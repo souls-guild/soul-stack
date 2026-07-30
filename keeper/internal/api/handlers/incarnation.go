@@ -143,6 +143,14 @@ type IncarnationHandler struct {
 	scoper    PurviewResolver
 	logger    *slog.Logger
 
+	// permChecker — the Check surface for gate (b) of a templated create
+	// ([ScreenComposedIncarnationName], NIM-333): the composed name is re-measured
+	// against the caller's scope once it exists. Injected late-binding via
+	// [IncarnationHandler.SetPermissionChecker] (the constructor has 143 call sites —
+	// same motive as refs below). nil → a templated create is REFUSED rather than
+	// waved through: without the checker the boundary cannot be evaluated.
+	permChecker middleware.PermissionChecker
+
 	// refs — ls-remote of the service registry's tags/branches, needed ONLY by the
 	// cheap UpgradePathsTyped mode (ADR-0068 §6, enumerating upgrade targets). The
 	// same [ServiceRefsLister] as ServiceHandler — no duplicate ls-remote. Injected
@@ -209,6 +217,14 @@ func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer D
 // upgrade-paths returns 500. No thread safety needed (called before serving).
 func (h *IncarnationHandler) SetServiceRefs(refs ServiceRefsLister) {
 	h.refs = refs
+}
+
+// SetPermissionChecker late-binds the Check surface used by gate (b) of a templated
+// create (NIM-333) — see [ScreenComposedIncarnationName]. Same motive for a setter
+// as [SetServiceRefs]. Leaving it unset does not disable the gate: a create whose
+// name was composed is refused instead.
+func (h *IncarnationHandler) SetPermissionChecker(c middleware.PermissionChecker) {
+	h.permChecker = c
 }
 
 // SetModuleManifests late-binds the plugin-manifest catalog (NIM-228) used by
@@ -468,8 +484,10 @@ type IncarnationContextReader interface {
 // covens, a single `{incarnation, service}` context (no coven) is emitted so the
 // incarnation/service dimensions still match. The permission check ORs them.
 //
-// Empty name → nil (the caller returns 422 on a broken path before RBAC, or create
-// passes name=its-own-name).
+// Empty name → nil: on a route over an EXISTING incarnation that means the row was
+// not found or the path was broken, and admitting a scoped role on a context that
+// names nothing would gate on less than the request is about. Create has its own
+// entry point below, because there the name legitimately does not exist yet.
 //
 // IncarnationCovenContexts — exported wrapper over [incarnationCovenContexts] for
 // reuse outside the package (MCP incarnation tools mirror the REST coven/service
@@ -478,10 +496,48 @@ func IncarnationCovenContexts(name, service string, covens []string) []map[strin
 	return incarnationCovenContexts(name, service, covens)
 }
 
+// IncarnationCreateContexts is the create-path builder: the same contexts, except
+// an absent name is expected rather than a failure (NIM-333).
+//
+// Under `name_template` (ADR-0079) the name is composed server-side from the
+// resolved input, so at gate time — before the handler runs — it does not exist.
+// The strict builder answered nil, [middleware.RequirePermissionMulti] turned that
+// into one empty context, and an empty context matches only a permission with no
+// effective scope. The result was that **only an unrestricted role could create a
+// templated incarnation**, which is the opposite of what scoping is for.
+//
+// The fix is not to relax anything: it is to stop discarding the two dimensions
+// that ARE in the request. `service` is required by the schema and `covens` are
+// declared, both are dimensions of the scope grammar
+// ([rbac.ScopeCond]), and both are already ceiling-checked by construction —
+// the declared values go into the CONTEXT and the role's predicate is evaluated
+// against them, so declaring a coven outside your scope makes the check FAIL. A
+// caller cannot widen their reach by claiming more; that is why no separate
+// "compare the claim against the ceiling" step is needed here.
+//
+// What still denies: a role whose scope names `incarnation=`. That dimension is
+// genuinely unanswerable before composition, so it stays fail-closed here — and a
+// role scoped ONLY that way cannot create a templated incarnation at all, since this
+// gate refuses before the name is composed. Deliberate, and an upgrade note rather
+// than something to discover live; see [ScreenIncarnationCreateScope] for what the
+// second gate does and does not add.
+func IncarnationCreateContexts(name, service string, covens []string) []map[string]string {
+	return incarnationScopeContexts(name, service, covens)
+}
+
 func incarnationCovenContexts(name, service string, covens []string) []map[string]string {
 	if name == "" {
 		return nil
 	}
+	return incarnationScopeContexts(name, service, covens)
+}
+
+// incarnationScopeContexts builds the OR-set of RBAC contexts from whichever
+// dimensions are known. A dimension that is absent is OMITTED rather than sent
+// empty: `evalCond` reads a missing dimension as "no candidate", so an omitted key
+// denies a role scoped on it — the fail-closed direction. All dimensions absent →
+// nil, which the middleware treats as the empty context (bare roles only).
+func incarnationScopeContexts(name, service string, covens []string) []map[string]string {
 	seen := make(map[string]struct{}, len(covens))
 	candidates := make([]string, 0, len(covens))
 	for _, c := range covens {
@@ -496,7 +552,10 @@ func incarnationCovenContexts(name, service string, covens []string) []map[strin
 	}
 
 	base := func() map[string]string {
-		ctx := map[string]string{"incarnation": name}
+		ctx := make(map[string]string, 2)
+		if name != "" {
+			ctx["incarnation"] = name
+		}
 		if service != "" {
 			ctx["service"] = service
 		}
@@ -506,6 +565,9 @@ func incarnationCovenContexts(name, service string, covens []string) []map[strin
 	// No declared covens → a single incarnation/service context (scope by the
 	// incarnation's own name is the `incarnation=` dimension, not `coven=`).
 	if len(candidates) == 0 {
+		if len(base()) == 0 {
+			return nil
+		}
 		return []map[string]string{base()}
 	}
 
@@ -561,11 +623,15 @@ func IncarnationScopeSelector(reader IncarnationContextReader) middleware.MultiS
 //
 // The body is read under the already-wired `/v1/*` MaxBytesReader limit and
 // restored for the handler (pattern [SoulCovenLabelSelector]): the handler decodes
-// the body again (strict decoder). An invalid/empty body or broken name → nil set:
+// the body again (strict decoder). An invalid/empty body → nil set:
 // scoped roles — deny, bare/`*` — pass (the handler then returns 400/422 on the
 // body). covens from the body are NOT format-validated here (the handler does that
 // before insert); an invalid label simply won't match any correct permission
 // (scoped → deny), bare/`*` — pass, the handler returns 422.
+//
+// An ABSENT `name` is not a failure (NIM-333): under `name_template` the name does
+// not exist yet, and the gate scopes on `service=` and `coven=` instead of
+// admitting only unrestricted roles — see [IncarnationCreateContexts].
 func IncarnationCreateScopeSelector(r *http.Request) []map[string]string {
 	if r.Body == nil {
 		return nil
@@ -581,8 +647,8 @@ func IncarnationCreateScopeSelector(r *http.Request) []map[string]string {
 		Service string   `json:"service"`
 		Covens  []string `json:"covens"`
 	}
-	if err := json.Unmarshal(body, &probe); err != nil || probe.Name == "" {
+	if err := json.Unmarshal(body, &probe); err != nil {
 		return nil
 	}
-	return incarnationCovenContexts(probe.Name, probe.Service, probe.Covens)
+	return incarnationScopeContexts(probe.Name, probe.Service, probe.Covens)
 }

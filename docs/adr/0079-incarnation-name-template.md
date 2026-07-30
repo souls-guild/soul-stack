@@ -1,9 +1,13 @@
 # ADR-079. Composed incarnation name — `name_template` in the create scenario
 
-- **Status.** Active. Backend landed by NIM-177 (schema key, soul-lint checks,
-  server-side composition shared by REST and MCP). The web half — hiding the
-  free-text "Name" field and drawing a live preview of the composed name — is a
-  separate ticket.
+- **Status.** Active, amended 2026-07-30. Backend landed by NIM-177 (schema key,
+  soul-lint checks, server-side composition shared by REST and MCP). The
+  **2026-07-30 amendment** (NIM-333) resolves the RBAC limitation this ADR had
+  deliberately deferred: a scoped operator could not create a templated incarnation
+  at all, because the gate scoped on `incarnation=` — the one dimension a template
+  does not have yet — and discarded `service=`/`coven=`, which the request does
+  carry. See the RBAC bullet under (f). The web half — hiding the free-text "Name"
+  field and drawing a live preview of the composed name — is a separate ticket.
 
 - **Context.** The incarnation name is typed by the operator as free text. In a
   fleet of similar instances that text is not actually free: it follows a house
@@ -113,17 +117,56 @@
   - REST and MCP cannot drift: both read `CreatePlan.ComposedName` from the same
     `ResolveCreatePlan`, and `CreatePlan.EffectiveName` is the single place that
     decides which name wins.
-  - **RBAC, known limitation.** `POST /v1/incarnations` scopes the permission check
-    from the request body before the handler runs
+  - **RBAC — RESOLVED (Amendment 2026-07-30, NIM-333).** As first written, this ADR
+    left a functional hole: `POST /v1/incarnations` scopes the permission check from
+    the request body before the handler runs
     ([`IncarnationCreateScopeSelector`](../../keeper/internal/api/handlers/incarnation.go)),
-    and a request with no `name` yields an empty context set — which
-    `RequirePermissionMulti` admits only for bare/`*` roles. MCP behaves the same way
-    (`Check` with a nil context). So a *scoped* operator cannot create a
-    templated incarnation on either surface; the direction is fail-closed (it can
-    only refuse, never over-grant), and the escalation path is closed by (e), but the
-    functional hole is real. Scoping a create whose name is not known until the
-    service snapshot resolves needs its own decision and is deliberately left out of
-    this ADR.
+    a request with no `name` yielded an empty context set, and
+    `RequirePermissionMulti` admits that only for bare/`*` roles — MCP the same, via
+    `Check` with a nil context. So a **scoped operator could not create a templated
+    incarnation on either surface**, and there was no fallback: passing `name`
+    explicitly is refused by `ErrNameNotComposable` under (b). The direction was
+    fail-closed, but with templating becoming the primary path it made creation the
+    privilege of an unrestricted role, which is the opposite of what scoping is for.
+
+    The resolution needed no new grammar and relaxed nothing. The gate was
+    **discarding two dimensions the request already carries**: `service` is
+    `required` in the schema and `covens` are declared, and both are dimensions of
+    the scope grammar ([ADR-047](0047-purview.md) `coven | service | incarnation |
+    host | trait`). They are also **ceiling-checked by construction** — the declared
+    values go INTO the context and the role's predicate is evaluated against them, so
+    declaring a coven outside your scope makes the check *fail*. A caller cannot widen
+    their reach by claiming more, which is why no separate "compare the claim against
+    the ceiling" step is needed at this gate. An absent dimension is **omitted**
+    rather than sent empty: `evalCond` reads a missing dimension as "no candidate", so
+    an omitted key denies a role scoped on it.
+
+    A **second gate** covers what the first cannot answer. Once `ResolveCreatePlan`
+    has composed the name,
+    [`ScreenIncarnationCreateScope`](../../keeper/internal/api/handlers/incarnation_create_scope.go)
+    re-asks with the full context, as an **AND over every declared coven** —
+    all-or-nothing, no silent trim, the shape [ADR-049(f)](0049-synod.md)-adjacent
+    bulk gates settled on. That matters because gate (a) is an OR: a request naming
+    one coven the caller holds and one it does not matches on the first. It also
+    measures the composed name, which is derived from operator `input` and becomes a
+    label in the coven plane of member hosts ([ADR-0080](0080-label-inheritance-union.md)),
+    against the caller's ceiling rather than trusting it. Both gates read the same
+    predicate over contexts from one builder, so there is no second notion of scope
+    ([NIM-219](0047-purview.md)); fail-closed when no checker is wired.
+
+    **What is still refused, deliberately:** a role scoped ONLY by `incarnation=`
+    cannot create a templated incarnation. That dimension is unanswerable before
+    composition, so gate (a) denies before the name exists and gate (b) is never
+    reached. Fail-closed and documented rather than discovered live.
+
+    **Gate (b) runs on every create, named ones included.** Gate (a)'s OR admits a
+    superset: a request declaring one coven the caller holds and one it does not
+    matched on the first and was created carrying both, placing hosts in a coven the
+    caller cannot reach ([ADR-0080](0080-label-inheritance-union.md)) and widening
+    their own visibility. That is an escalation, it predates templating, and a named
+    create has always been able to do it. Closing it tightens named create too — a
+    deliberate decision taken with the templated fix rather than after it, since the
+    two are one gate.
   - The 63-character ceiling becomes a design constraint on service authors: a
     template with four components leaves roughly 15 characters per component. The
     linter catches the impossible cases; the tight ones surface as a 422 at create,

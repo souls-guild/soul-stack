@@ -650,6 +650,12 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// refs-lister (the same ls-remote cache as ServiceHandler) for the cheap mode of
 	// GET .../upgrade-paths (ADR-0068 §6); late-binding, the constructor isn't extended.
 	incH.SetServiceRefs(deps.ServiceRefs)
+	// Gate (b) of a templated create (NIM-333): the composed name is re-measured
+	// against the caller's scope. deps.RBAC is a PermissionChecker by the
+	// RBACProvider contract, so this is the same enforcer the middleware gates on —
+	// one predicate, two moments. Without it a templated create is refused, so this
+	// wiring is not optional in a real server.
+	incH.SetPermissionChecker(deps.RBAC)
 	// the read side of audit_log for GET .../runs/{apply_id}/tasks (per-host task
 	// results of a run, NIM-37); late-binding, the same *auditpg.Reader as GET /v1/audit. nil
 	// AuditReader → /tasks returns the plan without per-host results.

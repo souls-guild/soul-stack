@@ -148,3 +148,121 @@ func toolIncarnation(t *testing.T, resp jsonRPCResponse) string {
 	}
 	return envelope.StructuredContent.Incarnation
 }
+
+// --- NIM-333: a scoped operator creates a templated incarnation ---
+//
+// These are the end-to-end guards for the change: unlike the REST handler unit
+// tests, the MCP tool runs BOTH gates against a real enforcer built from a real
+// rbactest snapshot — gate (a) over the request body, gate (b) over the composed
+// name. A REST handler test calls CreateTyped directly and therefore exercises
+// gate (b) only.
+
+// The demo scenario, and the one that was impossible: an operator whose only
+// permission is `incarnation.create on coven=billing` creates an incarnation whose
+// name is composed server-side. Before NIM-333 gate (a) saw no `name`, produced the
+// empty context, and only an unrestricted role passed.
+func TestToolsCall_IncarnationCreate_Templated_ScopedOperatorAllowed(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on coven=billing"),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","covens":["billing"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error != nil {
+		t.Fatalf("a coven-scoped operator must create inside its own scope: %+v", resp.Error)
+	}
+	if got := toolIncarnation(t, resp); got != composedNameWant {
+		t.Errorf("tool output incarnation = %q, want %q", got, composedNameWant)
+	}
+}
+
+// The other direction: a coven outside the ceiling is refused, and nothing is created.
+func TestToolsCall_IncarnationCreate_Templated_CovenOutsideCeilingRefused(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on coven=billing"),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","covens":["prod"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error == nil {
+		t.Fatalf("coven=prod is outside a coven=billing ceiling — must be refused")
+	}
+	if len(pool.insertIncArgs) != 0 {
+		t.Errorf("nothing may be inserted on a refusal; insertIncArgs=%v", pool.insertIncArgs)
+	}
+}
+
+// Declaring one coven the caller holds AND one it does not is refused WHOLE. This is
+// the case gate (a) alone lets through — it ORs over the declared covens and matches
+// on `billing` — so it is gate (b)'s AND that answers. The same shape NIM-209/232
+// settled on membership binding: a bulk claim is admitted whole or refused whole,
+// never quietly trimmed to the part the caller may have.
+//
+// The named-create equivalent is still open (NIM-338): there gate (b) does not run.
+func TestToolsCall_IncarnationCreate_Templated_MixedCovensRefusedWhole(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on coven=billing"),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","covens":["billing","prod"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error == nil {
+		t.Fatalf("mixed covens must NOT create: `prod` is outside the ceiling and the request is refused whole")
+	}
+	if len(pool.insertIncArgs) != 0 {
+		t.Errorf("nothing may be inserted; insertIncArgs=%v", pool.insertIncArgs)
+	}
+}
+
+// A service-scoped role works on the same terms — `service` is required by the tool
+// schema, so gate (a) always has it.
+func TestToolsCall_IncarnationCreate_Templated_ServiceScopedAllowed(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on service=redis"),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error != nil {
+		t.Fatalf("a service-scoped operator must be able to create: %+v", resp.Error)
+	}
+}
+
+// A role scoped ONLY by `incarnation=` still cannot create a templated incarnation:
+// that dimension is absent from gate (a)'s context by construction, so gate (a)
+// denies before composition ever happens. Fail-closed and deliberate — pinned here
+// because it is the one shape of scoped role this change does NOT enable, and it
+// belongs in the upgrade notes rather than being discovered in a demo.
+func TestToolsCall_IncarnationCreate_Templated_IncarnationScopedRoleStillDenied(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on incarnation="+composedNameWant),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error == nil {
+		t.Fatalf("a role scoped only by incarnation= cannot be satisfied before the name exists — must be refused")
+	}
+	if len(pool.insertIncArgs) != 0 {
+		t.Errorf("nothing may be inserted; insertIncArgs=%v", pool.insertIncArgs)
+	}
+}
+
+// An unrestricted role is unaffected — the path it always had still works.
+func TestToolsCall_IncarnationCreate_Templated_WildcardUnaffected(t *testing.T) {
+	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, nameTemplateYAML)}
+	h, _ := newTestHandlerFull(t, pool, wildcardRBAC(),
+		&mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
+		`{"service":"redis","covens":["prod"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	if resp.Error != nil {
+		t.Fatalf("`*` must be unaffected: %+v", resp.Error)
+	}
+}

@@ -366,6 +366,37 @@ order to act in.
   incarnation's name — put a dedicated tag on the incarnation where that
   distinction matters.
 
+- **Creating an incarnation from a `name_template` no longer requires an
+  unrestricted role, and a scoped role is now gated on what the request declares**
+  ([ADR-0079](docs/adr/0079-incarnation-name-template.md) amendment 2026-07-30).
+  Under a template the name is composed server-side, so at gate time it does not
+  exist — the create gate scoped on `incarnation=<name>`, got nothing, and admitted
+  only bare/`*`. With templating becoming the primary way to name an incarnation,
+  that made creation the privilege of a cluster-admin. It is now scoped on
+  `service=` and the declared `coven=` instead, which the request does carry.
+
+  **What changes for existing roles.** A role scoped by `coven=` or `service=` gains
+  templated create — it could not do it before, so nothing it used to do stops
+  working. A role scoped **only** by `incarnation=` still cannot create a templated
+  incarnation: that dimension is unanswerable before composition, and it stays
+  fail-closed. If you have such a role and it needs to create, add a `service=` or
+  `coven=` dimension to it.
+
+  **And this closes an escalation, on every create — named ones included.** The
+  pre-handler gate is an OR over the declared covens: a request naming one coven you
+  hold and one you do not matched on the first and was created **carrying both**.
+  Because an incarnation's covens become labels on its member hosts
+  ([ADR-0080](docs/adr/0080-label-inheritance-union.md)), that placed hosts in a coven
+  the caller cannot reach and widened their own visibility. It predates
+  `name_template` entirely — a named create has always been able to do it.
+
+  Every declared coven is now checked once the effective name is final, and the
+  request is refused **whole** rather than trimmed to the part you may have. **A role
+  that used to create incarnations declaring a coven outside its scope will start
+  getting 403** — the fix is to declare only covens the role covers, or to widen the
+  role deliberately. Check your automation's `covens` against its role before
+  upgrading; this is the one change here that can break something that worked.
+
 ### Added
 
 - **The interactive console — a real terminal on a host, from the browser**
@@ -954,6 +985,26 @@ order to act in.
   bench cluster, never production.
 
 ### Fixed
+
+- **Only an unrestricted role could create an incarnation whose name comes from a
+  `name_template`.** The create gate scopes from the request body before the handler
+  runs, keyed on `incarnation=<name>` — the one dimension a template does not have
+  yet, because the name is composed server-side from the resolved input. No name
+  meant an empty context set, and an empty context matches only a permission with no
+  effective scope. Passing `name` explicitly is not a way out either: with a template
+  it is refused outright. So a scoped operator was locked out of creation entirely,
+  on REST and MCP alike.
+
+  Nothing was relaxed to fix it. The gate was discarding two dimensions the request
+  already carries — `service`, required by the schema, and the declared `covens`,
+  both dimensions of the scope grammar — and both are ceiling-checked by construction,
+  since the declared values go into the context and the role's predicate is evaluated
+  against them. Claiming more cannot widen anyone's reach; it makes the check fail. An
+  absent dimension is omitted rather than sent empty, so a role scoped on it still
+  denies. A second gate re-asks once the name is composed, as an AND over every
+  declared coven, which also measures the name the caller effectively chose through
+  `input` — it becomes a label in the coven plane of member hosts — against their
+  ceiling. Both gates read one predicate over contexts from one builder.
 
 - **A role's `default_scope` did not reach the authorization gate.**
   `ResolvePurview` inherited it onto the role's bare permissions;

@@ -165,6 +165,14 @@ func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 // replaces RequireJWT.
 func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writer, incH *handlers.IncarnationHandler) *chi.Mux {
 	t.Helper()
+	// Gate (b) of create re-measures the effective name and every declared coven
+	// against the caller's scope, and is fail-closed without a checker (NIM-333).
+	// Production wires it from deps.RBAC in server.go; here the router's own enforcer
+	// is the same authority, so hand it to the handler as well — otherwise these
+	// tests would exercise a half-assembled handler.
+	if incH != nil {
+		incH.SetPermissionChecker(enforcer)
+	}
 	installHumaErrorOverride()
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

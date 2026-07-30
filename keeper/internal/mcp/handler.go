@@ -740,7 +740,23 @@ func incarnationRBACContext(name string) map[string]string {
 // empty set (malformed name) → one attempt with nil-context: bare/`*` pass,
 // scoped is denied (fail-closed, parity with middleware).
 func (h *Handler) checkIncarnationScope(claims *jwt.Claims, action, name, service string, covens []string) error {
-	contexts := handlers.IncarnationCovenContexts(name, service, covens)
+	return h.checkIncarnationContexts(claims, action, handlers.IncarnationCovenContexts(name, service, covens))
+}
+
+// checkIncarnationCreateScope is [Handler.checkIncarnationScope] for the create
+// tool, where the incarnation has no name yet under `name_template` (NIM-333).
+// Separate entry point rather than a flag, because for every OTHER tool an absent
+// name means a broken argument and must keep denying scoped roles — the two cases
+// look identical and mean opposite things. Contexts come from the same
+// [handlers.IncarnationCreateContexts] REST uses.
+func (h *Handler) checkIncarnationCreateScope(claims *jwt.Claims, name, service string, covens []string) error {
+	return h.checkIncarnationContexts(claims, "create", handlers.IncarnationCreateContexts(name, service, covens))
+}
+
+// checkIncarnationContexts runs the OR over a prepared context set. An empty set →
+// one attempt with a nil context: bare/`*` pass, scoped is denied (fail-closed,
+// parity with the middleware).
+func (h *Handler) checkIncarnationContexts(claims *jwt.Claims, action string, contexts []map[string]string) error {
 	if len(contexts) == 0 {
 		contexts = []map[string]string{nil}
 	}

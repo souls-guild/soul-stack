@@ -1602,11 +1602,42 @@ func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
 	}
 }
 
-func TestIncarnationCreateScopeSelector_NoName_Nil(t *testing.T) {
-	body := bytes.NewReader([]byte(`{"service":"redis"}`))
+// An absent `name` — the shape a `name_template` create sends (ADR-0079) — scopes
+// on the dimensions that ARE present instead of collapsing to the empty context.
+//
+// This assertion was deliberately inverted by NIM-333. It used to demand nil, and
+// nil is what made templated create the privilege of an unrestricted role: the
+// middleware turns an empty set into one empty context, and an empty context
+// matches only a permission with no effective scope. `service` is required by the
+// schema and `covens` are declared, both are scope dimensions, and both are
+// ceiling-checked by going INTO the context — so scoping on them cannot widen
+// anyone's reach.
+func TestIncarnationCreateScopeSelector_NoName_ScopesOnServiceAndCovens(t *testing.T) {
+	body := bytes.NewReader([]byte(`{"service":"redis","covens":["prod"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", body)
+	ctxs := IncarnationCreateScopeSelector(req)
+	if len(ctxs) != 1 {
+		t.Fatalf("contexts = %v, want exactly one (service + the single declared coven)", ctxs)
+	}
+	if ctxs[0]["service"] != "redis" || ctxs[0]["coven"] != "prod" {
+		t.Errorf("context = %v, want service=redis coven=prod", ctxs[0])
+	}
+	// The dimension that cannot be answered before composition must be ABSENT, not
+	// empty: `evalCond` reads a missing dimension as "no candidate", so a role
+	// scoped `incarnation=` still denies here and is re-asked once the name exists.
+	if _, ok := ctxs[0]["incarnation"]; ok {
+		t.Errorf("context = %v, must not carry an `incarnation` key when the name is not composed yet", ctxs[0])
+	}
+}
+
+// Nothing to scope on at all → nil, and the middleware's empty context then admits
+// only bare/`*`. A body with neither name, service nor covens is malformed and the
+// handler answers 422; the gate must not become a free pass on the way there.
+func TestIncarnationCreateScopeSelector_NothingKnown_Nil(t *testing.T) {
+	body := bytes.NewReader([]byte(`{}`))
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", body)
 	if got := IncarnationCreateScopeSelector(req); got != nil {
-		t.Errorf("got = %v, want nil for missing name", got)
+		t.Errorf("got = %v, want nil when no dimension is known", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -112,9 +113,11 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	}
 
 	// Body-scoped RBAC BEFORE creation (fail-closed): deny → no audit, no
-	// insert, no scenario-start. Contexts are covens ∪ {name}, via the same
-	// handlers.IncarnationCovenContexts as REST (single source of truth).
-	if err := h.checkIncarnationScope(claims, "create", a.Name, a.Service, a.Covens); err != nil {
+	// insert, no scenario-start. Contexts come from the same
+	// handlers.IncarnationCreateContexts as REST (single source of truth), which
+	// scopes on `service=`/`coven=` when `name` is absent under a `name_template`
+	// (NIM-333) instead of admitting only unrestricted roles.
+	if err := h.checkIncarnationCreateScope(claims, a.Name, a.Service, a.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.create")
 	}
@@ -155,6 +158,22 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	name := plan.EffectiveName(a.Name)
 	if name == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	}
+
+	// Gate (b), mirroring REST CreateTyped (NIM-333/NIM-338): the effective name and
+	// EVERY declared coven are measured against the caller's scope, all-or-nothing.
+	// Every create, named or composed, and AFTER the "name is required" check above
+	// for the same reason REST orders it that way.
+	//
+	// Gate (a) is an OR over the declared covens, so a request naming one coven the
+	// caller holds and one it does not was created carrying BOTH — and an
+	// incarnation's covens become labels on its member hosts (ADR-0080), so that
+	// placed hosts in a coven the caller cannot reach.
+	if err := handlers.ScreenIncarnationCreateScope(h.deps.RBAC, claims.Subject,
+		name, a.Service, a.Covens); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"incarnation.create denied: "+name+
+				" or a declared coven is outside your scope (the request is refused whole, not trimmed)")
 	}
 
 	// Write spec.input only when input is non-empty — otherwise scenario-runner

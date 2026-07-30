@@ -141,6 +141,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// plan resolve (insert / traits sync / bootstrap run / audit / reply) uses it,
 	// never req.Name.
 	name := req.Name
+	composedName := ""
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
 		if !ok {
@@ -163,6 +164,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		bareNoScenario = plan.BareNoScenario
 		autoCreate = plan.AutoCreate
 		name = plan.EffectiveName(req.Name)
+		composedName = plan.ComposedName
 	}
 
 	// Deferred "name is required" (see the top of the function): reached when the
@@ -170,6 +172,23 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// incarnations and stub mode included.
 	if name == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'name' is required")
+	}
+
+	// Gate (b) — the boundary (NIM-333/NIM-338). Every create, named or composed,
+	// once the effective name is final. AFTER the 422 above: a request with no name
+	// at all is malformed, and answering 403 for it would tell the operator to fix
+	// their role when the fix is to send a name.
+	//
+	// Gate (a) is an OR over the declared covens, so a request naming one coven the
+	// caller holds and one it does not matches on the first and used to be created
+	// carrying BOTH. Since an incarnation's covens become labels on its member hosts
+	// (ADR-0080), that placed hosts in a coven the caller cannot reach and widened
+	// their own visibility — an escalation, not a cosmetic gap, and it predates
+	// templating. Here every declared coven must be covered, all-or-nothing, with no
+	// silent trim to the part they may have.
+	if err := ScreenIncarnationCreateScope(h.permChecker, claims.Subject,
+		name, req.Service, req.Covens); err != nil {
+		return zero, incProblem(problem.TypeForbidden, createScopeDetail(name, composedName, req.Covens))
 	}
 
 	spec := map[string]any{}
