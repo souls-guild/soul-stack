@@ -323,11 +323,31 @@ func TestRun_CancelBetweenTasks(t *testing.T) {
 	}
 }
 
+// TestRun_CancelDuringTask — a Cancel that arrives WHILE a task is executing
+// yields exactly one CANCELLED task event.
+//
+// The canceller waits on `entered`, closed from inside the module's Apply, so it
+// synchronises on the FACT that the task is running rather than on how long that
+// takes (NIM-349). It used to poll Cancel every 5 ms starting at t=0, and Run
+// registers the apply-id well before it dispatches task 0 (register → span →
+// metrics → registerIndex → asyncFlows → the task loop). A poll landing inside
+// that window cancelled the run before any task started, and the assertion below
+// failed with `taskEvents = 0`. Under `-race` the window is wider — every access
+// between register and dispatch is instrumented — which is why the same test was
+// green in `make test` and red in the integration job on the same sha.
+//
+// This is a synchronisation fix, not a longer wait: raising the interval would
+// only make the wrong outcome rarer while still asserting nothing about when the
+// cancel landed. The invariant under test is unchanged.
 func TestRun_CancelDuringTask(t *testing.T) {
-	// Module respects ctx — blocks until cancel, returns ctx.Err().
+	// Module respects ctx — blocks until cancel, returns ctx.Err(). Closing
+	// `entered` here is the "task 0 is executing" signal; one task, no retry, so
+	// Apply is entered exactly once.
+	entered := make(chan struct{})
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				close(entered)
 				<-stream.Context().Done()
 				return stream.Context().Err()
 			},
@@ -336,18 +356,17 @@ func TestRun_CancelDuringTask(t *testing.T) {
 	sink := &recordingSink{}
 	r := NewApplyRunner(reg, nil)
 
-	// Fire Cancel from a second goroutine — give Run time to enter Apply.
+	// Fire Cancel from a second goroutine, once the task is provably in Apply.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Small wait so Apply has a chance to be called.
-		for i := 0; i < 50; i++ {
-			if r.Cancel("cancel-2") {
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
+		<-entered
+		// register precedes dispatch, so by now the apply-id is registered and
+		// Cancel cannot miss. A false here is a real regression in that ordering,
+		// not a slow machine.
+		if !r.Cancel("cancel-2") {
+			t.Errorf("Cancel: apply-id not registered while task 0 was executing")
 		}
-		t.Errorf("Cancel: apply-id never registered")
 	}()
 
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
