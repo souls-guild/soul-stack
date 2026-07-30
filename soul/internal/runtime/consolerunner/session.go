@@ -306,9 +306,18 @@ func (s *session) enqueue(b []byte) {
 }
 
 // sendLoop is the session's only writer to the EventStream. It emits
-// ConsoleOpened, then paces chunks through a token bucket, then closes with
-// exactly one ConsoleExit — including when the stream is already broken, so the
-// runner's bookkeeping is always released.
+// ConsoleOpened, then paces chunks through a token bucket, then ATTEMPTS exactly
+// one ConsoleExit, and always releases the runner's bookkeeping.
+//
+// It used to claim it closes "with exactly one ConsoleExit — including when the
+// stream is already broken". The bookkeeping half is true; the delivery half was
+// not, and could not be (NIM-397). A terminal event cannot reach a peer that has
+// stopped reading, and that case is not hypothetical — it is precisely why
+// [session.escalate] step 4 cancels the RPC: a sender blocked in Send is released
+// by cutting its own transport, after which its ConsoleExit has nowhere to go.
+// So the send is an attempt, the failure is reported at Warn rather than Debug
+// (see below), and Keeper closes such a session from the stream teardown instead
+// of waiting for a terminal frame that is never coming.
 func (s *session) sendLoop(sink Sink, metrics *Metrics, onFinish func()) {
 	defer close(s.done)
 	defer onFinish()
@@ -359,8 +368,25 @@ func (s *session) sendLoop(sink Sink, metrics *Metrics, onFinish func()) {
 			Reason:    reason,
 		}},
 	}); err != nil {
-		s.logger.Debug("console: send exit failed (stream broken)",
-			slog.String("session_id", s.id), slog.Any("error", err))
+		// Warn, not Debug: this is the session's ONLY terminal event, and losing
+		// it is the difference between "the console closed" and "nobody can say
+		// what happened to the console". A chunk lost to a broken stream is
+		// cosmetic and stays at Debug; this is not.
+		//
+		// It sat at Debug and cost a day. `TestLiveGRPC_ConsoleRoundTripOverItsOwn
+		// Stream` failed in CI with `timed out after 10s waiting for ConsoleExit`
+		// and the reason was written on this line — into a logger the tests had
+		// pointed at io.Discard with a LevelError threshold, so it was discarded
+		// twice over. Four hypotheses were measured and rejected (runner load: the
+		// other packages in the same two attempts matched within 2%; a data race:
+		// the -race job was green on that sha; throttling: 1 MiB/s against a few
+		// hundred bytes; misrouting to the EventStream: strictSink would have
+		// failed the test) before the answer turned out to have been logged all
+		// along.
+		s.logger.Warn("console: ConsoleExit could not be delivered — this session has no terminal event",
+			slog.String("session_id", s.id),
+			slog.String("reason", reason.String()),
+			slog.Any("error", err))
 	}
 }
 

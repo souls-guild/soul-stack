@@ -108,7 +108,97 @@ def import_path_to_pkg(path: str) -> str | None:
     return "./" + "/".join(rest[1:]) + "/"
 
 
+# Fixtures for --self-test, each an excerpt of a real `go test` failure this
+# script has been wrong about or has had to get right. They exist because the
+# classification logic has no other guard: it is not Go, so `make test` never sees
+# it, and its first version mislabelled two container failures as REGRESSION
+# without anything going red. A wrong label is worse than no label — it sends
+# someone hunting a defect that does not exist — so the mapping is pinned here and
+# checked by `make check`.
+SELF_TEST = [
+    (
+        "declared setup failure -> INFRA",
+        "INFRA",
+        '2026/07/30 04:35:58 toll integration: container setup failed (REQUIRE_DOCKER): '
+        'create container: reaper: from container "0a0c7998": wait for reaper 0a0c7998: '
+        'external check: check target: retries: 440 address: localhost:32916: '
+        'unexpected container status "removing"\n'
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/toll\t56.129s\n",
+    ),
+    (
+        "named failing test, no infra text -> REGRESSION",
+        "REGRESSION",
+        "--- FAIL: TestIntegration_CheckDrift_HappyPath_Clean (0.68s)\n"
+        "    checkdrift_test.go:236: UpsertTaskRegister: FK violation on "
+        "apply_task_register_apply_run_fk (SQLSTATE 23503)\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/scenario\t80.606s\n",
+    ),
+    (
+        "named failing test PLUS ambiguous transport text -> UNCLEAR, never REGRESSION",
+        "UNCLEAR",
+        "--- FAIL: TestIntegration_MarkDisconnected_LeaseAware (0.02s)\n"
+        '    integration_test.go:607: redis.NewClient: redis: ping (mode=standalone): '
+        'redis: can\'t parse map reply: "HTTP/1.1 400 Bad Request"\n'
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/reaper\t14.933s\n",
+    ),
+    (
+        "no named test at all -> UNCLEAR, because that shape means TestMain died",
+        "UNCLEAR",
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/topology\t42.468s\n",
+    ),
+    (
+        "declared marker ALONE -> INFRA (isolates the marker from the fallback list)",
+        "INFRA",
+        # Deliberately carries the suite's own marker and NOTHING from the INFRA
+        # text list. Without this case the marker path is untested: a real log
+        # usually holds both, so breaking the regex still yields INFRA through the
+        # fallback and the guard stays green. Found by mutating the regex and
+        # watching nothing go red.
+        "2026/07/30 04:35:58 soulseed integration: setup failed (REQUIRE_DOCKER): "
+        "postgres did not come up\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/soulseed\t62.043s\n",
+    ),
+]
+
+
+def classify_blob(blob: str) -> str:
+    """The verdict for one package's output. Shared by main() and --self-test so
+    the guard cannot drift away from what the tool actually does."""
+    declared = SETUP_DECLARED.search(blob)
+    infra_hits = [s for s in INFRA if s in blob]
+    unclear_hits = [s for s in UNCLEAR if s in blob]
+    tests = TEST_FAIL.findall(blob)
+    if declared:
+        return "INFRA"
+    if tests and not infra_hits and not unclear_hits:
+        return "REGRESSION"
+    if tests:
+        return "UNCLEAR"
+    if infra_hits:
+        return "INFRA"
+    return "UNCLEAR"
+
+
+def self_test() -> int:
+    bad = 0
+    for name, want, blob in SELF_TEST:
+        got = classify_blob(blob)
+        if got == want:
+            print(f"classify-l1-failure: ok   {name}")
+        else:
+            print(f"classify-l1-failure: FAIL {name}: got {got}, want {want}")
+            bad += 1
+    if bad:
+        print(f"classify-l1-failure: {bad} case(s) misclassified. A wrong label is worse than")
+        print("classify-l1-failure: none — fix the logic, do not relax the expectation.")
+        return 1
+    print("classify-l1-failure: self-test passed — the three verdicts still mean what they say")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
+        return self_test()
     if len(sys.argv) != 2:
         print(__doc__.strip().splitlines()[-1], file=sys.stderr)
         return 2
@@ -155,25 +245,15 @@ def main() -> int:
         unclear_hits = [s for s in UNCLEAR if s in blob]
         tests = TEST_FAIL.findall(blob)
 
-        # Order matters, and the ordering IS the design.
-        #
-        # A named `--- FAIL: Test…` line is the only thing that can make this a
-        # REGRESSION, and it is required rather than assumed: a suite that dies in
-        # TestMain prints `FAIL <pkg>` with no test name at all, so defaulting the
-        # nameless case to REGRESSION would report "fix the code" about code that
-        # was never exercised. That mistake is not symmetrical with the other one —
-        # it sends someone hunting a defect that does not exist, and after twice it
-        # teaches them to disbelieve the label — so the nameless case is UNCLEAR.
-        if declared:
-            verdict = "INFRA"
-        elif tests and not infra_hits and not unclear_hits:
-            verdict = "REGRESSION"
-        elif tests:
-            verdict = "UNCLEAR"
-        elif infra_hits:
-            verdict = "INFRA"
-        else:
-            verdict = "UNCLEAR"
+        # The rule itself lives in classify_blob so --self-test exercises exactly
+        # what a real run does. Its ordering is the design: a named
+        # `--- FAIL: Test…` line is the only thing that can make this a REGRESSION,
+        # required rather than assumed, because a suite dying in TestMain prints
+        # `FAIL <pkg>` with no test name — and defaulting that to REGRESSION would
+        # report "fix the code" about code that was never exercised. That mistake is
+        # not symmetrical with the other one: it sends someone hunting a defect that
+        # does not exist, and after twice it teaches them to disbelieve the label.
+        verdict = classify_blob(blob)
 
         print()
         print(f"  {verdict:<11}{path}")

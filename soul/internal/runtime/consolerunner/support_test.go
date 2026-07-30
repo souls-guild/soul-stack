@@ -129,6 +129,15 @@ func (c *capturedLog) String() string {
 // have the whole sequence rather than its last line.
 func testLogger(t *testing.T) *slog.Logger {
 	t.Helper()
+	l, _ := testLoggerWithCapture(t)
+	return l
+}
+
+// testLoggerWithCapture is testLogger plus read access to what was captured, for
+// guards that assert on the runner's own account rather than on its side effects
+// (NIM-397). Same behaviour otherwise: Debug level, printed only on failure.
+func testLoggerWithCapture(t *testing.T) (*slog.Logger, *capturedLog) {
+	t.Helper()
 	captured := &capturedLog{}
 	t.Cleanup(func() {
 		if !t.Failed() {
@@ -141,7 +150,7 @@ func testLogger(t *testing.T) *slog.Logger {
 				"so the code under test was never reached, not merely slow")
 		}
 	})
-	return slog.New(slog.NewTextHandler(captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	return slog.New(slog.NewTextHandler(captured, &slog.HandlerOptions{Level: slog.LevelDebug})), captured
 }
 
 // requireShell skips a test on a host with no usable shell (the pty tests are

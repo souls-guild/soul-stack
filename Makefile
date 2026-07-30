@@ -1218,8 +1218,14 @@ check-ci:
 # against is a green, fast, empty L1, and that must be caught by the gate everyone
 # runs rather than by the job that would be reporting the lie. Details and the
 # second derivation: scripts/check-integration-set.sh.
+#
+# It also self-tests the L1 failure classifier. That guard exists because the
+# classifier is the one piece of this work `make test` cannot see — it is not Go —
+# and its first version mislabelled two container failures as REGRESSION with
+# nothing going red. Pinned fixtures, one per verdict, taken from real failures.
 check-integration-set:
 	@scripts/check-integration-set.sh
+	@scripts/classify-l1-failure.py --self-test
 
 # check-e2e-set — the same guard check-integration-set gives L1, for the tiers
 # that never had one (NIM-392). `make e2e` took its package list from `go list
