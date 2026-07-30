@@ -152,7 +152,7 @@ func openOnDedicatedStream(t *testing.T, sink Sink, limits Limits) (*Runner, *fa
 	t.Helper()
 	shell := requireShell(t)
 	stream := newFakeConsoleStream()
-	r := New(sink, limits, testLogger(), nil, WithDialer(&fakeDialer{stream: stream}))
+	r := New(sink, limits, testLogger(t), nil, WithDialer(&fakeDialer{stream: stream}))
 	id := "session-1"
 
 	// The queue is buffered, so the ack can wait there for the reader goroutine
@@ -213,7 +213,7 @@ func TestTransport_FallsBackWhenTheKeeperHasNoConsoleRPC(t *testing.T) {
 	shell := requireShell(t)
 	sink := &recordingSink{}
 	dialer := &fakeDialer{err: status.Error(codes.Unimplemented, "unknown method ConsoleStream")}
-	r := New(sink, Limits{}, testLogger(), nil, WithDialer(dialer))
+	r := New(sink, Limits{}, testLogger(t), nil, WithDialer(dialer))
 	defer r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "session-1", Shell: shell})
@@ -236,7 +236,7 @@ func TestTransport_FallsBackWhenTheAckNeverArrives(t *testing.T) {
 		stream:   stream,
 		cancel:   func() {},
 		fallback: &recordingSink{},
-		logger:   testLogger(),
+		logger:   testLogger(t),
 		ready:    make(chan struct{}),
 	}
 	go tr.watchdog()
@@ -286,7 +286,7 @@ func TestTransport_DedicatedStreamDoesNotDropOutput(t *testing.T) {
 	// A slow reader, a queue of one and a tiny read buffer: the exact shape
 	// that makes the shared carrier drop constantly (see the test below).
 	stream.sendDelay = 5 * time.Millisecond
-	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(), nil,
+	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(t), nil,
 		WithDialer(&fakeDialer{stream: stream}))
 	stream.ack("session-1")
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "session-1", Shell: flood})
@@ -309,7 +309,7 @@ func TestTransport_DedicatedStreamDoesNotDropOutput(t *testing.T) {
 func TestTransport_SharedCarrierStillDrops(t *testing.T) {
 	flood := requireProgram(t, floodProgram)
 	sink := &recordingSink{delay: 20 * time.Millisecond}
-	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(), nil)
+	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(t), nil)
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "session-1", Shell: flood})
 
 	waitFor(t, 15*time.Second, "flow control to drop on the shared carrier", func() bool {
@@ -329,7 +329,7 @@ func TestTransport_CutUnblocksASenderWedgedOnSend(t *testing.T) {
 		stream:   stream,
 		cancel:   func() { close(cancelled) },
 		fallback: &recordingSink{},
-		logger:   testLogger(),
+		logger:   testLogger(t),
 		ready:    make(chan struct{}),
 	}
 	tr.settle(true, "")

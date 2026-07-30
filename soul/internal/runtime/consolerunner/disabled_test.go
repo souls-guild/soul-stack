@@ -14,7 +14,7 @@ import (
 // session immediately instead of waiting out an idle timeout.
 func TestConsole_DisabledHostRefusesEveryOpen(t *testing.T) {
 	sink := &recordingSink{}
-	r := New(sink, Limits{Disabled: true}, testLogger(), nil)
+	r := New(sink, Limits{Disabled: true}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1"})
 	waitFor(t, 2*time.Second, "ConsoleExit", func() bool { return sink.exit("s1") != nil })
@@ -36,7 +36,7 @@ func TestConsole_DisabledHostRefusesEveryOpen(t *testing.T) {
 func TestConsole_SingleSessionPolicy(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{MaxSessions: 1, KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{MaxSessions: 1, KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "first"})
@@ -71,7 +71,7 @@ func TestConsole_ThrottledSessionStillTearsDownFast(t *testing.T) {
 		RateBytesPerSec: 1024,         // 1 KB/s
 		BurstBytes:      1,            // no free burst: the very first chunk has to pace
 		KillGrace:       300 * time.Millisecond,
-	}, testLogger(), nil)
+	}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "slow"})
 	waitFor(t, 5*time.Second, "ConsoleOpened", func() bool { return sink.opened("slow") != nil })
@@ -119,7 +119,7 @@ func TestConsole_ThrottledSessionStillTearsDownFast(t *testing.T) {
 func TestConsole_ConfiguredShellIsUsed(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{Shell: "/bin/sh", KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{Shell: "/bin/sh", KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1"})

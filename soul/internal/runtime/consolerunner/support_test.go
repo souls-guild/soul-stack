@@ -2,7 +2,6 @@ package consolerunner
 
 import (
 	"bytes"
-	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -87,9 +86,62 @@ func (s *recordingSink) droppedTotal(sessionID string) uint64 {
 	return total
 }
 
-// testLogger keeps test output quiet but still exercises the logging paths.
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+// capturedLog is a concurrency-safe sink for the runner's own log lines. Sessions
+// log from their own goroutines, so a bare bytes.Buffer would be a data race in a
+// package that is run under `-race`.
+type capturedLog struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *capturedLog) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *capturedLog) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// testLogger CAPTURES the runner's account of the run and prints it when the test
+// fails — it does not silence it (NIM-349).
+//
+// It used to be `io.Discard` at `LevelError`, described as "keeps test output
+// quiet but still exercises the logging paths". Both halves of that were wrong.
+// Below the threshold slog never calls Handle at all, so the Warn and Info paths
+// were not exercised; and every line that WAS emitted went nowhere. The lines
+// thrown away are exactly the ones that explain a missing terminal event —
+// `console: open refused, consoles are disabled on this host`, `console: open
+// failed`, `console: duplicate open for a live session`, `console: sessions still
+// running after teardown budget — possible leak`.
+//
+// That is what made `TestLiveGRPC_ConsoleRoundTripOverItsOwnStream` unreadable
+// when it failed in CI with `timed out after 10s waiting for ConsoleExit`: the
+// run takes ~1.4 s locally, so a 10 s budget was not marginally missed, something
+// stalled — and the account of what stalled had been discarded. A test whose
+// failure carries no evidence cannot distinguish "the event never happened" from
+// "it had not happened yet when we gave up", and those have opposite answers.
+//
+// Debug level on purpose: the cost is a few KiB per test, and the point is to
+// have the whole sequence rather than its last line.
+func testLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	captured := &capturedLog{}
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		if s := captured.String(); s != "" {
+			t.Logf("runner log for this test (what the code itself reported):\n%s", s)
+		} else {
+			t.Logf("runner log for this test: EMPTY — the runner logged nothing at all, " +
+				"so the code under test was never reached, not merely slow")
+		}
+	})
+	return slog.New(slog.NewTextHandler(captured, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
 // requireShell skips a test on a host with no usable shell (the pty tests are
@@ -151,16 +203,33 @@ func waitShellReady(t *testing.T, r *Runner, sink *recordingSink, id string) {
 
 // waitFor polls cond until it holds or the deadline passes. Used instead of a
 // fixed sleep so the pty tests stay fast and non-flaky.
+//
+// On timeout it reports how long it actually waited and how many times it asked,
+// and says out loud that the runner's own log follows (testLogger prints it on
+// failure). The old message was one line — `timed out after 10s waiting for X` —
+// which is indistinguishable between "this never happens" and "this had not
+// happened yet", and those are a regression and a slow machine respectively
+// (NIM-349). Raising the budget is not the fix and is why it is named here: these
+// waits carry a large margin already, so a fired deadline means a stall worth
+// reading, not a number worth increasing.
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
+	polls := 0
 	for time.Now().Before(deadline) {
+		polls++
 		if cond() {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("timed out after %s waiting for %s", timeout, what)
+	t.Fatalf("waiting for %s: still false after %s (%d polls).\n"+
+		"This is a stall, not a tight budget — do NOT raise the timeout. Read the runner\n"+
+		"log printed below: the whole sequence present means the assertion looks at the\n"+
+		"wrong state, the sequence stopping partway names the step that hung, and no log\n"+
+		"at all means the code under test was never reached.",
+		what, time.Since(start).Round(time.Millisecond), polls)
 }
 
 // processAlive reports whether pid still exists. Signal 0 performs the existence

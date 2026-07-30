@@ -31,7 +31,7 @@ func TestFlowControl_FloodIsDroppedNotBuffered(t *testing.T) {
 		QueueChunks:     2,
 		ReadBufferBytes: 4096,
 		KillGrace:       300 * time.Millisecond,
-	}, testLogger(), nil)
+	}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "flood"})
 	waitFor(t, 5*time.Second, "ConsoleOpened", func() bool { return sink.opened("flood") != nil })
@@ -68,7 +68,7 @@ func TestFlowControl_FloodIsDroppedNotBuffered(t *testing.T) {
 func TestFlowControl_ChunkSeqIsMonotonic(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1"})

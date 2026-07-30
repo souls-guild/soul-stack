@@ -184,7 +184,7 @@ func TestLiveGRPC_ConsoleRoundTripOverItsOwnStream(t *testing.T) {
 	// The sink fails the test if anything console-shaped reaches the
 	// EventStream: that is the property the ticket bought.
 	sink := &strictSink{t: t}
-	r := New(sink, Limits{}, testLogger(), nil, WithDialer(dialer))
+	r := New(sink, Limits{}, testLogger(t), nil, WithDialer(dialer))
 	defer r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 
 	const id = "01LIVEGRPC0000000000000000"
@@ -234,7 +234,7 @@ func TestLiveGRPC_FloodArrivesWithoutDrops(t *testing.T) {
 	stub, dialer := startStubKeeper(t)
 
 	sink := &strictSink{t: t}
-	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(), nil, WithDialer(dialer))
+	r := New(sink, Limits{QueueChunks: 1, ReadBufferBytes: 64}, testLogger(t), nil, WithDialer(dialer))
 
 	const id = "01LIVEFLOOD000000000000000"
 	r.Open(&keeperv1.ConsoleOpen{SessionId: id, Shell: flood})

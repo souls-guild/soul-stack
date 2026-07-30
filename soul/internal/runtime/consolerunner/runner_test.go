@@ -15,7 +15,7 @@ import (
 func TestConsole_IsARealTTY(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{Cols: 80, Rows: 24}, testLogger(), nil)
+	r := New(sink, Limits{Cols: 80, Rows: 24}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1", Cols: 80, Rows: 24})
@@ -44,7 +44,7 @@ func TestConsole_IsARealTTY(t *testing.T) {
 func TestConsole_ResizeAppliesWinsize(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{}, testLogger(), nil)
+	r := New(sink, Limits{}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1", Cols: 80, Rows: 24})
@@ -63,7 +63,7 @@ func TestConsole_ResizeAppliesWinsize(t *testing.T) {
 func TestConsole_NaturalExitReportsCode(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{}, testLogger(), nil)
+	r := New(sink, Limits{}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1"})
 	waitFor(t, 5*time.Second, "ConsoleOpened", func() bool { return sink.opened("s1") != nil })
@@ -93,7 +93,7 @@ func TestConsole_NaturalExitReportsCode(t *testing.T) {
 func TestConsole_CloseKillsSessionIncludingJobControlChildren(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1"})
 	waitFor(t, 5*time.Second, "ConsoleOpened", func() bool { return sink.opened("s1") != nil })
@@ -133,7 +133,7 @@ func TestConsole_CloseKillsSessionIncludingJobControlChildren(t *testing.T) {
 func TestConsole_CloseAllOnStreamTeardown(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 
 	const sessions = 3
 	pids := make([]int, 0, sessions)
@@ -171,7 +171,7 @@ func TestConsole_CloseAllOnStreamTeardown(t *testing.T) {
 func TestConsole_NoFDLeakAcrossSessions(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 
 	// One warm-up cycle first: the runtime allocates epoll/pidfd descriptors on
 	// the first pty, and counting those as a leak would make this test lie.
@@ -199,7 +199,7 @@ func TestConsole_NoFDLeakAcrossSessions(t *testing.T) {
 func TestConsole_LimitExceededIsRefusedWithTerminal(t *testing.T) {
 	requireShell(t)
 	sink := &recordingSink{}
-	r := New(sink, Limits{MaxSessions: 1, KillGrace: 300 * time.Millisecond}, testLogger(), nil)
+	r := New(sink, Limits{MaxSessions: 1, KillGrace: 300 * time.Millisecond}, testLogger(t), nil)
 	t.Cleanup(func() { r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN) })
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "first"})
@@ -228,7 +228,7 @@ func TestConsole_LimitExceededIsRefusedWithTerminal(t *testing.T) {
 // binary in the daemon's environment cannot become the console.
 func TestConsole_RelativeShellIsRejected(t *testing.T) {
 	sink := &recordingSink{}
-	r := New(sink, Limits{}, testLogger(), nil)
+	r := New(sink, Limits{}, testLogger(t), nil)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "s1", Shell: "bash"})
 	waitFor(t, 2*time.Second, "ConsoleExit", func() bool { return sink.exit("s1") != nil })
@@ -250,7 +250,7 @@ func TestConsole_RelativeShellIsRejected(t *testing.T) {
 // resurrect anything.
 func TestConsole_UnknownSessionIsIgnored(t *testing.T) {
 	sink := &recordingSink{}
-	r := New(sink, Limits{}, testLogger(), nil)
+	r := New(sink, Limits{}, testLogger(t), nil)
 
 	r.Stdin(&keeperv1.ConsoleStdin{SessionId: "ghost", Data: []byte("x")})
 	r.Resize(&keeperv1.ConsoleResize{SessionId: "ghost", Cols: 10, Rows: 10})
@@ -266,7 +266,7 @@ func TestConsole_UnknownSessionIsIgnored(t *testing.T) {
 // it.
 func TestConsole_OpenAfterCloseAllIsRefused(t *testing.T) {
 	sink := &recordingSink{}
-	r := New(sink, Limits{}, testLogger(), nil)
+	r := New(sink, Limits{}, testLogger(t), nil)
 	r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 
 	r.Open(&keeperv1.ConsoleOpen{SessionId: "late"})
