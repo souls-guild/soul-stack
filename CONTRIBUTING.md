@@ -58,7 +58,10 @@ Some heavier targets are opt-in and worth running when relevant:
 
 - `make e2e` — fast-loop end-to-end (Postgres + Redis + Vault via testcontainers).
   Run it if you touched the apply pipeline or keeper-side modules.
-- `make test-race` — run if you touched pub/sub, leases, or any hot path.
+- `make test-race` — the unit corpus under the race detector (~3 min, no docker).
+  CI runs it as a blocking job, so a race here fails the merge; run it locally if
+  you touched pub/sub, leases, the async runner or any hot path. `make check` does
+  NOT include it and says so when it finishes.
 
 To reproduce a bug on a live stack, bring up the local dev circuit (Postgres + Redis +
 Vault via docker-compose) with `make dev-up` / `make dev-stand`; details in

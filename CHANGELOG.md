@@ -1022,6 +1022,91 @@ order to act in.
 
 ### Fixed
 
+- **CI's verdict on the test tiers said less than it appeared to, in three
+  independent ways.** None of these were red builds — they were the arithmetic of
+  what a green one covered, which is worse, because the number everyone reads did
+  not change while the claim behind it shrank.
+
+  **The race detector ran over the wrong package set.** `-tags=integration` widens
+  a package set rather than narrowing it, so `make test-integration` was handing
+  the whole untagged unit corpus (~155 packages) to a command carrying `-race`,
+  inside the one job that also starts ~40 container sets. Unit tests written
+  against uninstrumented timing then failed there on instrumentation speed, and
+  three consecutive runs failed on a **different** test each time — the signature
+  of chance, where a real regression would have kept failing on the same one. The
+  three participants are fixed to measure behaviour instead of the machine: the
+  Redis cluster fixture waits for `cluster_state:ok` from every master rather than
+  for the first successful dial, `TestRun_CancelDuringTask` waits for the module's
+  `Apply` to announce it is running rather than polling `Cancel` every 5 ms from
+  the moment `Run` registers the apply-id (which happens well before task 0 is
+  dispatched — a poll landing in that window cancelled a run whose task had not
+  started, losing ~1 % of runs under `-race` while staying green in `make test` on
+  the same commit), and `TestConsole_ThrottledSessionStillTearsDownFast` no longer
+  asserts on elapsed wall-clock. Those are synchronisation fixes, not longer
+  waits: a raised timeout would only make the wrong outcome rarer while still
+  asserting nothing.
+
+  Fixing the three does not fix the class, so the set was corrected too. L1 now
+  runs the packages that actually carry `integration`-tagged tests (43 today),
+  derived from the tree on every invocation by `scripts/integration-packages.sh`
+  rather than kept as a list that would rot. The excluded packages lost no
+  coverage — they run in `make test`, now under the detector in `make test-race`,
+  and `make vet-tags` still compiles the whole tree under the tag.
+
+  **Nothing ran the detector where the concurrency actually is.** Every concurrent
+  subsystem lives in untagged packages — the async runner and its barriers
+  ([ADR-0075](docs/adr/0075-intra-host-async-tasks.md)), the console pty pumps and
+  write budget, the applybus fan-out — and `make test` runs them uninstrumented. A
+  `test-race` target and a nightly job for it both existed and between them
+  produced no signal: the workflow had no schedule, and the job was
+  `continue-on-error`. `make test-race` is now a blocking CI job of its own (~3
+  min) and part of `make check-all`; `make check` states that it did not run the
+  detector, the same way it already states which tiers it skipped. The nightly
+  copy is gone rather than left as an advisory second opinion.
+
+  **`make test-race` could not fail.** It lacked `-count=1`. That flag is
+  load-bearing everywhere in this Makefile, but for the detector it guards
+  something sharper: a race is found by observing an interleaving, so a green
+  sweep means "no race was observed this run" — a per-run claim. Cached, `go test`
+  replays one historical observation for ever; two consecutive sweeps finished in
+  8 s reporting `(cached) ok` for all 140 packages.
+
+  **An infrastructure failure was indistinguishable from a caught regression.**
+  `CLUSTERDOWN`, `connection refused` against a mapped port and "wait until ready:
+  context deadline exceeded" all arrive in the same `--- FAIL` shape as an
+  assertion, and the two have opposite answers: rerun that package, versus fix the
+  code. Told apart by eye, every red L1 run cost a person an hour of reading
+  container logs — and the cheap way out of that hour, "L1 is flaky, rerun it", is
+  precisely how a real regression gets waved through. On failure the target now
+  labels each failing package **REGRESSION** / **INFRA** / **UNCLEAR** and prints
+  the `PKG=` line to rerun a suspect one alone. `UNCLEAR` exists rather than being
+  folded into `INFRA` because a false `INFRA` label is the failure mode that
+  matters — it is the one that makes a finding disappear — so a signature either
+  layer can print stays a finding until a solitary rerun says otherwise. Nothing is
+  downgraded: L1 still fails and the target still exits non-zero. No readiness wait
+  was loosened to make any of this quieter; that would trade a loud infra failure
+  for a silent one.
+
+  Narrowing what L1 runs introduced a failure mode the old `./...` could not have,
+  so it is guarded rather than trusted: if the derivation ever returns nothing,
+  `make test-integration` would print "skip" for every module and exit 0 — a total
+  loss of L1 that looks exactly like a tree with no integration tests.
+  `make check` now runs `check-integration-set`, which cross-checks the set
+  against a second derivation that shares no machinery with the first (grep for
+  build-constraint lines, not `go list`) and fails on a shortfall.
+
+- **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
+  is written for a feature branch, where only the newest commit matters. A release
+  branch is the opposite case: it *is* the integration target, every squash-merge
+  into it is a unit of acceptance, and merges land minutes apart — so each push
+  evicted the previous run and the branch could show a green result while the merge
+  in question never completed one. Eviction reports `cancelled`, which is neither
+  pass nor fail, sits next to `failure` in a run listing, and is remembered as
+  neither. Cancellation is now limited to branches that are not `main` or
+  `release/*`; on those, runs queue instead. Queueing alone would not be enough — a
+  reader can still pick the wrong row — so `make check-ci` answers "has CI verified
+  THIS commit?" about a sha it derives from git, and prints `cancelled`, `skipped`
+  and "no run exists" as their own outcomes instead of folding them into a verdict.
 - **The spec said a group construct's requisite skips the whole group when its
   condition is not met. That is only true for descendants with no requisite of
   their own** ([ADR-009](docs/adr/0009-scenario-dsl.md) amendment 2026-07-30,

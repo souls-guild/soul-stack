@@ -15,8 +15,14 @@ Commit the release commit to `main`. From this moment on, only what is already i
 Run the full gate — one target covers the three tiers:
 
 ```sh
-make check-all          # = check + test-integration (L1, -race) + e2e (L3a); docker required
+make check-all          # = check + test-race + test-integration (L1) + e2e (L3a); docker required
 ```
+
+Where the race detector runs: `make test-race` over the untagged unit corpus (that
+is where the concurrent code lives) and `make test-integration` over the tagged
+packages. `make test` — and therefore `make check` — runs **without** it, so a
+green `check` is silent about data races by design; the full table is in
+[docs/testing/README.md](docs/testing/README.md).
 
 `make check` alone is docker-free by design and therefore says nothing about L1
 or L3a; it now prints the tiers it skipped. Do not measure release readiness with

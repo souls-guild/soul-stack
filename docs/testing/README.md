@@ -106,6 +106,30 @@ One-time flake at container start (testcontainers infra — for example a timeou
 bringing Vault up) is not a code regression: rerun the affected package in
 isolation rather than rolling the change back.
 
+**You no longer have to work out which one you got.** When L1 fails, the target
+runs [`scripts/classify-l1-failure.py`](../../scripts/classify-l1-failure.py) over
+the output and labels every failing package:
+
+- **REGRESSION** — an assertion failed. A finding; rerunning changes nothing.
+- **INFRA** — a signature only the container/daemon layer can produce (`wait until
+  ready: context deadline exceeded`, `Error response from daemon`,
+  `docker-credential-…`). Nothing was asserted, so there is nothing to conclude
+  about the code. It prints the `PKG=` line to rerun that package alone.
+- **UNCLEAR** — a signature either layer can produce (`connection refused`,
+  `CLUSTERDOWN`, `i/o timeout`). Deliberately **not** folded into INFRA: a false
+  INFRA label is the failure mode that matters, because that is the one that makes
+  a regression disappear. Treat UNCLEAR as a finding until a solitary rerun says
+  otherwise.
+
+Why label rather than fix: `CLUSTERDOWN` and a failed assertion arrive in the same
+`--- FAIL` shape and have opposite answers, so telling them apart by eye cost a
+person an hour per red run — and the cheap way out of that hour ("L1 is flaky,
+rerun it") is exactly how a real regression gets waved through. The labelling
+downgrades nothing: L1 still fails, the target still exits non-zero, and a failure
+that survives a solitary rerun is a finding whatever its label said. In particular
+no readiness wait was loosened to make this quieter — that would trade a loud infra
+failure for a silent one, which is the trade the `check-all` target argues against.
+
 **Rerun it through the target, not around it:**
 
 ```
@@ -120,6 +144,39 @@ every data race in the code those suites exercise. A whole-tree sweep that lost
 the flag fails on `TestIntegrationSuiteRunsUnderRace` rather than passing
 quietly; declaring the weaker run is possible and explicit
 (`SOUL_STACK_INTEGRATION_SKIP_RACE=1`).
+
+### Where `-race` runs and where it does not
+
+The detector is bound to a **package set**, not to a job:
+
+| Target | Package set | `-race` |
+|---|---|---|
+| `make test` | the untagged corpus, all modules (~155 pkg) | **no** — keeps `make check` runnable in ~90 s |
+| `make test-race` | the **same** corpus | **yes** — blocking CI job `race` |
+| `make test-integration` | only packages carrying `integration`-tagged tests (43) | **yes** |
+
+Two mistakes this replaces, worth knowing because both read as their opposite:
+
+- `-tags=integration` **widens** a package set, it does not narrow one. So L1 was
+  running the whole untagged corpus under `-race`, in the same job that starts ~40
+  container sets. Tests written against uninstrumented timing failed there on
+  instrumentation speed — `TestRun_CancelDuringTask` lost ~1 % of runs under
+  `-race` while staying green in `make test` on the same commit — so the job
+  became unreliable in both directions at once (NIM-349). Fixing that means
+  correcting the SET; `-race` was not removed from anywhere.
+- Concurrent code lives in the untagged corpus: the async runner and its barriers
+  ([ADR-0075](../adr/0075-intra-host-async-tasks.md)), the console pty pumps and write
+  budget, the applybus fan-out. None of it carries an `integration` tag, so
+  before the `race` job **no gate ran the detector over it at all** (NIM-312). A
+  `test-race` target and a nightly job for it existed the whole time and produced
+  nothing: the workflow had no schedule, and the job was `continue-on-error`.
+
+`make test-race` passes `-count=1`, and that is load-bearing rather than tidy. A
+race is found by observing an interleaving, so a green sweep means "no race was
+observed this run" — a per-run claim. Cached, `go test` replays one historical
+observation for ever: two consecutive sweeps of this target once finished in 8 s
+reporting `(cached) ok` for all 140 packages, which is a gate that cannot fail
+whatever the code does.
 
 `make test-integration` also caps how many packages start containers at once
 (`INTEGRATION_PARALLEL`, default 4) to keep that class of noise down, and sets

@@ -17,7 +17,7 @@
 
 - [ ] `make check` green
 - [ ] `make e2e` green (if apply-pipeline / keeper-side modules touched)
-- [ ] `make test-race` green (if pubsub / lease / hot-path touched)
+- [ ] `make test-race` green (unit corpus under the detector; CI blocks on it too)
 
 ## Architecture
 
