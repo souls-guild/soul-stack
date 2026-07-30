@@ -887,6 +887,74 @@ func TestSkipOnChanges(t *testing.T) {
 	}
 }
 
+// TestRun_OnChanges_InheritedRequisiteWidens — a group construct (`block:` /
+// `apply:`) merges its own `onchanges:` into a descendant's as a UNION of names,
+// and the union composes as OR. So a descendant that already had a requisite
+// runs when EITHER source changed: a group-level requisite WIDENS its gating
+// rather than narrowing it, which is the opposite of how the outer line reads.
+//
+// Normative per ADR-009 amendment 2026-07-30 (NIM-287) and destiny/tasks.md
+// §6.5. Pinned here because nothing else covers the Soul-side half: the render
+// tests assert the union of indices, not what the runner then does with it.
+// Replacing OR with AND between inheritance levels is NIM-351, and would flip
+// this expectation — which is exactly why it is written down.
+//
+// Shape: `outer` is the group's source (unchanged), `inner` the descendant's own
+// (changed). The merged task carries [outer, inner] and RUNS although the
+// group's source never moved; the task gated on [outer] alone is skipped. The
+// contrast is the point — it shows the union widened rather than narrowed.
+func TestRun_OnChanges_InheritedRequisiteWidens(t *testing.T) {
+	ran := map[string]bool{}
+	reg := mapRegistry{
+		"core.file": &fakeModule{ // idx 0: the group's source — UNCHANGED
+			applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				return stream.Send(&pluginv1.ApplyEvent{Changed: false})
+			},
+		},
+		"core.pkg": &fakeModule{ // idx 1: the descendant's own source — CHANGED
+			applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				return stream.Send(&pluginv1.ApplyEvent{Changed: true})
+			},
+		},
+		"core.service": &fakeModule{ // idx 2: gated on the MERGED union
+			applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				ran["merged"] = true
+				return stream.Send(&pluginv1.ApplyEvent{Changed: true})
+			},
+		},
+		"core.cmd": &fakeModule{ // idx 3: gated on the group's source ALONE
+			applyFunc: func(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				ran["group_only"] = true
+				return stream.Send(&pluginv1.ApplyEvent{Changed: true})
+			},
+		},
+	}
+	sink := &recordingSink{}
+	r := NewApplyRunner(reg, nil)
+
+	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
+		ApplyId: "oc-widen",
+		Tasks: []*keeperv1.RenderedTask{
+			{Name: "outer", Module: "core.file.present"},
+			{Name: "inner", Module: "core.pkg.installed"},
+			{Name: "merged", Module: "core.service.restarted", OnchangesIdx: []int32{0, 1}},
+			{Name: "group_only", Module: "core.cmd.run", OnchangesIdx: []int32{0}},
+		},
+	}, sink)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !ran["merged"] {
+		t.Error("the merged task was skipped - an inherited requisite composes as OR, so the descendant's own changed source alone must run it")
+	}
+	if ran["group_only"] {
+		t.Error("the task gated on the group's source alone ran - that source is unchanged, and without this contrast the test no longer shows widening")
+	}
+	if sink.taskEvents[3].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_SKIPPED {
+		t.Errorf("group_only status = %v, want SKIPPED", sink.taskEvents[3].GetStatus())
+	}
+}
+
 // --- helpers ---
 
 type mapRegistry map[string]module.SoulModule

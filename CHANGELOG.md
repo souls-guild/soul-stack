@@ -1022,6 +1022,47 @@ order to act in.
 
 ### Fixed
 
+- **The spec said a group construct's requisite skips the whole group when its
+  condition is not met. That is only true for descendants with no requisite of
+  their own** ([ADR-009](docs/adr/0009-scenario-dsl.md) amendment 2026-07-30,
+  [destiny/tasks.md §6.5](docs/destiny/tasks.md), [scenario/orchestration.md
+  §2.1.2](docs/scenario/orchestration.md)). `block:` and `apply:` pass their own
+  `onchanges:`/`onfail:`/`require:` into every task of the group, merged with the
+  task's own as a **union of names** — and a union of `onchanges:` composes as
+  **OR**. So a group-level requisite **widens** the gating of a descendant that
+  already had one, rather than narrowing it:
+
+  ```yaml
+  # the destiny task, gated on its own source
+  - name: Restart DragonFly because the binary or unit changed
+    module: core.service.restarted
+    onchanges: [dragonfly_bin, dragonfly_unit]
+
+  # the applier over that destiny
+  - name: Apply the dragonfly destiny
+    onchanges: [df_config]      # reads as "only when the config changed"
+    apply: { destiny: dragonfly, input: { … } }
+  ```
+
+  The restart ends up gated on `[df_config, dragonfly_bin, dragonfly_unit]` and
+  fires on a binary change even when `df_config` never moved. Behaviour is
+  unchanged — this is what both constructs have always done (`block:` since the
+  C1 pilot, `apply:` since the applier stopped dropping its own keys); what was
+  wrong was the documentation, which stated the opposite in one place and said
+  nothing about the composition in the others. Note that `when:` on the same
+  construct merges by AND and narrows, so the two axes deliberately compose in
+  opposite directions.
+
+  **There is no way to spell "outer AND inner" today**, and no workaround
+  reproduces it — `when:` on an applier must be static, `where:` selects hosts
+  rather than reacting to an outcome. Keep the requisite off the group when a
+  descendant's own must stay authoritative. Introducing AND needs a grouped
+  requisite on the wire plus a rule for a bracket whose sources are all filtered
+  out on a host; it is deferred to NIM-351 and will be a breaking change to the
+  behaviour fixed here. Guard tests now pin the semantics on both sides
+  (`keeper/internal/render`, `soul/internal/runtime`) so it cannot drift in
+  silence.
+
 - **Only an unrestricted role could create an incarnation whose name comes from a
   `name_template`.** The create gate scopes from the request body before the handler
   runs, keyed on `incarnation=<name>` — the one dimension a template does not have
