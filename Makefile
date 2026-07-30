@@ -230,14 +230,25 @@ test-plugins:
 # Runs tests with the race detector - a separate target so the plain `make test`
 # stays fast. CI should run both: `test` (fast, on every push) and
 # `test-race` (a separate step before merge).
+#
+# `-count=1` is load-bearing HERE for a reason that does not apply to the other
+# targets (NIM-312). Everywhere else it defeats the file-content blind spot of the
+# build cache (see `test`); for the race detector it defeats something worse. A
+# race is found by OBSERVING an interleaving, so a green sweep means "no race was
+# observed this time", not "there is no race" — the claim is only worth anything
+# per run. Cached, `go test` replays that one historical observation forever: two
+# consecutive sweeps of this target finished in 8 s reporting `(cached) ok` for all
+# 140 packages, which is a gate that cannot fail no matter what the code does.
+# That is the NIM-238 shape once more — a check that did not happen, printing the
+# words of one that passed.
 test-race:
 	@for m in $(MODULES); do \
 		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
 			echo "skip $$m (no Go packages)"; \
 			continue; \
 		fi; \
-		echo "go test -race ./... in $$m"; \
-		(cd $$m && go test -race ./...) || exit 1; \
+		echo "go test -race -count=1 ./... in $$m"; \
+		(cd $$m && go test -race -count=1 ./...) || exit 1; \
 	done
 
 # Integration tests under the `integration` build tag (testcontainers-go).
@@ -271,8 +282,8 @@ SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
 # a green L1 then means something WEAKER locally than the same words mean in CI.
 # That is the failure mode NIM-238 is about, one level up: the check that did not
 # happen is indistinguishable from the check that passed. There is now one way to
-# run L1, and it matches CI by construction (INTEGRATION_RACE_GUARD below fails a
-# full sweep that lost the flag anyway).
+# run L1, and it matches CI by construction (TestIntegrationSuiteRunsUnderRace in
+# keeper/internal/integrationenv fails a full sweep that lost the flag anyway).
 PKG ?= ./...
 
 test-integration:
