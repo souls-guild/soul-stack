@@ -799,15 +799,18 @@ write/read round-trip and deletes the container on exit `TestMain`.
 
 | Team | What does |
 |---|---|
-| `make test-integration` | `go test -tags=integration -race -count=1 -p 4 ./...` for all modules, with `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1`. Default script. |
-| `cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/auditpg/` | Sighting one package. |
+| `make test-integration` | `go test -tags=integration -race -count=1 -p 4` over the packages that carry integration-tagged tests (43, listed by `scripts/integration-packages.sh`) in every module, with `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1`. Default script. |
+| `make test-integration PKG=./internal/auditpg/` | Sighting one package — same flags, so a green result means the same thing. |
 
 Requirements:
 
 - **Docker**. Testcontainers uses docker-sock; on macOS - Docker
 Desktop / OrbStack / Colima; on Linux - `dockerd` + rights to the socket.
 - `make test` / `make test-race` (without `-integration`) **do not require docker** -
-files under `//go:build integration` are excluded from the normal build.
+files under `//go:build integration` are excluded from the normal build. The two
+cover the same packages; `test-race` adds the race detector and takes ~3 min
+against ~90 s (see [docs/testing/README.md](../testing/README.md) for which target
+carries `-race` and which does not).
 - `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` (or `true`): if testcontainers could
 not start, the tests **fail** with `log.Fatalf` instead of skipping. Without it
 `TestMain` logs the reason and returns exit 0 - the package is silently not run,

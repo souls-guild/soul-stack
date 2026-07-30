@@ -208,8 +208,15 @@ jobs:
   # Docker is available on ubuntu-latest → testcontainers bring up containers themselves
   # (postgres:16-alpine etc.). Separate job so as not to slow down the required gate.
   #
-  # COVERAGE: runs the entire `make test-integration` (go test -tags=integration
-  # -race -count=1 across all go.work modules). Tests that need NON-testcontainers
+  # COVERAGE: runs `make test-integration` (go test -tags=integration -race
+  # -count=1) over the packages that carry integration-tagged tests — 43 today, not
+  # the ~155 of `./...`. The tag WIDENS a package set rather than narrowing it, so
+  # this job used to run the whole unit corpus under `-race` alongside its own
+  # container starts, and untagged timing-sensitive tests failed here at random
+  # while passing in `check` on the same sha (NIM-349). Those packages did not lose
+  # coverage: they run in the `check` job and, under the detector, in `race`.
+  #
+  # Tests that need NON-testcontainers
   # infra (a pre-started Vault/Redis cluster etc.) must skip themselves on
   # missing environment (t.Skip). If such a test hard-fails in a clean CI run —
   # that's a signal for the test author to add a skip-guard, not a reason to fix the workflow.
@@ -245,6 +252,54 @@ jobs:
 
       - name: make test-integration
         run: make test-integration
+
+  # Race detector over the UNIT corpus (`make test-race`). Blocking, and a separate
+  # job from `check` on purpose — two different claims, read separately.
+  #
+  # Why it is here and not in nightly (NIM-312). Every piece of concurrent code in
+  # this repository lives in untagged packages: the async runner and its barriers
+  # (soul/internal/runtime, ADR-0075), the console pty pumps and write budget, the
+  # applybus fan-out. `make test` runs them uninstrumented, so no gate saw them
+  # under the detector. `make test-integration` does pass `-race`, but only over
+  # packages carrying integration-tagged tests — none of the above.
+  #
+  # A `test-race` target and a nightly job for it both already existed, and between
+  # them they produced no signal at all: the workflow is `workflow_dispatch` with
+  # no schedule, and the job carried `continue-on-error: true`, so on the rare
+  # manual run a found race was advisory. That is the NIM-238 shape a third time —
+  # the machinery is present, the verdict is not. A detector that cannot fail a
+  # merge is documentation, not a gate.
+  #
+  # Cost, stated: ~3 min on a runner of its own, so it does not extend the critical
+  # path (`integration` is longer). Runner minutes are free — this repository is
+  # public. It duplicates the unit tests that `check` already ran, uninstrumented;
+  # that is the price of `make check` staying fast for a contributor, and the two
+  # runs are independent signals rather than one guarded by the other.
+  race:
+    name: race detector (unit corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: make test-race
+        run: make test-race
 
   # Vulnerability scanner across Go modules. Blocking: a supply-chain advisory must
   # stop the merge (P0-7, docs/prod-readiness.md). At the time of enabling,

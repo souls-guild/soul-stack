@@ -986,6 +986,70 @@ order to act in.
 
 ### Fixed
 
+- **CI's verdict on the test tiers said less than it appeared to, in three
+  independent ways.** None of these were red builds — they were the arithmetic of
+  what a green one covered, which is worse, because the number everyone reads did
+  not change while the claim behind it shrank.
+
+  **The race detector ran over the wrong package set.** `-tags=integration` widens
+  a package set rather than narrowing it, so `make test-integration` was handing
+  the whole untagged unit corpus (~155 packages) to a command carrying `-race`,
+  inside the one job that also starts ~40 container sets. Unit tests written
+  against uninstrumented timing failed there on instrumentation speed:
+  `TestRun_CancelDuringTask` polled `Cancel` every 5 ms from the moment `Run`
+  registered the apply-id — which happens well before task 0 is dispatched — and
+  lost ~1 % of runs under `-race` while staying green in `make test` on the same
+  commit. Two attempts on one sha failed in two different packages with `DATA
+  RACE` in neither. A job failing on a coin toss is untrustworthy in both
+  directions, and once people learn to rerun it, red stops meaning anything at
+  all. L1 now runs the packages that actually carry `integration`-tagged tests (43
+  today), derived from the tree on every invocation by
+  `scripts/integration-packages.sh` rather than kept as a list that would rot. The
+  excluded packages lost no coverage — they run in `make test`, now under the
+  detector in `make test-race`, and `make vet-tags` still compiles the whole tree
+  under the tag. `TestRun_CancelDuringTask` synchronises on the module's `Apply`
+  being entered instead of on a wall-clock interval; that is a synchronisation
+  fix, not a longer wait, and the invariant it asserts is unchanged.
+
+  **Nothing ran the detector where the concurrency actually is.** Every concurrent
+  subsystem lives in untagged packages — the async runner and its barriers
+  ([ADR-0075](docs/adr/0075-intra-host-async-tasks.md)), the console pty pumps and
+  write budget, the applybus fan-out — and `make test` runs them uninstrumented. A
+  `test-race` target and a nightly job for it both existed and between them
+  produced no signal: the workflow had no schedule, and the job was
+  `continue-on-error`. `make test-race` is now a blocking CI job of its own (~3
+  min) and part of `make check-all`; `make check` states that it did not run the
+  detector, the same way it already states which tiers it skipped. The nightly
+  copy is gone rather than left as an advisory second opinion.
+
+  **`make test-race` could not fail.** It lacked `-count=1`. That flag is
+  load-bearing everywhere in this Makefile, but for the detector it guards
+  something sharper: a race is found by observing an interleaving, so a green
+  sweep means "no race was observed this run" — a per-run claim. Cached, `go test`
+  replays one historical observation for ever; two consecutive sweeps finished in
+  8 s reporting `(cached) ok` for all 140 packages.
+
+  Narrowing what L1 runs introduced a failure mode the old `./...` could not have,
+  so it is guarded rather than trusted: if the derivation ever returns nothing,
+  `make test-integration` would print "skip" for every module and exit 0 — a total
+  loss of L1 that looks exactly like a tree with no integration tests.
+  `make check` now runs `check-integration-set`, which cross-checks the set
+  against a second derivation that shares no machinery with the first (grep for
+  build-constraint lines, not `go list`) and fails on a shortfall.
+
+- **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
+  is written for a feature branch, where only the newest commit matters. A release
+  branch is the opposite case: it *is* the integration target, every squash-merge
+  into it is a unit of acceptance, and merges land minutes apart — so each push
+  evicted the previous run and the branch could show a green result while the merge
+  in question never completed one. Eviction reports `cancelled`, which is neither
+  pass nor fail, sits next to `failure` in a run listing, and is remembered as
+  neither. Cancellation is now limited to branches that are not `main` or
+  `release/*`; on those, runs queue instead. Queueing alone would not be enough — a
+  reader can still pick the wrong row — so `make check-ci` answers "has CI verified
+  THIS commit?" about a sha it derives from git, and prints `cancelled`, `skipped`
+  and "no run exists" as their own outcomes instead of folding them into a verdict.
+
 - **Only an unrestricted role could create an incarnation whose name comes from a
   `name_template`.** The create gate scopes from the request body before the handler
   runs, keyed on `incarnation=<name>` — the one dimension a template does not have

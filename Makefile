@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -286,15 +286,35 @@ SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
 # keeper/internal/integrationenv fails a full sweep that lost the flag anyway).
 PKG ?= ./...
 
-test-integration:
+# The package set is the packages that actually carry integration-tagged tests,
+# derived from the tree by scripts/integration-packages.sh (43 today: 41 in
+# keeper, 2 in soul) rather than taken as `./...` (~155).
+#
+# The difference is not tidiness (NIM-349). `-tags=integration` WIDENS a package
+# set instead of narrowing it, so `./...` handed the whole unit corpus to a
+# command carrying `-race` — inside the one job that is also starting container
+# sets at `-p $(INTEGRATION_PARALLEL)`. Unit tests written against uninstrumented
+# timing then fail on instrumentation speed: `TestRun_CancelDuringTask` polled
+# Cancel every 5 ms and lost ~1% of the time under `-race` while staying green in
+# `make test`, on the same sha, differing only in this flag. A job that fails on a
+# coin toss is untrustworthy in both directions — red stops meaning regression,
+# and once people learn to rerun it, red stops meaning anything.
+#
+# `-race` is NOT removed anywhere; the SET is corrected. The excluded packages are
+# exactly those with no tagged file, they keep running in `test` and now under the
+# detector in `test-race`, and `vet-tags` still compiles the whole tree under the
+# tag. So this narrows what L1 RUNS without narrowing what is CHECKED — which is
+# the only reason it is allowed, given NIM-238.
+test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list $(PKG) 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages under $(PKG))"; \
+		pkgs="$$(cd $$m && $(CURDIR)/scripts/integration-packages.sh $(PKG))"; \
+		if [ -z "$$pkgs" ]; then \
+			echo "skip $$m (no package under $(PKG) carries integration-tagged tests)"; \
 			continue; \
 		fi; \
-		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $(PKG) in $$m"; \
+		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
 		(cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
-			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $(PKG)) || exit 1; \
+			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $$pkgs) || exit 1; \
 	done
 
 # L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
@@ -992,20 +1012,25 @@ sign:
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
-check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
+check: check-fmt vet vet-tags build test test-plugins check-integration-set check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
 	@echo "check: all docker-free checks passed"
 	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
 	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
 	@echo "check:   result here is silent about every defect those tiers catch. It is not a"
 	@echo "check:   weaker version of CI — it is a different, smaller claim."
+	@echo "check: NOT RUN — the RACE DETECTOR. \`test\` runs the unit corpus uninstrumented,"
+	@echo "check:   so this gate is also silent about every data race in it, and that is where"
+	@echo "check:   the concurrent code lives (async runner + barriers, console pumps, applybus"
+	@echo "check:   fan-out). Docker-free, so it IS runnable here:   make test-race"
 	@echo "check:   Say what CI says:   make check-all"
-	@echo "check:   or one tier:        make test-integration  |  make e2e"
+	@echo "check:   or one tier:        make test-race  |  make test-integration  |  make e2e"
 
 # check-all — the composite whose green result means what a green CI run means.
 #
 # Why it exists (NIM-316). `make check` and CI were two different assertions
 # that both ended in the word "passed", and neither implied the other: check is
-# docker-free and skips L1/L3a entirely, while CI runs both (with `-race`).
+# docker-free and skips L1/L3a entirely, while CI runs both (with `-race`), and
+# neither of them ran the detector over the unit corpus at all (NIM-312).
 # "Everything is green locally" therefore referred to something narrower than
 # anyone reading it assumed — which is how a rotted L1 suite and four L3a tests
 # failing since ADR-029 stayed invisible for a release (NIM-221, NIM-317).
@@ -1033,8 +1058,16 @@ check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi ch
 check-ci:
 	@REF="$(REF)"; scripts/ci-status.sh $${REF:-HEAD}
 
-check-all: check test-integration e2e
-	@echo "check-all: docker-free gate + L1 (integration, -race) + L3a (e2e) all passed"
+# check-integration-set — the L1 package set is real, cross-checked against the
+# tree (NIM-349). Docker-free, so it lives in `check`: the failure it guards
+# against is a green, fast, empty L1, and that must be caught by the gate everyone
+# runs rather than by the job that would be reporting the lie. Details and the
+# second derivation: scripts/check-integration-set.sh.
+check-integration-set:
+	@scripts/check-integration-set.sh
+
+check-all: check test-race test-integration e2e
+	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
 	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
 	@echo "check-all:   make e2e-live-gate   (curated subset, before a major batch commit)"
 	@echo "check-all:   make e2e-live        (full, nightly / pre-release)"
@@ -1351,8 +1384,8 @@ help:
 	@echo "  build-soulctl     build only soulctl (operator client CLI)"
 	@echo "  test              go test ./... across all modules (no docker)"
 	@echo "  test-plugins      GOWORK=off go test over go.mod plugins examples/module/* (community.redis)"
-	@echo "  test-race         go test -race ./..."
-	@echo "  test-integration  go test -tags=integration (testcontainers, needs docker)"
+	@echo "  test-race         go test -race -count=1 ./... — the unit corpus under the detector (no docker)"
+	@echo "  test-integration  go test -tags=integration -race over the tagged packages only (needs docker)"
 	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, needs docker for the imp-slice)"
 	@echo "  build-linux       cross-compile keeper+soul for Linux amd64 (aggregate of bin-keeper+bin-soul)"
 	@echo "  bin-keeper        cross-compile only keeper (linux-amd64) -> keeper/bin/keeper-linux-amd64"
@@ -1366,8 +1399,9 @@ help:
 	@echo ""
 	@echo "Checks/gate:"
 	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
-	@echo "  check-all         check + test-integration (L1, -race) + e2e (L3a) = what a green CI run means"
+	@echo "  check-all         check + test-race + test-integration (L1) + e2e (L3a) = what a green CI run means"
 	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
+	@echo "  check-integration-set  the L1 package set matches the tree (guards a green, empty L1)"
 	@echo "  check-webui-embed embedded UI bundle matches its recorded fingerprint (no companion needed)"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
