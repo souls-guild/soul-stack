@@ -164,9 +164,20 @@ func PublishApplyEvent(ctx context.Context, c *Client, applyID, originKID, kind 
 // applyEventSubBufferSize is the Go channel buffer between the
 // Redis-PubSub loop and the caller (the applybus bridge). Symmetric with
 // outboundSubBufferSize. 64 events covers a typical apply (10-30 tasks +
-// start/final) plus burst headroom; a single shard channel can receive
-// several applyIDs (collision ≈ 1/K), but the forward-loop drains into
-// local subs synchronously and fast, so overflow is unlikely.
+// start/final) plus burst headroom.
+//
+// These 64 slots belong to the SHARD, not to an applyID: every apply mapped to
+// this shard (collision ≈ 1/[ApplyBusShardCount]) shares them. This comment used
+// to add "but the forward-loop drains into local subs synchronously and fast, so
+// overflow is unlikely" — which is wrong, and wrong in the direction that makes
+// people stop looking. Overflow was reproduced under load with several applies
+// colliding on one shard, and [ApplyEventSubscription.forward] then does what it
+// says: evicts the oldest event and logs it. Raising this number moves the
+// threshold, it does not remove the branch.
+//
+// Losing an event here costs live visibility (SSE), never the record of the
+// apply: that is Postgres, and the terminal state is reconciled by the
+// dispatcher's own timer rather than by this stream.
 const applyEventSubBufferSize = 64
 
 // ApplyEventSubscription is a handle on a subscription to a single shard

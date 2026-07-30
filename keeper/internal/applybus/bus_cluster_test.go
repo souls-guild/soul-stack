@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +35,72 @@ func newClusterRedis(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 
 func clusterTestLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
+}
+
+// lossCounter is an slog.Handler that counts the warnings the delivery path
+// emits when it sheds an event, so a test can tell a shed event from a lost
+// one. The default test logger writes to io.Discard: the code names the buffer
+// it overflowed on every drop, and the tests were throwing that away.
+//
+// The two buffers are counted apart on purpose. Which one overflows is the
+// whole question the fan-out test kept getting wrong: applybus.deliver's buffer
+// belongs to ONE subscriber (one applyID), redis.applyEventSubBufferSize
+// belongs to ONE SHARD and carries every applyID mapped to it.
+type lossCounter struct {
+	mu     sync.Mutex
+	bridge int // redis shard subscription — ApplyEventSubscription.forward
+	local  int // applybus.EventBus.deliver — per-subscriber channel
+}
+
+func (l *lossCounter) Enabled(context.Context, slog.Level) bool { return true }
+
+func (l *lossCounter) Handle(_ context.Context, r slog.Record) error {
+	// Both buffers say "dropped oldest event" when they evict, and "event lost"
+	// when the freed slot is gone again — one event either way. Matching the
+	// text is deliberate: if a message is reworded, this counts zero and the
+	// accounting assert fails as "loss nobody logged", which is the direction a
+	// test should fail in.
+	if !strings.Contains(r.Message, "dropped oldest event") && !strings.Contains(r.Message, "event lost") {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if strings.HasPrefix(r.Message, "redis.SubscribeApplyEvent:") {
+		l.bridge++
+	} else {
+		l.local++
+	}
+	return nil
+}
+
+func (l *lossCounter) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *lossCounter) WithGroup(string) slog.Handler      { return l }
+
+// counts returns the events shed by the shard bridge and by per-subscriber
+// buffers.
+func (l *lossCounter) counts() (bridge, local int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.bridge, l.local
+}
+
+// missingSeq lists the seq numbers below n that a collector never saw. The
+// shape of the answer names the mechanism: gaps in the MIDDLE are a buffer
+// evicting its oldest entry, a missing TAIL is a reader that stopped before the
+// stream ended. Printing the count alone hides that difference, which is how
+// one was read as the other for as long as it was (NIM-318, NIM-363).
+func missingSeq(seq []int, n int) []int {
+	seen := make(map[int]bool, len(seq))
+	for _, s := range seq {
+		seen[s] = true
+	}
+	var out []int
+	for i := 0; i < n; i++ {
+		if !seen[i] {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // redisSubCount — number of Redis-side subscribers on the shard channel that
@@ -1158,16 +1225,37 @@ func TestConcurrentPublishVsUnsubscribe(t *testing.T) {
 	wg.Wait()
 }
 
-// TestCluster_ShardFanout_NoDropNoMix — fan-out: N>10 distinct applyIDs
-// colliding on ONE shard are published from another Keeper at a reasonable
-// rate (readers drain concurrently). One forward-loop per shard serves all
-// applyIDs: each channel receives EXACTLY its own events (no drops at a
-// reasonable rate) and no mixing (per-applyID order preserved, payload
-// doesn't leak between applyIDs). Extends
-// TestCluster_ShardCollision_NoPayloadMix to N>2 channels.
-func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
+// TestCluster_ShardFanout_NoSilentLossNoMix — fan-out: N>10 distinct applyIDs
+// colliding on ONE shard are published from another Keeper at a reasonable rate
+// (readers drain concurrently). One forward-loop per shard serves all applyIDs:
+// each channel receives its own events in order, nothing leaks between
+// applyIDs, and every event that does not arrive was shed by a buffer that said
+// so. Extends TestCluster_ShardCollision_NoPayloadMix to N>2 channels.
+//
+// The test was called NoDropNoMix and demanded all perID events on every
+// channel. The bus never promised that: both buffers on this path are
+// drop-oldest by policy, and the one that governs here belongs to the SHARD,
+// not to the applyID. redis.applyEventSubBufferSize is 64 slots per shard
+// subscription while this test deliberately collides fanout×perID = 320 events
+// onto one shard, so overflow is not an anomaly here — it is the design working
+// as documented. The reassuring arithmetic "20 events, 64 slots, nothing can be
+// dropped" reads applybus.SubscriberBufferSize, which is a different buffer and
+// says nothing about the bridge. A shortfall is therefore not by itself a
+// defect; a shortfall nobody logged is (NIM-363).
+//
+// So this asserts what the bus actually guarantees:
+//
+//   - order and ownership ALWAYS, including on a shortfall. The old assert did
+//     `continue` when the count was short, which skipped the order check
+//     precisely in the runs where something had gone wrong — the NIM-238 shape:
+//     the guarantee went unchecked exactly when it mattered.
+//   - accounting: events missing == events the code reported shedding. Policy
+//     loss passes, silent loss fails.
+//   - no surplus or duplicated delivery.
+func TestCluster_ShardFanout_NoSilentLossNoMix(t *testing.T) {
+	losses := &lossCounter{}
 	c, mr := newClusterRedis(t)
-	busA := NewBusWithRedis(clusterTestLogger(), c, "keeper-A")
+	busA := NewBusWithRedis(slog.New(losses), c, "keeper-A")
 	busB := NewBusWithRedis(clusterTestLogger(), c, "keeper-B")
 
 	const (
@@ -1195,11 +1283,13 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool { return redisSubCount(mr, ids[0]) == 1 },
 		"fanout subscriptions did not collapse to single shard bridge")
 
-	// Concurrent readers: collect seq for their own applyID. A reasonable
-	// drain rate — the buffer doesn't overflow, no drops expected.
+	// Concurrent readers: collect seq for their own applyID. Draining
+	// concurrently keeps the shard buffer from overflowing most runs, but
+	// whether it did is measured below, not assumed here.
 	type collected struct {
-		mu  sync.Mutex
-		seq []int
+		mu       sync.Mutex
+		seq      []int
+		timedOut bool
 	}
 	got := make(map[string]*collected, fanout)
 	var rwg sync.WaitGroup
@@ -1232,6 +1322,11 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 			// event loss spends the reader's time on the wrong subsystem, and if
 			// it were "fixed" by widening the window it would stop being able to
 			// tell the two apart at all (NIM-318).
+			//
+			// The deadline no longer decides whether events were lost — the
+			// shed-log does (see the accounting assert below). It only bounds how
+			// long this reader is willing to wait, and it records giving up so a
+			// shortfall can name which of the two happened.
 			hard := time.NewTimer(drainTimeout)
 			defer hard.Stop()
 			for {
@@ -1262,8 +1357,12 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 					col.seq = append(col.seq, dec.Seq)
 					col.mu.Unlock()
 				case <-hard.C:
-					// Short of perID after drainTimeout — a real shortfall. Let
-					// the assert below report it with the count.
+					// Short of perID after drainTimeout. Whether that is loss or
+					// a stall is not this goroutine's call — record that it gave
+					// up and let the accounting below say which.
+					col.mu.Lock()
+					col.timedOut = true
+					col.mu.Unlock()
 					return
 				}
 			}
@@ -1274,7 +1373,11 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 			// only miss one, never invent one.
 			select {
 			case ev := <-ch:
-				t.Errorf("surplus delivery for %q: got seq beyond the %d published (%+v)", wantID, perID, ev.Payload)
+				extra := "unreadable payload"
+				if raw, ok := ev.Payload.(json.RawMessage); ok {
+					extra = string(raw)
+				}
+				t.Errorf("surplus delivery for %q: an event beyond the %d published (%s)", wantID, perID, extra)
 			case <-time.After(200 * time.Millisecond):
 			}
 		}()
@@ -1302,22 +1405,55 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 	pwg.Wait()
 	rwg.Wait()
 
-	// Each applyID received exactly its perID events, in increasing seq order
-	// (the forward-loop didn't scramble per-applyID order), no drops.
+	// Order and ownership are checked for EVERY applyID, short or not: the run
+	// that lost something is exactly the run where scrambling would matter, and
+	// skipping the check there is how a guarantee stops being guarded. How many
+	// events arrived is settled once, below, against what the buses shed.
+	shortfall, gaveUp := 0, 0
 	for _, id := range ids {
 		col := got[id]
 		col.mu.Lock()
-		seq := col.seq
+		seq := append([]int(nil), col.seq...)
+		timedOut := col.timedOut
 		col.mu.Unlock()
-		if len(seq) != perID {
-			t.Errorf("applyID %q: got %d events, want %d (drop or loss under fanout)", id, len(seq), perID)
-			continue
-		}
+
+		prev := -1
 		for i, s := range seq {
-			if s != i {
-				t.Errorf("applyID %q: event[%d] seq = %d, want %d (per-applyID order scrambled)", id, i, s, i)
+			if s < 0 || s >= perID {
+				t.Errorf("applyID %q: event[%d] seq = %d, outside the %d published", id, i, s, perID)
 				break
 			}
+			if s <= prev {
+				t.Errorf("applyID %q: event[%d] seq = %d after %d — per-applyID order scrambled or duplicated",
+					id, i, s, prev)
+				break
+			}
+			prev = s
 		}
+
+		if missing := perID - len(seq); missing > 0 {
+			shortfall += missing
+			if timedOut {
+				gaveUp++
+			}
+			t.Logf("applyID %q: %d of %d events, missing seq %v (reader gave up: %t)",
+				id, len(seq), perID, missingSeq(seq, perID), timedOut)
+		}
+	}
+
+	// The count that decides. Every event that did not arrive must be an event a
+	// buffer reported shedding; anything beyond that is loss nobody reported,
+	// which is what this test exists to catch. No timeout can be widened into
+	// making this assert pass.
+	bridge, local := losses.counts()
+	switch {
+	case shortfall != bridge+local:
+		t.Errorf("%d events missing but %d shed (%d shard bridge, %d subscriber buffers) — the two must match. "+
+			"%d of %d readers hit the %s deadline; a missing TAIL behind a reader that gave up is a stall, "+
+			"gaps in the MIDDLE are a buffer evicting without saying so",
+			shortfall, bridge+local, bridge, local, gaveUp, fanout, drainTimeout)
+	case shortfall > 0:
+		t.Logf("%d events shed under fan-out (%d shard bridge, %d subscriber buffers), all of them logged — "+
+			"drop-oldest working as documented, not loss", shortfall, bridge, local)
 	}
 }
