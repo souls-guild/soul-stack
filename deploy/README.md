@@ -171,27 +171,30 @@ sudo rpm  -i dist/pkg/soul-stack-keeper-<version>.x86_64.rpm    # rpm distros
 # then: cp /etc/keeper/keeper.yml.example /etc/keeper/keeper.yml — edit the config
 ```
 
-### Image signing (cosign) — post-publish, once a registry exists
+### Image signing (cosign) — live in CI
 
-Signing images and packages via cosign/sigstore is **deferred**: real signing
-requires a registry to publish images to + keyless identity via OIDC (or a
-private signing key). A local repo without CI/registry has neither.
+Released artifacts are signed with **keyless cosign** by the release workflow. The
+OIDC identity of [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+is what Fulcio issues an ephemeral certificate against, and Rekor records the
+signature in the public transparency log — there is no long-lived signing key
+anywhere.
 
-`make sign` — a documented stub: prints the reason it's deferred and a link to this
-section, and exits successfully (doesn't block the pipeline). Once CI + registry exist,
-the plan is:
+What every tag signs (see [`.goreleaser.yaml`](../.goreleaser.yaml), blocks `signs`
+and `docker_signs`):
 
-- keyless image signing in CI: `cosign sign <registry>/soul-stack/keeper:<tag>`
-  under the workflow's OIDC identity (Fulcio issues an ephemeral certificate, Rekor
-  logs transparency);
-- verification at deploy time: `cosign verify --certificate-identity=<workflow>
-  --certificate-oidc-issuer=<issuer> <image>`;
-- optionally — attach the SBOM from `make sbom` to the image via `cosign attach sbom`.
+- `checksums.txt` — `cosign sign-blob`; the certificate and signature ship next to it
+  in the release as `checksums.txt.pem` / `checksums.txt.sig`;
+- the GHCR image manifests — `cosign sign` by digest.
+
+The identity to pin and the ready-to-run verification commands —
+[README → Install](../README.md#install).
+
+`make sign` stays a stub for **local** builds: signing off-CI would need a private key
+or an interactive OIDC flow, which a local build deliberately doesn't have. Locally
+built artifacts are unsigned by design — you sign by pushing a tag, not by hand.
 
 ## Deferred (next pass)
 
-- **Signing images and packages** (cosign / sigstore) — see the section above, waiting
-  on CI + registry.
 - **Version variable** in `soul-lint`'s main package (then the ldflags `-X` and
   `--build-arg VERSION` will start injecting a version into it too — as already done for
   `soul`/`keeper`/`soulctl`).

@@ -15,16 +15,21 @@ Accordingly, [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-sou
 
 ### Where to get artifacts
 
-| Method | Team/source | When |
+Released artifacts come first: every tag is built and signed by CI, so a production host should install a release, not a local build. Local builds stay available for anything that isn't tagged yet.
+
+| Method | Command / source | When |
 |---|---|---|
+| **Released packages** (`.deb` / `.rpm` / `.apk`) | [Releases](https://github.com/souls-guild/soul-stack/releases) - `soul-stack-<binary>_<version>_linux_<arch>.<ext>`, `amd64` and `arm64`. `keeper` and `soul` carry a systemd unit, env file and example config. | **Default for production Linux hosts.** |
+| **Released container images** | `ghcr.io/souls-guild/soul-stack/keeper:<version>` and `.../soul:<version>` - multi-arch (`linux/amd64` + `linux/arm64`), distroless. Version tags only, no `latest`. | **Default for container rollout.** |
+| **Released archives** | [Releases](https://github.com/souls-guild/soul-stack/releases) - `soul-stack_<version>_<os>_<arch>.tar.gz` (`.zip` on Windows). The Linux bundle carries all six binaries, macOS/Windows the four CLIs. | Hosts without a package manager; operator workstations. |
 | From sources | `make build` ([`Makefile`](../../Makefile)) | dev / staging. Binary in `<module>/bin/<name>`. |
-| Native deb/rpm packages | `make pkg` (requires `nfpm`, see [`deploy/README.md`](../../deploy/README.md)). Artifacts in `dist/pkg/`. | Prod installation on Linux. nfpm configs - [`deploy/nfpm/`](../../deploy/nfpm/). |
-| Docker images | `docker build -f deploy/docker/<name>.Dockerfile -t soul-stack/<name> --build-arg VERSION=$(git describe …) .` (multi-stage, distroless runtime; see [`deploy/README.md`](../../deploy/README.md)). | Container rolling. |
-| SBOM | `make sbom` (CycloneDX via `cyclonedx-gomod`, mode `app`). Artifacts in `dist/sbom/`. | Compliance / supply-chain audit requirements. |
+| Local deb/rpm packages | `make pkg` (requires `nfpm`, see [`deploy/README.md`](../../deploy/README.md)). Artifacts in `dist/pkg/`. | A build off an untagged commit. nfpm configs - [`deploy/nfpm/`](../../deploy/nfpm/). |
+| Local docker images | `docker build -f deploy/docker/<name>.Dockerfile -t soul-stack/<name> --build-arg VERSION=$(git describe …) .` (multi-stage, distroless runtime; see [`deploy/README.md`](../../deploy/README.md)). | A build off an untagged commit. |
+| SBOM | Every released archive ships a CycloneDX SBOM next to it (`*.cdx.json`); locally - `make sbom` (CycloneDX via `cyclonedx-gomod`, mode `app`), artifacts in `dist/sbom/`. | Compliance / supply-chain audit requirements. |
 
 `make pkg` rebuilds Linux binaries under `PKG_ARCH` (`amd64` default, overridden by `make pkg PKG_ARCH=arm64`) with `CGO_ENABLED=0 -trimpath -ldflags '-s -w'` and injects `VERSION` ldflags (see [`Makefile`](../../Makefile)).
 
-Signing images (cosign / sigstore) - postponed until the appearance of CI + registry (`make sign` - documented stub), see [`deploy/README.md` § "Signing images"](../../deploy/README.md).
+Released artifacts are signed with keyless cosign (GitHub OIDC, no long-lived key; signatures recorded in Rekor) - `checksums.txt` as a blob, the GHCR image manifests by digest. **Verify before rollout**; the commands and the identity to pin are in [README → Install](../../README.md#install). Locally built artifacts are unsigned by design (`make sign` is a stub), see [`deploy/README.md` § "Image signing"](../../deploy/README.md).
 
 ## System Requirements
 

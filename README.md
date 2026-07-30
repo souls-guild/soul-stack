@@ -82,6 +82,55 @@ hot layer (presence, lease, leader election) lives in Redis. The required
 infrastructure tier is **Postgres + Redis + Vault**
 ([ADR-053](docs/adr/0053-dependency-tiers.md)).
 
+## Install
+
+Every tag publishes signed artifacts to the
+[Releases page](https://github.com/souls-guild/soul-stack/releases); container images
+go to [Packages](https://github.com/orgs/souls-guild/packages?repo_name=soul-stack).
+Everything is built and signed in CI — nothing here is assembled by hand. The examples
+below pin `0.1.0-beta.1`; check Releases for the current tag.
+
+**Container images** — `keeper` and `soul`, multi-arch (`linux/amd64` + `linux/arm64`),
+distroless. Images are tagged by version only, there is no `latest`:
+
+```sh
+docker pull ghcr.io/souls-guild/soul-stack/keeper:0.1.0-beta.1
+docker pull ghcr.io/souls-guild/soul-stack/soul:0.1.0-beta.1
+```
+
+**Native packages** — `.deb`, `.rpm` and `.apk`, one per binary, `amd64` and `arm64`.
+`keeper` and `soul` ship a systemd unit, an env file and an example config, so the
+package lands a runnable daemon:
+
+```sh
+curl -fsSLO https://github.com/souls-guild/soul-stack/releases/download/v0.1.0-beta.1/soul-stack-keeper_0.1.0-beta.1_linux_amd64.deb
+sudo dpkg -i soul-stack-keeper_0.1.0-beta.1_linux_amd64.deb
+```
+
+Swap `keeper` for `soul`, `soul-lint`, `soulctl`, `soul-trial` or `soul-legion`.
+
+**Archives** — `soul-stack_<version>_<os>_<arch>.tar.gz` for Linux and macOS, `.zip`
+for Windows. The Linux bundle carries all six binaries; macOS and Windows carry the
+four CLIs only, since `keeper` and `soul` are Linux daemons.
+
+**Verify before you run it.** Artifacts are signed with keyless
+[cosign](https://docs.sigstore.dev/) (GitHub OIDC, no long-lived key), and every
+archive ships a CycloneDX SBOM (`*.cdx.json`):
+
+```sh
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/souls-guild/soul-stack/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --ignore-missing -c checksums.txt
+
+cosign verify ghcr.io/souls-guild/soul-stack/keeper:0.1.0-beta.1 \
+  --certificate-identity-regexp '^https://github\.com/souls-guild/soul-stack/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Building from source instead — [docs/getting-started.md](docs/getting-started.md).
+
 ## Where to start
 
 - **[docs/getting-started.md](docs/getting-started.md)** — bring up a single Keeper

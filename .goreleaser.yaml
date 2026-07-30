@@ -545,6 +545,51 @@ release:
   # Pre-release tags (v*-beta*/-rc*) publish as GitHub pre-releases.
   prerelease: auto
   draft: false
+  # Container images never show up as release assets — they live in the registry.
+  # Without this footer the docker channel is invisible from the release page, and
+  # nobody knows the artifacts are signed or how to check them.
+  footer: |
+
+    ## Install
+
+    **Container images** — `keeper` and `soul`, multi-arch (`linux/amd64` +
+    `linux/arm64`), distroless. Version tags only, there is no `latest`:
+
+    ```sh
+    docker pull ghcr.io/souls-guild/soul-stack/keeper:{{ .Version }}
+    docker pull ghcr.io/souls-guild/soul-stack/soul:{{ .Version }}
+    ```
+
+    **Native packages** — the `.deb` / `.rpm` / `.apk` assets below, one per binary,
+    `amd64` and `arm64`. `keeper` and `soul` ship a systemd unit, an env file and an
+    example config, so the package lands a runnable daemon:
+
+    ```sh
+    curl -fsSLO https://github.com/souls-guild/soul-stack/releases/download/{{ .Tag }}/soul-stack-keeper_{{ .Version }}_linux_amd64.deb
+    sudo dpkg -i soul-stack-keeper_{{ .Version }}_linux_amd64.deb
+    ```
+
+    Swap `keeper` for `soul`, `soul-lint`, `soulctl`, `soul-trial` or `soul-legion`.
+
+    **Archives** — `soul-stack_{{ .Version }}_<os>_<arch>.tar.gz` for Linux and macOS,
+    `.zip` for Windows. The Linux bundle carries all six binaries; macOS and Windows
+    carry the four CLIs only, since `keeper` and `soul` are Linux daemons.
+
+    **Verify before you run it.** Everything here is signed with keyless cosign
+    (GitHub OIDC, no long-lived key), and every archive ships a CycloneDX SBOM
+    (`*.cdx.json`):
+
+    ```sh
+    cosign verify-blob checksums.txt \
+      --certificate checksums.txt.pem --signature checksums.txt.sig \
+      --certificate-identity "https://github.com/souls-guild/soul-stack/.github/workflows/release.yml@refs/tags/{{ .Tag }}" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    sha256sum --ignore-missing -c checksums.txt
+
+    cosign verify ghcr.io/souls-guild/soul-stack/keeper:{{ .Version }} \
+      --certificate-identity "https://github.com/souls-guild/soul-stack/.github/workflows/release.yml@refs/tags/{{ .Tag }}" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
 
 # Pre-release tags get -beta/-rc; keep the changelog auto-generated from commits.
 changelog:
