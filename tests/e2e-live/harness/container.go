@@ -176,12 +176,18 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 			WithStartupTimeout(60 * time.Second),
 	}
 
+	// The stand is BUILT, and testcontainers resolves registry credentials for every
+	// build — including for a Dockerfile whose only base image is public. Make sure a
+	// credential helper that cannot run does not take the build down with it
+	// (registry_auth.go, NIM-347).
+	ensureRegistryAuthUsable()
+
 	cont, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
 	})
 	if err != nil {
-		t.Fatalf("SpawnSoulContainer: generic container: %v", err)
+		t.Fatalf("SpawnSoulContainer: generic container: %v", annotateRegistryAuthError(err))
 	}
 	stack.containers = append(stack.containers, cont)
 	stack.cleanups = append(stack.cleanups, func() {

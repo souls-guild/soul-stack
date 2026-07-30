@@ -144,11 +144,18 @@ so it stops working whenever interop is not registered — `systemd-binfmt` flus
 `cat /proc/sys/fs/binfmt_misc/WSLInterop` (must print `enabled`) and re-register by
 restarting WSL.
 
-The L2 harness no longer depends on this: it probes the credential plumbing before
+Neither harness depends on this any more: each probes the credential plumbing before
 building and, when it is broken, builds without credentials and says so on stderr
-(`keeper/internal/trial/l2_registry_auth.go`). That costs nothing, because a helper
-that cannot run yields credentials for no registry anyway. L3b has no such
-pre-flight yet — see NIM-307 for the reasoning and the follow-up.
+(`keeper/internal/trial/l2_registry_auth.go` for L2, NIM-307;
+`tests/e2e-live/harness/registry_auth.go` for L3b, NIM-347). That costs nothing,
+because a helper that cannot run yields credentials for no registry anyway.
+
+The two are deliberate copies, each with its own guard tests. They cannot share
+code: `keeper/internal/` is unreachable from another module, and `tests/e2e-live`
+depends on no Go module of ours except `proto` — lifting ~40 lines into a new
+workspace module would make four test modules require and replace it. A divergence
+therefore surfaces as a failing guard rather than as one harness quietly losing the
+fix.
 
 ## Local live-gate of large features (`make e2e-live-gate`)
 
