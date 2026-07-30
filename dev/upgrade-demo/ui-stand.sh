@@ -89,6 +89,7 @@ if [ "$(healthz ${API}/healthz)" = 200 ]; then
 else
     log "building keeper from the worktree (carries the upgrade-paths route)"
     make -C "${REPO_ROOT}" build-keeper >&2
+    built="$("${REPO_ROOT}/keeper/bin/keeper" version 2>/dev/null | awk '{print $2}')"
     kill_by 'keeper-demo\.yml' keeper
     sleep 1
     mkdir -p "${DEV}/services" "${DEV}/destiny-cache" "${DEV}/plugin-sockets-demo"
@@ -97,6 +98,15 @@ else
     kp=$!
     for i in $(seq 1 30); do [ "$(healthz ${API}/healthz)" = 200 ] && { log "healthz :8090 = 200 (${i}s)"; break; }; kill -0 "$kp" 2>/dev/null || { tail -14 "${DEV}/keeper-demo.log"; fail "demo-keeper died on startup"; }; sleep 1; done
     [ "$(healthz ${API}/healthz)" = 200 ] || { tail -14 "${DEV}/keeper-demo.log"; fail "demo-keeper failed to come up"; }
+    # Same check as keeper-run.sh, on THIS port: a 200 says the port is served, not that it is
+    # served by what we just started. The "one stand, one port" assumption is already false -
+    # this demo runs its own keeper on :8090 alongside the default stand on :8080 - so the
+    # foreign-binary risk lives on every port a dev script uses, not only the default one.
+    served="$(curl -s "${API}/healthz" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    if [ -n "${built}" ] && [ "${served}" != "${built}" ]; then
+        fail "healthz on :8090 reports version=${served:-<none>}, we built ${built} - a FOREIGN keeper holds this port"
+    fi
+    log "demo-keeper up, version=${served}"
 fi
 
 # ── 3. git repo upgrade-demo (3 tags) ─────────────────────────────────────────

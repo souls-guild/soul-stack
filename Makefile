@@ -965,6 +965,12 @@ check-dev-stand-build:
 		echo "check-dev-stand-build: dev/souls-up.sh no longer rebuilds through 'make build-soul' (NIM-342)."; \
 		exit 1; \
 	}
+	@grep -qF 'FOREIGN keeper holds this port' dev/upgrade-demo/ui-stand.sh || { \
+		echo "check-dev-stand-build: dev/upgrade-demo/ui-stand.sh lost the served-version check."; \
+		echo "  the demo keeper runs on its OWN port (:8090) next to the default stand, so the"; \
+		echo "  foreign-binary risk is per-port, not only on :8080 (NIM-342)."; \
+		exit 1; \
+	}
 	@echo "dev stand build: keeper/soul are rebuilt through the Makefile, keeper-run verifies the served version"
 
 # --- Release/packaging ---

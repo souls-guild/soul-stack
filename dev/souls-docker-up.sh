@@ -60,6 +60,11 @@ command -v docker >/dev/null 2>&1 || fail "docker not found in PATH"
 
 code="$(curl -s -o /dev/null -w '%{http_code}' "${API_BASE}/healthz" 2>/dev/null || true)"
 [ "${code}" = "200" ] || fail "keeper is not responding on ${API_BASE}/healthz (code=${code:-none}) - run '${STAND_ENV_HINT}make dev-keeper'"
+# Name the keeper these souls are about to be onboarded against. This script is a CONSUMER -
+# it did not build anything, so it has nothing to compare against and does not gate on the
+# value. But onboarding a fleet against an unidentified keeper is how a demo ends up
+# unfalsifiable (NIM-342), so at least say which build answered. `0.0.0-dev` = no stamp.
+log "keeper on ${API_BASE}: version=$(curl -s "${API_BASE}/healthz" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 
 case "${COUNT}" in ''|*[!0-9]*) fail "COUNT must be a number (got: ${COUNT})" ;; esac
 [ "${COUNT}" -ge 1 ] || fail "COUNT must be >= 1"
