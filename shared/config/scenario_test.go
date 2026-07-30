@@ -456,6 +456,121 @@ tasks:
 	}
 }
 
+// TestLoadScenarioManifest_ApplyForbiddenKeys — module-specific keys on an
+// apply: task are cut fail-closed with code <key>_on_apply_invalid, the apply:
+// half of the <key>_on_block_invalid family (NIM-286). Each of these WORKS on a
+// module task and reaches no RenderedTask on an applier: render reads only the
+// applier's Apply/Register/requisites and its When/Where/On/RunOnce/Serial.
+func TestLoadScenarioManifest_ApplyForbiddenKeys(t *testing.T) {
+	cases := map[string]string{
+		"changed_when_on_apply_invalid": "changed_when: \"true\"",
+		"failed_when_on_apply_invalid":  "failed_when: \"false\"",
+		"retry_on_apply_invalid":        "retry: { count: 3 }",
+		"timeout_on_apply_invalid":      "timeout: 30s",
+		"params_on_apply_invalid":       "params: { a: 1 }",
+		"vars_on_apply_invalid":         "vars: { v: \"x\" }",
+		"no_log_on_apply_invalid":       "no_log: true",
+	}
+	for wantCode, line := range cases {
+		t.Run(wantCode, func(t *testing.T) {
+			key := strings.TrimSuffix(wantCode, "_on_apply_invalid")
+			src := "name: x\ntasks:\n  - apply:\n      destiny: redis\n      input: {}\n    " + line + "\n"
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if !hasCodeAt(diags, wantCode, "$.tasks[0]."+key) {
+				dump(t, diags)
+				t.Fatalf("expected %s at $.tasks[0].%s", wantCode, key)
+			}
+		})
+	}
+}
+
+// The negative half, and the one that decides whether the gate is about the
+// applier or about the keys: every one of them on an ordinary module task is
+// legal and stays legal.
+func TestLoadScenarioManifest_ApplyForbiddenKeys_ModuleTaskUnaffected(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    changed_when: "true"
+    failed_when: "false"
+    retry: { count: 3 }
+    timeout: 30s
+    vars: { v: "x" }
+    no_log: true
+    params: { cmd: "true" }
+  - apply:
+      destiny: redis
+      input: {}
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			dump(t, diags)
+			t.Fatalf("module-task key wrongly rejected: %s", d.Code)
+		}
+	}
+}
+
+// TestLoadScenarioManifest_ApplyAllowedKeysOK — the keys an applier DOES answer
+// stay valid: the requisites and register: that render merges into the group,
+// the targeting delta it resolves before the destiny pass, and a static when:.
+//
+// ★ `output:` is here deliberately. It is unread on every task type today, not
+// just on an applier, and belongs to the output-contract projection that
+// orchestration.md §2.1.1 marks PLANNED — refusing it here would pre-empt that
+// slice and misreport an unimplemented key as a meaningless one.
+func TestLoadScenarioManifest_ApplyAllowedKeysOK(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.exec.run
+    register: probe
+    params: { cmd: "true" }
+  - name: roll the redis destiny over the drifted hosts
+    apply:
+      destiny: redis
+      input: {}
+    when: input.action == 'apply'
+    where: "register.probe.changed"
+    on: [redis]
+    serial: 1
+    onchanges: [probe]
+    require: [probe]
+    output: { dsn: "${ register.probe.stdout }" }
+    register: rolled
+  - apply:
+      destiny: redis
+      input: {}
+    run_once: true
+    onfail: [probe]
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			dump(t, diags)
+			t.Fatalf("key an applier answers wrongly rejected: %s", d.Code)
+		}
+	}
+}
+
+// TestLoadScenarioManifest_IDOnApply pins the one member of the family that
+// needed no new code: `id:` is already refused on every non-module
+// discriminator, applier included, so the gate is complete without a second
+// rule for the same key.
+func TestLoadScenarioManifest_IDOnApply(t *testing.T) {
+	src := `name: x
+tasks:
+  - apply:
+      destiny: redis
+      input: {}
+    id: rolled
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if !hasCodeAt(diags, "id_unsupported_target", "$.tasks[0].id") {
+		dump(t, diags)
+		t.Fatalf("expected id_unsupported_target")
+	}
+}
+
 // TestLoadScenarioManifest_AsyncTaskKeyAccepted — the other half of the rename:
 // `async: true` on an ordinary task parses clean and lands on Task.Async.
 func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {

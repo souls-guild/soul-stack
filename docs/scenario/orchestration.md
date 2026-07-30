@@ -109,6 +109,9 @@ An applier expands into N destiny tasks, so each of its own keys has to be answe
 | `serial:` | Inherited by every destiny task - the whole destiny rolls as one wave (§2.2.1). |
 | `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `essence.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
 | `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
+| `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` · `vars:` · `no_log:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
+| `id:` · `loop:` | **Refused** (`id_unsupported_target` / `loop_unsupported_target`) - both are allowed only on a module task in the pilot; an applier is one of the discriminators they already cover. |
+| `output:` | **Accepted, unread.** Not refused - `output:` is unread on every task type today and belongs to the planned output-contract projection (§2.1.1), not to the class below. |
 
 **A `when:` that reads `register.*` or `soulprint.*` on an applier is an error** (`apply_when_dynamic_unsupported`), not a slow path. It cannot be decided at render, and it cannot be handed to the group either: a destiny task's flow context is built in the **isolated destiny env**, where `input.` / `vars.` / `essence.` name different things than in the scenario the predicate was written in - the same text would answer a different question. Until it was refused, the key was dropped and the destiny applied **everywhere, including on the hosts the author had gated off**.
 
@@ -132,6 +135,19 @@ Both replacements work today and cover the cases in practice:
 ```
 
 ★ The requisites merge as a **union**, as they do on a `block:`: an applier naming a source and a destiny task naming its own end up naming both. For `onchanges:`/`onfail:` that composes as OR - the task runs if **any** named source changed/failed - so an applier-level `onchanges:` widens, rather than narrows, the gating of a destiny task that already had one.
+
+**Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the three requisites, so nothing else it carries reaches a rendered task.
+
+| Refused key | Why it has no answer here | Write instead |
+|---|---|---|
+| `changed_when:` · `failed_when:` | No module result to re-judge. | Put it on the destiny task whose result you are re-judging; the applier's `register:` already reports `changed`/`failed` as the OR of its children (§2.1.1). |
+| `retry:` | Repeats **one** module call; a group has no single call to repeat, and re-running the group is a different operation. | Put `retry:` on the destiny task that can be retried on its own. |
+| `timeout:` | Bounds **one** module call, not the duration of a group. | Put `timeout:` on the destiny tasks that need bounding. |
+| `params:` | Module arguments, and an applier calls no module. `module:`+`apply:` is caught as `task_discriminator_multiple`; a lone `params:` used to slip through. | `apply: { input: { … } }`, checked against the destiny's own `input:` contract. |
+| `vars:` | Task-level `vars:` resolve in the **scenario** env, while the destiny renders in its isolated env built from `apply.input` alone - they reach neither `apply.input` nor any child. | `apply: { input: { … } }`, or destiny locals in that destiny's own `vars.yml` ([vars.md](../destiny/vars.md)). |
+| `no_log:` | Masking a whole group is not implemented: the flag reaches no child, so the output it was written to hide is **logged in full**. Accepting it is a false sense of masking. | Put `no_log:` on the destiny tasks that handle the secret. |
+
+★ These were not simply dropped, which is why refusing beats leaving them: a static-false `when:` collapses the applier into one skip placeholder that **does** copy `changed_when`/`failed_when`/`timeout`/`no_log`/`id` onto itself. The keys were honoured exactly when they could not matter, and ignored whenever they could.
 
 ### 2.3. `assert:` — render-time precondition
 

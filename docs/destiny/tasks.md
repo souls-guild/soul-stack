@@ -318,7 +318,7 @@ The specification above is the full design intent of `block:`. The implementatio
 - `module:`-descendants, `apply:`-descendants (delegation to destiny with inherited `serial:`-window), nested `block:` and `include:`-descendants inside block.
 - Inheritance from a block task to its descendants: `when:` (combined with internal AND), `where:`, `serial:`, requisites (`onchanges:` / `onfail:` / `require:`), `vars:`.
 - Static-skip of the entire group by `when:` (falsy → all tasks are skipped). Expands into **per-descendant** skip-placeholders: block.`when:` is poured into each child via AND, static-when each one becomes false, and each child carries its own `skipped: when` + its own `register:`. `register:` of children is visible outside block and with static-skip (flat-register-scope is invariant with respect to truthy/falsy - see below).
-- Fail-closed failure of module-specific keys at the block level (codes `*_on_block_invalid`, see [naming-rules.md → Error codes](../naming-rules.md)).
+- Fail-closed failure of module-specific keys at the block level (codes `*_on_block_invalid`, see [naming-rules.md → Error codes](../naming-rules.md)). The same cut exists at the other construct that expands into a group - an `apply:` task, codes `*_on_apply_invalid` ([scenario/orchestration.md §2.1.2](../scenario/orchestration.md)); the two lists differ because the constructs lose different keys.
 
 **Post-pilot (spec saved as design intent, pilot C1 implementation does not support):**
 

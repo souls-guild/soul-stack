@@ -867,6 +867,38 @@ order to act in.
   names by position named the wrong source in the cross-Passage error, or ran off
   the end of the slice.
 
+- **Module-specific keys on an `apply:` task are refused** (family
+  `<key>_on_apply_invalid`: `changed_when`, `failed_when`, `retry`, `timeout`,
+  `params`, `vars`, `no_log`) — the apply-side mirror of the
+  `<key>_on_block_invalid` family, for the other construct that expands into a
+  group. Unlike the keys above, these never could have worked: an applier invokes
+  no module, and render hands its children only the three requisites, so nothing
+  else it carries reaches a rendered task. Membership is decided by one rule —
+  the key **works on a module task and is lost on an applier** — and each is
+  refused with its own reason rather than a shared sentence: no module result to
+  re-judge (`changed_when`/`failed_when`), one call's retry or timeout applied to
+  a group (`retry`/`timeout`), module arguments where the destiny takes
+  `apply.input` (`params`), scenario-env locals that the isolated destiny env
+  never sees (`vars`), and a group mask that is not implemented, so the output it
+  was written to hide was **logged in full** (`no_log`).
+
+  ★ They were not simply dropped, which is why refusing beats leaving them: a
+  static-false `when:` collapses an applier into one skip placeholder that *does*
+  copy `changed_when`/`failed_when`/`timeout`/`no_log`/`id` onto itself. The keys
+  were honoured exactly when they could not matter and ignored whenever they
+  could.
+
+  `output:` is deliberately **not** in the family. It is unread on every task
+  type today, not only on an applier, and belongs to the planned projection of a
+  destiny's top-level `output:` into `register.<applier>.<field>`
+  ([orchestration.md §2.1.1](docs/scenario/orchestration.md),
+  [destiny/output.md](docs/destiny/output.md)) — refusing it here would pre-empt
+  a design that slice owns and would report an unimplemented key as a meaningless
+  one. `id:` and `loop:` needed no new rule: both already refuse every non-module
+  discriminator, an applier included. No example in the corpus carries any of the
+  seven keys on an applier (37 applier tasks across 394 files), so nothing that
+  ran before stops rendering.
+
 - **`async:` on `on: keeper` is refused offline** (`async_on_keeper_invalid`),
   joining `async_on_block_invalid` and `async_on_apply_invalid` — the third and
   last construct where the flag is meaningless, since a keeper task is executed by

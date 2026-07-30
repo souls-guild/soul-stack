@@ -1,0 +1,19 @@
+name: apply-forbidden-keys
+tasks:
+  # An applier written as if it were a module task: every key below works on a
+  # module task and reaches no destiny task from here (NIM-286).
+  - name: Roll the redis destiny over the cluster
+    apply:
+      destiny: redis
+      input:
+        action: apply
+    params:
+      action: apply
+    vars:
+      pause: 5
+    changed_when: "true"
+    failed_when: "false"
+    retry:
+      count: 3
+    timeout: 30s
+    no_log: true

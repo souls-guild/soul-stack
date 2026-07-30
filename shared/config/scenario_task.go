@@ -584,6 +584,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		out = append(out, validateApplyField(kv, pathPrefix)...)
 		out = append(out, validateAsyncOnApply(present, pathPrefix)...)
 		out = append(out, validateApplyWhenStatic(present, pathPrefix)...)
+		out = append(out, validateApplyForbiddenKeys(present, pathPrefix)...)
 	}
 	if kv, ok := present["assert"]; ok {
 		out = append(out, validateAssertField(kv, pathPrefix)...)
@@ -1000,6 +1001,108 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 	})}
 }
 
+// applyForbiddenKeys — module-specific keys not allowed on an `apply:` task
+// (fail-closed; the apply: half of [blockForbiddenKeys], NIM-286).
+//
+// The membership rule is one line: these keys WORK on a module task and are
+// LOST on an applier. `apply:` is the second construct that expands into a
+// group, and after NIM-245 an applier's own fields are read in exactly two
+// places — `Apply`/`Register`/`OnChanges`/`OnFail`/`Require` in
+// keeper/internal/render.renderApplyDestiny, and `When`/`Where`/`On`/
+// `RunOnce`/`Serial` in the scenario loop that calls it. Nothing else on the
+// applier reaches a RenderedTask: mergeApplierInheritance carries only the
+// three requisites into the children, and the group's terminal is a synthetic
+// `core.noop.run` whose register is an aggregate of the children.
+//
+// Each key is rejected with code `<key>_on_apply_invalid`, symmetric to
+// `<key>_on_block_invalid`, and carries its OWN reason: they are lost for
+// different reasons and one generic message would hide that.
+//
+// ★ Not "always dropped", which is why refusing them is the stronger option:
+// when a static `when:` collapses the applier into one skip placeholder,
+// staticSkipPlaceholder copies changed_when/failed_when/timeout/no_log/id onto
+// it. That is the degenerate path — the group does not run — so today the keys
+// are honoured exactly when they cannot matter and ignored whenever they
+// could. Inconsistent silence is worse than plain silence.
+//
+// NOT in the list:
+//   - `output:` — unread on EVERY task type today, not just on an applier
+//     (nothing in render reads Task.Output; only passage_vault scans it for
+//     `vault(...)` provenance). It belongs to the unimplemented output-contract
+//     slice — the projection of a destiny's top-level `output:` into
+//     `register.<applier>.<field>` that orchestration.md §2.1.1 and
+//     destiny/output.md both mark PLANNED. Refusing it only here would pre-empt
+//     a design that slice owns, and would say the key is meaningless on an
+//     applier when it is merely unimplemented everywhere.
+//   - `async:` and `id:` and `loop:` — already refused, by
+//     validateAsyncOnApply, `id_unsupported_target` and
+//     `loop_unsupported_target` respectively (the last two gate every
+//     non-module discriminator, applier included).
+//   - `register:` and the applier's inherited keys (`when:`/`where:`/`on:`/
+//     `serial:`/`run_once:`/`onchanges:`/`onfail:`/`require:`/`name:`) — all
+//     read, all working.
+var applyForbiddenKeys = []struct{ key, why, hint string }{
+	{
+		"changed_when",
+		"an applier invokes no module, so there is no module result to re-judge",
+		"put changed_when: on the destiny task whose result you are re-judging; the applier's own register: already reports changed as the OR of its children",
+	},
+	{
+		"failed_when",
+		"an applier invokes no module, so there is no module result to re-judge",
+		"put failed_when: on the destiny task whose result you are re-judging; the applier's own register: already reports failed as the OR of its children",
+	},
+	{
+		"retry",
+		"retry: repeats ONE module call, and a group of destiny tasks has no single call to repeat — re-running the group is a different operation",
+		"put retry: on the destiny task that can be retried on its own",
+	},
+	{
+		"timeout",
+		"timeout: bounds ONE module call, not the duration of a group",
+		"put timeout: on the destiny tasks that need bounding",
+	},
+	{
+		"params",
+		"params: are module arguments and an applier calls no module — a destiny is parameterised by apply.input, checked against its own input: contract",
+		"move the values into apply: { input: { ... } }",
+	},
+	{
+		"vars",
+		"task-level vars: are resolved in the SCENARIO env, and a destiny renders in its own isolated env built from apply.input alone — they reach neither apply.input nor any child task",
+		"pass the values through apply: { input: { ... } }, or declare destiny locals in that destiny's own vars.yml",
+	},
+	{
+		"no_log",
+		"masking a whole destiny group is not implemented: the flag reaches no child task, so the output it was written to hide is logged in full",
+		"put no_log: on the destiny tasks that handle the secret",
+	},
+}
+
+// validateApplyForbiddenKeys raises `<key>_on_apply_invalid` for each present
+// key from [applyForbiddenKeys]. Called only when the discriminator is apply.
+//
+// Raised on PRESENCE, like every `<key>_on_block_invalid`: `no_log: false` is
+// equally a statement about a construct that does not answer the key.
+func validateApplyForbiddenKeys(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for _, f := range applyForbiddenKeys {
+		kv, ok := present[f.key]
+		if !ok {
+			continue
+		}
+		tok := kv.Key.GetToken()
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     f.key + "_on_apply_invalid",
+			Message:  fmt.Sprintf("%s: is not allowed on an apply: task — %s (see docs/scenario/orchestration.md §2.1.2)", f.key, f.why),
+			Hint:     f.hint,
+			YAMLPath: pathPrefix + "." + f.key,
+		}))
+	}
+	return out
+}
+
 // validateAsyncOnKeeper raises `async_on_keeper_invalid` for `async:` on a
 // keeper-side task (`on: keeper`) — the third and last construct where the flag
 // has no meaning, joining `async_on_block_invalid` and `async_on_apply_invalid`
@@ -1254,7 +1357,7 @@ func validateIDField(kv *ast.MappingValueNode, present map[string]*ast.MappingVa
 		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "id_unsupported_target",
-			Message:  "id: on a block/include task is not supported yet — in the pilot id is allowed only on a module task (it has its own changed signal)",
+			Message:  "id: on a block/include/apply task is not supported yet — in the pilot id is allowed only on a module task (it has its own changed signal)",
 			Hint:     "put id: on a specific module task; extending to block/include is a separate change",
 			YAMLPath: pathPrefix + ".id",
 		}))
