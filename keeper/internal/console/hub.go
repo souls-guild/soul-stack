@@ -545,11 +545,24 @@ func (h *Hub) Resize(ctx context.Context, sess *Session, cols, rows uint32) erro
 // Close ends a session from the Keeper side and tells the Soul to kill the
 // process group. Idempotent; safe to call on an already-exited session.
 //
-// It does NOT synthesize an `exit` frame for the operator: the Soul answers
-// every close with a ConsoleExit, and inventing a second terminal here would
-// make the client show an exit code that no shell produced. The one case that
-// does need synthesis — the socket dying, where nobody is left to receive a
-// frame — is handled by [Hub.CloseAllFor].
+// It does NOT synthesize an `exit` frame for the operator, because on this path
+// one is coming: a Keeper-side close reaches the Soul over the EventStream, and
+// inventing a second terminal here would make the client show an exit code that
+// no shell produced. The one case that needs synthesis on this side — the socket
+// dying, where nobody is left to receive a frame — is [Hub.CloseAllFor].
+//
+// What this must NOT be read as is "the Soul answers every close with a
+// ConsoleExit" — the wording that used to stand here. It does not, and cannot
+// (NIM-397): a session whose dedicated console stream is cut has no way to
+// deliver its terminal frame, which is exactly what `escalate` step 4 does to
+// release a sender blocked on a Keeper that stopped reading. That case is not
+// this function's to cover and is already covered elsewhere — the console
+// stream's own handler notices a stream that ended without a terminal frame and
+// synthesizes the exit there (keeper/internal/grpc/consolestream.go, guarded by
+// TestConsoleStreamRPC_SynthesizesExitWhenTheStreamDiesSilently). The premise
+// mattered because a reader who believed it would conclude that synthesis is
+// redundant and remove the one thing standing between an operator and a pane
+// that pretends to be alive for ever.
 //
 // Unlike input, a close is NEVER parked (see [Hub.dispatch]): parking it would
 // wait for a ConsoleOpened that a session closed before it opened will never
