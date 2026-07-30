@@ -68,6 +68,25 @@ as incarnation memberships after NIM-124 changed the roster axis. Both are the
 same failure mode - a deliberate contract change that nothing re-ran the suite
 against.
 
+**Measured, so that the next coordination does not have to rediscover it.** On
+2026-07-29 the R5 branch was pushed to the remote and CI ran over a release
+branch for the first time. `make check` was green at that moment, and had been
+green for the whole release. The first CI run found **nine failing tests** it had
+never mentioned: two in L1 (a fanout collector that mistook a scheduler stall for
+event loss, and a self-lockout invariant shadowed by a caller-rights gate) and
+seven in L3a (three redis tests drifted from their own example's covenant, four
+examples unable to create an incarnation since ADR-029 made the service registry
+a precondition - they had been red for a whole release). None of the nine was
+subtle; all nine were simply outside what `make check` runs.
+
+So "green locally" was never evidence that the release was checked, and it will
+read that way again unless someone says otherwise out loud. That is what
+`make check-all` is for, and why `make check` now prints the tiers it skipped.
+Measure release readiness with `check-all` (or a CI run over the pushed branch),
+never with `check` alone - and read a CI result **per sha**, not per branch: a
+run superseded by the next push is reported as `cancelled`, which sits next to
+`failure` in the list and next to `success` in memory.
+
 - **L1 — `make test-integration`** (build-tag `integration`, testcontainers
 PG / Redis / Vault, docker is needed). Covers keeper-integration, which
 docker-free `make check` is missing: scenario-dispatch, state-migrate,
