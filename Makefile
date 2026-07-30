@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -374,8 +374,12 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 # tests/e2e/ under the `e2e` build tag (testcontainers deps don't leak into the main
 # keeper/soul). NOT part of `check` (requires docker); details in tests/e2e/README.md.
 e2e:
-	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./... 2>/dev/null)" ]; then \
-		echo "skip tests/e2e (no Go packages under build-tag e2e)"; \
+	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./...)" ]; then \
+		echo "tests/e2e: the e2e package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
 	else \
 		echo "go test -tags=e2e ./... in tests/e2e"; \
 		(cd tests/e2e && go test -tags=e2e -timeout=10m ./...) || exit 1; \
@@ -417,8 +421,12 @@ build-linux: bin-keeper bin-soul
 # `-p 1` - serial (RAM-heavy: privileged containers with systemd + apt-install
 # running concurrently would kill a developer's laptop). Architect recommendation.
 e2e-live: build-linux
-	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
-		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
+	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
+		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
 	else \
 		echo "go test -tags=e2e_live ./... in tests/e2e-live"; \
 		(cd tests/e2e-live && go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
@@ -453,8 +461,12 @@ e2e-live-gate: build build-linux
 	@echo "e2e-live-gate: harness unit-guard (docker-free) - WaitApplySuccess apply bracket NIM-46"
 	@(cd tests/e2e-live && go test -run '^TestApplySettled$$' -count=1 ./harness/) \
 		|| { echo "e2e-live-gate: FALSE-GREEN - harness unit-guard TestApplySettled failed" >&2; exit 1; }
-	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./... 2>/dev/null)" ]; then \
-		echo "skip tests/e2e-live (no Go packages under build-tag e2e_live)"; \
+	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
+		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
 		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
@@ -544,8 +556,12 @@ docker-build-soul: build-linux
 # `-p 1` - serial (RAM-heavy: each test spins up its own kind cluster with
 # its own PG/Redis/Vault via bitnami Helm; running in parallel would kill a laptop).
 e2e-k8s: docker-build-keeper docker-build-soul
-	@if [ -z "$$(cd tests/e2e-k8s && go list -tags=e2e_k8s ./... 2>/dev/null)" ]; then \
-		echo "skip tests/e2e-k8s (no Go packages under build-tag e2e_k8s)"; \
+	@if [ -z "$$(cd tests/e2e-k8s && go list -tags=e2e_k8s ./...)" ]; then \
+		echo "tests/e2e-k8s: the e2e_k8s package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
 	else \
 		echo "go test -tags=e2e_k8s ./... in tests/e2e-k8s"; \
 		(cd tests/e2e-k8s && go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
@@ -1140,7 +1156,7 @@ sign:
 # the tree themselves, so on a broken build they report the same root cause
 # first-hand instead of being skipped for it.
 GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
-	check-integration-set check-gen check-openapi@build check-template check-stand-template \
+	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
@@ -1203,6 +1219,16 @@ check-ci:
 # second derivation: scripts/check-integration-set.sh.
 check-integration-set:
 	@scripts/check-integration-set.sh
+
+# check-e2e-set — the same guard check-integration-set gives L1, for the tiers
+# that never had one (NIM-392). `make e2e` took its package list from `go list
+# -tags=e2e` and, on an empty answer, printed a skip and exited 0: a lost L3a and
+# a tree with no e2e tests were the same observation. Docker-free on purpose —
+# the failure it guards against is a green, fast, empty suite, and that has to be
+# caught by the gate everyone runs rather than by the job that would be doing the
+# lying. Details and the second derivation: scripts/check-e2e-set.sh.
+check-e2e-set:
+	@scripts/check-e2e-set.sh
 
 # check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
 # decides whether a tier ran and what it said, so a regression there misreports
