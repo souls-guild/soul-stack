@@ -61,12 +61,20 @@ sid_safe_for_stand() {
     return 1
 }
 
-# 1. soul binary.
-if [ ! -x "${SOUL_BIN}" ]; then
-    log "soul binary not found (${SOUL_BIN}) - building (go build ./cmd/soul)"
-    (cd "${REPO_ROOT}/soul" && go build -o bin/soul ./cmd/soul) \
-        || fail "soul build failed - build it manually: make build"
-fi
+# 1. soul binary. ALWAYS rebuilt, through `make build-soul` - never reused as-is.
+#
+# Same reasoning as keeper-run.sh step 1 (NIM-342): building only when the binary
+# was MISSING let a stand run an arbitrarily old soul, and without -ldflags it
+# reported `0.0.0-dev` - so the version a soul announces to keeper on the wire named
+# nothing. Going through the Makefile keeps the stamp defined in one place.
+# The stamp cannot be read back from the artifact the way keeper-run.sh does it:
+# `soul` has no `version` subcommand, and the value it reports on the wire
+# (Hello.soul_version) is not surfaced on `GET /v1/souls`. So this half fixes only
+# "never run a stale soul"; making a running soul's version observable from outside
+# is a separate change to a documented surface, tracked apart from NIM-342.
+log "building soul (make build-soul; the target prints the VERSION it stamps)"
+make -C "${REPO_ROOT}" build-soul >&2 || fail "soul build failed"
+[ -x "${SOUL_BIN}" ] || fail "build reported success but ${SOUL_BIN} is not executable"
 
 [ -s "${VAULT_CA}" ] || fail "no Vault CA (${VAULT_CA}) - run 'DEV_STAND=${STAND_SLUG} make dev-provision'"
 

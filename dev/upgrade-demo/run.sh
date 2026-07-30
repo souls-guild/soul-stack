@@ -134,8 +134,9 @@ api_code() {  # api_code METHOD PATH - HTTP code only (for poll).
 # THIS worktree (its binary carries the feature). 'nope' is valid per the path pattern, the
 # route exists -> 404 not-found (without 'no such endpoint').
 if api GET "/v1/incarnations/nope/upgrade-paths" | grep -q "no such endpoint"; then
-    fail "keeper at ${API} was built BEFORE NIM-34 (no upgrade-paths route). Rebuild and restart keeper from this worktree:
-    (cd ${REPO_ROOT}/keeper && go build -o bin/keeper ./cmd/keeper) && VAULT_TOKEN=root bash ${REPO_ROOT}/dev/keeper-run.sh"
+    fail "keeper at ${API} was built BEFORE NIM-34 (no upgrade-paths route). Restart keeper from this worktree
+    (keeper-run.sh rebuilds with the version stamp and refuses when the port answers with another build):
+    VAULT_TOKEN=root bash ${REPO_ROOT}/dev/keeper-run.sh"
 fi
 
 # ── 4. Service registry: psql INSERT + wait for holder ──────────────────────────

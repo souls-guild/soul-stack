@@ -30,7 +30,7 @@ separate mount from `secret/`), `audit.otel_export`
 | `make dev-reset` | `docker compose down -v && docker compose up -d` - full reset with data loss. |
 | `make dev-provision` | Idempotent bootstrap: Vault KV (`secret/keeper/postgres`, `secret/keeper/jwt-signing-key`) + Vault PKI (`pki/` engine, root cert, role `soul-seed`) + TLS stuff from Vault PKI to `/tmp/keeper-dev/tls/` + directories `plugins/`, `plugin-sockets/` + **git repo service/destiny-artifacts** from `examples/` under file://-URLs from `keeper.dev.yml` (see Service/destiny artifacts). The script is [`dev/provision.sh`](../../dev/provision.sh), safe to run again. |
 | `make dev-smoke` | Full cycle: `dev-up` → `dev-provision` → assemble `keeper` → `keeper init --archon=archon-alice`. Operator JWT file → `/tmp/keeper-dev/archon-alice.jwt`. A second run requires `make dev-reset && make dev-smoke` (operators registry is no longer empty). |
-| `make dev-keeper` | Restarting keeper in the background with a FULL dev-env (see Background dev-daemons): extinguishes the old process using the `keeper.dev.yml` pattern, clears leader-leases in Redis (`conductor:leader`/`reaper:leader`), creates cache directories, exposes `VAULT_ADDR`/`VAULT_TOKEN`/`KEEPER_SERVICE_CACHE_DIR`/`KEEPER_DESTINY_CACHE_DIR`/`SOUL_STACK_ALLOW_FILE_REPOS=1`, picks up `nohup keeper run` and waits for healthz 200 on `:8080`. No binary - collects; no TLS - prompts `dev-provision`. Log → `/tmp/keeper-dev/keeper.log`. Script - [`dev/keeper-run.sh`](../../dev/keeper-run.sh). |
+| `make dev-keeper` | Restarting keeper in the background with a FULL dev-env (see Background dev-daemons): extinguishes the old process using the `keeper.dev.yml` pattern, clears leader-leases in Redis (`conductor:leader`/`reaper:leader`), creates cache directories, exposes `VAULT_ADDR`/`VAULT_TOKEN`/`KEEPER_SERVICE_CACHE_DIR`/`KEEPER_DESTINY_CACHE_DIR`/`SOUL_STACK_ALLOW_FILE_REPOS=1`, picks up `nohup keeper run` and waits for healthz 200 on `:8080`. **Always rebuilds the binary** (`make build-keeper`, with the version stamp) and refuses when healthz reports a version other than the one just built — a foreign keeper on the port is named, not reported as ready (see Which code is this stand running?). No TLS - prompts `dev-provision`. Log → `/tmp/keeper-dev/keeper.log`. Script - [`dev/keeper-run.sh`](../../dev/keeper-run.sh). |
 | `make dev-jwt [AID=… ROLES=… TTL=…]` | Prints to stdout HS256-JWT Archon for ad-hoc API calls **without** `keeper init`. The key is taken from the same Vault KV as keeper (`secret/keeper/jwt-signing-key`, field `signing_key`, base64-decode), `iss=keeper-dev-01`. Defaults: `AID=archon-alice`, `ROLES='["cluster-admin"]'`, `TTL=43200` (12h). Only the token in stdout (service - in stderr) → `TOKEN=$(make dev-jwt)`. Requires python3 + raised Vault. Script - [`dev/mint-jwt.sh`](../../dev/mint-jwt.sh). |
 | `make dev-souls` | Re-raises the local fleet of souls according to the database registry (`SELECT sid FROM souls`): for each sid writes per-sid `soul.yml` (if not), onboards (`issue-token?force=true` → `soul init`) ONLY in the absence of a valid seed (three files `cert/key/ca.pem` by `seed/current`), (re)launch `soul run`. Covens are saved in the database - they do NOT register again. At the end it prints `SELECT status, count(*) FROM souls`. Repairs "all souls disconnected". Script - [`dev/souls-up.sh`](../../dev/souls-up.sh). |
 | `make dev-web [WEB_DIR=…]` | Vite dev-server companion-repo (`WEB_DIR`, default `../soul-stack-web`) with the required `--host` - otherwise vite binds only to IPv6 `[::1]` and `http://127.0.0.1:5173` fails. Extinguishes the old vite of this repo, raises `nohup npm run dev -- --host`, waits for 200 on `:5173`. Log → `/tmp/keeper-dev/web-dev.log`. Script - [`dev/web-run.sh`](../../dev/web-run.sh). |
@@ -416,8 +416,8 @@ service/destiny).
 
 | Target | Wrap over | What adds |
 |---|---|---|
-| `make dev-keeper` | `keeper run --config=dev/keeper.dev.yml` | kill the old one using the pattern `keeper.dev.yml` → DEL leader-leases (`conductor:leader`/`reaper:leader`) → wait `:9090` free → full dev-env → `nohup` → wait healthz `:8080`. There is no binary - it collects; There is no TLS - `dev-provision` suggests. |
-| `make dev-souls` | `soul init` + `soul run` for each sid | onboarding only if the seed is invalid, does not touch covens from the database, summary `status, count(*)` at the end. |
+| `make dev-keeper` | `keeper run --config=dev/keeper.dev.yml` | **rebuild through `make build-keeper`** (always, with the version stamp) → kill the old one using the pattern `keeper.dev.yml` → DEL leader-leases (`conductor:leader`/`reaper:leader`) → wait `:9090` free → full dev-env → `nohup` → wait healthz `:8080` **and refuse when the version it reports is not the one just built**. There is no TLS - `dev-provision` suggests. |
+| `make dev-souls` | `soul init` + `soul run` for each sid | **rebuild through `make build-soul`** (always), onboarding only if the seed is invalid, does not touch covens from the database, summary `status, count(*)` at the end. |
 | `make dev-web` | `npm run dev -- --host` | mandatory `--host` (IPv4-loopback) + wait `:5173`. |
 | `make dev-stand` | all at once | `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web`. |
 
@@ -434,6 +434,45 @@ curl -H "Authorization: Bearer ${TOKEN}" 127.0.0.1:8080/v1/souls
 # arbitrary subject and roles (for example, for the RBAC keyset demo):
 make dev-jwt AID=archon-keyset ROLES='["keyset-demo"]'
 ```
+
+### Which code is this stand running?
+
+Ask the stand, do not infer it. `/healthz` is public (no token) and reports the build
+version of the instance that answers — during a rolling upgrade, of the very instance
+that answered (ADR-0076(h)):
+
+```sh
+curl -s 127.0.0.1:8080/healthz
+# {"status":"ok","version":"v0.1.0-beta.1-127-g1a226729-dirty"}
+```
+
+The version is `git describe --tags --always --dirty`, so it names the commit
+(`g<sha>`) and says when the tree had uncommitted changes (`-dirty`). That turns the
+acceptance question into one command:
+
+```sh
+served=$(curl -s 127.0.0.1:8080/healthz | sed -n 's/.*"version"[^"]*"\([^"]*\)".*/\1/p')
+git merge-base --is-ancestor "${served##*-g}" release/R5 && echo "the stand runs code that is in release/R5"
+```
+
+`version: 0.0.0-dev` means the binary carries no stamp — the stand cannot be
+identified and nothing observed on it can be held to a commit. `make dev-keeper`
+warns when it produces such a build.
+
+Why this matters: a worktree per ticket means a dozen `keeper/bin/keeper` binaries,
+and every one of them binds the same default stand (`:8080` plus shared
+Postgres/Redis/Vault). Before this was checkable, a stand served an eight-day-old
+binary for over a week without a word, and an observation made against it — "a
+narrowly scoped role sees everything" — cost a critical priority and a dedicated
+session before the binary turned out not to be the merged code (NIM-342).
+
+Two rules follow:
+
+- **An acceptance or demo stand is brought up only from the release worktree** of both
+  repos (`tasks/<REL>/soul-stack` and `tasks/<REL>/soul-stack-web`), never from a
+  ticket worktree. A demo shows the release, not somebody's branch.
+- **Before asking anyone to accept a change, prove the stand contains it** — via
+  `/healthz` for the backend, and by querying your own key/string for the UI.
 
 ## Docker-souls (isolated fleet)
 

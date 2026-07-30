@@ -29,6 +29,13 @@ source "${SCRIPT_DIR}/stand-env.sh"
 WEB_DIR="${WEB_DIR:-${REPO_ROOT}/../soul-stack-web}"
 WEB_LOG="${STAND_DEV_DIR}/web-dev.log"
 WEB_URL="http://127.0.0.1:${WEB_PORT}"
+# Probe the app, not the port root. vite serves the SPA under base '/ui/' (ADR-055,
+# required for the go:embed serving out of keeper), so '/' answers 302 -> /ui/. The
+# readiness loop below demands 200, so probing the root failed on a HEALTHY stand:
+# 30s of waiting and then "web dev server did not come up", with `make dev-stand`
+# ending red while the UI was serving fine. Same defect as NIM-342 seen from the
+# other side - a stand check telling the operator something untrue about the stand.
+WEB_PROBE_URL="${WEB_URL}/ui/"
 PID_FILE="${STAND_DEV_DIR}/web.pid"
 
 log()  { printf '[web-run] %s\n' "$*" >&2; }
@@ -88,12 +95,12 @@ WEB_PID=$!
 printf '%s\n' "${WEB_PID}" > "${PID_FILE}"
 
 # Wait for 200 on the stand's web port (up to 30s).
-log "waiting for ${WEB_URL} (up to 30s)"
+log "waiting for ${WEB_PROBE_URL} (up to 30s)"
 for _ in $(seq 1 30); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' "${WEB_URL}" 2>/dev/null || true)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' "${WEB_PROBE_URL}" 2>/dev/null || true)"
     if [ "${code}" = "200" ]; then
-        log "web ready: ${WEB_URL} (pid=${WEB_PID}, stand=${STAND_SLUG:-default})"
-        printf 'web %s pid=%s stand=%s\n' "${WEB_URL}" "${WEB_PID}" "${STAND_SLUG:-default}"
+        log "web ready: ${WEB_PROBE_URL} (pid=${WEB_PID}, stand=${STAND_SLUG:-default})"
+        printf 'web %s pid=%s stand=%s\n' "${WEB_PROBE_URL}" "${WEB_PID}" "${STAND_SLUG:-default}"
         exit 0
     fi
     if ! kill -0 "${WEB_PID}" 2>/dev/null; then

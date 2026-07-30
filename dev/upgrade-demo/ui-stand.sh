@@ -82,10 +82,13 @@ fi
 # ── 2. Demo-keeper :8090 ──────────────────────────────────────────────────────
 step "2. Demo-keeper :8090 (keeper-demo.yml)"
 if [ "$(healthz ${API}/healthz)" = 200 ]; then
-    log "keeper already on :8090 - REUSING"
+    # Say WHICH keeper is being reused: the port may be held by any of the dozens of
+    # per-worktree binaries, and a silent reuse is how a demo ends up showing code
+    # nobody can name (NIM-342). `0.0.0-dev` means it cannot be identified at all.
+    log "keeper already on :8090 - REUSING, version=$(curl -s "${API}/healthz" 2>/dev/null | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 else
     log "building keeper from the worktree (carries the upgrade-paths route)"
-    ( cd "${REPO_ROOT}/keeper" && go build -o bin/keeper ./cmd/keeper )
+    make -C "${REPO_ROOT}" build-keeper >&2
     kill_by 'keeper-demo\.yml' keeper
     sleep 1
     mkdir -p "${DEV}/services" "${DEV}/destiny-cache" "${DEV}/plugin-sockets-demo"

@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -152,16 +152,35 @@ build:
 		echo "go build ./... in $$m"; \
 		(cd $$m && go build ./...) || exit 1; \
 	done
-	@echo "go build -o keeper/$(BIN_DIR)/keeper ./cmd/keeper in keeper (VERSION=$(VERSION))"
-	@cd keeper && go build -ldflags '$(KEEPER_LDFLAGS)' -o $(BIN_DIR)/keeper ./cmd/keeper
+	@$(MAKE) build-keeper
 	@echo "go build -o keeper/$(BIN_DIR)/soul-trial ./cmd/soul-trial in keeper"
 	@cd keeper && go build -o $(BIN_DIR)/soul-trial ./cmd/soul-trial
-	@echo "go build -o soul/$(BIN_DIR)/soul ./cmd/soul in soul (VERSION=$(VERSION))"
-	@cd soul && go build -ldflags '$(SOUL_LDFLAGS)' -o $(BIN_DIR)/soul ./cmd/soul
+	@$(MAKE) build-soul
 	@echo "go build -o soul-lint/$(BIN_DIR)/soul-lint ./cmd/soul-lint in soul-lint"
 	@cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint
 	@$(MAKE) build-soulctl
 	@$(MAKE) build-soul-legion
+
+# Single-binary targets, split out of `build` so the dev stand can rebuild ONE
+# binary without paying for the whole set. `dev/keeper-run.sh` and
+# `dev/souls-up.sh` go through these rather than calling `go build` themselves:
+# the version stamp then has exactly one definition ($(VERSION)), and a running
+# stand can always be asked which commit it serves (`curl /healthz` -> version,
+# ADR-0076(h)).
+#
+# Before NIM-342 both scripts built with NO -ldflags and only when the binary was
+# MISSING. A stand therefore served an arbitrarily old build that reported
+# `0.0.0-dev`, and nothing on any surface could contradict it - an observation made
+# against such a stand ("a narrowly scoped role sees everything") cost a critical
+# priority and a dedicated session before the binary turned out not to be the
+# merged code at all.
+build-keeper:
+	@echo "go build -o keeper/$(BIN_DIR)/keeper ./cmd/keeper in keeper (VERSION=$(VERSION))"
+	@cd keeper && go build -ldflags '$(KEEPER_LDFLAGS)' -o $(BIN_DIR)/keeper ./cmd/keeper
+
+build-soul:
+	@echo "go build -o soul/$(BIN_DIR)/soul ./cmd/soul in soul (VERSION=$(VERSION))"
+	@cd soul && go build -ldflags '$(SOUL_LDFLAGS)' -o $(BIN_DIR)/soul ./cmd/soul
 
 # soul-legion is a shipped artifact (ADR-004 Amendment 2026-07-26), so `build`
 # has to produce it like the rest. Its code lives in the tests/load module, which
@@ -557,7 +576,7 @@ dev-provision:
 dev-smoke:
 	@$(MAKE) dev-up
 	@$(MAKE) dev-provision
-	@cd keeper && go build -o $(BIN_DIR)/keeper ./cmd/keeper
+	@$(MAKE) build-keeper
 	@VAULT_TOKEN=root bash -c '. dev/stand-env.sh >/dev/null && \
 		mkdir -p "$${STAND_DEV_DIR}" && \
 		envsubst "$${KEEPER_RENDER_WHITELIST}" < dev/keeper.dev.yml.tmpl > "$${STAND_DEV_DIR}/keeper.dev.yml" && \
@@ -855,6 +874,46 @@ check-soul-template:
 		fi; \
 	fi
 
+# check-dev-stand-build - keeps a dev stand falsifiable (NIM-342). Two properties:
+#
+#   1. no script in dev/ builds keeper or soul itself - both go through
+#      `make build-keeper` / `make build-soul`, so the $(VERSION) stamp cannot be
+#      dropped and the build cannot go back to being conditional on the binary
+#      being absent;
+#   2. keeper-run.sh holds the answering /healthz to the version it just built - a
+#      foreign keeper on the port is reported as such instead of as "ready".
+#
+# A grep guard rather than a Go test: the subject is shell under dev/, which no test
+# binary loads. It catches the actual regression - a "simplification" back to a bare
+# `go build`, or the served-version comparison being deleted. What it cannot catch is
+# the scripts still working; that is what `make dev-keeper` on a live stand shows.
+#
+# Why it is worth a gate at all: before this, a stand served an arbitrarily old
+# binary reporting `0.0.0-dev`, so an observation made against it could be neither
+# confirmed nor refuted. One such observation ("a narrowly scoped role sees
+# everything") cost a critical priority and a dedicated session.
+check-dev-stand-build:
+	@bad=$$(find dev -name '*.sh' -print0 | xargs -0 grep -lE 'go build.*(cmd/keeper|cmd/soul([^-]|$$))' 2>/dev/null || true); \
+	if [ -n "$$bad" ]; then \
+		echo "check-dev-stand-build: a dev script builds keeper/soul directly: $$bad"; \
+		echo "  use 'make -C \"\$$REPO_ROOT\" build-keeper' / 'build-soul' instead - a bare go build"; \
+		echo "  drops the -ldflags stamp and the stand then reports version 0.0.0-dev (NIM-342)."; \
+		exit 1; \
+	fi
+	@for m in build-keeper BUILT_VERSION 'FOREIGN keeper holds this port'; do \
+		grep -qF "$$m" dev/keeper-run.sh || { \
+			echo "check-dev-stand-build: dev/keeper-run.sh lost the marker \"$$m\"."; \
+			echo "  the script must rebuild through 'make build-keeper', read the version back out of"; \
+			echo "  the artifact, and refuse when /healthz reports a different one (NIM-342)."; \
+			exit 1; \
+		}; \
+	done
+	@grep -qF 'build-soul' dev/souls-up.sh || { \
+		echo "check-dev-stand-build: dev/souls-up.sh no longer rebuilds through 'make build-soul' (NIM-342)."; \
+		exit 1; \
+	}
+	@echo "dev stand build: keeper/soul are rebuilt through the Makefile, keeper-run verifies the served version"
+
 # --- Release/packaging ---
 # These targets are additive: NOT part of `check` (require external tooling that may
 # not be installed in the dev environment). Artifacts are written to dist/ (gitignored).
@@ -981,7 +1040,7 @@ sign:
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
-check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
+check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
 	@echo "check: all docker-free checks passed"
 	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
 	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"

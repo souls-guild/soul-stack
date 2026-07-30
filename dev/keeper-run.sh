@@ -36,11 +36,31 @@ fail() { printf '[keeper-run] [fail] %s\n' "$*" >&2; exit 1; }
 
 log "stand: slug=${STAND_SLUG:-<default>} slot=${STAND_SLOT} dir=${STAND_DEV_DIR} kid=${KID} openapi=${OPENAPI_PORT}"
 
-# 1. keeper binary. Missing - build it.
-if [ ! -x "${KEEPER_BIN}" ]; then
-    log "keeper binary not found (${KEEPER_BIN}) - building (go build ./cmd/keeper)"
-    (cd "${REPO_ROOT}/keeper" && go build -o bin/keeper ./cmd/keeper) \
-        || fail "keeper build failed - build manually: make build"
+# 1. keeper binary. ALWAYS rebuilt, through `make build-keeper` - never reused as-is.
+#
+# Reusing an existing binary is what made a stand unfalsifiable (NIM-342): the
+# script used to build only when ${KEEPER_BIN} was MISSING, so `make dev-keeper`
+# would relaunch an arbitrarily old build without a word. There are dozens of
+# worktrees in this repo, each with its own keeper/bin/keeper, and any of them
+# binds the same default stand.
+#
+# The build goes through the Makefile rather than a local `go build` so the version
+# stamp has ONE definition ($(VERSION) = git describe --tags --always --dirty).
+# Without -ldflags the binary reports `0.0.0-dev`, and a stand that cannot name its
+# own commit cannot be held to anything.
+log "building keeper (make build-keeper)"
+make -C "${REPO_ROOT}" build-keeper >&2 || fail "keeper build failed"
+[ -x "${KEEPER_BIN}" ] || fail "build reported success but ${KEEPER_BIN} is not executable"
+
+# The version is read back FROM THE ARTIFACT, not recomputed here: this is the
+# string the process will report, so it is what we later hold /healthz to.
+BUILT_VERSION="$("${KEEPER_BIN}" version 2>/dev/null | awk '{print $2}')"
+[ -n "${BUILT_VERSION}" ] || fail "cannot read the version out of ${KEEPER_BIN} ('keeper version')"
+if [ "${BUILT_VERSION}" = "0.0.0-dev" ]; then
+    log "[warn] binary carries no version stamp (0.0.0-dev) - git describe found nothing."
+    log "[warn] this stand cannot be identified from the outside; expect no acceptance proof."
+else
+    log "keeper built: version=${BUILT_VERSION}"
 fi
 
 # 2. Per-stand directories: root + both cache dirs for file://-resolve (keeper does not
@@ -131,13 +151,29 @@ nohup "${KEEPER_BIN}" run --config="${KEEPER_CONFIG}" > "${KEEPER_LOG}" 2>&1 &
 KEEPER_PID=$!
 printf '%s\n' "${KEEPER_PID}" > "${PID_FILE}"
 
-# 10. Wait for the stand's healthz 200 (up to 30s).
+# 10. Wait for the stand's healthz 200 (up to 30s), then PROVE the answer comes from
+# the binary we just built.
+#
+# A 200 proves only that *something* serves the port. `/healthz` reports the build
+# version of the instance actually answering (ADR-0076(h)), so comparing it with the
+# artifact's own version turns "keeper is up" into "THIS keeper is up". Without the
+# comparison the loop happily reports success while our process died on
+# `bind: address already in use` and a foreign keeper answers the probe - which is
+# how a stand ends up serving code nobody can name (NIM-342).
 log "waiting for healthz 200 (${HEALTHZ_URL}, up to 30s)"
 for _ in $(seq 1 30); do
     code="$(curl -s -o /dev/null -w '%{http_code}' "${HEALTHZ_URL}" 2>/dev/null || true)"
     if [ "${code}" = "200" ]; then
-        log "keeper ready: pid=${KEEPER_PID}, healthz 200 (:${OPENAPI_PORT})"
-        printf 'keeper pid=%s healthz=200 openapi=%s stand=%s\n' "${KEEPER_PID}" "${OPENAPI_PORT}" "${STAND_SLUG:-default}"
+        body="$(curl -s -m 5 "${HEALTHZ_URL}" 2>/dev/null || true)"
+        served="$(printf '%s' "${body}" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [ -n "${served}" ] || fail "healthz answered 200 without a version field - the stand cannot be verified: ${body}"
+        if [ "${served}" != "${BUILT_VERSION}" ]; then
+            fail "healthz on :${OPENAPI_PORT} reports version=${served}, but we built ${BUILT_VERSION} -
+       a FOREIGN keeper holds this port. Kill it (lsof -nP -iTCP:${OPENAPI_PORT} -sTCP:LISTEN) or
+       bring up a separate stand (DEV_STAND=<slug> make dev-keeper)."
+        fi
+        log "keeper ready: pid=${KEEPER_PID}, healthz 200, version=${served} (:${OPENAPI_PORT})"
+        printf 'keeper pid=%s healthz=200 version=%s openapi=%s stand=%s\n' "${KEEPER_PID}" "${served}" "${OPENAPI_PORT}" "${STAND_SLUG:-default}"
         exit 0
     fi
     if ! kill -0 "${KEEPER_PID}" 2>/dev/null; then
