@@ -850,6 +850,14 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 	}
 
 	// Step 3: self-lockout invariant — cannot revoke the last `*` operator.
+	//
+	// The absent CallerAID is the point, not an oversight (NIM-319). `keeper init`
+	// has no operator claims, and the lockout guard answers about cluster state
+	// rather than about a caller, so it must be reachable with no subject. When
+	// NIM-214/NIM-285 put a caller-rights gate ahead of it, this assertion is what
+	// caught it — the refusal arrived from the least-privilege floor naming a
+	// missing caller, and the invariant went unchecked. Adding a caller here to
+	// make a future red go away would retire the only coverage of that.
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: integrationPool})
 	if err != nil {
 		t.Fatalf("rbac.NewService: %v", err)

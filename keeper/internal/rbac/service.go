@@ -251,14 +251,14 @@ func (s *Service) CreateRole(ctx context.Context, in CreateRoleInput) error {
 // Order of checks inside the tx (a deterministic lock order against
 // deadlock — R2: role → permissions → membership/operators):
 //  1. lock the role row (SELECT … FOR UPDATE); missing → [ErrRoleNotFound].
-//  2. builtin=true → [ErrRoleBuiltin] (FIRST, before lockout — builtin takes
-//     priority).
-//  3. the caller must be able to administer the role — cover what it grants
+//  2. builtin=true → [ErrRoleBuiltin] (FIRST — builtin takes priority).
+//  3. if the role grants `*` — a self-lockout check: will active admins with
+//     `*` remain through a role OTHER than the one being deleted; none →
+//     [ErrWouldLockOutCluster]. Ahead of the caller gate because it is a
+//     precondition rather than a permission check (NIM-319).
+//  4. the caller must be able to administer the role — cover what it grants
 //     (NIM-214); otherwise → [ErrPermissionNotHeld]. Before this, `role.delete`
 //     had no caller-side check of any kind and dropped any non-builtin role.
-//  4. if the role grants `*` — a self-lockout check: will active admins with
-//     `*` remain through a role OTHER than the one being deleted; none →
-//     [ErrWouldLockOutCluster].
 //  5. DELETE.
 func (s *Service) DeleteRole(ctx context.Context, name, callerAID string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -275,17 +275,6 @@ func (s *Service) DeleteRole(ctx context.Context, name, callerAID string) error 
 		return ErrRoleBuiltin
 	}
 
-	// Resolved against its chain, so a derived role is judged on what it GRANTS
-	// rather than on its stored delta — the same currency every other coverage
-	// question reads (NIM-198).
-	target, err := resolveRoleChain(ctx, tx, name)
-	if err != nil {
-		return err
-	}
-	if err := s.assertCallerMayAdminister(ctx, tx, callerAID, target); err != nil {
-		return err
-	}
-
 	perms, err := rolePermissions(ctx, tx, name)
 	if err != nil {
 		return err
@@ -297,10 +286,24 @@ func (s *Service) DeleteRole(ctx context.Context, name, callerAID string) error 
 	// Only a PLAIN `*` role is a cluster-admin source (ADR-078(i)) — a derived one
 	// was never counted by the probes, so deleting it cannot lock anyone out and
 	// checking would only produce a false 409.
+	//
+	// Ahead of the caller gate below, per the precedence argued at
+	// [Service.assertNotLastWildcardRole] (NIM-319).
 	if grantsClusterAdmin(perms, parent) {
 		if err := s.assertNotLastWildcardRole(ctx, tx, name); err != nil {
 			return err
 		}
+	}
+
+	// Resolved against its chain, so a derived role is judged on what it GRANTS
+	// rather than on its stored delta — the same currency every other coverage
+	// question reads (NIM-198).
+	target, err := resolveRoleChain(ctx, tx, name)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayAdminister(ctx, tx, callerAID, target); err != nil {
+		return err
 	}
 
 	// Deleting a role that is still someone's parent is refused by the self-FK
@@ -357,16 +360,21 @@ type UpdateRolePermissionsInput struct {
 //
 // Order inside the tx:
 //  1. lock the role; missing → [ErrRoleNotFound].
-//  2. builtin=true → [ErrRoleBuiltin] (before lockout).
-//  3. validate the new set via [ParsePermission].
-//  4. if the resulting role is derived → the caller holds the parent
+//  2. builtin=true → [ErrRoleBuiltin].
+//  3. validate the new permission set, the new default_scope and the resulting
+//     scope_mode.
+//  4. if the role STOPS being a cluster-admin source — `*` removed, or the role
+//     turned derived — a self-lockout check (will admins with `*` remain through
+//     a PLAIN role other than this one); none → [ErrWouldLockOutCluster]. Ahead
+//     of every caller gate: a precondition, not a permission check (NIM-319).
+//  5. the caller must be able to administer the role as it stands (NIM-214).
+//  6. if the resulting role is derived → the caller holds the parent
 //     ([Service.resolveParentCeiling]) and `child ⊆ parent`
 //     ([assertWithinParent]) — ADR-078(h).
-//  5. least-privilege, over the role's rights in RESOLVED form (NIM-198).
-//  6. if the role STOPS being a cluster-admin source — `*` removed, or the role
-//     turned derived — a self-lockout check (will admins with `*` remain through
-//     a PLAIN role other than this one); none → [ErrWouldLockOutCluster].
-//  7. replace.
+//  7. least-privilege, over the role's rights in RESOLVED form (NIM-198), then
+//     the root-role gate if the result tracks nothing (NIM-201).
+//  8. the cascade report, last (ADR-078(k), NIM-199).
+//  9. replace.
 func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermissionsInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -439,6 +447,23 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 	}
 	if err := checkScopeMode(newMode, newParent != nil); err != nil {
 		return err
+	}
+
+	// The self-lockout check is needed when the role STOPS being a cluster-admin
+	// source. Two ways to stop, and the second one is why ADR-078(i) exists: `*`
+	// is removed from the permission set, or the role becomes DERIVED — a derived
+	// `*` is capped by its parent, so the probes no longer count it and the
+	// cluster could be left with none.
+	//
+	// First among the guards, per the precedence argued at
+	// [Service.assertNotLastWildcardRole] (NIM-319) — it needs nothing but the
+	// stored rows and the parent this PATCH resolves to, so nothing forces it later.
+	// A PATCH that would also be refused for another reason is refused by this one
+	// instead; both are refusals, and this is the one the caller cannot lift.
+	if grantsClusterAdmin(oldPerms, oldParent) && !grantsClusterAdmin(in.Permissions, newParent) {
+		if err := s.assertNotLastWildcardRole(ctx, tx, in.Name); err != nil {
+			return err
+		}
 	}
 
 	// The role as STORED and RESOLVED before anything changes — the baseline the
@@ -533,17 +558,6 @@ func (s *Service) UpdateRolePermissions(ctx context.Context, in UpdateRolePermis
 		}
 	}
 
-	// The self-lockout check is needed when the role STOPS being a cluster-admin
-	// source. Two ways to stop, and the second one is why ADR-078(i) exists: `*`
-	// is removed from the permission set, or the role becomes DERIVED — a derived
-	// `*` is capped by its parent, so the probes no longer count it and the
-	// cluster could be left with none.
-	if grantsClusterAdmin(oldPerms, oldParent) && !grantsClusterAdmin(in.Permissions, newParent) {
-		if err := s.assertNotLastWildcardRole(ctx, tx, in.Name); err != nil {
-			return err
-		}
-	}
-
 	// The blast radius, LAST among the gates (ADR-078(k), NIM-199): every refusal
 	// that is about the caller's own rights should be reported as such before one
 	// that asks them to take a position. A change nobody below feels passes
@@ -595,8 +609,12 @@ type RevokeOperatorInput struct {
 //  2. if the role grants `*` AND the AID being removed holds `*` ONLY
 //     through it — a self-lockout check: will active admins with `*` remain
 //     after excluding the (RoleName, AID) pair; none →
-//     [ErrWouldLockOutCluster].
-//  3. DELETE.
+//     [ErrWouldLockOutCluster]. Ahead of the caller gate because it is a
+//     precondition rather than a permission check (NIM-319).
+//  3. the caller must be able to unbind — cover what the role grants, the same
+//     rights `role.grant-operator` demands to create the binding (NIM-285);
+//     otherwise → [ErrPermissionNotHeld].
+//  4. DELETE.
 func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -617,16 +635,6 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		// ErrRoleNotFound propagates as-is.
 		return err
 	}
-	// The rights `role.grant-operator` would have demanded to create this binding
-	// (NIM-285) — unbinding is the same authorization surface in reverse.
-	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
-	if err != nil {
-		return err
-	}
-	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
-		return err
-	}
-
 	perms, err := rolePermissions(ctx, tx, in.RoleName)
 	if err != nil {
 		return err
@@ -635,6 +643,8 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 	if err != nil {
 		return err
 	}
+	// Before the caller gate below, per the precedence argued at
+	// [Service.assertNotLastWildcardRole] (NIM-319).
 	if grantsClusterAdmin(perms, parent) {
 		// Are we removing the last admin with `*`? The probe query, run
 		// UNDER FOR UPDATE, excludes the target (RoleName, AID) pair: if the
@@ -644,6 +654,16 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		if err := s.assertNotLastWildcardOperator(ctx, tx, in.RoleName, in.AID); err != nil {
 			return err
 		}
+	}
+
+	// The rights `role.grant-operator` would have demanded to create this binding
+	// (NIM-285) — unbinding is the same authorization surface in reverse.
+	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
+		return err
 	}
 
 	if err := RevokeOperator(ctx, tx, in.RoleName, in.AID); err != nil {
@@ -773,6 +793,45 @@ func (s *Service) ListRoles(ctx context.Context, callerAID string) ([]RoleView, 
 	return visibleRoleViews(callerPerms, views)
 }
 
+// A self-lockout guard is a precondition, not a permission check (NIM-319).
+//
+// The six guards below answer one question — "would the cluster be left with no
+// effective `*` admin?" — about the state the mutation would produce. They read
+// that state under FOR UPDATE and say nothing about who is asking. So they run
+// BEFORE every gate that requires a caller, and their refusal takes precedence
+// over one.
+//
+// This is not a stylistic ordering. It is the only refusal on the write path that
+// no caller, however privileged, may waive: a cluster-admin holding `*` is
+// refused by it exactly as an unprivileged caller is. Everything else in the chain
+// — the least-privilege floor, the root-role gate, [Service.assertCallerMayAdminister],
+// [Service.assertCallerMayUnbind] — is a statement about the caller's rights and
+// is satisfiable by holding more of them. A check that cannot be satisfied at all
+// belongs ahead of checks that can, and a check about cluster state must be
+// answerable when there is no subject in the picture.
+//
+// NIM-319 was the consequence of getting that backwards. Placing a caller gate
+// first made the guarantee depend on that gate's incidental strictness rather than
+// on the probe: "you cannot remove the last admin" held only because unbinding a
+// `*`-granting role happens to demand `*` from the caller. Nothing was exploitable
+// through the API — every handler passes its claims — but the invariant had stopped
+// being enforced in its own right, and the caller-less path (`keeper init`, and any
+// reconciler added later) reached a least-privilege refusal instead of the guard.
+//
+// ADR-078(k) places the cascade report last, so that a refusal about the caller's
+// own rights is reported before one asking them to take a position. That ordering
+// stands; it simply never assigned these guards a place, and they ended up between
+// its two elements. The full order on the write path is now:
+//
+//	syntactic validation → self-lockout → caller's rights → cascade confirmation
+//
+// One consequence is accepted deliberately: a caller who may reach the endpoint but
+// could not administer the role now learns from the refusal that the target is the
+// last `*` holder. That audience already passed the enforcer's `Check` for a
+// role-administration right, and the row locks above already disclose whether the
+// membership exists at all. Locking a live cluster out has no path back through the
+// API; this does not.
+//
 // assertNotLastWildcardRole is the self-lockout guard for delete/
 // update-that-removes-`*`: lock the effective-cluster-admins core (DB + FOR
 // UPDATE) and check that ≥1 active AID with `*` remains via a role OTHER

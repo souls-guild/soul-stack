@@ -7,7 +7,10 @@
   (NIM-198 / NIM-199 / NIM-200) corrects §(h) to measure the child in its resolved
   form, and adds §(k) `scope_mode` + the cascade report and §(l) inert rows. The
   **2026-07-28 amendment** (NIM-214) adds §(m): administering a role is bounded by
-  what the caller could grant, which is what finally gives `role.delete` a floor.
+  what the caller could grant, which is what finally gives `role.delete` a floor. The
+  **2026-07-29 amendment** (NIM-319) adds §(n): the self-lockout guard runs ahead of
+  every caller-rights gate, because §(m)'s gate is the first one that always demands a
+  caller and it had pushed the guard out of reach on the caller-less path.
 
 - **Context.** Roles are flat. An operator who runs the `dba` team can already be
   scoped — `default_scope: coven=dba` ([ADR-047 §a](0047-purview.md)) — but there is no way
@@ -379,6 +382,45 @@
   a role you DO cover is untouched. And the route rights stay NoSelector: the
   boundary lives in the service, so REST and MCP cannot drift, and `role.update` is
   the right to reach the endpoint, never the reach itself.
+
+  **(n) The self-lockout guard is a precondition, not a permission check**
+  (Amendment 2026-07-29, NIM-319). §(k) placed the cascade report last, so that a
+  refusal about the caller's own rights is reported before one asking them to take a
+  position. That ordering is right and stands, but it named only two of the three
+  kinds of check on the write path, and the self-lockout guard — "would the cluster
+  be left with no effective `*` admin?" — ended up between them by default. §(m) and
+  its Synod counterpart then added caller gates that measure a role's **whole
+  current** right set, which unlike the least-privilege floor can never be empty, so
+  they demanded a caller before the guard was consulted. The order is now explicit:
+
+  > syntactic validation → **self-lockout** → the caller's rights → cascade confirmation
+
+  The guard belongs first because it is the only refusal on the write path that no
+  caller may waive: a cluster-admin holding `*` is refused by it exactly as an
+  unprivileged caller is. Every other check is a statement about the caller's rights
+  and is satisfiable by holding more of them, and a check that cannot be satisfied at
+  all belongs ahead of checks that can. The deeper reason is that the guard is not
+  about the caller at all — it reads the state the mutation would produce, under `FOR
+  UPDATE`, and must therefore be answerable when there is **no subject in the
+  picture**. `keeper init` is such a path today; any reconciler added later is
+  another.
+
+  Nothing was exploitable while the order was inverted — every handler and MCP tool
+  passes its claims, and unbinding a `*`-granting role demands `*` from the caller,
+  which implies the guard's answer. That implication is exactly the defect: the
+  guarantee had stopped being enforced in its own right and held only because a
+  different gate happened to be strict enough. An invariant that survives by
+  coincidence is not an invariant, and the coincidence breaks the moment a
+  system-caller path exists.
+
+  **One disclosure is accepted.** A caller who may reach the endpoint but could not
+  administer the role now learns from the refusal that the target is the last `*`
+  holder. That audience already passed the enforcer's `Check` for a
+  role-administration right, and the row locks taken first already disclose whether
+  the membership exists at all. Being locked out of a live cluster has no path back
+  through the API; this does not. Where a mutation would be refused for several
+  reasons at once — an unresolvable parent, a set the caller cannot grant — the
+  lockout refusal is the one reported.
 
 - **Delivery.**
   - **J1 (NIM-179).** The column, its guards, and the plumbing that carries

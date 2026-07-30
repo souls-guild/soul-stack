@@ -202,8 +202,12 @@ type RemoveOperatorInput struct {
 //  2. if the group bundles `*` — self-lockout, excluding the (synod, aid)
 //     pair from the Synod branch (excludeAID might still hold `*` directly
 //     or through another group — it survives); empty →
-//     [ErrWouldLockOutCluster].
-//  3. DELETE.
+//     [ErrWouldLockOutCluster]. Ahead of the caller gate because it is a
+//     precondition rather than a permission check (NIM-319).
+//  3. the caller must be able to unbind — cover the group's WHOLE bundle, the
+//     same rights [Service.AddOperator] demands (NIM-285); otherwise →
+//     [ErrPermissionNotHeld].
+//  4. DELETE.
 func (s *Service) RemoveOperator(ctx context.Context, in RemoveOperatorInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -218,16 +222,8 @@ func (s *Service) RemoveOperator(ctx context.Context, in RemoveOperatorInput) er
 		return err
 	}
 
-	// What [AddOperator] would have demanded to create this membership (NIM-285):
-	// the member holds the whole bundle, so removing them is measured against it.
-	required, err := s.synodEffectivePermissions(ctx, tx, in.SynodName)
-	if err != nil {
-		return err
-	}
-	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
-		return err
-	}
-
+	// Before the caller gate below, per the precedence argued at
+	// [Service.assertNotLastWildcardRole] (NIM-319).
 	wildcard, err := s.synodGivesWildcard(ctx, tx, in.SynodName)
 	if err != nil {
 		return err
@@ -236,6 +232,16 @@ func (s *Service) RemoveOperator(ctx context.Context, in RemoveOperatorInput) er
 		if err := s.assertNotLastWildcardSynodOperator(ctx, tx, in.SynodName, in.AID); err != nil {
 			return err
 		}
+	}
+
+	// What [AddOperator] would have demanded to create this membership (NIM-285):
+	// the member holds the whole bundle, so removing them is measured against it.
+	required, err := s.synodEffectivePermissions(ctx, tx, in.SynodName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
+		return err
 	}
 
 	tag, err := tx.Exec(ctx, deleteSynodOperatorSQL, in.SynodName, in.AID)
@@ -329,8 +335,12 @@ type RevokeRoleInput struct {
 //  1. lock the bundle row; missing → [ErrSynodRoleNotFound].
 //  2. if the revoked role grants `*` — self-lockout, excluding the
 //     (synod, role) pair from the Synod branch; empty →
-//     [ErrWouldLockOutCluster].
-//  3. DELETE.
+//     [ErrWouldLockOutCluster]. Ahead of the caller gate because it is a
+//     precondition rather than a permission check (NIM-319).
+//  3. the caller must be able to unbind — cover the revoked role's rights, the
+//     same rights [Service.GrantRole] demands (NIM-285); otherwise →
+//     [ErrPermissionNotHeld].
+//  4. DELETE.
 func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -342,20 +352,13 @@ func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 		return err
 	}
 
-	// What [GrantRole] would have demanded to put this role in the bundle
-	// (NIM-285) — the revoked role's own effective rights.
-	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
-	if err != nil {
-		return err
-	}
-	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
-		return err
-	}
-
 	// Self-lockout is only needed if the revoked role is a cluster-admin SOURCE —
 	// a bare `*` on a PLAIN role (ADR-078(i): a derived `*` is capped by its
 	// parent and the probes never counted it). Otherwise removing it doesn't
 	// shrink the admin set.
+	//
+	// Before the caller gate below, per the precedence argued at
+	// [Service.assertNotLastWildcardRole] (NIM-319).
 	perms, err := rolePermissions(ctx, tx, in.RoleName)
 	if err != nil {
 		return err
@@ -368,6 +371,16 @@ func (s *Service) RevokeRole(ctx context.Context, in RevokeRoleInput) error {
 		if err := s.assertNotLastWildcardSynodRole(ctx, tx, in.SynodName, in.RoleName); err != nil {
 			return err
 		}
+	}
+
+	// What [GrantRole] would have demanded to put this role in the bundle
+	// (NIM-285) — the revoked role's own effective rights.
+	required, err := s.roleEffectivePermissions(ctx, tx, in.RoleName)
+	if err != nil {
+		return err
+	}
+	if err := s.assertCallerMayUnbind(ctx, tx, in.CallerAID, required); err != nil {
+		return err
 	}
 
 	tag, err := tx.Exec(ctx, deleteSynodRoleSQL, in.SynodName, in.RoleName)

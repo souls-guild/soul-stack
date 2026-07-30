@@ -218,6 +218,12 @@ Violation → `409 would-lock-out-cluster` (common problem-type for operator and
 
 **Check - from the database under `FOR UPDATE`, not from the enforcer snapshot** (see § How an enforcer resolves). The control SQL takes a row-lock on `rbac_role_operators` / `rbac_role_permissions` / `operators` in the same transaction as the mutation: excludes the target role/pair from the sample and checks that ≥1 row remains. The snapshot becomes outdated on the TTL window - checking against it would be a hole; `FOR UPDATE` serializes parallel lockout operations (two txs that unlock `*` in different ways cannot both pass).
 
+**The check runs BEFORE every gate that reads the caller** ([ADR-078 §n](../adr/0078-rbac-derived-roles.md), NIM-319). Order on the write path:
+
+> syntactic validation → **self-lockout** → the caller's rights (§ Invariant least-privilege, § Who may administer a role, § Taking a binding apart) → cascade confirmation (§ Derived roles)
+
+It is the only refusal no caller can waive — a cluster-admin holding `*` is refused by it exactly as an unprivileged caller is — and it is not about the caller at all: it reads the state the mutation would produce, so it must answer when there is **no subject in the picture**. `keeper init` revokes without operator claims, and its guard test is what caught the inverted order. Two consequences: a caller who could not administer the role still gets `409 would-lock-out-cluster` rather than `403` (a deliberate disclosure — that audience already holds a role-administration right, and being locked out of a live cluster has no path back through the API), and where several refusals apply at once the lockout one is reported.
+
 ### Catalog visibility (`role.list`)
 
 `role.list` is the right to read the role catalog — **not** the right to read the cluster's privilege map. The two are different because a role carries more than its name: its permission set, its scope and the AIDs holding it. Read together, a full catalog answers "who administers what", "which covens and services exist" and "which operator to attack to reach `*`". Before NIM-202 every holder of `role.list` got all of it, including a `coven`-scoped operator who administers one team.

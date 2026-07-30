@@ -118,7 +118,12 @@ order to act in.
   leaves an empty role administrable by anyone.
 
   **This is the one that breaks working automation:** trimming or deleting a role
-  whose rights you do not hold now answers 403, where it used to succeed.
+  whose rights you do not hold now answers 403, where it used to succeed — unless
+  the mutation would also leave the cluster with no administrator, in which case
+  the self-lockout guard answers `409 would-lock-out-cluster` first, as it did
+  before this release. It runs ahead of every caller-side check
+  ([ADR-078 §n](docs/adr/0078-rbac-derived-roles.md)): it is the one refusal no
+  operator can satisfy by holding more rights.
   `role.revoke-operator`, `synod.remove-operator` and `synod.revoke-role` carried
   no caller at all and are gated the same way — each revoke asks for exactly what
   its matching grant asks for, so unbinding a role weighs that role's rights and
@@ -930,6 +935,22 @@ order to act in.
   effective form and compared by coverage, so any ceiling move is caught —
   clearing the parent, replacing the scope, re-pinning the delta — while a pure
   trim stays ungated.
+
+- **The self-lockout guard had ended up behind the gates that read the caller.**
+  Giving `role.update` / `role.delete` a floor, and the revoke paths a caller,
+  introduced the first checks on those mutations that measure a role's **whole
+  current** right set — which, unlike the least-privilege floor, can never be
+  empty and so always demands a caller. On five mutations they ran before the
+  "≥1 active Archon with an effective `*` must remain" probe, and a caller-less
+  revoke reached a least-privilege refusal naming a missing caller instead of the
+  guard. Nothing was exploitable — every handler and MCP tool passes its claims,
+  and unbinding a `*`-granting role demands `*`, which implies the guard's answer
+  — and that implication was the defect: the guarantee held only because another
+  gate happened to be strict enough. The guard is a precondition on the resulting
+  cluster state, read under `FOR UPDATE` and unwaivable by any caller, so it now
+  runs first ([ADR-078 §n](docs/adr/0078-rbac-derived-roles.md)) and is answerable
+  with no subject in the picture — which is what `keeper init` needs, and what its
+  guard test caught.
 
 - **Every `create` carrying a topology `assert:` answered 422.** Pre-flight runs
   before `incarnation.Create`, and once membership moved onto a relation whose FK
