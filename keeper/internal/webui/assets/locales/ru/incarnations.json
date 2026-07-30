@@ -176,7 +176,6 @@
   "missingRequired": "Заполните обязательные поля: {{fields}}.",
   "nameRequired": "обязательное поле",
   "nameRequiredByScenario": "Этот сценарий создания имя не собирает — введите его.",
-  "newNameComposedHint": "Оставьте пустым, если сценарий создания собирает имя из входных данных.",
   "newNameLabel": "Имя (kebab-case)",
   "noConnectedSouls": "На coven {{name}} нет привязанных souls.",
   "noHostsInState": "В state.hosts нет данных — либо не было apply, либо scenario не пишет per-host state.",
