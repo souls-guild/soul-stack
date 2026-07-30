@@ -222,6 +222,15 @@ var writeRoutesNoAudit = map[route]string{
 	// incarnation.get (read pattern). audit deliberately not written.
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
 
+	// POST /v1/incarnations/resolve-name — the name a create WOULD compose from the
+	// chosen scenario's name_template, plus whether it is free (NIM-331). POST by HTTP
+	// method (the input it composes over is an arbitrary nested object, which does not
+	// fit a query string and has no business in access logs), but a read-only resolve by
+	// semantics — creates nothing, stores nothing. It also fires on every keystroke of
+	// the create form, so auditing it would bury the create it precedes. The create
+	// itself still writes incarnation.created. audit deliberately not written.
+	{http.MethodPost, "/v1/incarnations/resolve-name"}: "NIM-331: live preview of the name a create would compose - read-only resolve without mutation, fired per keystroke; audit deliberately not written (pattern voyages/preview, the create itself writes incarnation.created)",
+
 	// POST /auth/token — exchange of session-cookie for a short-lived Bearer (NIM-77, Option B).
 	// POST by HTTP method, but does not mutate state: reissuing a token from an already
 	// verified cookie (high-freq refresh on every tab/SPA reload).

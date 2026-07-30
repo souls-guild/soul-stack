@@ -7,7 +7,8 @@
   at all, because the gate scoped on `incarnation=` — the one dimension a template
   does not have yet — and discarded `service=`/`coven=`, which the request does
   carry. See the RBAC bullet under (f). The web half — hiding the free-text "Name"
-  field and drawing a live preview of the composed name — is a separate ticket.
+  field and drawing a live preview of the composed name — landed by NIM-331, over
+  the resolve endpoint described under (g).
 
 - **Context.** The incarnation name is typed by the operator as free text. In a
   fleet of similar instances that text is not actually free: it follows a house
@@ -171,3 +172,48 @@
     template with four components leaves roughly 15 characters per component. The
     linter catches the impossible cases; the tight ones surface as a 422 at create,
     which the create form should pre-empt with a live preview and a character count.
+
+- **(g) The preview is a RESOLVE, not a second implementation (Amendment
+  2026-07-30, NIM-331).** The bullet above asks the create form to pre-empt the
+  ceiling with a live preview, which raises the obvious question of where the
+  composition runs. It runs **only on the server**:
+  [`POST /v1/incarnations/resolve-name`](../keeper/openapi.yaml) takes
+  `service` + `create_scenario` + the `input` so far and answers with the composed
+  name, its length against the ceiling, whether it is a legal name, and whether it
+  is free. Nothing is created or stored; the create still re-validates everything.
+
+  Composing client-side was the tempting shape and is the one thing this ADR
+  forbids. Template blocks are CEL, stringified by cel-go's own coercion rules
+  (`nameBlockString`); a JavaScript evaluator would round a number or spell a bool
+  differently and compose a **different string from the same input**. Under an
+  immutable primary key that is not a cosmetic mismatch — the operator approves one
+  identity and is handed another, silently, which is the same failure mode this ADR
+  refuses truncation over. So the endpoint calls
+  [`scenario.ComposeName`](../../keeper/internal/scenario/create_scenarios.go), the
+  function the create path itself reaches through `composeIncarnationName`, and the
+  agreement is pinned by a guard test rather than by inspection. The form
+  reimplements nothing about composition; it duplicates only what is not
+  composition — a character count, and the name pattern it already receives.
+
+  **One deliberate asymmetry.** A preview runs while the operator is still typing,
+  so it merges schema defaults *without* the required/`validate:` phases —
+  otherwise every keystroke would be rejected before a name could exist. Merge is
+  also the only phase that CHANGES a value (require and validate merely reject), so
+  whenever the create would have been accepted, both paths compose over the same map.
+  The preview therefore rejects *less*, never *differently*.
+
+  **Occupancy is answered here, deliberately.** The form must not probe
+  `GET /v1/incarnations/{name}`: that turns the status code into an existence oracle
+  and lets a scoped operator walk names outside their scope. The reply is scope-aware
+  in two grains — "taken" for anyone who could create the name, "taken by service X"
+  only for a caller who may already see that incarnation — and the same rule now
+  phrases the create's 409, which under a template otherwise names a string the
+  operator never typed. The endpoint carries permission `incarnation.create` and
+  re-measures the **composed** name against the caller's scope (gate (b) above);
+  without that it would compose arbitrary names and report their availability, which
+  is the oracle again by another door.
+
+  Scenario listing gained a **boolean** `composes_name` next to `input_schema`, so
+  the form knows which mode to open in. A flag, not the template text: the operator
+  is shown the resulting name rather than the formula (NIM-340), and a client
+  holding the expression is one step from evaluating it — the divergence above.

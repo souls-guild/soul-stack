@@ -217,6 +217,25 @@ func resolveInputVaultRefs(schema InputSchemaMap, merged map[string]any, resolve
 	return nil
 }
 
+// MergeInputDefaults exposes step 1 of the value resolution — provided values
+// plus defaults for what is missing — WITHOUT the required and value-validation
+// phases that [ResolveInputValues] runs after it.
+//
+// It exists for one caller: the live preview of a `name_template`-composed
+// incarnation name (ADR-0079). A preview runs while the operator is still typing,
+// so a half-filled input is its NORMAL state and the required-gate would reject
+// every keystroke before a name could be composed. Merge is also the only phase
+// that CHANGES a value — require and validate merely reject — so composing over
+// this map yields the same string the create path composes whenever that create
+// would have been accepted. That equality is what keeps the preview from showing
+// one name while the create makes another.
+//
+// Do NOT reach for this to skip validation on a write path: the phases it omits
+// are the ones that keep bad input out.
+func MergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[string]any {
+	return mergeInputDefaults(schema, provided)
+}
+
 // mergeInputDefaults builds a new map: provided + default substitution for
 // missing/empty params (step 1 of docs/input.md "Value resolution"). required is
 // not checked here — that's the separate requireInputValues phase, so

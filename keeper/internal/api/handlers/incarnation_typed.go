@@ -234,7 +234,17 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	}
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
-			return zero, incProblem(problem.TypeIncarnationExists, "incarnation "+name+" already exists")
+			// Name the holder when the caller may see it (NIM-331). Under a
+			// `name_template` the operator did not type this name — they typed the
+			// components it was composed from — so a bare "already exists" points at
+			// a string they have never seen and leaves them nothing to change. The
+			// lookup is best-effort: a failure here must not turn a correct 409 into
+			// a 500, so the detail simply stays in its previous form.
+			holder := ""
+			if _, svc, lerr := h.nameOccupant(ctx, name, h.GetInScopeFor(claims, "get")); lerr == nil {
+				holder = svc
+			}
+			return zero, incProblem(problem.TypeIncarnationExists, takenNameDetail(name, holder))
 		}
 		h.logger.Error("incarnation.create: insert failed",
 			slog.String("name", name), slog.String("service", req.Service),

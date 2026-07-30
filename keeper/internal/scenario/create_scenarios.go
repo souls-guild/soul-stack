@@ -303,16 +303,36 @@ func ResolveCreatePlan(
 // validates the result against the incarnation name grammar (ADR-0079).
 //
 // requested is the `name` the operator sent: with a template it MUST be empty
-// ([ErrNameNotComposable]) — the name is derived, not negotiated.
+// ([ErrNameNotComposable]) — the name is derived, not negotiated. Past that guard
+// the work is [ComposeName]'s, so the create path and the preview path compose
+// through the SAME code.
+func composeIncarnationName(template string, merged map[string]any, requested string) (string, error) {
+	if requested != "" {
+		return "", fmt.Errorf("%w (composed from %q)", ErrNameNotComposable, template)
+	}
+	return ComposeName(template, merged)
+}
+
+// ComposeName renders `name_template` over the resolved input and checks the
+// result against the incarnation name grammar (ADR-0079). It is the ONLY place
+// either surface composes a name: the create path reaches it through
+// [composeIncarnationName], the preview endpoint calls it directly. A second
+// implementation — client-side CEL above all — would compose a DIFFERENT string
+// from the same input, and under an immutable primary key that is a silently
+// different identity, not a cosmetic mismatch.
+//
+// The composed string comes back on BOTH outcomes. On failure it is what the
+// template actually produced, so a caller showing a live preview can display the
+// offending value and its length instead of an empty box; callers acting on the
+// name must branch on err, not on the string being non-empty. (The render itself
+// failing — an unset component, a list-valued block — yields "" plus
+// [config.ErrNameTemplateRender]: there is no string to show.)
 //
 // The length ceiling is where this realistically fails: four components plus the
 // template's literal text overrun 63 characters easily. The error names the
 // composed string and its length so the operator knows WHICH way to shorten,
 // instead of getting a truncated name that silently becomes a different identity.
-func composeIncarnationName(template string, merged map[string]any, requested string) (string, error) {
-	if requested != "" {
-		return "", fmt.Errorf("%w (composed from %q)", ErrNameNotComposable, template)
-	}
+func ComposeName(template string, merged map[string]any) (string, error) {
 	composed, err := config.RenderNameTemplate(template, merged)
 	if err != nil {
 		return "", err
@@ -321,10 +341,10 @@ func composeIncarnationName(template string, merged map[string]any, requested st
 		return composed, nil
 	}
 	if len(composed) > config.IncarnationNameMaxLen {
-		return "", fmt.Errorf("%w: %q is %d characters, the ceiling is %d — shorten the input components feeding name_template",
+		return composed, fmt.Errorf("%w: %q is %d characters, the ceiling is %d — shorten the input components feeding name_template",
 			ErrComposedNameInvalid, composed, len(composed), config.IncarnationNameMaxLen)
 	}
-	return "", fmt.Errorf("%w: %q does not match %s — check the input components feeding name_template",
+	return composed, fmt.Errorf("%w: %q does not match %s — check the input components feeding name_template",
 		ErrComposedNameInvalid, composed, incarnation.NamePattern)
 }
 

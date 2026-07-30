@@ -399,6 +399,38 @@ order to act in.
 
 ### Added
 
+- **The composed incarnation name, previewed before it is permanent**
+  ([ADR-0079 (g)](docs/adr/0079-incarnation-name-template.md)). When a create
+  scenario declares `name_template`, the name is assembled server-side from the
+  `input:` components and the request must not carry a `name` — so until now the
+  operator first saw it in the refusal or in the row. The name is the immutable
+  primary key with no rename, which makes a wrong one cost a destroy and a
+  re-create. `POST /v1/incarnations/resolve-name` answers what a create with the
+  input so far would compose, how long it is against the 63-character ceiling,
+  whether it is a legal name, and whether it is already taken. It creates nothing
+  and the create re-checks everything; the resolve is a hint, not a gate.
+
+  Composition stays on the server for a reason. Template blocks are CEL, and a
+  browser-side evaluator would spell a number or a bool by its own rules and
+  compose a different string from the same input — the operator would approve one
+  identity and be handed another, without a word. The endpoint therefore calls the
+  same function the create calls, and a guard test pins the two to one answer. The
+  form duplicates nothing about composition; it counts characters, which is not
+  composition. A preview also runs on half-typed input, so it merges schema
+  defaults without the required phase: it rejects *less* than the create, never
+  *differently*.
+
+  Whether the name is free is answered by the same endpoint rather than by probing
+  `GET /v1/incarnations/{name}` from the form — that probe would turn a status code
+  into an existence oracle and let a scoped operator walk names outside their scope.
+  The answer is scope-aware in two grains: **taken** for anyone who could create the
+  name, **taken by service X** only for someone who may already see that
+  incarnation. The same rule now phrases the create's 409, which under a template
+  used to name a string the operator had never typed and left them nothing to
+  change. The create form knows which mode to open in from the boolean
+  `composes_name` the scenario listing now carries — the flag, not the template
+  text: the operator is shown the name, not the formula.
+
 - **The interactive console — a real terminal on a host, from the browser**
   ([ADR-0074](docs/adr/0074-interactive-console-pty.md),
   [docs/keeper/console.md](docs/keeper/console.md)). `GET /v1/console` is a

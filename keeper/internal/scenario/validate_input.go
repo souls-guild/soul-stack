@@ -89,40 +89,9 @@ type InputScenarioLoader interface {
 // a number).
 func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) (InputGate, error) {
 	var zero InputGate
-	if loader == nil {
-		// Without a loader, sync validation is impossible — do NOT silently skip
-		// it (that was the original gap). Return an explicit config error; the
-		// handler decides (in prod the loader is always wired up together with
-		// the runner).
-		return zero, fmt.Errorf("scenario: validate input: loader is not configured")
-	}
-
-	art, err := loader.Load(ctx, ref)
+	scn, err := loadScenarioManifest(ctx, loader, ref, scenarioName, "validate input")
 	if err != nil {
-		return zero, fmt.Errorf("scenario: validate input: load service: %w", err)
-	}
-
-	rel := fmt.Sprintf(scenarioMainFile, scenarioName)
-	data, err := loader.ReadFile(art, rel)
-	if err != nil {
-		return zero, fmt.Errorf("scenario: validate input: read %s: %w", rel, err)
-	}
-	// $type references in the input schema are resolved HERE (at load time) so
-	// that config.ResolveInputValues below validates a submitted $type field
-	// value against the RESOLVED type shape (object/array/properties/required),
-	// instead of silently accepting it (a reference node has empty Type →
-	// validation skipped).
-	// No plugin-manifest resolver here (NIM-228): this entry point is package-level
-	// and carries no Deps, and it answers about the submitted INPUT rather than the
-	// task bodies. The same file is parsed with a resolver on the paths that act on
-	// those tasks - run, pre-flight and check-drift - so nothing goes unchecked; a
-	// second resolve here would only cost a read per input validation.
-	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data, nil)
-	if err != nil {
-		return zero, fmt.Errorf("scenario: validate input: parse %s: %w", rel, err)
-	}
-	if diag.HasErrors(diags) {
-		return zero, fmt.Errorf("scenario: validate input: %s is invalid: %s", rel, firstError(diags))
+		return zero, err
 	}
 
 	// The full input gate in one call (config.ResolveInputContract, shared with
@@ -141,10 +110,61 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 			// config validator already compiled `that` input-only; non-bool `that`
 			// is rejected at load) — an internal pre-flight failure (handler → 500),
 			// NOT validation_failed.
-			return zero, fmt.Errorf("scenario: validate rules %s/%s: %w", scenarioName, rel, err)
+			return zero, fmt.Errorf("scenario: validate rules %s/%s: %w",
+				scenarioName, fmt.Sprintf(scenarioMainFile, scenarioName), err)
 		default:
 			return zero, fmt.Errorf("%w: %v", ErrInputInvalid, err)
 		}
 	}
 	return InputGate{Merged: merged, NameTemplate: scn.NameTemplate}, nil
+}
+
+// loadScenarioManifest materializes the service snapshot and parses
+// scenario/<name>/main.yml into its typed manifest (covenant merged, $type
+// references resolved). op names the calling phase so the wrapped error reads the
+// same as before the extraction ("validate input" / "preview name").
+//
+// Extracted from [ValidateInput] for [PreviewName]: the live name preview must
+// read the SAME effective `input:` schema and the SAME `name_template` the create
+// path validates against. A second load path here is exactly how the preview would
+// start composing over a different contract than the create — the divergence class
+// this whole feature exists to avoid.
+//
+// $type references in the input schema are resolved HERE (at load time) so that
+// value validation downstream sees the RESOLVED type shape (object/array/
+// properties/required) instead of silently accepting a reference node (empty Type
+// → validation skipped).
+//
+// No plugin-manifest resolver (NIM-228): this entry point is package-level and
+// carries no Deps, and it answers about the submitted INPUT rather than the task
+// bodies. The same file is parsed with a resolver on the paths that act on those
+// tasks — run, pre-flight and check-drift — so nothing goes unchecked; a second
+// resolve here would only cost a read per call.
+func loadScenarioManifest(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName, op string) (*config.ScenarioManifest, error) {
+	if loader == nil {
+		// Without a loader, sync validation is impossible — do NOT silently skip
+		// it (that was the original gap). Return an explicit config error; the
+		// handler decides (in prod the loader is always wired up together with
+		// the runner).
+		return nil, fmt.Errorf("scenario: %s: loader is not configured", op)
+	}
+
+	art, err := loader.Load(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: %s: load service: %w", op, err)
+	}
+
+	rel := fmt.Sprintf(scenarioMainFile, scenarioName)
+	data, err := loader.ReadFile(art, rel)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: %s: read %s: %w", op, rel, err)
+	}
+	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data, nil)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: %s: parse %s: %w", op, rel, err)
+	}
+	if diag.HasErrors(diags) {
+		return nil, fmt.Errorf("scenario: %s: %s is invalid: %s", op, rel, firstError(diags))
+	}
+	return scn, nil
 }
