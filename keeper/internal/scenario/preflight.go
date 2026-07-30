@@ -188,8 +188,36 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 			ServiceVersion: spec.ServiceRef.Ref,
 		},
 		Hosts: hosts,
+		// State — the same snapshot run() carries, so `incarnation.state.<path>`
+		// resolves here to what it will resolve to there (NIM-403, NIM-404).
+		//
+		// Omitting it was not a missing value but a missing KEY: cel_render.go
+		// binds `incarnation.state` only when State is non-nil, so every
+		// state-reading assert judged a context the run would never see. The two
+		// symptoms are worth naming because only one of them was loud — a bare
+		// read raised `no such key: state` (surfaced as a 500), while a
+		// has()-guarded read raised nothing and simply evaluated to false,
+		// refusing the run with a confident 422 about a condition the
+		// incarnation satisfied. Writing the predicate defensively made the
+		// failure silent.
+		//
+		// nil on the create path is correct and stays: there is no row yet, so
+		// there is no state to read (NIM-124). Same shape as the essence fix of
+		// NIM-271 — pre-flight takes the input run() would, not a poorer one.
+		State: incarnationState(inc),
 	}
 	return r.deps.Render.EvalAsserts(ctx, in)
+}
+
+// incarnationState is the state snapshot a pre-flight assert reads, or nil when
+// there is no row. A nil-safe accessor rather than an inline branch: the whole
+// defect was that this value silently defaulted to absent, so the place it comes
+// from is worth naming.
+func incarnationState(inc *incarnation.Incarnation) map[string]any {
+	if inc == nil {
+		return nil
+	}
+	return inc.State
 }
 
 // preflightIncarnation reads the incarnation the run is about, or nil when it
