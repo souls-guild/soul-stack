@@ -12,10 +12,31 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel stale runs on the same branch/PR — saves runners.
+# Cancel stale runs on the same branch/PR — saves runners. But NOT on the
+# integration targets (`main`, `release/*`), where every push is a squash-merge
+# and therefore a unit of acceptance in its own right (NIM-339).
+#
+# `cancel-in-progress: true` is written for a feature branch, where only the
+# latest commit matters and intermediate states interest nobody. A release branch
+# is the opposite case: it IS the integration target, and "the newest sha was
+# verified" does not imply "my merge was verified". With merges landing minutes
+# apart, each push killed the previous run, so a branch could show a green run
+# while the merge you care about never completed one — run 30507506031 was
+# evicted 14 s after the next push and reported `cancelled`, which sits next to
+# `failure` in `gh run list` and next to `success` in memory.
+#
+# Cost of this exception, stated: on a busy release branch runs queue instead of
+# cancelling, so the tip's verdict can arrive later and several runs occupy
+# runners at once. That is affordable here (public repo, standard runners are
+# unmetered) and it is the price of every merge having its own verdict. Feature
+# branches keep the eviction.
+#
+# Queueing is not enough by itself — a human can still read the wrong row. The
+# other half is `make check-ci`, which derives the sha from git instead of
+# trusting a list; see scripts/ci-status.sh.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
 
 permissions:
   contents: read

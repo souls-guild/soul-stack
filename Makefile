@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -971,6 +971,15 @@ check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi ch
 # believing it. Only a failure that survives the rerun is a finding. Do not
 # "fix" it by loosening a readiness wait: that trades a loud infra flake for a
 # quiet one.
+# check-ci — "has CI verified THIS commit?", asked about a sha derived from git
+# rather than read off a branch listing (NIM-339). REF= to ask about another ref.
+#
+# Separate from check-all on purpose: check-all runs tiers locally and works
+# offline, this one is a network question about the remote's verdict. The two
+# answer different things and a green one does not substitute for the other.
+check-ci:
+	@REF="$(REF)"; scripts/ci-status.sh $${REF:-HEAD}
+
 check-all: check test-integration e2e
 	@echo "check-all: docker-free gate + L1 (integration, -race) + L3a (e2e) all passed"
 	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
@@ -1305,6 +1314,7 @@ help:
 	@echo "Checks/gate:"
 	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
 	@echo "  check-all         check + test-integration (L1, -race) + e2e (L3a) = what a green CI run means"
+	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
 	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"

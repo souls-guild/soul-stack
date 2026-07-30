@@ -12,15 +12,42 @@ Commit the release commit to `main`. From this moment on, only what is already i
 
 ### (b) Green Gate
 
-Run the full gate on Linux-CI:
+Run the full gate — one target covers the three tiers:
 
 ```sh
-make check              # fmt + vet + build + test + drift-checks + vuln + lint examples
-make test-integration   # testcontainers (needs docker)
-make e2e                # L3a fast-loop (docker required)
+make check-all          # = check + test-integration (L1, -race) + e2e (L3a); docker required
 ```
 
+`make check` alone is docker-free by design and therefore says nothing about L1
+or L3a; it now prints the tiers it skipped. Do not measure release readiness with
+it (see [docs/testing/README.md](docs/testing/README.md) for what a green `check`
+was actually worth: nine tests were red behind one).
+
 Here are docker-dependent levels up to L3a. Long-term L3b (`make e2e-live`) is a separate **blocking** pre-tag step (e), L3c (`make e2e-k8s`) is chased on-demand. The release is not issued until the gate is green.
+
+**Then confirm CI verified the exact commit you are about to ship — blocking:**
+
+```sh
+make check-ci           # verdict for HEAD; REF=release/R5 to ask about another ref
+```
+
+This is not the same question as `check-all`, and neither substitutes for the
+other: `check-all` is this machine's verdict, `check-ci` is the remote's verdict
+**about one sha**. Ask it by sha rather than by branch, because a branch listing
+answers a different question than the one that matters (NIM-339):
+
+- a green run on the branch may belong to an **older** sha — on release/R5 a green
+  run sat on `7af81dc7` while the branch had moved two commits further, one of
+  them a render change CI had never seen;
+- a run for your sha may have been **evicted** by the next push and reported
+  `cancelled`, which is neither pass nor fail — in the run list it sits next to
+  `failure`, in memory next to `success`;
+- an unpushed sha has no run at all, which looks exactly like a run nobody read.
+
+`check-ci` exits non-zero for every one of those, and prints which one it was.
+Eviction no longer happens on `main` or `release/*` (the concurrency exception in
+`.github/workflows/ci.yml`), but a queued or unfinished run is still not a
+verdict, so the check stays.
 
 ### (c) Bump CHANGELOG
 

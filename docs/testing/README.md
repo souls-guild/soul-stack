@@ -82,10 +82,15 @@ subtle; all nine were simply outside what `make check` runs.
 So "green locally" was never evidence that the release was checked, and it will
 read that way again unless someone says otherwise out loud. That is what
 `make check-all` is for, and why `make check` now prints the tiers it skipped.
-Measure release readiness with `check-all` (or a CI run over the pushed branch),
-never with `check` alone - and read a CI result **per sha**, not per branch: a
-run superseded by the next push is reported as `cancelled`, which sits next to
-`failure` in the list and next to `success` in memory.
+Measure release readiness with `check-all`, never with `check` alone - and read a
+CI result **per sha**, not per branch. `make check-ci` asks that question for a
+sha it derives from git ([scripts/ci-status.sh](../../scripts/ci-status.sh)):
+it separates "verified" from "failed" from "no verdict", where no-verdict covers
+an unpushed commit, a run still going, and a run **evicted** by the next push -
+reported `cancelled`, which sits next to `failure` in the run list and next to
+`success` in memory. Eviction no longer happens on `main` or `release/*`
+(concurrency exception in `.github/workflows/ci.yml`, NIM-339), but a queued run
+is still not a verdict.
 
 - **L1 — `make test-integration`** (build-tag `integration`, testcontainers
 PG / Redis / Vault, docker is needed). Covers keeper-integration, which
