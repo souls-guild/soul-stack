@@ -35,6 +35,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/netip"
 	"strings"
 	"testing"
@@ -43,6 +44,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	dockercontainer "github.com/moby/moby/api/types/container"
 	dockernetwork "github.com/moby/moby/api/types/network"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
 	tcvault "github.com/testcontainers/testcontainers-go/modules/vault"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -74,8 +76,26 @@ func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate
 		ExposedPorts:       []string{"7000/tcp", "7001/tcp", "7002/tcp", "7003/tcp", "7004/tcp", "7005/tcp"},
 		Env:                map[string]string{"IP": "0.0.0.0", "INITIAL_PORT": "7000", "MASTERS": "3", "SLAVES_PER_MASTER": "1"},
 		HostConfigModifier: portBindings,
-		WaitingFor: wait.ForLog("Ready to accept connections").
-			WithStartupTimeout(90 * time.Second),
+		// "Ready to accept connections" is a SINGLE-NODE readiness line: every
+		// node prints it the moment its socket is up, which in a cluster happens
+		// long before slots are handed out. Waiting on it alone returned a
+		// fixture whose cluster_state was still `fail`, and the tests then died
+		// on CLUSTERDOWN — twice in three CI runs (NIM-349).
+		//
+		// cluster_state:ok is the GLOBAL claim: a node reports it only once it
+		// sees all 16384 slots covered. It is the same condition the production
+		// module checks (examples/module/soul-mod-community-redis/cluster.go),
+		// so the fixture now waits for what the code under test requires rather
+		// than for a line that happens to appear earlier.
+		WaitingFor: wait.ForAll(
+			wait.ForLog("Ready to accept connections"),
+			wait.ForExec([]string{"redis-cli", "-p", "7000", "cluster", "info"}).
+				WithResponseMatcher(func(body io.Reader) bool {
+					b, err := io.ReadAll(body)
+					return err == nil && strings.Contains(string(b), "cluster_state:ok")
+				}).
+				WithPollInterval(500*time.Millisecond),
+		).WithStartupTimeoutDefault(90 * time.Second),
 	}
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -101,16 +121,27 @@ func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate
 	return fmt.Sprintf("%s:7000", host), terminate
 }
 
-// newClusterClient connects to the running cluster; allows time for gossip
-// convergence (grokzen sometimes reports Ready before slots fully form).
+// newClusterClient connects to the running cluster and does not return until
+// every master reports cluster_state:ok.
+//
+// This used to confirm convergence with a single `SET cluster:warmup`, which is
+// the trap NIM-349 was made of: one key hashes to ONE slot, so the probe proved
+// that one slot was served and was read as proof that the slot map had formed.
+// The test keys hash elsewhere, so on a partially assigned cluster the warmup
+// passed and the test died on CLUSTERDOWN. A sample was standing in for a
+// property.
+//
+// cluster_state is that property, and it is asked of every master rather than
+// the seed: a node answers CLUSTERDOWN based on ITS OWN view, so the seed
+// calling the cluster healthy does not stop a lagging peer from refusing the
+// write that lands on it.
 func newClusterClient(ctx context.Context, t *testing.T, seed string) *Client {
 	t.Helper()
 	var lastErr error
 	for i := 0; i < 20; i++ {
 		c, err := NewClient(ctx, Config{Mode: ModeCluster, Nodes: []string{seed}}, nil)
 		if err == nil {
-			// Additionally wait until the slot map has formed (any SET succeeds).
-			if perr := c.underlying().Set(ctx, "cluster:warmup", "1", time.Minute).Err(); perr == nil {
+			if perr := clusterStateOK(ctx, c); perr == nil {
 				return c
 			} else {
 				lastErr = perr
@@ -126,6 +157,27 @@ func newClusterClient(ctx context.Context, t *testing.T, seed string) *Client {
 	}
 	t.Skipf("cluster integration: cluster did not converge: %v", lastErr)
 	return nil
+}
+
+// clusterStateOK returns nil when EVERY master answers cluster_state:ok.
+// Any master still reporting `fail` is a master that will answer CLUSTERDOWN to
+// a write routed to one of its slots, which is precisely the failure this
+// replaces (NIM-349).
+func clusterStateOK(ctx context.Context, c *Client) error {
+	cc, ok := c.underlying().(*goredis.ClusterClient)
+	if !ok {
+		return fmt.Errorf("cluster client expected, got %T", c.underlying())
+	}
+	return cc.ForEachMaster(ctx, func(ctx context.Context, m *goredis.Client) error {
+		info, err := m.ClusterInfo(ctx).Result()
+		if err != nil {
+			return fmt.Errorf("CLUSTER INFO on %s: %w", m.Options().Addr, err)
+		}
+		if !strings.Contains(info, "cluster_state:ok") {
+			return fmt.Errorf("%s reports cluster_state != ok (slots still forming)", m.Options().Addr)
+		}
+		return nil
+	})
 }
 
 // TestIntegration_Cluster_SingleKeyLease — single-key Lua-lease is
