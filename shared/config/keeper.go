@@ -1001,13 +1001,26 @@ type KeeperPostgresPool struct {
 // `password_ref` / `sentinel_password_ref` are vault-refs of the form
 // `vault:<mount>/<path>[#field]` (or plaintext in tests); resolved at
 // `keeper/internal/redis.NewClient` via the keeper-vault client.
+//
+// `username` / `sentinel_username` name the Redis ACL user (Redis 6+) for the
+// data nodes and for the sentinel nodes respectively. Both are optional and
+// EMPTY MEANS the implicit `default` user, which is the pre-ACL behavior — so
+// omitting them keeps old configs working unchanged. They are not secrets (the
+// password stays in `*_password_ref`), hence plain values rather than refs.
+//
+// A server with ACLs enabled rejects the one-argument `AUTH <password>` form
+// with `-WRONGPASS`, because that form implies user `default`. Setting these is
+// therefore the difference between connecting and not connecting at all, not a
+// matter of which identity shows up in the server log.
 type KeeperRedis struct {
 	Mode                string   `yaml:"mode,omitempty"`
 	Addr                string   `yaml:"addr"`
+	Username            string   `yaml:"username,omitempty"`
 	PasswordRef         string   `yaml:"password_ref"`
 	MasterName          string   `yaml:"master_name,omitempty"`
 	Sentinels           []string `yaml:"sentinels,omitempty"`
 	Nodes               []string `yaml:"nodes,omitempty"`
+	SentinelUsername    string   `yaml:"sentinel_username,omitempty"`
 	SentinelPasswordRef string   `yaml:"sentinel_password_ref,omitempty"`
 }
 

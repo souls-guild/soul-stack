@@ -112,6 +112,8 @@ redis:
     - "sentinel-1.internal:26379"
     - "sentinel-2.internal:26379"
     - "sentinel-3.internal:26379"
+  username: keeper                                           # ACL user, omit for the implicit `default`
+  sentinel_username: keeper                                  # ACL user on the sentinel nodes themselves
   password_ref: vault:secret/keeper/redis                    # Redis node password
   sentinel_password_ref: vault:secret/keeper/redis#sentinel  # optional, password of the sentinel nodes themselves
 
@@ -134,6 +136,8 @@ redis:
 | `redis.nodes` | `list<string(host:port)>` | — (`optional`) | Addresses of cluster nodes for bootstrap-discovery (the client itself will pull up the full topology and slot-map). **Required (non-empty)** for `mode: cluster`. Each element is validated as `host:port`. In other modes, there is an extra field (warn). |
 | `redis.password_ref` | `vault-ref` or `string` | — | Redis password. `vault:<mount>/<path>[#field]` — resolved from Vault by the keeper-vault-client (default field `password`, override via `#field`); plaintext-string works as is (dev/tests); empty—connection without password. Vault-ref is validated by the semantic phase (`vault_ref_invalid` for a broken format). |
 | `redis.sentinel_password_ref` | `vault-ref` or `string` | — (`optional`) | The password of the sentinel nodes themselves (separate from the Redis password). Same form and resolution as `password_ref`. Only makes sense with `mode: sentinel`. |
+| `redis.username` | `string` | — (`optional`) | Redis ACL user (Redis 6+) on the data nodes. Empty = the implicit `default` user, i.e. the pre-ACL behavior, so old configs are unaffected. Not a secret — the password stays in `password_ref` — hence a plain value, not a ref. **On a server with ACLs enabled this is not optional in practice:** without it the client sends the one-argument `AUTH <password>`, which means user `default`, and the server answers `-WRONGPASS` — the connection never opens, and the symptom surfaces as a failing `/readyz` redis check. |
+| `redis.sentinel_username` | `string` | — (`optional`) | Redis ACL user on the sentinel nodes, independent of `username`. Frequently the same credential, but this is the pair that gates master-discovery: reject it and the client never learns the master's address. Only makes sense with `mode: sentinel`. |
 
 Vault KV-secret with password is placed under the field `password` (`vault kv put secret/keeper/redis password="<redis-password>"`); another field is selected by the suffix `#field` in the ref (for example `vault:secret/keeper/redis#sentinel`). If the field in KV is missing/empty, Keeper crashes fail-fast at startup (`password field missing or empty`); if ref starts with `vault:`, but the vault client is not up - `vault client is required`.
 

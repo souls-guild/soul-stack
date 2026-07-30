@@ -2549,10 +2549,12 @@ func (d *daemon) setupRedis(ctx context.Context) error {
 		rc, err := keeperredis.NewClient(ctx, keeperredis.Config{
 			Mode:                cfg.Redis.Mode,
 			Addr:                cfg.Redis.Addr,
+			Username:            cfg.Redis.Username,
 			PasswordRef:         cfg.Redis.PasswordRef,
 			MasterName:          cfg.Redis.MasterName,
 			Sentinels:           cfg.Redis.Sentinels,
 			Nodes:               cfg.Redis.Nodes,
+			SentinelUsername:    cfg.Redis.SentinelUsername,
 			SentinelPasswordRef: cfg.Redis.SentinelPasswordRef,
 		}, d.vc)
 		if err != nil {

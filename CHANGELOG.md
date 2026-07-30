@@ -1088,6 +1088,28 @@ order to act in.
 
 ### Fixed
 
+- **Keeper could not connect to a Redis that has ACL users at all.** `redis:` grew
+  two optional keys, `username` and `sentinel_username`, and both now reach the
+  driver in every topology — standalone, sentinel (where the sentinel identity is
+  separate from the data-node one) and cluster.
+
+  The old config could only express a password, so the client sent the
+  one-argument `AUTH <password>`. That form means user `default`, and a server
+  with ACLs enabled answers it `-WRONGPASS` — measured against a live cluster,
+  where `AUTH keeper <password>` returns `+OK` for the same credential. So this
+  was not a matter of which identity appeared in the server's log; the connection
+  never opened, and the operator saw it as a failing `/readyz` redis check with
+  nothing in the config obviously wrong. Sentinel mode failed one step earlier
+  still: the sentinel credential is what gates master-discovery, so without it
+  the client never learned the master's address to begin with.
+
+  Both keys are plain values rather than vault-refs — a username is not a secret,
+  the password stays in `password_ref` — and both default to empty, which is
+  exactly the pre-ACL behaviour, so configs against a non-ACL Redis are
+  unaffected. Worth noting that Soul Stack's own Redis service creates ACL users,
+  which made "manages ACL Redis but cannot connect to one" a gap in its own right
+  rather than a property of any single installation.
+
 - **CI's verdict on the test tiers said less than it appeared to, in three
   independent ways.** None of these were red builds — they were the arithmetic of
   what a green one covered, which is worse, because the number everyone reads did

@@ -59,13 +59,20 @@ const defaultPasswordField = "password"
 // password, either a vault-ref `vault:<mount>/<path>[#field]` (resolved via
 // [resolvePassword]) or plaintext (tests against a password-protected Redis
 // without a Vault fixture).
+//
+// `Username` / `SentinelUsername` — the Redis ACL user (Redis 6+) on the data
+// nodes and on the sentinel nodes. Empty = go-redis sends the one-argument
+// `AUTH <password>`, i.e. the implicit `default` user; a server with ACLs
+// enabled answers that with `-WRONGPASS`.
 type Config struct {
 	Mode                string
 	Addr                string
+	Username            string
 	PasswordRef         string
 	MasterName          string
 	Sentinels           []string
 	Nodes               []string
+	SentinelUsername    string
 	SentinelPasswordRef string
 	DB                  int
 }
@@ -137,6 +144,7 @@ func build(cfg Config, password, sentinelPassword string) (redis.UniversalClient
 		}
 		return redis.NewClient(&redis.Options{
 			Addr:     cfg.Addr,
+			Username: cfg.Username,
 			Password: password,
 			DB:       cfg.DB,
 		}), nil
@@ -148,13 +156,7 @@ func build(cfg Config, password, sentinelPassword string) (redis.UniversalClient
 		if len(cfg.Sentinels) == 0 {
 			return nil, errors.New("redis: sentinels is empty (mode=sentinel)")
 		}
-		return redis.NewFailoverClient(&redis.FailoverOptions{
-			MasterName:       cfg.MasterName,
-			SentinelAddrs:    cfg.Sentinels,
-			Password:         password,
-			SentinelPassword: sentinelPassword,
-			DB:               cfg.DB,
-		}), nil
+		return redis.NewFailoverClient(failoverOptions(cfg, password, sentinelPassword)), nil
 
 	case ModeCluster:
 		if len(cfg.Nodes) == 0 {
@@ -166,11 +168,37 @@ func build(cfg Config, password, sentinelPassword string) (redis.UniversalClient
 		// cluster always operates on db0.
 		return redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:    cfg.Nodes,
+			Username: cfg.Username,
 			Password: password,
 		}), nil
 
 	default:
 		return nil, fmt.Errorf("redis: unknown mode %q", cfg.Mode)
+	}
+}
+
+// failoverOptions assembles the sentinel-mode options.
+//
+// Split out of [build] because it is the only branch whose credentials are not
+// observable afterwards: go-redis returns a plain *redis.Client whose
+// Options() exposes the data-node pair but not the sentinel one, so a guard
+// test has no way to see SentinelUsername unless the struct itself is
+// returnable.
+//
+// Two independent identities live here. Username/Password authenticate against
+// the master go-redis discovers; SentinelUsername/SentinelPassword against the
+// sentinel nodes themselves. They are frequently the same credential, but the
+// sentinel pair is what gates discovery — get it wrong and the client never
+// learns the master's address at all.
+func failoverOptions(cfg Config, password, sentinelPassword string) *redis.FailoverOptions {
+	return &redis.FailoverOptions{
+		MasterName:       cfg.MasterName,
+		SentinelAddrs:    cfg.Sentinels,
+		Username:         cfg.Username,
+		Password:         password,
+		SentinelUsername: cfg.SentinelUsername,
+		SentinelPassword: sentinelPassword,
+		DB:               cfg.DB,
 	}
 }
 
