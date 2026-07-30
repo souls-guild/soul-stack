@@ -2,9 +2,12 @@
 # Redis Cluster). Multi-host roster (fixtures.hosts) of 3 hosts: shards=3,
 # replicas_per_shard=0 → topology exactly 3*(1+0)=3 (size-guard passes).
 #
-# Render-only, hermetic. The create dispatcher includes standalone.yml + cluster.yml;
-# on a cluster run the standalone branch is suppressed by a placeholder-skip (static-when
-# input.redis_type != 'standalone'), the cluster branch is rendered. size-guard is now
+# Render-only, hermetic. The create dispatcher includes cluster.yml + sentinel.yml, each
+# guarded by a static-when on input.redis_type; on a cluster run the sentinel branch is
+# suppressed by a placeholder-skip and the cluster branch is rendered. (This note used to
+# name a standalone.yml and a redis_type 'standalone' — both were removed on 2026-06-25
+# when the enum became [sentinel, cluster]; the comment outlived them. NIM-223.)
+# size-guard is now
 # assert: (keeper-side render-time precondition, ADR-009 amendment 2026-06-23): it
 # does NOT emit a RenderedTask. shards-guard (core.cmd.shell, has(input.shards)) was REMOVED —
 # the requiredness of shards is now declarative via required_when in main.yml

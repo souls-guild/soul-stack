@@ -80,7 +80,10 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	// Materialize the mode-agnostic destiny `redis` (the cluster branch
 	// calls apply: destiny: redis) + set default_destiny_source. BEFORE
 	// RegisterService.
-	stack.MaterializeDestinies(t, "v1.0.0", "redis")
+	// ★ FOUR destinies, not one — the create scenario also applies
+	// redis-exporter / node-exporter (metrics) and vector (the mandatory log
+	// plane, ADR-067). See the note in redis_test.go. NIM-223.
+	stack.MaterializeDestinies(t, "v1.0.0", "redis", "redis-exporter", "node-exporter", "vector")
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
 	// Three live streams. All tasks of the cluster branch arrive over the
@@ -101,10 +104,23 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	// Simple typed input for cluster mode: shards=3, replicas_per_shard=0 ->
 	// topology 3*(1+0)=3, exactly matches the roster (size-guard PASS).
 	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", stack.AllSoulIndexes(), map[string]any{
-		"redis_type":           "cluster",
-		"version":              "7.4.1",
-		"shards":               3,
-		"replicas_per_shard":   0,
+		// ★ provision is DEFAULT-ON in this example (user decision 2026-06-30):
+		// without this the run reaches core.cloud.created and dies on
+		// `resolve profile "redis-debian-12": profile: name not found` — L3a has
+		// no cloud provider. Deploying onto an existing roster is the EXPLICIT
+		// opt-out that covenant.yml documents; the create_from_souls twin is not
+		// usable here because its name_template composes the incarnation name
+		// and rejects the fixed one this harness seeds (ADR-0079). NIM-223.
+		"provision":  map[string]any{"enabled": false},
+		"redis_type": "cluster",
+		"version":    "7.4.1",
+		"shards":     3,
+		// ★ replicas_per_shard no longer exists — it was unified into a single
+		// replicas_per_master for both modes (2026-06-25), which is what the
+		// size-guard reads. Sending the old name left the real field at its
+		// default of 2, so the guard demanded 3*(1+2)=9 hosts for a 3-soul stack.
+		// 0 replicas is what this stack actually has. NIM-223.
+		"replicas_per_master":  0,
 		"cluster_node_timeout": 5000,
 	})
 

@@ -97,7 +97,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -252,15 +252,28 @@ test-race:
 INTEGRATION_PARALLEL ?= 4
 SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
 
+# PKG narrows the run to one package while keeping every other flag identical:
+#
+#     make test-integration PKG=./internal/scenario/
+#
+# It exists because the alternative people reached for -- a bare
+# `go test -tags=integration ./internal/scenario/` -- silently drops `-race`, and
+# a green L1 then means something WEAKER locally than the same words mean in CI.
+# That is the failure mode NIM-238 is about, one level up: the check that did not
+# happen is indistinguishable from the check that passed. There is now one way to
+# run L1, and it matches CI by construction (INTEGRATION_RACE_GUARD below fails a
+# full sweep that lost the flag anyway).
+PKG ?= ./...
+
 test-integration:
 	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
+		if [ -z "$$(cd $$m && go list $(PKG) 2>/dev/null)" ]; then \
+			echo "skip $$m (no Go packages under $(PKG))"; \
 			continue; \
 		fi; \
-		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) ./... in $$m"; \
+		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $(PKG) in $$m"; \
 		(cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
-			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) ./...) || exit 1; \
+			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $(PKG)) || exit 1; \
 	done
 
 # L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
@@ -683,9 +696,28 @@ WEBUI_DST := keeper/internal/webui/assets
 sync-webui:
 	@bash scripts/sync-webui.sh
 
+# WEBUI_REPO is the companion checkout; WEBUI_SRC is its build output. They are
+# separate because the two absences mean different things (NIM-277).
+WEBUI_REPO := ../soul-stack-web
+
+# THREE outcomes, not two. The old form collapsed "no companion here" and
+# "companion here but not built" into one `skipping`, and the second is the
+# release-worktree case — the one place the gate was supposed to work. So the
+# rule that catches an unpaired web merge was itself skipped, silently, in
+# exactly the situation it exists for, and that is how NIM-273 reached the
+# release. Same shape as NIM-238: an unperformed check must never read like a
+# passed one.
 check-webui:
-	@if [ ! -d "$(WEBUI_SRC)" ]; then \
-		echo "companion soul-stack-web/dist not found, skipping webui-drift check"; \
+	@if [ ! -d "$(WEBUI_REPO)" ]; then \
+		echo "check-webui: companion $(WEBUI_REPO) not present - skipping (expected in CI and third-party clones)"; \
+	elif [ ! -d "$(WEBUI_SRC)" ]; then \
+		echo "check-webui: companion IS present but $(WEBUI_SRC) is not built."; \
+		echo "  This is the release-worktree case, and it is the one the drift guard exists for:"; \
+		echo "  an unpaired web merge is invisible until the bundle is compared against a real build."; \
+		echo "  Build it (cd $(WEBUI_REPO) && npm run build), or state that you are skipping:"; \
+		echo "      make check WEBUI_SKIP=1"; \
+		test -n "$(WEBUI_SKIP)" || exit 1; \
+		echo "check-webui: skipped by WEBUI_SKIP - declared, not accidental"; \
 	elif ! diff -r -q $(WEBUI_SRC) $(WEBUI_DST) >/dev/null; then \
 		echo "embed-UI drift detected:"; \
 		diff -r $(WEBUI_SRC) $(WEBUI_DST) || true; \
@@ -694,6 +726,29 @@ check-webui:
 		exit 1; \
 	else \
 		echo "embed-UI: copy in sync"; \
+		$(MAKE) --no-print-directory check-webui-provenance; \
+	fi
+
+# Even a byte-identical bundle can be stale: `diff` only says the copy matches
+# the build sitting in dist/, and dist/ is whatever was built last -- possibly
+# from an older commit than the branch the release is assembling. The recorded
+# SHA answers the question diff cannot: WHICH companion commit these bytes came
+# from. Advisory, not fatal: the companion may legitimately sit on another
+# branch, and a hard failure there would be the permanently-red gate that
+# teaches everyone to stop reading it.
+check-webui-provenance:
+	@rec=$$(sed -n 's/^commit=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
+	if [ -z "$$rec" ]; then \
+		echo "check-webui: no provenance recorded yet (keeper/internal/webui/WEBUI_SOURCE) - run 'make sync-webui'"; \
+	else \
+		head=$$(git -C $(WEBUI_REPO) rev-parse HEAD 2>/dev/null); \
+		if [ "$$rec" = "$$head" ]; then \
+			echo "check-webui: bundle provenance matches companion HEAD ($$rec)"; \
+		else \
+			echo "check-webui: NOTE - bundle was vendored from $$rec, companion HEAD is $$head."; \
+			echo "  Not a failure (the companion may be on another branch), but if the UI changed"; \
+			echo "  on the release branch and this SHA did not move, the embedded bundle is stale."; \
+		fi; \
 	fi
 
 # keeper.dev.yml: the committed copy (dev/keeper.dev.yml) - golden, read by dev-smoke
@@ -875,7 +930,44 @@ sign:
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
 check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
-	@echo "check: all checks passed"
+	@echo "check: all docker-free checks passed"
+	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
+	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
+	@echo "check:   result here is silent about every defect those tiers catch. It is not a"
+	@echo "check:   weaker version of CI — it is a different, smaller claim."
+	@echo "check:   Say what CI says:   make check-all"
+	@echo "check:   or one tier:        make test-integration  |  make e2e"
+
+# check-all — the composite whose green result means what a green CI run means.
+#
+# Why it exists (NIM-316). `make check` and CI were two different assertions
+# that both ended in the word "passed", and neither implied the other: check is
+# docker-free and skips L1/L3a entirely, while CI runs both (with `-race`).
+# "Everything is green locally" therefore referred to something narrower than
+# anyone reading it assumed — which is how a rotted L1 suite and four L3a tests
+# failing since ADR-029 stayed invisible for a release (NIM-221, NIM-317).
+#
+# The fix is not a note in the docs: it is one command that covers the same
+# ground, plus `check` stating out loud what it left out. L3b (`make e2e-live`)
+# stays outside on purpose — CI does not run it either; it is nightly /
+# pre-release, see docs/testing/README.md.
+#
+# One honest difference from CI, stated here because it bites on the first run:
+# CI gives each tier its own runner, this target gives them one docker daemon, and
+# it starts L3a right after ~300 container-starting L1 packages. A failure at
+# container startup ("wait until ready: context deadline exceeded", "connection
+# refused" against a mapped port, a Vault mount that never answered) is that
+# contention, not a regression — rerun the affected package in isolation before
+# believing it. Only a failure that survives the rerun is a finding. Do not
+# "fix" it by loosening a readiness wait: that trades a loud infra flake for a
+# quiet one.
+check-all: check test-integration e2e
+	@echo "check-all: docker-free gate + L1 (integration, -race) + L3a (e2e) all passed"
+	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
+	@echo "check-all:   make e2e-live-gate   (curated subset, before a major batch commit)"
+	@echo "check-all:   make e2e-live        (full, nightly / pre-release)"
+	@echo "check-all: a container-startup failure here is contention (one docker daemon,"
+	@echo "check-all:   two tiers back to back), not a regression — rerun that package alone."
 
 # gofmt formatting across all modules. `gofmt -l` only prints files that
 # differ from the canonical format; a non-empty list is a gate failure.
@@ -1202,7 +1294,8 @@ help:
 	@echo "  tidy              go mod tidy across all modules"
 	@echo ""
 	@echo "Checks/gate:"
-	@echo "  check             single local CI gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
+	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
+	@echo "  check-all         check + test-integration (L1, -race) + e2e (L3a) = what a green CI run means"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
 	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"

@@ -1081,13 +1081,35 @@ order to act in.
   `/ui` from a committed copy of the companion's build, and the companion had
   moved on without a paired re-sync, so a built Keeper served a bundle in which
   the Russian translation keys were not merely different but absent. Why the
-  drift survived to the release is tracked separately: the companion is never
-  checked out in CI, so `check-webui` takes its silent rc=0 skip branch there and
-  in every ticket worktree.
+  drift survived to the release is now fixed rather than tracked: the companion is
+  never checked out in CI, so `check-webui` used to take a silent rc=0 skip branch
+  there and in every ticket worktree — exactly where it was supposed to catch this.
+  It now has three outcomes instead of two (verified / declared-skip / missing
+  companion), and the vendored bundle records the companion commit it was built
+  from, so an unpaired web merge is a line a reviewer can read instead of minified
+  noise.
 
 - `apt`/`dpkg` installs wait for the lock instead of failing on it
   (`DPkg::Lock::Timeout`), so a package task no longer loses a race with an
   unattended-upgrade run.
+
+- **A check that did not run no longer reads like a check that passed.** The
+  local gate and CI both ended in the word "passed" while asserting different
+  things, and neither implied the other: `make check` is docker-free by design and
+  runs neither the integration tier nor the e2e tier, which CI runs — with the race
+  detector, which a hand-typed `go test` silently drops. So "everything is green"
+  meant something narrower than any reader assumed, and that is how an integration
+  suite skipped for want of an unset environment variable reported success, and how
+  four e2e tests failed from the day the service registry became mandatory until
+  the first CI run over this release noticed.
+
+  Each of those is now inverted rather than documented harder: the integration
+  requirement is the default and skipping it is what has to be said out loud, a
+  sweep that lost the race detector fails instead of passing quietly, `make check`
+  prints the tiers it did **not** run, and `make check-all` is the one command whose
+  green result means what a green CI run means. The e2e job also no longer hangs off
+  the gate job, which had let one red lint erase the whole e2e tier and render it as
+  "skipped".
 
 - **Tag-guarded tests are compiled by the gate again.** Nothing built the
   `integration` sources on a normal PR, so they rotted out of sight: the Soul

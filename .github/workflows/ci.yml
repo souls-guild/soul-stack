@@ -95,18 +95,26 @@ jobs:
         run: make check
 
   # L3a fast-loop E2E (ADR-039): testcontainers (PG+Redis+Vault) + Keeper process +
-  # soul-stub. Depends on check (no point running e2e if the base gate failed) and
-  # requires a built keeper binary (harness/stack.go spawns a sub-process, the path
-  # is read from env KEEPER_BIN — see tests/e2e/harness/stack.go). Docker is available
-  # out of the box on ubuntu-latest — testcontainers bring up dependent services.
+  # soul-stub. Requires a built keeper binary (harness/stack.go spawns a sub-process,
+  # the path is read from env KEEPER_BIN — see tests/e2e/harness/stack.go). Docker is
+  # available out of the box on ubuntu-latest — testcontainers bring up dependent services.
   #
-  # Skip semantics of the pilot scaffold: without docker harness.NewStack does t.Skip; in
-  # CI docker is present → tests run for real. If e2e is still skeleton-only at this stage —
-  # `make e2e` returns 0 on an empty test list, the gate stays green.
+  # ★ DELIBERATELY NOT `needs: check`. It used to be, on the reasoning "no point running
+  # e2e if the base gate failed" — but the cost is that a red `check` ERASES the L3a
+  # signal, and GitHub renders the erasure as `skipped`. In the run log that reads as
+  # "nothing to check" rather than "not checked", which is the same silent-skip trap
+  # NIM-238 removed one level down: an absent result must never be mistakable for a
+  # passed one. It bit exactly that way on main — a one-patch Go pin turned `check` red
+  # and took the whole e2e level with it, invisibly.
+  #
+  # The two jobs are independent signals. A tree that does not compile fails e2e on its
+  # own `make build` step, which is an honest FAILURE rather than a skip; anything
+  # cheaper that `check` catches (fmt, lint, a stale snapshot) has no bearing on whether
+  # the L3a contract holds. Running both costs a runner — free on a public repository —
+  # and buys the ability to read the two answers separately.
   e2e:
     name: e2e (L3a fast-loop)
     runs-on: ubuntu-latest
-    needs: check
     timeout-minutes: 30
     steps:
       - name: Checkout

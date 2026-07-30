@@ -32,6 +32,18 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 
 - `make check` drives L0 + L2 (via `lint`). L1 / L3a / L3b / L3c - separate
 targets on request (require docker/kind).
+- **`make check-all` = `check` + L1 + L3a — the one command whose green result
+means what a green CI run means.** `check` is docker-free by design and
+therefore says nothing about L1 or L3a; those were two different claims that
+both ended in the word "passed", and neither implied the other. That is how a
+rotted L1 suite (NIM-221) and four L3a tests failing since ADR-029 (NIM-317)
+stayed invisible for a whole release. `check` now prints what it did NOT run;
+`check-all` runs it. L3b stays outside both — CI does not run it either.
+One difference from CI survives on purpose: CI gives each tier its own runner,
+`check-all` gives them one docker daemon and starts L3a right after ~300
+container-starting L1 packages. A failure at container startup there is that
+contention — rerun the package alone before believing it, and do not loosen a
+readiness wait to make it go away.
 - `make check` still **compiles** the levels it cannot run: `vet-tags` vets
 L1/L3a/L3b/L3c sources under their own build tags without starting anything
 (docker-free). Without it a suite goes unbuildable unnoticed between docker runs -
@@ -66,13 +78,30 @@ contract apply_runs lifecycle / RBAC / audit / MCP when L3a-slice is stable.
 - **L3b — `make e2e-live`** (build-tag `e2e_live`, privileged docker) —
 smoke on a real `soul` binary; usually nightly, but run it before release.
 
-One-time flask at the start of the container (testcontainers infra - for example timeout
-raising Vault) is not a code regression: rerun in isolation
-affected package (`go test -tags=integration ./<pkg>/...`) rather than rollback the changes.
-`make test-integration` caps how many packages start containers at once
-(`INTEGRATION_PARALLEL`, default 4) precisely to keep that class of noise down,
-and sets `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` so a container that fails to
-come up is a failure rather than a silent skip that leaves the target green.
+One-time flake at container start (testcontainers infra — for example a timeout
+bringing Vault up) is not a code regression: rerun the affected package in
+isolation rather than rolling the change back.
+
+**Rerun it through the target, not around it:**
+
+```
+make test-integration PKG=./internal/<pkg>/
+```
+
+A bare `go test -tags=integration ./<pkg>/...` looks equivalent and is not: it
+drops `-race`, which `make test-integration` (and therefore CI) passes. Both
+print the same word at the end, so "L1 is green" would mean something weaker
+from one keyboard than from another, and the weaker meaning is silent about
+every data race in the code those suites exercise. A whole-tree sweep that lost
+the flag fails on `TestIntegrationSuiteRunsUnderRace` rather than passing
+quietly; declaring the weaker run is possible and explicit
+(`SOUL_STACK_INTEGRATION_SKIP_RACE=1`).
+
+`make test-integration` also caps how many packages start containers at once
+(`INTEGRATION_PARALLEL`, default 4) to keep that class of noise down, and sets
+`SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` — since NIM-238 that requirement is
+the default anyway, and skipping it is the thing that has to be said out loud
+(`SOUL_STACK_INTEGRATION_SKIP_DOCKER=1`).
 
 ## Local live-gate of large features (`make e2e-live-gate`)
 

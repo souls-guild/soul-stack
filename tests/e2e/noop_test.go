@@ -20,7 +20,16 @@ func TestE2EServiceNoop_Create(t *testing.T) {
 	})
 	defer stack.Cleanup()
 
-	inc := stack.CreateIncarnation(t, "test-noop", "service-noop@main", nil)
+	stack.RegisterService(t, "noop", "examples/service/noop")
+
+	stub := stack.ConnectSoulStub(t, 0)
+	stub.SetApplyDefaultSuccess(true)
+
+	// Bare create path on purpose: POST /v1/incarnations WITHOUT create_scenario,
+	// then an explicit run. CreateIncarnationOnRoster covers the other shape, and
+	// nothing else covers this one (NIM-317).
+	inc := stack.CreateIncarnation(t, "test-noop", "noop@main", nil)
+	stack.AddMember(t, 0, inc)
 
 	applyID := stack.RunScenario(t, inc, "create", nil)
 

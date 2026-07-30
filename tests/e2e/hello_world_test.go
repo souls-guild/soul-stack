@@ -5,7 +5,7 @@
 // Full pilot pattern (like smoke-nginx, but with input.required and real mutation
 // incarnation.state). Flow:
 //  1. NewStack: testcontainers (PG/Redis/Vault) + Keeper process + 1 soul-stub.
-//  2. CreateIncarnation `test-hello` on top of service `service-hello-world@main`.
+//  2. CreateIncarnation `test-hello` on top of service `hello-world@main`.
 //  3. RunScenario `create` with input.greeting (required).
 //  4. WaitApplySuccess -> asserts by after-create.yaml expectations:
 //     - apply_runs.status == "success";
@@ -28,9 +28,16 @@ func TestE2EServiceHelloWorld_Create(t *testing.T) {
 	})
 	defer stack.Cleanup()
 
-	inc := stack.CreateIncarnation(t, "test-hello", "service-hello-world@main", map[string]any{
-		"greeting": "hello from L3a E2E",
-	})
+	stack.RegisterService(t, "hello-world", "examples/service/hello-world")
+
+	stub := stack.ConnectSoulStub(t, 0)
+	stub.SetApplyDefaultSuccess(true)
+
+	// Bare create path on purpose — see the note in noop_test.go (NIM-317).
+	// `greeting` is declared by scenario/create, not by service.yml, so it is
+	// passed to the run and NOT to the incarnation spec.
+	inc := stack.CreateIncarnation(t, "test-hello", "hello-world@main", nil)
+	stack.AddMember(t, 0, inc)
 
 	applyID := stack.RunScenario(t, inc, "create", map[string]any{
 		"greeting": "hello from L3a E2E",

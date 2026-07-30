@@ -79,7 +79,13 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	// set keeper_settings[default_destiny_source]. BEFORE RegisterService:
 	// the invalidate from POST /v1/services will pull the setting into the
 	// Holder without waiting for a TTL poll.
-	stack.MaterializeDestinies(t, "v1.0.0", "redis")
+	// ★ FOUR destinies, not one. The create scenario stopped being redis-only:
+	// it now also applies redis-exporter and node-exporter (metrics) and vector
+	// (the mandatory log plane, ADR-067). Materializing just `redis` left the
+	// render aborting on `cloning .../destiny-repos/node-exporter: repository
+	// not found` — the example grew an observability contract and this test
+	// never learned. NIM-223.
+	stack.MaterializeDestinies(t, "v1.0.0", "redis", "redis-exporter", "node-exporter", "vector")
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
 	// Live EventStream: capture the SID-lease -> ApplyRequest into the local
@@ -101,12 +107,36 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	// state.redis_version; memory_mb+persistence+policy are translated into
 	// the merged redis_config; users -- typed map with a full ACL string.
 	inc, applyID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", []int{0}, map[string]any{
-		"version":          "7.4.1",
-		"memory_mb":        1024,
-		"persistence":      "rdb",
-		"maxmemory_policy": "volatile-lru",
-		"users": map[string]any{
-			"app": map[string]any{
+		// ★ provision is DEFAULT-ON in this example (user decision 2026-06-30):
+		// an operator who passes nothing gets cloud-create, and the run dies on
+		// `resolve profile "redis-debian-12": profile: name not found` — L3a has
+		// no cloud provider. Rolling onto a roster that already exists is the
+		// EXPLICIT opt-out, exactly as covenant.yml documents it. The other
+		// documented route, the create_from_souls twin, is not usable from this
+		// harness: it carries a name_template, so it composes the incarnation
+		// name and rejects the fixed one CreateIncarnationOnRoster seeds
+		// (ADR-0079). NIM-223.
+		"provision": map[string]any{"enabled": false},
+		// ★ replicas_per_master must be stated: it defaults to 2 (the HA set,
+		// covenant.yml), and with provision off the size-guard becomes ACTIVE and
+		// demands a roster of exactly 1+replicas_per_master. This stack binds one
+		// soul, so 0 is both the honest number and the "standalone-equivalent"
+		// the covenant names for sentinel mode — which is what the state assertion
+		// below expects. NIM-223.
+		"replicas_per_master": 0,
+		"version":             "7.4.1",
+		"memory_mb":           1024,
+		"persistence":         "rdb",
+		"maxmemory_policy":    "volatile-lru",
+		// users is an ARRAY of AclUser {name, perms, state}, not a name→record
+		// map (covenant.yml `users: type: array, items: {$type: AclUser}`,
+		// types.yml::AclUser). The map form predates the redis consolidation and
+		// was rejected as `input_invalid: $.users ... does not match type "array"`
+		// — the test was written against a contract that no longer exists
+		// (NIM-223).
+		"users": []any{
+			map[string]any{
+				"name":  "app",
 				"perms": "~app:* +@read +@write -@dangerous",
 				"state": "on",
 			},
@@ -124,7 +154,11 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	// (essence.memory_reserve_percent=75), policy/save/appendonly from
 	// input+persistence preset, maxclients/timeout from the essence baseline.
 	stack.AssertIncarnationState(t, inc, map[string]any{
-		"redis_type":    "standalone",
+		// ★ `standalone` is not a state value any more — redis_type records the
+		// enum the operator chose, and the enum is [sentinel, cluster]. A single
+		// master with replicas_per_master=0 IS the standalone-equivalent, but the
+		// covenant says so in prose; the state says `sentinel`. NIM-223.
+		"redis_type":    "sentinel",
 		"redis_version": "7.4.1",
 		"redis_config": map[string]any{
 			"maxmemory":        "768mb",
@@ -134,13 +168,33 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 			"maxclients":       float64(10000),
 			"timeout":          float64(300),
 		},
-		"redis_users": map[string]any{
-			"app": map[string]any{
+		// ★ redis_users mirrors the INPUT array now, not a name→record map — the
+		// same shape change as `users` above, carried through to state.
+		"redis_users": []any{
+			map[string]any{
+				"name":  "app",
 				"perms": "~app:* +@read +@write -@dangerous",
 				"state": "on",
 			},
 		},
 		"redis_hosts": []any{},
+		// ★ The observability contract is part of what this test guards now: the
+		// create scenario applies redis-exporter / node-exporter / vector, and it
+		// was their ABSENCE from MaterializeDestinies that aborted the render.
+		// Asserting the recorded versions means a future change to that set fails
+		// here loudly instead of only when someone forgets a destiny.
+		"monitoring": map[string]any{
+			"redis_exporter_version": "1.62.0",
+			"redis_exporter_listen":  ":9121",
+			"node_exporter_version":  "1.8.2",
+			"node_exporter_listen":   ":9100",
+		},
+		"logging": map[string]any{
+			"vector_version":       "0.40.0",
+			"vector_sink_type":     "console",
+			"vector_log_sources":   []any{"/var/log/redis/*.log"},
+			"vector_sink_endpoint": "",
+		},
 	})
 	// create is an explicit run here (NIM-210), so the run endpoint writes
 	// incarnation.scenario_started with that run's apply_id in the payload --

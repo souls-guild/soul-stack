@@ -50,12 +50,19 @@ func (s *Stack) AllSoulIndexes() []int {
 // Coverage note: this path does NOT exercise POST /v1/incarnations with a
 // `create_scenario` (its input validation, create-plan resolution and the
 // `incarnation.created` audit event). The bare create path — POST without a
-// starting scenario — is still covered by the tests that need no roster
-// (hello_world / noop / long_runner / coven_probe), and the 422 surface by
-// [Stack.CreateIncarnationRaw]; the auto-started create run has no L3a coverage
-// left, since every test that exercised it also needs a bound roster. Here
-// create is an explicit run, so it writes `incarnation.scenario_started`, not
-// `incarnation.created`.
+// starting scenario — is covered by hello_world / noop / long_runner /
+// coven_probe, and the 422 surface by [Stack.CreateIncarnationRaw]; the
+// auto-started create run has no L3a coverage left, since every test that
+// exercised it also needs a bound roster. Here create is an explicit run, so it
+// writes `incarnation.scenario_started`, not `incarnation.created`.
+//
+// ★ That sentence was written while it was false. Those four tests had been
+// failing at CreateIncarnation with 422 "not registered" since ADR-029, so the
+// coverage this note leaned on to justify its own scope did not exist — nothing
+// re-read the note against a run, because a red L3a and an unwritten L3a look
+// the same from here. They were repaired in NIM-317 (and no longer need no
+// roster: they bind one after create, which is why they can stay on the bare
+// path). Before trusting a claim like this one, run the tests it names.
 //
 // serviceRef — `<service>@<ref>`; the ref is stored in
 // incarnation.service_version for readability only (the run path resolves the

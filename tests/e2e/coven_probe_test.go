@@ -21,7 +21,14 @@ func TestE2EServiceCovenProbe_Create(t *testing.T) {
 	})
 	defer stack.Cleanup()
 
-	inc := stack.CreateIncarnation(t, "test-coven-probe", "service-coven-probe@main", nil)
+	stack.RegisterService(t, "coven-probe", "examples/service/coven-probe")
+
+	stub := stack.ConnectSoulStub(t, 0)
+	stub.SetApplyDefaultSuccess(true)
+
+	// Bare create path on purpose — see the note in noop_test.go (NIM-317).
+	inc := stack.CreateIncarnation(t, "test-coven-probe", "coven-probe@main", nil)
+	stack.AddMember(t, 0, inc)
 
 	applyID := stack.RunScenario(t, inc, "create", nil)
 

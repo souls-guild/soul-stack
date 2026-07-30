@@ -40,6 +40,28 @@ if [[ ! -f "${SRC}/index.html" ]]; then
   exit 2
 fi
 
+# PROVENANCE (NIM-277). The embedded bundle is a build artefact of another
+# repository committed into this one, and until now it carried no record of
+# WHERE it came from: looking at core, nobody could say which soul-stack-web
+# commit produced the bytes in assets/. That is why an unpaired web merge is
+# invisible in review — the assets diff is minified noise, and there is no line
+# a reviewer can read.
+#
+# Refuse to vendor from a dirty companion: a bundle built from uncommitted work
+# is not reproducible, and recording its SHA would be a lie.
+WEB_SHA="$(git -C "${WEB_REPO}" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "${WEB_SHA}" ]]; then
+  echo "sync-webui.sh: ${WEB_REPO} is not a git checkout - refusing to vendor a bundle with no provenance" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${WEB_REPO}" status --porcelain 2>/dev/null)" ]]; then
+  echo "sync-webui.sh: companion working tree is dirty - the bundle would not be reproducible." >&2
+  echo "sync-webui.sh: commit or stash in ${WEB_REPO}, rebuild, then sync again." >&2
+  exit 2
+fi
+WEB_DESC="$(git -C "${WEB_REPO}" describe --tags --always 2>/dev/null || echo "-")"
+WEB_BRANCH="$(git -C "${WEB_REPO}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-")"
+
 echo "sync-webui.sh: ${SRC} -> ${DST}"
 
 # Full mirror: --delete so renamed hash chunks and removed files
@@ -54,4 +76,19 @@ else
   cp -R "${SRC}/." "${DST}/"
 fi
 
+# The provenance record lives OUTSIDE assets/ on purpose: everything under
+# assets/ is go:embed'ed and shipped to browsers, and this is a build fact for
+# reviewers, not a served file. One key per line so a re-sync shows up in the
+# diff as a readable SHA change rather than as minified churn.
+cat > "${CORE_REPO}/keeper/internal/webui/WEBUI_SOURCE" <<EOF
+# Provenance of keeper/internal/webui/assets/ (NIM-277). Written by
+# scripts/sync-webui.sh; do not edit by hand. Its purpose is to make an unpaired
+# web merge visible: if this SHA does not move when the UI changed, the vendored
+# bundle is stale.
+commit=${WEB_SHA}
+describe=${WEB_DESC}
+branch=${WEB_BRANCH}
+EOF
+
+echo "sync-webui.sh: recorded companion commit ${WEB_SHA} (${WEB_DESC}) in keeper/internal/webui/WEBUI_SOURCE"
 echo "sync-webui.sh: done. Run 'make check' next."

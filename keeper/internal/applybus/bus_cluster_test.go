@@ -1211,9 +1211,36 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 		rwg.Add(1)
 		go func() {
 			defer rwg.Done()
-			idle := time.NewTimer(drainTimeout)
-			defer idle.Stop()
+			// Read until perID events have arrived, or give up on ONE hard
+			// deadline — never on silence.
+			//
+			// This loop used to re-arm a 500 ms "idle" timer after every event
+			// and return when it fired. That cannot distinguish "the stream is
+			// over" from "the scheduler stalled", and under load it read the
+			// second as the first: the collector returned while the tail of the
+			// stream was still in flight, the length assert below found 18 or 19
+			// of 20, and the message it printed said "drop or loss under
+			// fanout". Nothing had been dropped — SubscriberBufferSize is 64 and
+			// only 20 events per applyID are ever published, so EventBus.deliver
+			// cannot overflow here. The reader left first.
+			//
+			// It took the first CI run over the release to surface (NIM-297,
+			// three applyIDs short) and a loaded machine to reproduce: 20 runs
+			// on an idle box are green, 8 of 20 fail at loadavg ~5, and the
+			// affected subset varies — the signature of a shared stall, not of a
+			// systematic drop. A test that reports a scheduling artefact as
+			// event loss spends the reader's time on the wrong subsystem, and if
+			// it were "fixed" by widening the window it would stop being able to
+			// tell the two apart at all (NIM-318).
+			hard := time.NewTimer(drainTimeout)
+			defer hard.Stop()
 			for {
+				col.mu.Lock()
+				done := len(col.seq) >= perID
+				col.mu.Unlock()
+				if done {
+					break
+				}
 				select {
 				case ev := <-ch:
 					if ev.ApplyID != wantID {
@@ -1234,13 +1261,21 @@ func TestCluster_ShardFanout_NoDropNoMix(t *testing.T) {
 					col.mu.Lock()
 					col.seq = append(col.seq, dec.Seq)
 					col.mu.Unlock()
-					if !idle.Stop() {
-						<-idle.C
-					}
-					idle.Reset(500 * time.Millisecond)
-				case <-idle.C:
+				case <-hard.C:
+					// Short of perID after drainTimeout — a real shortfall. Let
+					// the assert below report it with the count.
 					return
 				}
+			}
+			// perID reached. Keep the "no duplicate / no surplus delivery" half
+			// of the guarantee: a brief look for one more event. Silence here is
+			// weak evidence under load, but the asymmetry is in our favour —
+			// a surplus event is a positive observation, so a short window can
+			// only miss one, never invent one.
+			select {
+			case ev := <-ch:
+				t.Errorf("surplus delivery for %q: got seq beyond the %d published (%+v)", wantID, perID, ev.Payload)
+			case <-time.After(200 * time.Millisecond):
 			}
 		}()
 	}

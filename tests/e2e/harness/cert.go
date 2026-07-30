@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -74,49 +76,64 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 	return cert, key
 }
 
-// AddMember binds the i-th pre-auth Soul to incarnation `incName` in
-// incarnation_membership (ADR-008 amendment 2026-07-17/NIM-124: membership is a
-// first-class M:N relation, no longer the derived fact
-// `incarnation.name ∈ souls.coven[]`). Needed for scenario-apply: the run's
-// roster resolves members via incarnation_membership
-// (topology/resolver.go::rosterSQL). Without this an incarnation "has no
-// connected hosts" → no_hosts → error_locked.
+// AddMember binds the i-th pre-auth Soul to incarnation `incName` through the
+// OPERATOR path — `POST /v1/incarnations/{name}/members` (ADR-008 amendment
+// 2026-07-28/NIM-209). Needed for scenario-apply: the run's roster resolves
+// members via incarnation_membership (topology/resolver.go::rosterSQL), so
+// without this an incarnation "has no connected hosts" → no_hosts →
+// error_locked.
 //
-// ORDER (NIM-210): the incarnation row must ALREADY exist — migration 099
-// carries FK incarnation_membership_incarnation_fk (incarnation_name →
-// incarnation(name)). Binding first, creating second is a hard SQLSTATE 23503
-// and was how most of the suite died on setup; the probe below turns that into
-// the instruction rather than the constraint name. For bootstrapping a NEW
-// incarnation use [Stack.CreateIncarnationOnRoster], which owns the whole order
-// in one place.
+// It used to INSERT into incarnation_membership directly, because until NIM-209
+// there was no route to call — the harness was working around a genuine product
+// gap. Now that the route exists, the direct INSERT would be worse than
+// redundant (NIM-231): it bypasses BOTH authorization gates (the incarnation
+// selector and the caller's soul purview) and the `connected` status rule, so a
+// suite would go green along a path no operator can take. Tests are supposed to
+// fail where an operator would.
 //
-// Idempotent (ON CONFLICT DO NOTHING; PK (incarnation_name, sid)). Fatal on
-// error.
+// A consequence worth stating: this call now REQUIRES the soul to be
+// `connected`, exactly as the operator's does. Connect the stub before binding.
+//
+// ORDER: the incarnation must already exist. That is still true, but it is no
+// longer diagnosed by an FK violation — the route resolves `{name}` before
+// writing anything and answers 404, which this turns into the instruction. For
+// bootstrapping a NEW incarnation use [Stack.CreateIncarnationOnRoster], which
+// owns the whole order in one place.
+//
+// Idempotent server-side (ON CONFLICT DO NOTHING; the reply splits `bound` from
+// `already_member`). Fatal on any non-200 — see [Stack.AddMemberRaw] when the
+// status itself is the subject of the test.
 func (s *Stack) AddMember(t *testing.T, soulIndex int, incName string) {
 	t.Helper()
+	body, status := s.AddMemberRaw(t, soulIndex, incName)
+	if status == http.StatusNotFound {
+		t.Fatalf("AddMember(%s, soul %d): 404 — the incarnation does not exist yet; membership is bound AFTER "+
+			"the incarnation is created. Bootstrap a new incarnation with Stack.CreateIncarnationOnRoster. body=%s",
+			incName, soulIndex, string(body))
+	}
+	if status != http.StatusOK {
+		t.Fatalf("AddMember(%s, soul %d): status %d, body=%s", incName, soulIndex, status, string(body))
+	}
+}
+
+// AddMemberRaw — low-level `POST /v1/incarnations/{name}/members`: returns
+// (responseBody, statusCode) without checking it. For tests where the code IS
+// the subject — binding a host that is not `connected` must be refused the same
+// way it is refused an operator (422), not silently accepted as the old direct
+// INSERT did (NIM-231).
+func (s *Stack) AddMemberRaw(t *testing.T, soulIndex int, incName string) ([]byte, int) {
+	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
-		t.Fatalf("AddMember(%d): out of range (created %d souls)", soulIndex, len(s.souls))
+		t.Fatalf("AddMemberRaw(%d): out of range (created %d souls)", soulIndex, len(s.souls))
 	}
 	sid := s.souls[soulIndex].SID
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var exists bool
-	if err := s.db.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM incarnation WHERE name = $1)`, incName).Scan(&exists); err != nil {
-		t.Fatalf("AddMember(%s, %s): probing incarnation: %v", incName, sid, err)
+	c := s.opClient(t)
+	path := fmt.Sprintf("/v1/incarnations/%s/members", incName)
+	resp, status, err := c.post(context.Background(), path, map[string]any{"sids": []string{sid}})
+	if err != nil {
+		t.Fatalf("AddMemberRaw(%s, %s): http: %v", incName, sid, err)
 	}
-	if !exists {
-		t.Fatalf("AddMember(%s, %s): incarnation row does not exist yet — membership is bound AFTER "+
-			"the incarnation is created (FK incarnation_membership_incarnation_fk, migration 099). "+
-			"Bootstrap a new incarnation with Stack.CreateIncarnationOnRoster.", incName, sid)
-	}
-	if _, err := s.db.Exec(ctx, `
-		INSERT INTO incarnation_membership (incarnation_name, sid)
-		VALUES ($1, $2)
-		ON CONFLICT DO NOTHING
-	`, incName, sid); err != nil {
-		t.Fatalf("AddMember(%s, %s): %v", incName, sid, err)
-	}
+	return resp, status
 }
 
 // SeedSoulprint writes souls.soulprint_facts (JSONB) for the i-th pre-auth

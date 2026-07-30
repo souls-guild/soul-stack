@@ -80,6 +80,10 @@ func (s *Stack) RegisterService(t *testing.T, serviceName, relativePath string) 
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("RegisterService %s: decode: %v (body=%s)", serviceName, err, string(resp))
 	}
+	if s.registered == nil {
+		s.registered = map[string]string{}
+	}
+	s.registered[serviceName] = relativePath
 	return gitURL
 }
 

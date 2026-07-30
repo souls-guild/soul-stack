@@ -21,10 +21,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +57,13 @@ type Stack struct {
 	t *testing.T
 
 	cfg Config
+
+	// registered — service names RegisterService has put in the registry,
+	// mapped to the example directory each was materialized from. Read only
+	// by failNotRegistered, so that a "not registered" 422 which outlives the
+	// warm-up window can name the omission instead of quoting a handler
+	// (NIM-317).
+	registered map[string]string
 
 	// Resolved endpoints (filled in by NewStack after spawn).
 	PGURL               string
@@ -551,6 +560,9 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 		}
 		break
 	}
+	if status == http.StatusUnprocessableEntity && strings.Contains(string(resp), "not registered") {
+		s.failNotRegistered(t, "CreateIncarnation "+name, service, resp)
+	}
 	if status != http.StatusAccepted {
 		t.Fatalf("CreateIncarnation %s: status %d, body=%s", name, status, string(resp))
 	}
@@ -612,6 +624,9 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string
 			continue
 		}
 		break
+	}
+	if status == http.StatusUnprocessableEntity && strings.Contains(string(resp), "not registered") {
+		s.failNotRegistered(t, "CreateIncarnationWithApply "+name, stripServiceRef(serviceRef), resp)
 	}
 	if status != http.StatusAccepted {
 		t.Fatalf("CreateIncarnationWithApply %s: status %d, body=%s", name, status, string(resp))
@@ -685,6 +700,9 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 			continue
 		}
 		break
+	}
+	if status == http.StatusUnprocessableEntity && strings.Contains(string(resp), "not registered") {
+		s.failNotRegistered(t, fmt.Sprintf("RunScenario %s/%s", incarnationName, scenarioName), "", resp)
 	}
 	if status != http.StatusAccepted {
 		t.Fatalf("RunScenario %s/%s: status %d, body=%s", incarnationName, scenarioName, status, string(resp))
@@ -825,6 +843,62 @@ func stripServiceRef(ref string) string {
 		return ref[:i]
 	}
 	return ref
+}
+
+// failNotRegistered reports a "service is not registered" 422 that outlived
+// the registry warm-up poll, and it reports it as the test's own omission.
+//
+// Why this exists (NIM-317). ADR-029 made the service registry a precondition
+// for CreateIncarnation, and four L3a tests were never taught: they went
+// straight from NewStack to CreateIncarnation. The failure they produced was
+// the handler's own sentence — "service service-hello-world is not registered
+// (manage via service.* API, ADR-029)" — which reads like a keeper defect and
+// says nothing about the missing harness call. Worse, the poll loop above
+// spends 15 s first, so the test looks slow-and-broken rather than
+// mis-written. Three of those four also named a service that no longer exists
+// (the examples dropped the `service-` prefix), and the handler cannot tell
+// "you forgot to register" from "you registered under a different name".
+//
+// This is the NIM-238 shape applied to a setup step: the point is not to
+// document the required call harder, it is to make its absence name itself.
+// Whoever writes the next L3a test gets the fix in the failure text.
+// service may be empty when the caller does not carry a service ref
+// (RunScenario knows only the incarnation).
+func (s *Stack) failNotRegistered(t *testing.T, op, service string, body []byte) {
+	t.Helper()
+	t.Fatal(notRegisteredMessage(op, service, s.cfg.ExamplePath, s.registered, body))
+}
+
+// notRegisteredMessage is split out of [Stack.failNotRegistered] so the wording
+// can be asserted without a Stack (and therefore without containers) — see
+// not_registered_test.go. A diagnostic whose whole job is to be read is worth a
+// test: it is the only thing standing between the next author and the 422 that
+// sent four tests unnoticed for a release.
+func notRegisteredMessage(op, service, examplePath string, registered map[string]string, body []byte) string {
+	var b strings.Builder
+	if service == "" {
+		fmt.Fprintf(&b, "%s: the incarnation's service is not in the registry after the warm-up window.\n", op)
+	} else {
+		fmt.Fprintf(&b, "%s: service %q is not in the registry after the warm-up window.\n", op, service)
+	}
+
+	if len(registered) == 0 {
+		name := service
+		if name == "" {
+			name = "<the name: from the example's service.yml>"
+		}
+		fmt.Fprintf(&b, "This Stack registered NOTHING — ADR-029 requires the service to exist before\n"+
+			"an incarnation can be created on it. Add, before the first CreateIncarnation:\n"+
+			"    stack.RegisterService(t, %q, %q)\n", name, examplePath)
+	} else {
+		fmt.Fprintf(&b, "This Stack registered %v, so the name does not match what the test asked for.\n"+
+			"The registered name must equal the `name:` in the example's service.yml, and the\n"+
+			"service ref passed to CreateIncarnation/RunScenario must use that same name.\n",
+			slices.Sorted(maps.Keys(registered)))
+	}
+
+	fmt.Fprintf(&b, "keeper answered: %s", string(body))
+	return b.String()
 }
 
 // DB returns the pool for the test (read-only for asserts). The caller must
