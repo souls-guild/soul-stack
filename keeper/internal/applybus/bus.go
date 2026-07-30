@@ -465,6 +465,11 @@ func (b *EventBus) deliver(ev Event, s *subscriber) {
 	}
 	// Channel full — try to free a slot. Reading from a never-closed channel
 	// is safe and doesn't race with unsubscribe.
+	//
+	// These warnings carry the same contract as the bridge's in
+	// keeper/internal/redis/applybus.go: TestCluster_ShardFanout_NoSilentLossNoMix
+	// counts them by message text to separate an event shed by policy from one
+	// that vanished. Reword or silence them with the test, not without it.
 	select {
 	case <-s.ch:
 		b.logger.Warn("applybus: subscriber buffer full — dropped oldest event",

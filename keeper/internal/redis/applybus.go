@@ -355,6 +355,15 @@ func (s *ApplyEventSubscription) forward(ev *ApplyEvent) {
 	default:
 	}
 	// Buffer full — free a slot by evicting the oldest.
+	//
+	// The two warnings below are a contract, not diagnostics.
+	// TestCluster_ShardFanout_NoSilentLossNoMix counts them to tell an event the
+	// bus shed on purpose from one that vanished, and it matches on the message
+	// text ("dropped oldest event" / "event lost") and on the
+	// "redis.SubscribeApplyEvent:" prefix that names which buffer overflowed.
+	// Silencing one leaves the test green while it stops being able to see loss;
+	// rewording one makes it fail as "loss nobody logged". Change either with the
+	// test, never on its own.
 	select {
 	case <-s.out:
 		s.logger.Warn("redis.SubscribeApplyEvent: forward channel full — dropped oldest event",
