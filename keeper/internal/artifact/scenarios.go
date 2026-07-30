@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	yaml "gopkg.in/yaml.v3"
@@ -61,10 +62,25 @@ type Scenario struct {
 	// create=true, destroy=false (deletion is special DELETE flow), operational=true.
 	// Marked by listing-handler according to scenario-package convention
 	// (scenario.IsRunnableScenario); ListScenarios itself does not populate it.
-	Runnable    bool           `json:"runnable"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"input_schema,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
+	Runnable bool `json:"runnable"`
+	// ComposesName marks "this create scenario composes the incarnation name
+	// itself" — the manifest carries `name_template` (ADR-0079), so the server
+	// builds the name from `input:` and REFUSES a request that also sends one
+	// (scenario.ErrNameNotComposable → 422 name_not_composable).
+	//
+	// The descriptor had no way to say this, so a client asked for a name it must
+	// not send: the web form required one and the backend rejected it, which left
+	// no way to create a templated incarnation through the UI at all (NIM-340).
+	//
+	// Only the FLAG travels, never the template. What an operator is shown is the
+	// composed name — the result — and not the formula that produced it; publishing
+	// the expression would make an internal authoring detail part of the API.
+	// omitempty: a scenario that composes nothing serializes exactly as it did
+	// before this field existed.
+	ComposesName bool           `json:"composes_name,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  map[string]any `json:"input_schema,omitempty"`
+	Tags         []string       `json:"tags,omitempty"`
 	// Form is an optional presentation layer (top-level `form:` in scenario
 	// manifest): sections with field labels for UI Run modal. omitempty: no form:
 	// in YAML → no field in reply (exactly as before this feature); UI renders
@@ -163,6 +179,9 @@ type scenarioYAML struct {
 	// (see loadScenario). soul-lint (config-validator) does strict type validation;
 	// here is best-effort projection for UI — invalid type remains nil → false.
 	Create *bool `yaml:"create"`
+	// NameTemplate is the top-level `name_template:` (ADR-0079). Read only to
+	// decide [Scenario.ComposesName]; the string itself never leaves this struct.
+	NameTemplate string `yaml:"name_template"`
 	// FromVersions is the top-level `from:` of upgrade manifest (ADR-0068).
 	// Projected to Scenario.FromVersions only on upgrade path ([ListUpgrades]);
 	// for scenario/ there is no key → nil. soul-lint (config-validator) does
@@ -327,13 +346,16 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 		schema = mergeCovenantInputRaw(serviceRoot, raw.Extends, schema, logger)
 	}
 	sc := Scenario{
-		Name:        name,
-		Path:        relPath,
-		Create:      raw.Create != nil && *raw.Create,
-		Description: raw.Description,
-		InputSchema: schema,
-		Tags:        raw.Tags,
-		Form:        scenarioFormProjection(raw.Form),
+		Name:   name,
+		Path:   relPath,
+		Create: raw.Create != nil && *raw.Create,
+		// Presence, not content: any non-empty template means the server composes
+		// the name. A malformed one is soul-lint's business, not the listing's.
+		ComposesName: strings.TrimSpace(raw.NameTemplate) != "",
+		Description:  raw.Description,
+		InputSchema:  schema,
+		Tags:         raw.Tags,
+		Form:         scenarioFormProjection(raw.Form),
 	}
 	// Channel isolation is PHYSICAL, not just directory-based (ADR-0068 §3): stray
 	// `from:` in scenario/<name>/main.yml must not leak into day-2 reply —

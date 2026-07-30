@@ -3415,6 +3415,8 @@ components:
     Scenario:
       additionalProperties: false
       properties:
+        composes_name:
+          type: boolean
         create:
           type: boolean
         description:
