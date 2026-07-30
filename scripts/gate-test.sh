@@ -31,6 +31,7 @@ green: ; @echo RAN-green
 red: ; @echo RAN-red; exit 1
 after: ; @echo RAN-after
 needs: ; @echo RAN-needs
+selfskip: ; @echo "skip everything (no packages)"
 EOF
 
 # run_gate <tier>... — gate.sh over the throwaway Makefile. Sets `out` and `rc`.
@@ -81,5 +82,32 @@ assert_eq yes "$(lacks 'RAN-needs')" "the tier did not run under a broken declar
 it "a gate with no tiers refuses to report success"
 run_gate
 assert_eq 2 "${rc}" "exit code"
+
+# ★ KNOWN BOUNDARY, asserted so it stays written down instead of being
+# remembered by whoever last looked.
+#
+# gate.sh judges a tier by its exit code, which means it can report what a tier
+# ANSWERED and never what a tier DID. A tier that skips its own work and exits 0
+# is therefore a PASS in the table, and the table is the strongest-looking claim
+# in the output — so the gap reads as coverage.
+#
+# This is not hypothetical. `make test` takes its package list from
+# `go list ./... 2>/dev/null`, and any failure of that command — a broken
+# go.work, an unreadable go.mod, a toolchain change — comes back empty and is
+# treated as "this module has no Go packages". Measured: with
+# GOWORK=/nonexistent/go.work, `make test` prints eight skip lines, exits 0, and
+# this gate prints `PASS test` for a tier that ran no tests at all.
+#
+# Closing it belongs in the tiers, not here: a tier must stop conflating "there
+# is nothing to do" with "the tool that would have told me broke" (NIM-392 for
+# the seven `go list` sites, NIM-394 for the e2e suites, already done). The case
+# below asserts the CURRENT behaviour on purpose. If someone later teaches
+# gate.sh to detect self-skips, this assertion is where they will find out that
+# the old contract was deliberate rather than overlooked.
+it "known boundary: a tier that skips itself internally is still reported PASS"
+run_gate selfskip
+assert_eq 0 "${rc}" "exit code — the tier answered 0 and the gate believes it"
+assert_eq yes "$(contains 'PASS     selfskip')" "the table calls it a pass"
+assert_eq yes "$(lacks 'NOT RUN')" "the gate has no third thing to say about it"
 
 harness_summary
