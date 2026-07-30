@@ -137,7 +137,13 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 			return util.SendFailed(stream, aerr.Error())
 		}
 		sha, _ := canonicalSHA256(path, algo, existingHashHex)
-		return finalOutput(stream, attrChanged, path, rawURL, sha, fileSize(path), warnings)
+		return finalOutput(stream, attrChanged, fetchedOutput{
+			path:      path,
+			rawURL:    rawURL,
+			sha256Hex: sha,
+			size:      fileSize(path),
+			warnings:  warnings,
+		})
 	}
 
 	// Download to a temp file in path's directory, hashing on the fly.
@@ -167,7 +173,13 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		if serr != nil {
 			return util.SendFailed(stream, serr.Error())
 		}
-		return finalOutput(stream, attrChanged, path, rawURL, sha, fileSize(path), warnings)
+		return finalOutput(stream, attrChanged, fetchedOutput{
+			path:      path,
+			rawURL:    rawURL,
+			sha256Hex: sha,
+			size:      fileSize(path),
+			warnings:  warnings,
+		})
 	}
 
 	cleanup := func() { _ = os.Remove(tmpName) }
@@ -189,7 +201,13 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		if aerr != nil {
 			return util.SendFailed(stream, aerr.Error())
 		}
-		return finalOutput(stream, attrChanged, path, rawURL, sha256Hex, size, warnings)
+		return finalOutput(stream, attrChanged, fetchedOutput{
+			path:      path,
+			rawURL:    rawURL,
+			sha256Hex: sha256Hex,
+			size:      size,
+			warnings:  warnings,
+		})
 	}
 
 	if err := os.Chmod(tmpName, mode); err != nil {
@@ -207,7 +225,13 @@ func (m *Module) applyFetched(stream grpc.ServerStreamingServer[pluginv1.ApplyEv
 		}
 	}
 
-	return finalOutput(stream, true, path, rawURL, sha256Hex, size, warnings)
+	return finalOutput(stream, true, fetchedOutput{
+		path:      path,
+		rawURL:    rawURL,
+		sha256Hex: sha256Hex,
+		size:      size,
+		warnings:  warnings,
+	})
 }
 
 // converge brings an existing file's mode/owner to the declaration when
@@ -405,21 +429,33 @@ func fileSize(path string) int64 {
 	return info.Size()
 }
 
+// fetchedOutput is what the module reports about the file it settled on. The
+// fields are keyed rather than positional because path, rawURL and sha256Hex
+// were three adjacent strings: swapping any two of them compiled, and landed a
+// RunResult whose path and url each describe the other's subject.
+type fetchedOutput struct {
+	path      string
+	rawURL    string
+	sha256Hex string
+	size      int64
+	warnings  []string
+}
+
 // finalOutput assembles the module's output. headers are never included in
 // output (sensitive-by-construction). url is echoed back without headers.
 // warnings (if any) are host-only guard warnings from util.GuardWarnings,
 // surfaced to the operator in RunResult.
-func finalOutput(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, path, rawURL, sha256Hex string, size int64, warnings []string) error {
+func finalOutput(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, res fetchedOutput) error {
 	out := map[string]any{
-		"path":    path,
-		"url":     rawURL,
-		"sha256":  sha256Hex,
-		"size":    size,
+		"path":    res.path,
+		"url":     res.rawURL,
+		"sha256":  res.sha256Hex,
+		"size":    res.size,
 		"changed": changed,
 		"fetched": true,
 	}
-	if len(warnings) > 0 {
-		out["warnings"] = util.StringsToAny(warnings)
+	if len(res.warnings) > 0 {
+		out["warnings"] = util.StringsToAny(res.warnings)
 	}
 	return util.SendFinal(stream, changed, out)
 }

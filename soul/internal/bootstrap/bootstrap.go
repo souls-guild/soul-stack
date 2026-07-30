@@ -146,7 +146,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		if h, ok := hostFromAddr(addr); ok {
 			cfgForAddr.ServerName = h
 		}
-		r, err := dialAndBootstrap(ctx, addr, cfgForAddr, sid, cfg.Token, csrPEM, cfg.SoulVersion, timeout)
+		r, err := dialAndBootstrap(ctx, bootstrapAttempt{
+			addr:        addr,
+			tlsCfg:      cfgForAddr,
+			sid:         sid,
+			token:       cfg.Token,
+			csrPEM:      csrPEM,
+			soulVersion: cfg.SoulVersion,
+			timeout:     timeout,
+		})
 		if err == nil {
 			reply = r
 			successAddr = addr
@@ -199,24 +207,39 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	return res, nil
 }
 
+// bootstrapAttempt carries the inputs of a single dial. The fields are keyed
+// rather than positional because sid and token are both strings and sat next
+// to each other in the old signature: swapping them compiled, and the result
+// would have put the bootstrap token in the field Keeper echoes into its logs
+// while the SID went to the field compared as a secret.
+type bootstrapAttempt struct {
+	addr        string
+	tlsCfg      *tls.Config
+	sid         string
+	token       string
+	csrPEM      []byte
+	soulVersion string
+	timeout     time.Duration
+}
+
 // dialAndBootstrap is one attempt: gRPC dial + Bootstrap RPC + close.
-func dialAndBootstrap(ctx context.Context, addr string, tlsCfg *tls.Config, sid, token string, csrPEM []byte, soulVersion string, timeout time.Duration) (*keeperv1.BootstrapReply, error) {
-	creds := credentials.NewTLS(tlsCfg)
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds))
+func dialAndBootstrap(ctx context.Context, at bootstrapAttempt) (*keeperv1.BootstrapReply, error) {
+	creds := credentials.NewTLS(at.tlsCfg)
+	conn, err := grpc.NewClient(at.addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
-	rpcCtx, cancel := context.WithTimeout(ctx, timeout)
+	rpcCtx, cancel := context.WithTimeout(ctx, at.timeout)
 	defer cancel()
 
 	client := keeperv1.NewKeeperClient(conn)
 	reply, err := client.Bootstrap(rpcCtx, &keeperv1.BootstrapRequest{
-		Sid:            sid,
-		BootstrapToken: token,
-		CsrPem:         csrPEM,
-		SoulVersion:    soulVersion,
+		Sid:            at.sid,
+		BootstrapToken: at.token,
+		CsrPem:         at.csrPEM,
+		SoulVersion:    at.soulVersion,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Bootstrap RPC: %w", err)

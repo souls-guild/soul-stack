@@ -946,3 +946,63 @@ func assertNoTempLeftovers(t *testing.T, dir string) {
 		}
 	}
 }
+
+// TestApply_OutputReportsPathAndURLInTheirOwnFields pins the mapping of the two
+// output fields easiest to confuse. path and url are both strings and travel
+// together into every finalOutput call; the suite asserts sha256 and size but
+// never these two, so exchanging them produced a RunResult in which each field
+// described the other's subject and nothing turned red.
+//
+// All four return paths are covered, because the exchange can live in any one
+// call site as readily as in finalOutput itself.
+func TestApply_OutputReportsPathAndURLInTheirOwnFields(t *testing.T) {
+	const rawURL = "https://example.com/artifact.bin"
+	body := []byte("fetched payload\n")
+
+	cases := []struct {
+		name       string
+		status     int
+		existing   []byte // nil = no file on disk yet
+		byChecksum bool
+	}{
+		{name: "downloaded"},
+		{name: "checksum already matches the file on disk", existing: body, byChecksum: true},
+		{name: "server answers 304", existing: body, status: http.StatusNotModified},
+		{name: "content already matches the file on disk", existing: body},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModule(&fakeDoer{body: body, status: tc.status})
+			path := filepath.Join(t.TempDir(), "artifact.bin")
+			if tc.existing != nil {
+				if err := os.WriteFile(path, tc.existing, 0o644); err != nil {
+					t.Fatalf("seed the existing file: %v", err)
+				}
+			}
+
+			params := map[string]any{"url": rawURL, "path": path}
+			if tc.byChecksum {
+				params["checksum"] = "sha256:" + sha256hex(body)
+			}
+
+			stream := &internaltest.ApplyStream{}
+			if err := m.Apply(&pluginv1.ApplyRequest{
+				State:  "fetched",
+				Params: mustStruct(t, params),
+			}, stream); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			ev := stream.Last()
+			if ev.Failed {
+				t.Fatalf("Apply failed: %s", ev.Message)
+			}
+			if got := ev.Output.Fields["path"].GetStringValue(); got != path {
+				t.Errorf("output path = %q; want %q — the URL reached the field naming the file", got, path)
+			}
+			if got := ev.Output.Fields["url"].GetStringValue(); got != rawURL {
+				t.Errorf("output url = %q; want %q — the file path reached the field naming the source", got, rawURL)
+			}
+		})
+	}
+}
