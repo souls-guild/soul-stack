@@ -867,9 +867,25 @@ order to act in.
   names by position named the wrong source in the cross-Passage error, or ran off
   the end of the slice.
 
+- **An applier's `vars:` reach the input it passes to its destiny.** A `block:`
+  passes its `vars:` to every descendant (destiny/tasks.md §6.5) — except that a
+  module descendant could read `${ vars.x }` and an `apply:` one could not:
+  `resolveApplyInput` built its env with `hostVars` alone and never called
+  `resolveTaskVars`, so the render failed there with "no such key". The applier's
+  own `vars:` had the same fate. They are now resolved into the env that renders
+  `apply.input`, exactly as the module path does it. Isolation is untouched:
+  `apply.input` renders on the **caller's** side, so only the resulting values
+  cross, which is what every other `apply.input` value already does — a destiny
+  still sees none of its caller's `vars.*`, only its own `vars.yml`.
+
+  ★ This is why the key left the `<key>_on_apply_invalid` family it briefly
+  joined. Refusing it could never have reached the case that mattered: the key is
+  written on the `block:`, where it is legal, and the descendant carries no key
+  of its own — invisible to any offline validator by construction.
+
 - **Module-specific keys on an `apply:` task are refused** (family
   `<key>_on_apply_invalid`: `changed_when`, `failed_when`, `retry`, `timeout`,
-  `params`, `vars`, `no_log`) — the apply-side mirror of the
+  `params`, `no_log`) — the apply-side mirror of the
   `<key>_on_block_invalid` family, for the other construct that expands into a
   group. Unlike the keys above, these never could have worked: an applier invokes
   no module, and render hands its children only the three requisites, so nothing
@@ -878,9 +894,10 @@ order to act in.
   refused with its own reason rather than a shared sentence: no module result to
   re-judge (`changed_when`/`failed_when`), one call's retry or timeout applied to
   a group (`retry`/`timeout`), module arguments where the destiny takes
-  `apply.input` (`params`), scenario-env locals that the isolated destiny env
-  never sees (`vars`), and a group mask that is not implemented, so the output it
-  was written to hide was **logged in full** (`no_log`).
+  `apply.input` (`params`), and a group mask that is not implemented, so the
+  output it was written to hide was **logged in full** (`no_log`). A key that
+  turns out to be answerable on the caller's side leaves the family instead of
+  staying refused — `vars:` did, above.
 
   ★ They were not simply dropped, which is why refusing beats leaving them: a
   static-false `when:` collapses an applier into one skip placeholder that *does*
@@ -896,7 +913,7 @@ order to act in.
   a design that slice owns and would report an unimplemented key as a meaningless
   one. `id:` and `loop:` needed no new rule: both already refuse every non-module
   discriminator, an applier included. No example in the corpus carries any of the
-  seven keys on an applier (37 applier tasks across 394 files), so nothing that
+  refused keys on an applier (37 applier tasks across 394 files), so nothing that
   ran before stops rendering.
 
 - **`async:` on `on: keeper` is refused offline** (`async_on_keeper_invalid`),

@@ -279,7 +279,10 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 // Only the three requisites travel. They are resolved NAME→INDEX over the whole
 // flat plan in Render's final pass, so they are env-agnostic: an index means the
 // same thing on both sides of the destiny boundary. `when:`/`where:`/`vars:` are
-// not, and are handled where they are written — see [renderApplyDestiny].
+// not, and are handled where they are written — see [renderApplyDestiny]. For
+// `vars:` "where it is written" is the caller: [Pipeline.resolveApplyInput]
+// resolves it into the env that renders `apply.input`, so its values reach the
+// destiny the only way anything does — through the input contract (NIM-336).
 //
 // Union, exactly as a block does it: an applier that names a source and a
 // destiny task that names its own end up naming both. ★ For `onchanges:`/

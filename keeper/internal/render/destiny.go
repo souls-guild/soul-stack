@@ -103,7 +103,7 @@ type DestinyResolver interface {
 //
 // applier is the whole parent task, not just its `apply:` block — the
 // function that renders a task's fan-out has to see the task, or keys land
-// nowhere and no one is told (NIM-245). Two of its fields are read here:
+// nowhere and no one is told (NIM-245). Three of its fields are read here:
 //
 // applier.Register — if non-empty, renderApplyDestiny emits a synthetic
 // terminal `core.noop.run` after the child tasks, with Register=applier.Register
@@ -115,14 +115,20 @@ type DestinyResolver interface {
 // (applier without register: — no index reserved, bit-for-bit unchanged
 // behavior).
 //
+// applier.Vars — task-level `vars:` (its own, plus any a `block:` above merged
+// in), resolved by [Pipeline.resolveApplyInput] into the env that renders
+// `apply.input`. NOT inherited by the children: they are answered on the
+// CALLER's side, which is where the text was written, and only the resulting
+// values cross the boundary (NIM-336).
+//
 // applier's requisites (`onchanges:`/`onfail:`/`require:`) — merged into every
 // child by [mergeApplierInheritance], the same way a block passes its own down
-// (destiny/tasks.md §6.5). `when:`/`where:`/`vars:` are deliberately NOT
-// inherited: those are resolved in the SCENARIO env, while a child's flow
-// context is built in the isolated destiny env, so the same text would mean a
-// different thing on the other side of the boundary. The applier's `when:` is
-// decided before this call instead (static-when at the scenario level), and a
-// `when:` that cannot be decided there is refused by [guardApplierWhen].
+// (destiny/tasks.md §6.5). `when:`/`where:` are deliberately NOT inherited:
+// those are resolved in the SCENARIO env, while a child's flow context is built
+// in the isolated destiny env, so the same text would mean a different thing on
+// the other side of the boundary. The applier's `when:` is decided before this
+// call instead (static-when at the scenario level), and a `when:` that cannot be
+// decided there is refused by [guardApplierWhen].
 func (p *Pipeline) renderApplyDestiny(
 	ctx context.Context,
 	parentIn RenderInput,
@@ -146,7 +152,7 @@ func (p *Pipeline) renderApplyDestiny(
 	// against the destiny's input: contract (required params present,
 	// defaults applied). apply.input renders in scenario env (the parent
 	// resolves what to pass); the destiny itself sees only the result.
-	destinyInput, err := p.resolveApplyInput(parentIn, apply, resolved, targeted)
+	destinyInput, err := p.resolveApplyInput(parentIn, applier, resolved, targeted)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -396,12 +402,39 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 // apply.input is host-invariant in the pilot: values are computed once (on
 // the first targeted host), same as module-task params (host variance is
 // out of pilot scope).
+//
+// The applier's task-level `vars:` are resolved into that env first, exactly
+// as the module path does it (dispatch.go, renderModuleTask) — NIM-336. This
+// is the one applier key that CAN be answered on this side of the boundary:
+// `apply.input` renders in the SCENARIO env, where `vars.<name>` means what
+// its author meant, and only the resulting VALUES cross into the destiny — the
+// same thing every other apply.input value does. Isolation is untouched; the
+// destiny still sees no `vars.*` of its caller, only its own vars.yml.
+//
+// ★ Two entrances, one fix. The applier's own `vars:` is the visible one; the
+// second is a `block:` above it, whose vars mergeBlockInheritance merges into
+// every descendant INCLUDING an apply: one. That second path is invisible to
+// the offline validator — the key is written on the block, where §6.5 allows
+// it, and the descendant carries no key of its own — so refusing it there was
+// never an option.
+//
+// ★ The loss was LOUD, not silent: the scenario pass has no file-vars base, so
+// `${ vars.x }` in apply.input failed with "no such key" for every applier.
+// What was missing is a capability the DSL documents — a block passes `vars:`
+// to its descendants (destiny/tasks.md §6.5) — and did not deliver to one kind
+// of descendant, while every module sibling in the same block got it.
+//
+// fileVarsForHost is the base layer (Variant A, vars.md): empty on the scenario
+// pass, and the destiny's own vars.yml if an applier is ever rendered inside a
+// destiny pass — so the base is always the right one for wherever this applier
+// physically sits.
 func (p *Pipeline) resolveApplyInput(
 	parentIn RenderInput,
-	apply *config.ApplyTask,
+	applier config.Task,
 	resolved *ResolvedDestiny,
 	targeted []*topology.HostFacts,
 ) (map[string]any, error) {
+	apply := applier.Apply
 	var host *topology.HostFacts
 	if len(targeted) > 0 {
 		host = targeted[0]
@@ -409,6 +442,10 @@ func (p *Pipeline) resolveApplyInput(
 		host = &topology.HostFacts{}
 	}
 	vars := hostVars(parentIn, host, len(targeted))
+	vars, err := resolveTaskVars(p.cel, fileVarsForHost(parentIn, host), applier.Vars, vars)
+	if err != nil {
+		return nil, fmt.Errorf("render: apply destiny %q (task %q): %w", apply.Destiny, applier.Name, err)
+	}
 
 	rendered := make(map[string]any, len(apply.Input))
 	for name, raw := range apply.Input {

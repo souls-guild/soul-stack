@@ -1006,13 +1006,21 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 //
 // The membership rule is one line: these keys WORK on a module task and are
 // LOST on an applier. `apply:` is the second construct that expands into a
-// group, and after NIM-245 an applier's own fields are read in exactly two
-// places — `Apply`/`Register`/`OnChanges`/`OnFail`/`Require` in
+// group, and an applier's own fields are read in exactly two places —
+// `Apply`/`Register`/`Vars`/`OnChanges`/`OnFail`/`Require` in
 // keeper/internal/render.renderApplyDestiny, and `When`/`Where`/`On`/
 // `RunOnce`/`Serial` in the scenario loop that calls it. Nothing else on the
 // applier reaches a RenderedTask: mergeApplierInheritance carries only the
 // three requisites into the children, and the group's terminal is a synthetic
 // `core.noop.run` whose register is an aggregate of the children.
+//
+// ★ `vars:` left this list in NIM-336. It was the one member that could be
+// answered on the caller's side after all — `apply.input` renders in the
+// scenario env, so resolving the applier's vars there and letting only the
+// VALUES cross is exactly what every other apply.input value does. Refusing it
+// also could not reach the second entrance: a `block:` above the applier merges
+// its own `vars:` into the descendant, and that key is written where it is
+// legal, so this layer never sees it.
 //
 // Each key is rejected with code `<key>_on_apply_invalid`, symmetric to
 // `<key>_on_block_invalid`, and carries its OWN reason: they are lost for
@@ -1066,11 +1074,6 @@ var applyForbiddenKeys = []struct{ key, why, hint string }{
 		"params",
 		"params: are module arguments and an applier calls no module — a destiny is parameterised by apply.input, checked against its own input: contract",
 		"move the values into apply: { input: { ... } }",
-	},
-	{
-		"vars",
-		"task-level vars: are resolved in the SCENARIO env, and a destiny renders in its own isolated env built from apply.input alone — they reach neither apply.input nor any child task",
-		"pass the values through apply: { input: { ... } }, or declare destiny locals in that destiny's own vars.yml",
 	},
 	{
 		"no_log",

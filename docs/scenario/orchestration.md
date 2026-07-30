@@ -109,7 +109,8 @@ An applier expands into N destiny tasks, so each of its own keys has to be answe
 | `serial:` | Inherited by every destiny task - the whole destiny rolls as one wave (§2.2.1). |
 | `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `essence.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
 | `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
-| `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` · `vars:` · `no_log:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
+| `vars:` | **On the caller's side, into `apply.input`** - the applier's own `vars:` plus any a `block:` above merged in are resolved in the scenario env, and only the resulting VALUES cross into the destiny, exactly like every other `apply.input` value. NOT inherited by the children: the destiny renders its own locals from its `vars.yml` ([destiny/vars.md](../destiny/vars.md)) and never sees its caller's. |
+| `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` · `no_log:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
 | `id:` · `loop:` | **Refused** (`id_unsupported_target` / `loop_unsupported_target`) - both are allowed only on a module task in the pilot; an applier is one of the discriminators they already cover. |
 | `output:` | **Accepted, unread.** Not refused - `output:` is unread on every task type today and belongs to the planned output-contract projection (§2.1.1), not to the class below. |
 
@@ -136,7 +137,7 @@ Both replacements work today and cover the cases in practice:
 
 ★ The requisites merge as a **union**, as they do on a `block:`: an applier naming a source and a destiny task naming its own end up naming both. For `onchanges:`/`onfail:` that composes as OR - the task runs if **any** named source changed/failed - so an applier-level `onchanges:` widens, rather than narrows, the gating of a destiny task that already had one.
 
-**Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the three requisites, so nothing else it carries reaches a rendered task.
+**Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the three requisites, so nothing else it carries reaches a rendered task. A key that turns out to be answerable on the caller's side leaves the family rather than staying refused - `vars:` did, see below.
 
 | Refused key | Why it has no answer here | Write instead |
 |---|---|---|
@@ -144,10 +145,11 @@ Both replacements work today and cover the cases in practice:
 | `retry:` | Repeats **one** module call; a group has no single call to repeat, and re-running the group is a different operation. | Put `retry:` on the destiny task that can be retried on its own. |
 | `timeout:` | Bounds **one** module call, not the duration of a group. | Put `timeout:` on the destiny tasks that need bounding. |
 | `params:` | Module arguments, and an applier calls no module. `module:`+`apply:` is caught as `task_discriminator_multiple`; a lone `params:` used to slip through. | `apply: { input: { … } }`, checked against the destiny's own `input:` contract. |
-| `vars:` | Task-level `vars:` resolve in the **scenario** env, while the destiny renders in its isolated env built from `apply.input` alone - they reach neither `apply.input` nor any child. | `apply: { input: { … } }`, or destiny locals in that destiny's own `vars.yml` ([vars.md](../destiny/vars.md)). |
 | `no_log:` | Masking a whole group is not implemented: the flag reaches no child, so the output it was written to hide is **logged in full**. Accepting it is a false sense of masking. | Put `no_log:` on the destiny tasks that handle the secret. |
 
 ★ These were not simply dropped, which is why refusing beats leaving them: a static-false `when:` collapses the applier into one skip placeholder that **does** copy `changed_when`/`failed_when`/`timeout`/`no_log`/`id` onto itself. The keys were honoured exactly when they could not matter, and ignored whenever they could.
+
+★ `vars:` was in this list and left it (NIM-336). It turned out to be the one member that **could** be answered here: `apply.input` renders in the scenario env, so resolving the applier's locals there and letting only the resulting values cross is what every other `apply.input` value already does - isolation is untouched. Refusing it also could not reach the second entrance, where the loss actually showed: a `block:` passes its `vars:` to every descendant (§6.5), that key is written on the block where it is legal, and an offline validator therefore never sees it. Before the fix a module descendant of such a block could read `${ vars.x }` and an `apply:` descendant could not - the render failed there with "no such key", loudly but for no reason the author could act on.
 
 ### 2.3. `assert:` — render-time precondition
 

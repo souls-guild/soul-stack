@@ -468,7 +468,6 @@ func TestLoadScenarioManifest_ApplyForbiddenKeys(t *testing.T) {
 		"retry_on_apply_invalid":        "retry: { count: 3 }",
 		"timeout_on_apply_invalid":      "timeout: 30s",
 		"params_on_apply_invalid":       "params: { a: 1 }",
-		"vars_on_apply_invalid":         "vars: { v: \"x\" }",
 		"no_log_on_apply_invalid":       "no_log: true",
 	}
 	for wantCode, line := range cases {
@@ -519,6 +518,9 @@ tasks:
 // just on an applier, and belongs to the output-contract projection that
 // orchestration.md §2.1.1 marks PLANNED — refusing it here would pre-empt that
 // slice and misreport an unimplemented key as a meaningless one.
+//
+// ★ `vars:` is here since NIM-336: it is resolved into the env that renders
+// `apply.input`, so it is an answered key, not a lost one.
 func TestLoadScenarioManifest_ApplyAllowedKeysOK(t *testing.T) {
 	src := `name: x
 tasks:
@@ -529,6 +531,7 @@ tasks:
     apply:
       destiny: redis
       input: {}
+    vars: { pause: 5 }
     when: input.action == 'apply'
     where: "register.probe.changed"
     on: [redis]

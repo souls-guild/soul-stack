@@ -9,8 +9,8 @@ tasks:
         action: apply
     params:
       action: apply
-    vars:
-      pause: 5
+    # vars: is deliberately absent — it IS answered on an applier since NIM-336
+    # (resolved into the env that renders apply.input).
     changed_when: "true"
     failed_when: "false"
     retry:
