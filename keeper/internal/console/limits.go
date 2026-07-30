@@ -47,6 +47,12 @@ type Limits struct {
 	IdleTimeout       time.Duration
 }
 
+// StaticLimits adapts a fixed envelope to the provider shape [HubDeps.Limits]
+// wants. Production passes a closure over the live config snapshot so an
+// operator's edit applies without a restart (ADR-0073(j.5)); wiring with no
+// store behind it — tests, dev harnesses — passes this.
+func StaticLimits(l Limits) func() Limits { return func() Limits { return l } }
+
 // resolve fills zero fields with the defaults. A negative value means the
 // caller explicitly disabled the limit and is kept as-is by the checks
 // (which only enforce a positive ceiling).

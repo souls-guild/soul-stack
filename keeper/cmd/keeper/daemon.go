@@ -3051,7 +3051,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	// console" from being reachable through a deployment mistake.
 	consoleRecorder, err := console.NewRecorder(
 		consolepg.NewStore(d.pool, consoleRecordingRetention(cfg)),
-		consoleRecorderConfig(cfg),
+		d.consoleRecorderConfigProvider(),
 		logger,
 	)
 	if err != nil {
@@ -3064,7 +3064,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Cluster:      consoleBridge,
 		AuditWriter:  d.auditWriter,
 		Recorder:     consoleRecorder,
-		Limits:       consoleLimits(cfg),
+		Limits:       d.consoleLimitsProvider(),
 		Metrics:      d.consoleMetrics,
 		Logger:       logger,
 	})
@@ -4495,6 +4495,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// the API server.
 		ConsoleHub:     d.consoleHub,
 		ConsoleMetrics: d.consoleMetrics,
+		// `console.enabled` (NIM-292). Off → GET /v1/console answers 404 like an
+		// unrouted path. Not folded into the nil-hub branch above on purpose: the
+		// switch is live, so the route has to exist and refuse rather than never
+		// be mounted.
+		ConsolePlaneEnabled: d.consolePlaneEnabledProvider(),
 		// Playback of recorded sessions (NIM-148). Its own read-only store over
 		// the same pool, NOT the recorder the Hub holds — the API can read a
 		// recording and cannot touch one, which is what keeps the playback
@@ -4971,6 +4976,10 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			ErrandDispatcher: d.errandDispatcher,
 			ErrandStore:      d.errandStore,
 			ConsoleRecorder:  d.consoleRecorder,
+			// The same switch the REST half reads (NIM-292): off →
+			// keeper.soul.run-command is absent from tools/list and unknown to
+			// tools/call.
+			ConsolePlaneEnabled: d.consolePlaneEnabledProvider(),
 
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.

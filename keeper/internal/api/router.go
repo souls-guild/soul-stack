@@ -2002,8 +2002,14 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// consoleDeps nil → the route is not mounted (opt-in, the runEventsDeps
 		// pattern; it carries no OpenAPI operation, so it is in the drift-test
 		// pathAllowlist).
+		//
+		// The plane gate sits AHEAD of the RBAC one (NIM-292): with
+		// `console.enabled: false` the route answers 404 like any unrouted path,
+		// so a console-free cluster does not confirm through a 403 that it has a
+		// console plane at all.
 		if consoleDeps != nil {
 			r.With(
+				consolePlaneGate(consoleDeps.PlaneEnabled),
 				apimiddleware.RequireAction(enforcer, "soul", "console"),
 			).Group(func(r chi.Router) {
 				registerConsoleWS(r, consoleDeps)

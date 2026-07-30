@@ -349,3 +349,86 @@ func TestSettingsOverlay_BreakGlassRunsOffFileOnly(t *testing.T) {
 		t.Error("the overlay value was applied under KEEPER_CONFIG_SOURCE=file")
 	}
 }
+
+// ★ The console plane switched off from Postgres, with nothing edited on the
+// box (NIM-292). This is the whole point of admitting `cfg_console_enabled`:
+// "this cluster carries no consoles" becomes one row rather than an edit to
+// keeper.yml on every Keeper VM.
+//
+// The providers are the ones daemon.go hands to the router and the MCP handler,
+// so what this exercises is the production read path, not a re-implementation
+// of it.
+func TestSettingsOverlay_ConsolePlaneSwitchedOffFromPostgres(t *testing.T) {
+	store, _ := keeperFixtureStore(t)
+	d := &daemon{store: store, logger: discardLogger(), cfg: store.Get()}
+	planeEnabled := d.consolePlaneEnabledProvider()
+
+	if !planeEnabled() {
+		t.Fatal("the plane is off before any overlay row — absent must mean on")
+	}
+
+	if err := d.initSettingsStore(context.Background(), &overlayDB{
+		rows: [][2]string{{"cfg_console_enabled", "false"}},
+	}); err != nil {
+		t.Fatalf("initSettingsStore: %v", err)
+	}
+
+	if planeEnabled() {
+		t.Fatal("cfg_console_enabled=false did not reach the plane provider — the switch does not work from Postgres")
+	}
+}
+
+// The envelope travels the same way, and through the same providers the Hub and
+// the recorder hold. Without the live apply path these keys could not have been
+// admitted at all (ADR-0073(j.5)).
+func TestSettingsOverlay_ConsoleEnvelopeReadsLiveValues(t *testing.T) {
+	store, _ := keeperFixtureStore(t)
+	d := &daemon{store: store, logger: discardLogger(), cfg: store.Get()}
+	limits := d.consoleLimitsProvider()
+	recording := d.consoleRecorderConfigProvider()
+
+	if got := limits().MaxSessionsPerAID; got != 0 {
+		t.Fatalf("pre-overlay per-Archon ceiling = %d, want 0 so the package default applies", got)
+	}
+
+	if err := d.initSettingsStore(context.Background(), &overlayDB{rows: [][2]string{
+		{"cfg_console_max_sessions_per_archon", "3"},
+		{"cfg_console_max_sessions_global", "7"},
+		{"cfg_console_idle_timeout", "5m"},
+		{"cfg_console_recording_max_session_bytes", "2097152"},
+	}}); err != nil {
+		t.Fatalf("initSettingsStore: %v", err)
+	}
+
+	got := limits()
+	if got.MaxSessionsPerAID != 3 || got.MaxSessionsGlobal != 7 || got.IdleTimeout != 5*time.Minute {
+		t.Errorf("post-overlay limits = %+v, want per-Archon 3, global 7, idle 5m", got)
+	}
+	if b := recording().MaxBytes; b != 2097152 {
+		t.Errorf("post-overlay recording cap = %d, want 2097152", b)
+	}
+}
+
+// The escape hatch that makes the admission survivable: a value pinned in the
+// instance's own keeper.yml outranks the cluster row (ADR-0073(b)). A cluster
+// that must never carry consoles writes `enabled: false` in the FILE, and no
+// `setting.update` can switch it back on.
+func TestSettingsOverlay_ConsoleFilePinOutranksPostgres(t *testing.T) {
+	store, _ := keeperFixtureStoreWith(t, "\nconsole:\n  enabled: false\n")
+	d := &daemon{store: store, logger: discardLogger(), cfg: store.Get()}
+	planeEnabled := d.consolePlaneEnabledProvider()
+
+	if planeEnabled() {
+		t.Fatal("the file pin did not switch the plane off")
+	}
+
+	if err := d.initSettingsStore(context.Background(), &overlayDB{
+		rows: [][2]string{{"cfg_console_enabled", "true"}},
+	}); err != nil {
+		t.Fatalf("initSettingsStore: %v", err)
+	}
+
+	if planeEnabled() {
+		t.Fatal("a Postgres row switched the console plane back on over a keeper.yml that forbids it — the file must win (ADR-0073(b))")
+	}
+}

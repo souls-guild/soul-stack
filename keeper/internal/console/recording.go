@@ -228,10 +228,16 @@ func (c RecorderConfig) resolve() RecorderConfig {
 	return c
 }
 
+// StaticRecorderConfig adapts a fixed envelope to the provider shape
+// [NewRecorder] wants, for wiring with no live config behind it.
+func StaticRecorderConfig(c RecorderConfig) func() RecorderConfig {
+	return func() RecorderConfig { return c }
+}
+
 // castRecorder is the only [Recorder] implementation.
 type castRecorder struct {
 	store  RecordingStore
-	cfg    RecorderConfig
+	cfg    func() RecorderConfig
 	logger *slog.Logger
 	now    func() time.Time
 	newID  func() string
@@ -239,16 +245,25 @@ type castRecorder struct {
 
 // NewRecorder builds the recorder over a store. Both arguments are required —
 // a recorder with no store would be a way to run an unrecorded console.
-func NewRecorder(store RecordingStore, cfg RecorderConfig, logger *slog.Logger) (Recorder, error) {
+//
+// cfg is resolved per session rather than once here, so a change to the cap
+// applies to the next recording instead of the next restart (ADR-0073(j.5)).
+// Sessions already recording keep the cap they started under: the cap decides
+// when a recording is closed, and moving that line under a live session would
+// close it for a reason its operator never saw. nil → the defaults.
+func NewRecorder(store RecordingStore, cfg func() RecorderConfig, logger *slog.Logger) (Recorder, error) {
 	if store == nil {
 		return nil, errors.New("console: recorder requires a store")
 	}
 	if logger == nil {
 		return nil, errors.New("console: recorder requires a logger")
 	}
+	if cfg == nil {
+		cfg = StaticRecorderConfig(RecorderConfig{})
+	}
 	return &castRecorder{
 		store:  store,
-		cfg:    cfg.resolve(),
+		cfg:    cfg,
 		logger: logger,
 		now:    time.Now,
 		newID:  audit.NewULID,
@@ -265,7 +280,7 @@ func (r *castRecorder) Open(ctx context.Context, spec RecordingSpec) (Recording,
 	rec := &castRecording{
 		id:       r.newID(),
 		store:    r.store,
-		maxBytes: r.cfg.MaxBytes,
+		maxBytes: r.cfg().resolve().MaxBytes,
 		logger:   r.logger,
 		now:      r.now,
 		start:    start,

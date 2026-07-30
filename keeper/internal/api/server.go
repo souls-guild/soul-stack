@@ -209,6 +209,16 @@ type Deps struct {
 	// instrumentation disabled (nil-safe no-ops).
 	ConsoleMetrics *console.Metrics
 
+	// ConsolePlaneEnabled — the cluster-wide console switch, `console.enabled`
+	// (NIM-292). Read per request rather than captured here, so an operator's
+	// edit applies without a restart (ADR-0073(j.5)). nil → on, which is what a
+	// keeper.yml written before the key resolves to.
+	//
+	// It gates the ROUTE's existence, not the caller's rights: off means 404, the
+	// same answer as an unrouted path. The MCP half of the plane reads the same
+	// switch through mcp.HandlerDeps.ConsolePlaneEnabled.
+	ConsolePlaneEnabled func() bool
+
 	// ConsoleRecordings — the READ half of the console recording store
 	// (ADR-0074(g), NIM-148). Deliberately separate from the recorder the Hub
 	// holds: that one can only write, this one can only read, so a playback
@@ -925,10 +935,11 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	var consoleDeps *consoleWSDeps
 	if deps.ConsoleHub != nil {
 		consoleDeps = &consoleWSDeps{
-			Hub:      deps.ConsoleHub,
-			Enforcer: deps.RBAC,
-			Metrics:  deps.ConsoleMetrics,
-			Logger:   logger,
+			Hub:          deps.ConsoleHub,
+			Enforcer:     deps.RBAC,
+			Metrics:      deps.ConsoleMetrics,
+			Logger:       logger,
+			PlaneEnabled: deps.ConsolePlaneEnabled,
 		}
 	}
 

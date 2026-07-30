@@ -52,9 +52,41 @@ func consoleRecorderConfig(cfg *config.KeeperConfig) console.RecorderConfig {
 	return console.RecorderConfig{MaxBytes: cfg.Console.Recording.MaxSessionBytes}
 }
 
+// The three providers below read the LIVE config snapshot on every call rather
+// than closing over the boot-time one. That is what makes these keys admissible
+// to the SettingsStore overlay (ADR-0073(j.5)): a key the UI can edit but whose
+// consumer resolved it once at startup would accept the edit and change nothing
+// until the next restart — the silent form of the failure `requires_restart`
+// exists to prevent.
+
+// consoleLimitsProvider resolves the operator envelope per check.
+func (d *daemon) consoleLimitsProvider() func() console.Limits {
+	return func() console.Limits { return consoleLimits(d.store.Get()) }
+}
+
+// consoleRecorderConfigProvider resolves the recording envelope per session.
+func (d *daemon) consoleRecorderConfigProvider() func() console.RecorderConfig {
+	return func() console.RecorderConfig { return consoleRecorderConfig(d.store.Get()) }
+}
+
+// consolePlaneEnabledProvider answers "does this cluster carry a console plane"
+// per request (NIM-292). Both halves of the plane consult it — the WebSocket
+// route and the MCP `keeper.soul.run-command` tool — because they are one
+// privilege reached two ways.
+func (d *daemon) consolePlaneEnabledProvider() func() bool {
+	return func() bool { return d.store.Get().ConsolePlaneEnabled() }
+}
+
 // consoleRecordingRetention resolves how long recordings are kept. 0 lets the
 // store apply its own default; the semantic phase already rejected a malformed
 // duration, so an unparsable value here just falls through to it.
+//
+// Unlike the three above this one is still read once, at store construction:
+// the retention is stamped into the row when a recording is created, and the
+// store that stamps it lives in internal/consolepg. Moving it to a provider is
+// tracked separately (NIM-292 follow-up) — until then it is the one `console:`
+// key that stays file-only, because admitting it without a live apply path is
+// exactly what (j.5) forbids.
 func consoleRecordingRetention(cfg *config.KeeperConfig) time.Duration {
 	if cfg == nil || cfg.Console == nil || cfg.Console.Recording == nil {
 		return 0
@@ -90,6 +122,59 @@ func (d *daemon) startConsoleBackground(ctx context.Context, bridge *console.Clu
 	d.startConsoleUpstream(ctx, bridge)
 	d.startConsoleIdleSweep(ctx)
 	d.startConsoleOrphanSweep(ctx, bridge)
+	d.startConsolePlaneWatch(ctx)
+}
+
+// consolePlaneWatchInterval is how often the plane switch is re-read for the
+// benefit of sessions ALREADY open. New sessions do not wait for this — their
+// gate is per request — so this only bounds how long a shell survives the
+// operator switching the plane off, and a tighter tick would only re-read a
+// config snapshot that cannot have changed.
+const consolePlaneWatchInterval = 10 * time.Second
+
+// startConsolePlaneWatch closes live sessions once `console.enabled` goes false.
+//
+// The gate on the route stops the NEXT console; without this, the ones already
+// open would outlive the decision — an operator would switch the plane off, see
+// `/v1/console` answer 404, and still have root shells running behind it. The
+// switch is a statement about the cluster, so it has to reach the sessions the
+// cluster is currently holding.
+//
+// Idempotent by construction: [console.Hub.CloseAll] skips sessions already
+// closed, so a disabled plane with nothing open is a no-op tick.
+func (d *daemon) startConsolePlaneWatch(ctx context.Context) {
+	if d.consoleHub == nil {
+		return
+	}
+	ticker := time.NewTicker(consolePlaneWatchInterval)
+	enabled := d.consolePlaneEnabledProvider()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if enabled() {
+					continue
+				}
+				if n := d.consoleHub.CloseAll(ctx, console.ClosePlaneDisabled,
+					"the console plane was switched off on this cluster"); n > 0 {
+					d.logger.Warn("console: plane switched off — live sessions closed",
+						slog.Int("count", n))
+				}
+			}
+		}
+	}()
+	d.cleanups.push(func() {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			d.logger.Warn("console: plane watch did not stop in time")
+		}
+	})
 }
 
 // consoleOrphanSweepInterval is how often this instance checks the bridged

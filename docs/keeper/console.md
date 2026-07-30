@@ -344,6 +344,7 @@ each of them.
 
 | `keeper.yml` → `console:` | Default | Meaning |
 |---|---|---|
+| `enabled` | `true` | Whether this cluster carries a console plane at all (§7.1). |
 | `max_sessions_per_archon` | 30 | Live consoles one Archon may hold. Covers the walls the UI is built for; past that an operator is not reading output, they are running a fan-out — which is what an Errand is for. |
 | `max_sessions_global` | 256 | Live consoles on ONE Keeper instance, across all operators. |
 | `idle_timeout` | `30m` | Close after this long without operator input. `0s` disables. |
@@ -352,6 +353,46 @@ each of them.
 
 Exceeding either session cap gives `error{code: "limit_exceeded"}` on that pane
 only. There is no key for whether a session is recorded — see §9.
+
+Note what a ceiling of `0` does NOT mean: it resolves to the **default**, not to
+zero. `max_sessions_global: 0` is 256. Switching the plane off is `enabled`,
+below.
+
+### 7.1 Switching the plane off
+
+`console: {enabled: false}` in `keeper.yml` says this cluster carries no console
+plane. It removes **both halves** of it:
+
+| Surface | With the plane off |
+|---|---|
+| `GET /v1/console` (interactive) | **404**, the body an unrouted path gives. The check runs *ahead* of the RBAC gate, so the answer is about the cluster and not about the caller. |
+| MCP `keeper.soul.run-command` (non-interactive) | Absent from `tools/list`; calling it by name answers "tool not found", exactly as a typo does. |
+| Sessions already open | Closed, reason `console_plane_disabled`, with an `error` frame so the operator sees why their pane went away. |
+| `GET /v1/console/recordings…` | **Unaffected.** Recordings outlive the plane that produced them. |
+
+Both halves go together because they are one privilege: `soul.console` reached
+with a tty and without one (§ADR-0074 amendment NIM-147). Closing the WebSocket
+alone would leave an agent running arbitrary command lines as root on a cluster
+whose operator had just declared it has no consoles.
+
+**404 and not 403** because a 403 confirms the plane exists. A cluster that has
+declared it carries none should not be answering that question, so a switched-off
+plane is indistinguishable from a path that was never routed.
+
+The key is also served from the SettingsStore overlay (`cfg_console_enabled`), so
+the switch can be thrown cluster-wide from the API or the UI. A value written in
+`keeper.yml` outranks the cluster row — which is the form to use when it is meant
+as a guarantee, since `setting.update` can otherwise switch the plane back on.
+See [config.md § SettingsStore](config.md#settingsstore--the-admitted-keys-and-their-operator-surface)
+for the trade-off as accepted.
+
+**Two things it does not cover.** The Errand path is a different plane with its
+own gate (`errand_shell_gate`): reaching `core.cmd.shell` / `core.exec.run`
+through an Errand, a Voyage or a Cadence still works and still requires
+`errand.run` **and** `soul.console`. And the host-side `console: {enabled:
+false}` in `soul.yml` gates interactive opens only — a host carrying that flag
+still executes `keeper.soul.run-command`, so it is the Keeper-side switch that
+covers both halves.
 
 Frame-plane constants (queue depth 256, ping 60 s, max inbound frame 1 MiB) stay
 in code: they are flow-control tuning with no operator-visible policy meaning.

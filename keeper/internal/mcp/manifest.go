@@ -1088,6 +1088,40 @@ func listAllTools() []toolDeclaration {
 	return out
 }
 
+// consolePlaneTools are the tools that ARE the console plane, and therefore
+// vanish from the catalog while `console.enabled` is false (NIM-292).
+//
+// A set rather than a literal comparison because the membership test is the
+// question a future tool has to answer: anything gated by `soul.console` is this
+// plane by definition, and adding one without adding it here would leave a
+// switched-off cluster serving half a console. There is one today —
+// `keeper.soul.run-command`, the non-interactive half (ADR-0074 amendment,
+// NIM-147). The interactive half is not here because it is not a tool: it is the
+// `GET /v1/console` WebSocket, gated in the router.
+var consolePlaneTools = map[string]struct{}{
+	"keeper.soul.run-command": {},
+}
+
+// listTools is the catalog as this Keeper currently serves it. With the console
+// plane switched off the plane's tools are ABSENT rather than present-and-
+// refusing: an agent should not be able to read "this cluster has a console
+// plane" off a catalog it may not use, which is the same reason the WebSocket
+// answers 404 instead of 403.
+func listTools(consoleEnabled bool) []toolDeclaration {
+	all := listAllTools()
+	if consoleEnabled {
+		return all
+	}
+	out := make([]toolDeclaration, 0, len(all))
+	for _, d := range all {
+		if _, isPlane := consolePlaneTools[d.Name]; isPlane {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // --- JSON Schema literals for tool declarations ---
 //
 // Each schema is JSON Schema draft 2020-12, additionalProperties=false,

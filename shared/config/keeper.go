@@ -784,6 +784,33 @@ type KeeperTollWebhook struct {
 // host can answer, since a multi-console wall of 30 hosts is one session on
 // each of them.
 type KeeperConsole struct {
+	// Enabled gates the console plane cluster-wide (NIM-292). nil/omitted →
+	// true: consoles are part of the product, so a keeper.yml written before
+	// this key behaves exactly as it did.
+	//
+	// `false` switches off BOTH halves of the plane — the interactive
+	// `GET /v1/console` and the one-shot MCP `keeper.soul.run-command` — because
+	// they are one privilege (`soul.console`) reached two ways, and a switch that
+	// left the agent-facing half live would read as a guarantee it does not give.
+	// Recording PLAYBACK is deliberately untouched: recordings outlive the plane
+	// that produced them, and turning the console off must not take yesterday's
+	// sessions away from an auditor.
+	//
+	// Spelled the same as `console.enabled` in soul.yml on purpose, and
+	// independent of it: the host key answers "may a shell run HERE", this one
+	// answers "does this cluster carry a console plane at all". Either alone is
+	// enough to refuse a session.
+	//
+	// The switch cannot be expressed through the numeric envelope below —
+	// `max_sessions_global: 0` resolves to the DEFAULT 256, not to zero — which
+	// is why it is a bool of its own rather than a documented use of a ceiling.
+	//
+	// Layering (ADR-0073(b)): the key is admitted to the SettingsStore overlay,
+	// so it can also be set cluster-wide from Postgres — but `file ?? pg`, so a
+	// value written HERE outranks it. A cluster that must never carry consoles
+	// pins `false` in this file, where no `setting.update` can reach it.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
 	// MaxSessionsPerArchon caps live consoles one Archon may hold. 0/omitted →
 	// default 30, which covers the walls the operator UI is built for.
 	MaxSessionsPerArchon int `yaml:"max_sessions_per_archon,omitempty"`
@@ -817,6 +844,27 @@ type KeeperConsole struct {
 	// Recording tunes where the mandatory session recording lands and how long
 	// it stays. It cannot turn recording off — see [KeeperConsoleRecording].
 	Recording *KeeperConsoleRecording `yaml:"recording,omitempty"`
+}
+
+// PlaneEnabled reports whether the console plane is on, resolving both the
+// absent block and the absent key to the default (true). Nil-receiver safe: the
+// whole `console:` block is optional, so every caller would otherwise repeat the
+// same two nil checks and one of them would eventually get it wrong.
+func (c *KeeperConsole) PlaneEnabled() bool {
+	if c == nil || c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// ConsolePlaneEnabled is the whole-config read of the console switch, safe on a
+// nil config the way [KeeperConfig.AuditEnabled] is. This is what runtime
+// callers use: they hold a live snapshot, not a block.
+func (c *KeeperConfig) ConsolePlaneEnabled() bool {
+	if c == nil {
+		return true
+	}
+	return c.Console.PlaneEnabled()
 }
 
 // KeeperConsoleRecording is the policy surface of mandatory session recording

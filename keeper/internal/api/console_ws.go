@@ -43,6 +43,10 @@ type consoleWSDeps struct {
 	Enforcer middleware.PermissionChecker
 	Metrics  *console.Metrics
 	Logger   *slog.Logger
+	// PlaneEnabled answers `console.enabled` as it stands right now (NIM-292).
+	// Resolved per request, not captured at wire-up, so an operator's edit takes
+	// effect without a restart. nil → on, the pre-NIM-292 behaviour.
+	PlaneEnabled func() bool
 	// WriteWait overrides the per-write budget; zero takes consoleWriteWait.
 	// Only the socket's own tests set it, to reach an expiry the production
 	// value is deliberately too generous to wait for.
@@ -83,6 +87,31 @@ func registerConsoleWS(r interface {
 	Get(pattern string, h http.HandlerFunc)
 }, deps *consoleWSDeps) {
 	r.Get("/console", consoleWSHandler(deps))
+}
+
+// consolePlaneGate answers as if the route did not exist while the console plane
+// is switched off (NIM-292, `console.enabled: false`).
+//
+// 404 and not 403, and the difference is the point: 403 says "this cluster has a
+// console plane and you may not use it", which is a fact an operator of a
+// console-free cluster should not be able to read off the API. The body is the
+// one the catch-all writes for any unrouted /v1/ path, so the two are
+// indistinguishable.
+//
+// It runs BEFORE the RBAC middleware. The other order would answer 403 to
+// everyone without `soul.console` — leaking the plane's existence to exactly the
+// callers who are not allowed to reach it — and would make the response depend
+// on the caller's rights rather than on the cluster's configuration.
+func consolePlaneGate(enabled func() bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if enabled != nil && !enabled() {
+				middleware.WriteNotFound(w, r, "no such endpoint")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func consoleWSHandler(deps *consoleWSDeps) http.HandlerFunc {

@@ -123,7 +123,7 @@ func (s *fakeRecordingStore) result(id string) RecordingResult {
 
 func newTestRecorder(t *testing.T, store RecordingStore, cfg RecorderConfig) Recorder {
 	t.Helper()
-	r, err := NewRecorder(store, cfg, testLogger())
+	r, err := NewRecorder(store, StaticRecorderConfig(cfg), testLogger())
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestNewHub_RefusesWithoutARecorder(t *testing.T) {
 
 // A recorder without a store is the same hole one layer down.
 func TestNewRecorder_RefusesWithoutAStore(t *testing.T) {
-	if _, err := NewRecorder(nil, RecorderConfig{}, testLogger()); err == nil {
+	if _, err := NewRecorder(nil, StaticRecorderConfig(RecorderConfig{}), testLogger()); err == nil {
 		t.Fatal("NewRecorder accepted a nil store")
 	}
 }

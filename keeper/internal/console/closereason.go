@@ -52,6 +52,13 @@ const (
 	// CloseRecordingUnavailable — the session could no longer be recorded, and
 	// a console that stops being recorded stops (ADR-0074(g)).
 	CloseRecordingUnavailable CloseReason = "recording_unavailable"
+
+	// ClosePlaneDisabled — the console plane was switched off under the session
+	// (NIM-292, `console.enabled: false`). Distinct from every reason above
+	// because it is the only one that is a POLICY decision rather than a
+	// failure: an operator declared this cluster has no consoles, and a switch
+	// that let the shells already open keep running would not be one.
+	ClosePlaneDisabled CloseReason = "console_plane_disabled"
 )
 
 // closeReasonText is the registry of known reasons. Membership here is what
@@ -70,6 +77,7 @@ var closeReasonText = map[CloseReason]string{
 	CloseSocketCongested:      "operator socket congested",
 	CloseIdleTimeout:          "idle timeout",
 	CloseRecordingUnavailable: "recording unavailable",
+	ClosePlaneDisabled:        "console plane disabled",
 }
 
 // Label is the metric label. Anything outside the table collapses to `unknown`

@@ -202,6 +202,14 @@ type HandlerDeps struct {
 	// the deprecation window (see shellgate.Gate).
 	ShellGate *shellgate.Gate
 
+	// ConsolePlaneEnabled — the cluster-wide console switch, `console.enabled`
+	// (NIM-292). The SAME switch the REST half reads (api.Deps.
+	// ConsolePlaneEnabled): `run-command` and the `/v1/console` WebSocket are one
+	// privilege reached two ways, so one of them staying live after the plane is
+	// switched off would make the switch a claim rather than a control.
+	// Resolved per request (ADR-0073(j.5)). nil → on.
+	ConsolePlaneEnabled func() bool
+
 	// ConsoleRecorder records `keeper.soul.run-command` (NIM-147), the
 	// non-interactive half of the console plane. The SAME recorder the session
 	// manager uses (ADR-0074(g), NIM-145): one right reaching a shell two ways
@@ -349,6 +357,16 @@ func (h *Handler) handleInitialize(req jsonRPCRequest) (jsonRPCResponse, bool) {
 	return newRPCResult(req.ID, raw), false
 }
 
+// consolePlaneEnabled resolves the console switch for this request. An absent
+// provider is "on" — what a keeper.yml written before NIM-292 resolves to, and
+// what every unit harness that does not care about the plane gets.
+func (h *Handler) consolePlaneEnabled() bool {
+	if h.deps.ConsolePlaneEnabled == nil {
+		return true
+	}
+	return h.deps.ConsolePlaneEnabled()
+}
+
 // --- tools/list ---
 
 type toolsListResult struct {
@@ -356,7 +374,7 @@ type toolsListResult struct {
 }
 
 func (h *Handler) handleToolsList(req jsonRPCRequest) (jsonRPCResponse, bool) {
-	res := toolsListResult{Tools: listAllTools()}
+	res := toolsListResult{Tools: listTools(h.consolePlaneEnabled())}
 	raw, err := json.Marshal(res)
 	if err != nil {
 		h.deps.Logger.Error("mcp: tools/list marshal failed", slog.Any("error", err))
@@ -410,6 +428,16 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 
 	entry, ok := toolByName(p.Name)
 	if !ok {
+		return h.toolError(req.ID, p.Name, mcpCodeNotFound,
+			"tool not found: "+p.Name), false
+	}
+
+	// A console-plane tool on a cluster with the plane switched off answers
+	// exactly as an unknown name does (NIM-292). Checked before RBAC and before
+	// the wiring guards, so the refusal cannot be told apart from a typo: an
+	// agent that could distinguish them would have learned the cluster has a
+	// console plane, which is what `console.enabled: false` says it does not.
+	if _, isPlane := consolePlaneTools[p.Name]; isPlane && !h.consolePlaneEnabled() {
 		return h.toolError(req.ID, p.Name, mcpCodeNotFound,
 			"tool not found: "+p.Name), false
 	}

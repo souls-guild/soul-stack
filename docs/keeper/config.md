@@ -697,6 +697,7 @@ wall of 30 hosts is one session on each of them.
 
 ```yaml
 # console:
+#   enabled: true                  # false = this cluster carries NO console plane
 #   max_sessions_per_archon: 30   # live consoles one Archon may hold
 #   max_sessions_global: 256      # live consoles on THIS keeper instance
 #   idle_timeout: 30m             # close after this long without operator input
@@ -708,6 +709,7 @@ wall of 30 hosts is one session on each of them.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
+| `enabled` | `bool` | `true` | Whether this cluster carries an interactive console plane at all (NIM-292). `false` removes **both halves** — the `GET /v1/console` WebSocket answers **404**, and the MCP tool `keeper.soul.run-command` disappears from `tools/list` and answers "tool not found" — and closes the sessions already open. Recorded sessions stay readable: playback is not part of the switch. Omitted → `true`, so a file written before this key behaves exactly as it did. See the note below on why 404 and not 403. |
 | `max_sessions_per_archon` | `int` (≥0) | `30` | Live consoles one Archon may hold across all their sockets. Covers the walls the operator UI is built for; past that an operator is not reading output but running a fan-out, which is what an Errand is for. Exceeding it gives the pane `error{code: "limit_exceeded"}`. `0`/omitted → default. |
 | `max_sessions_global` | `int` (≥0) | `256` | Live consoles on ONE Keeper instance across all operators — a backstop when many operators each stay within their own limit. Every session costs a pty on some host plus a socket buffer here. `0`/omitted → default. |
 | `idle_timeout` | `duration` | `30m` | Close a session with no operator **input** for this long. Output does NOT count as activity: a `tail -f` left running overnight is exactly the abandoned root shell this reaps. `0s` disables the sweep; empty/omitted → default. |
@@ -723,6 +725,38 @@ they are kept; it may not decide whether a session is recorded, because an
 operator who can choose an unrecorded shell makes the control decorative. The
 absence is pinned by a guard test — adding the key is an ADR amendment, not a
 config change.
+
+**`enabled: false` answers 404, not 403, and the difference is the control.** A
+403 says "this cluster has a console plane and you may not use it", which is a
+fact an operator of a console-free cluster should not be able to read off the
+API. So a switched-off plane is indistinguishable from a path that was never
+routed, and the MCP half matches: the tool is absent from the catalogue rather
+than present and refusing. The check runs *before* the RBAC one, so the answer
+depends on the cluster's configuration and not on the caller's rights.
+
+**What it does not cover.** The switch removes the console plane; it does not
+remove every way to run a command as root. Reaching `core.cmd.shell` /
+`core.exec.run` through an Errand, a Voyage or a Cadence is a different path with
+its own gate (`errand_shell_gate`, [NIM-197](rbac.md)), and it requires
+`errand.run` **and** `soul.console` — switching the plane off neither closes nor
+weakens it. Read `console.enabled: false` as "no console plane here", not as "no
+root shells here".
+
+**Two switches, one name, independent.** `console.enabled` in `soul.yml` is the
+HOST answer (may a shell run on this machine); this one is the CLUSTER answer.
+Either alone is enough to refuse a session, and neither implies the other. Note
+one asymmetry worth knowing: the host switch gates interactive `ConsoleOpen`
+only, so a host with `console: {enabled: false}` in `soul.yml` still executes
+`keeper.soul.run-command` — the Keeper-side switch is the one that covers both
+halves.
+
+**This key can also live in Postgres.** It is admitted to the `SettingsStore`
+overlay, so the plane can be switched cluster-wide from the API and the UI
+without touching a file — with the trade-off spelled out in
+[§ SettingsStore](#settingsstore--the-admitted-keys-and-their-operator-surface):
+`setting.update` then becomes the right to switch it back on. A value set **here**
+outranks the cluster row, so a cluster that must never carry consoles pins it in
+this file.
 
 ## `allow_unsafe_single_path_multi_keeper` (top-level)
 
@@ -1080,6 +1114,11 @@ Admitted so far (the set grows as `keeper.yml` shrinks toward the bootstrap floo
 | `cfg_cloud_init_soul_binary_url` | `cloud_init.soul_binary_url` | string | non-empty | — |
 | `cfg_cloud_init_soul_binary_ca` | `cloud_init.soul_binary_ca` | string | non-empty | — |
 | `cfg_cloud_init_soul_version` | `cloud_init.soul_version` | string | non-empty | — |
+| `cfg_console_enabled` | `console.enabled` | bool | `true \| false` | `true` |
+| `cfg_console_max_sessions_per_archon` | `console.max_sessions_per_archon` | int | `[1, 1000]` | `30` |
+| `cfg_console_max_sessions_global` | `console.max_sessions_global` | int | `[1, 100000]` | `256` |
+| `cfg_console_idle_timeout` | `console.idle_timeout` | duration | `[1m, 24h]` | `30m` |
+| `cfg_console_recording_max_session_bytes` | `console.recording.max_session_bytes` | int | `[1048576, 17179869184]` | `268435456` |
 
 A `duration` value is stored and returned in its normalized form (`120m` is accepted and kept as `2h`), so the catalog and the file spell the same value the same way. A key with no built-in default (`—` above) simply has no value until someone sets one; `DELETE` is the way back to that state, since an empty value is refused on write.
 
@@ -1090,6 +1129,15 @@ A `duration` value is stored and returned in its normalized form (`120m` is acce
 **Admission requires a LIVE apply path, not just a reload-able label.** Every key above has a consumer that re-resolves it from the current `config.Store` snapshot — a per-tick read (Reaper, Conductor), a per-request read (Tempo), a per-step read (`max_await_timeout`) or an `OnReload` callback (Toll). A key whose consumer reads it once at startup is deliberately left out, even when this file marks its block reload-able: the overlay would accept the edit and silently change nothing until the next restart, which is worse than not offering the field at all. On top of the four ADR-0073(j) rules, that is what keeps `plugins.*`, `plugin_runtime.*`, `postgres.pool.*` and `sigil_anchors_reload_interval` out of the registry for now — their values are read while the process starts; making them genuinely hot is tracked as its own work, after which they become admission candidates. `auth.*`, `vault.*`, `metrics.auth.*` and the rest of the bootstrap floor stay out for the ADR-0073(b/j.2) reasons instead — a fail-soft overlay has no business holding a security gate.
 
 **`audit.*` now has a live apply path and is still excluded — deliberately, by [ADR-0073(j.2)](../adr/0073-keeper-runtime-config-pg.md).** It used to be listed above as "no runtime consumer at all"; since NIM-194 both `enabled` and `otel_export` are read per event from the live snapshot, which removes that reason and would otherwise make the block an automatic admission candidate for the next migration phase. It stays file-only on the other rule: `audit.enabled` is a security gate, not an operational tunable. Admitting it would put "stop journaling this cluster" behind `setting.update` in the API and the UI, and the overlay is fail-soft — after a Postgres outage an instance degrades toward the *file* value, which is the wrong direction for a compliance control. Turning audit off therefore stays what it is today: an edit to `keeper.yml` on a specific host by whoever administers that host, journaled by `audit.disabled`. `retention_days` and `otel_export` are not security gates, but they are fields of the same block and move with it.
+
+**`console.enabled` is a security gate and is admitted anyway — by explicit decision, recorded in [ADR-0073](../adr/0073-keeper-runtime-config-pg.md) (NIM-292).** It is the same shape as the `audit.enabled` refusal above, so the difference is worth stating rather than inferring. Two things separate them:
+
+- **The fail-soft direction does not exist here.** The worry with a gate in the overlay is that a Postgres outage degrades it toward the more permissive file value. The console plane cannot run without Postgres either — recording is mandatory ([ADR-0074(g)](../adr/0074-interactive-console-pty.md)) and lives in `console_recordings` — so a session attempted during the outage is refused whatever the switch says. The permissive value is unreachable.
+- **The file still wins.** Under the file-wins precedence, `console: {enabled: false}` in a host's own `keeper.yml` cannot be overridden from Postgres at all.
+
+What the admission costs, plainly: **`setting.update` becomes the right to switch the console plane back ON cluster-wide**, and `soul.console` is the most privileged right in the catalog on the execution axis ([rbac.md § Console](rbac.md)). A cluster that must never carry consoles therefore pins `enabled: false` in `keeper.yml`, where the overlay cannot reach it, and treats the Postgres key as convenience for clusters that have not. Do not rely on the Postgres row alone to express "consoles are forbidden here".
+
+**Two `console:` keys are NOT admitted.** `console.recording.retention` is stamped into the row when a recording is created, by a store that takes it once at construction — no live apply path, so the admission rule (j.5) refuses it, and giving it one is tracked separately. `console.errand_shell_gate` is the [NIM-197](rbac.md) gate over the Errand path, with its own deprecation window; nothing about this admission decides it.
 
 Cross-field invariants are enforced **before the row is written**: `PUT` merges the candidate override set onto the file and runs the full validation pipeline, so `poll_floor: 10m` against a `poll_ceiling: 1m` is a `422` and Postgres is untouched. The check runs twice — as this instance sees the merge, and as an instance whose file does not set that key would see it — because under the file-wins precedence a value the answering node ignores would otherwise be committed and then rejected by every node that applies it. `DELETE` is validated the same way — dropping an override can break an invariant the override was holding up. Without that gate a per-field-valid row would be rejected by every reader as a whole (all-or-nothing) and the cluster would sit on its last-good overlay.
 

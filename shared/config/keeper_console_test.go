@@ -158,6 +158,70 @@ func TestKeeperConsoleRecording_RejectsAMalformedRetention(t *testing.T) {
 	}
 }
 
+// --- enabled (NIM-292) --------------------------------------------------------
+
+// The Keeper-side switch for the console plane, deliberately spelled the same as
+// `console.enabled` in soul.yml: the host key answers "may a shell run HERE",
+// this one answers "does this cluster carry a console plane at all". One name on
+// both sides, two independent questions.
+
+func TestKeeperConsole_Enabled_ParsedBothWays(t *testing.T) {
+	for _, tc := range []struct {
+		yaml string
+		want bool
+	}{
+		{"true", true},
+		{"false", false},
+	} {
+		cfg := loadKeeperOrFail(t, consoleBaseConfig+`
+console:
+  enabled: `+tc.yaml+`
+`)
+		if cfg.Console == nil || cfg.Console.Enabled == nil {
+			t.Fatalf("enabled: %s was dropped by the parser", tc.yaml)
+		}
+		if *cfg.Console.Enabled != tc.want {
+			t.Fatalf("enabled = %v, want %v", *cfg.Console.Enabled, tc.want)
+		}
+	}
+}
+
+// Absent means on, and that IS the backward-compatibility story: a keeper.yml
+// written before this key resolves bit-for-bit to what it did before. Both
+// absences have to resolve — the whole block and the key inside a block that
+// carries only envelope fields.
+func TestKeeperConsole_PlaneEnabled_ResolvesAbsenceToOn(t *testing.T) {
+	yes, no := true, false
+	for name, tc := range map[string]struct {
+		console *KeeperConsole
+		want    bool
+	}{
+		"no block at all":       {nil, true},
+		"block without the key": {&KeeperConsole{MaxSessionsGlobal: 99}, true},
+		"explicit true":         {&KeeperConsole{Enabled: &yes}, true},
+		"explicit false":        {&KeeperConsole{Enabled: &no}, false},
+	} {
+		if got := tc.console.PlaneEnabled(); got != tc.want {
+			t.Errorf("%s: PlaneEnabled() = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// `max_sessions_global: 0` means the DEFAULT 256, not zero — so an operator
+// reaching for a numeric ceiling to express "off" gets the opposite of what they
+// asked for. Pinned here because it is the reason this key exists as a bool at
+// all: the switch cannot be expressed through the existing envelope.
+func TestKeeperConsole_ZeroCeilingIsNotAnOffSwitch(t *testing.T) {
+	cfg := loadKeeperOrFail(t, consoleBaseConfig+`
+console:
+  max_sessions_global: 0
+  max_sessions_per_archon: 0
+`)
+	if !cfg.Console.PlaneEnabled() {
+		t.Fatal("zeroed ceilings switched the plane off; 0 means 'the default', and the plane is off only via `enabled: false`")
+	}
+}
+
 // --- errand_shell_gate (ADR-0074 amendment, NIM-197) --------------------------
 
 // The stage of the console gate over the Errand path. A closed enum: a typo must

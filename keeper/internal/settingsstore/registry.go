@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -418,6 +419,123 @@ var levelAndCloudInit = []Field{
 		Description: "cloud-init: `soul` version recorded in the userdata; empty — whatever the URL serves.",
 		Read:        cloudInitField(func(ci *config.KeeperCloudInit) any { return ci.SoulVersion }, ""),
 	},
+
+	// --- Console: the interactive plane and its operator envelope (NIM-292) ---
+	//
+	// `cfg_console_enabled` is admitted AGAINST THE LETTER of (j.2), which keeps
+	// security gates out of a fail-soft overlay, and the decision is recorded in
+	// ADR-0073 rather than left to be re-derived from this table. Two things make
+	// it survivable where `audit.enabled` did not:
+	//
+	//   - the failure (j.2) guards against cannot occur here. A gate served from
+	//     Postgres degrades toward the more permissive file value when Postgres
+	//     goes away — but the console plane cannot run without Postgres either:
+	//     recording is mandatory (ADR-0074(g)) and lives in `console_recordings`,
+	//     so a session opened during the outage is refused anyway;
+	//   - the file still outranks the overlay (b). A cluster that must never carry
+	//     consoles pins `enabled: false` in its own keeper.yml, where no
+	//     `setting.update` can reach it.
+	//
+	// What is bought with that: `setting.update` becomes the right to switch the
+	// plane back ON cluster-wide. That is the real cost of the admission, it is
+	// documented in rbac.md, and pinning the key in the file is the answer to it.
+	{
+		Key:         "cfg_console_enabled",
+		YAMLPath:    "$.console.enabled",
+		Kind:        KindBool,
+		Default:     true,
+		Description: "Console: whether this cluster carries an interactive console plane at all. False removes both halves — the GET /v1/console WebSocket and the MCP keeper.soul.run-command tool — and closes the sessions already open. Recorded sessions stay readable.",
+		Read: func(c *config.KeeperConfig) any {
+			return c.ConsolePlaneEnabled()
+		},
+	},
+	{
+		Key:         "cfg_console_max_sessions_per_archon",
+		YAMLPath:    "$.console.max_sessions_per_archon",
+		Kind:        KindInt,
+		Min:         1,
+		Max:         1000,
+		Default:     console.DefaultMaxSessionsPerAID,
+		Description: "Console: live consoles one Archon may hold across all their sockets.",
+		Read: func(c *config.KeeperConfig) any {
+			return consoleInt(c, func(cc *config.KeeperConsole) int { return cc.MaxSessionsPerArchon },
+				console.DefaultMaxSessionsPerAID)
+		},
+	},
+	{
+		Key:      "cfg_console_max_sessions_global",
+		YAMLPath: "$.console.max_sessions_global",
+		Kind:     KindInt,
+		// Floor of 1, not 0: in this block `0` means "the default 256", so a
+		// range that accepted it would offer an operator a value that reads as
+		// "none" and resolves to the maximum. Switching the plane off is
+		// `cfg_console_enabled`, which says what it does.
+		Min:         1,
+		Max:         100000,
+		Default:     console.DefaultMaxSessionsGlobal,
+		Description: "Console: live consoles on ONE Keeper instance across all operators. Not an off switch — see cfg_console_enabled.",
+		Read: func(c *config.KeeperConfig) any {
+			return consoleInt(c, func(cc *config.KeeperConsole) int { return cc.MaxSessionsGlobal },
+				console.DefaultMaxSessionsGlobal)
+		},
+	},
+	{
+		Key:         "cfg_console_idle_timeout",
+		YAMLPath:    "$.console.idle_timeout",
+		Kind:        KindDuration,
+		MinDur:      time.Minute,
+		MaxDur:      24 * time.Hour,
+		Default:     formatDuration(console.DefaultIdleTimeout),
+		Description: "Console: how long a session may go without operator input before it is closed. Output does not count as activity.",
+		Read: func(c *config.KeeperConfig) any {
+			if c == nil || c.Console == nil || c.Console.IdleTimeout == "" {
+				return formatDuration(console.DefaultIdleTimeout)
+			}
+			d, err := config.ParseDuration(c.Console.IdleTimeout)
+			if err != nil || d <= 0 {
+				return formatDuration(console.DefaultIdleTimeout)
+			}
+			return formatDuration(d)
+		},
+	},
+	{
+		Key:      "cfg_console_recording_max_session_bytes",
+		YAMLPath: "$.console.recording.max_session_bytes",
+		Kind:     KindInt,
+		// The floor is a real one: reaching the cap CLOSES the session, so a
+		// value small enough to be hit by a login banner would make consoles
+		// unusable through a setting that reads as a storage knob.
+		Min:         1 << 20,
+		Max:         1 << 34,
+		Default:     int(console.DefaultMaxRecordingBytes),
+		Description: "Console: cap on one session's recording. Reaching it closes the session — a console that can no longer be recorded may not keep running.",
+		Read: func(c *config.KeeperConfig) any {
+			if c == nil || c.Console == nil || c.Console.Recording == nil || c.Console.Recording.MaxSessionBytes == 0 {
+				return int(console.DefaultMaxRecordingBytes)
+			}
+			return int(c.Console.Recording.MaxSessionBytes)
+		},
+	},
+	// `console.recording.retention` is deliberately NOT here. It is stamped into
+	// the row when a recording is created, by the store in internal/consolepg
+	// which takes it once at construction — so it has no live apply path and
+	// (j.5) refuses it. Giving it one is a follow-up, not a line in this table.
+	//
+	// `console.errand_shell_gate` is also absent, and for the original reason:
+	// it is the NIM-197 gate over the Errand path, with its own deprecation
+	// window and its own deadline. Nothing about this admission decides it.
+}
+
+// consoleInt resolves one optional console ceiling the way the consumer does: an
+// absent block or a zero means the built-in default, never zero.
+func consoleInt(c *config.KeeperConfig, get func(*config.KeeperConsole) int, def int) int {
+	if c == nil || c.Console == nil {
+		return def
+	}
+	if v := get(c.Console); v != 0 {
+		return v
+	}
+	return def
 }
 
 // cloudInitField builds a nil-safe Read for one cloud_init field: an absent

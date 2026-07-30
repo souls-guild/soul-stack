@@ -262,14 +262,14 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 	// far past it on purpose, and the cap has its own guard in the console
 	// package; leaving it on would make one contract's test fail on the other's.
 	recorder, err := console.NewRecorder(consoletest.NewStore(),
-		console.RecorderConfig{MaxBytes: -1}, logger)
+		console.StaticRecorderConfig(console.RecorderConfig{MaxBytes: -1}), logger)
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
 	hub, err := console.NewHub(console.HubDeps{
 		Dispatcher: soul,
 		Recorder:   recorder,
-		Limits:     limits,
+		Limits:     console.StaticLimits(limits),
 		Logger:     logger,
 	})
 	if err != nil {

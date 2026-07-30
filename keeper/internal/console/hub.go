@@ -192,15 +192,19 @@ type HubDeps struct {
 	// one, and no second code path for an unrecorded session.
 	Recorder Recorder
 
-	Limits  Limits
+	// Limits resolves the operator envelope on every check rather than once at
+	// construction, so an edit to the ceilings applies to the next open instead
+	// of the next restart — the live apply path ADR-0073(j.5) requires before a
+	// key may be served from the SettingsStore overlay. nil → the defaults.
+	// Fixed envelopes go through [StaticLimits].
+	Limits  func() Limits
 	Metrics *Metrics
 	Logger  *slog.Logger
 }
 
 // Hub is the registry of live console sessions on this Keeper instance.
 type Hub struct {
-	deps   HubDeps
-	limits Limits
+	deps HubDeps
 
 	mu sync.RWMutex
 	// byKeeperID routes an upstream frame (which carries only the Keeper ULID)
@@ -229,11 +233,19 @@ func NewHub(deps HubDeps) (*Hub, error) {
 	}
 	return &Hub{
 		deps:       deps,
-		limits:     deps.Limits.resolve(),
 		byKeeperID: make(map[string]*Session),
 		perAID:     make(map[string]int),
 		newID:      audit.NewULID,
 	}, nil
+}
+
+// currentLimits resolves the envelope as it stands right now. An absent provider
+// is the defaults, so a zero HubDeps stays usable.
+func (h *Hub) currentLimits() Limits {
+	if h.deps.Limits == nil {
+		return Limits{}.resolve()
+	}
+	return h.deps.Limits().resolve()
 }
 
 // OpenRequest is one operator request to start a console.
@@ -399,14 +411,18 @@ func (h *Hub) transportOf(ctx context.Context, sid string) string {
 // inserts are one critical section: a per-AID slot taken without the global one
 // would leak on the failure path.
 func (h *Hub) register(sess *Session) error {
+	// Resolved before the lock: the provider reads a config snapshot, and a
+	// critical section this narrow has no business calling out to one.
+	limits := h.currentLimits()
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.limits.MaxSessionsGlobal > 0 && len(h.byKeeperID) >= h.limits.MaxSessionsGlobal {
-		return fmt.Errorf("%w: keeper instance at %d sessions", ErrLimitExceeded, h.limits.MaxSessionsGlobal)
+	if limits.MaxSessionsGlobal > 0 && len(h.byKeeperID) >= limits.MaxSessionsGlobal {
+		return fmt.Errorf("%w: keeper instance at %d sessions", ErrLimitExceeded, limits.MaxSessionsGlobal)
 	}
-	if h.limits.MaxSessionsPerAID > 0 && sess.AID != "" && h.perAID[sess.AID] >= h.limits.MaxSessionsPerAID {
-		return fmt.Errorf("%w: operator at %d sessions", ErrLimitExceeded, h.limits.MaxSessionsPerAID)
+	if limits.MaxSessionsPerAID > 0 && sess.AID != "" && h.perAID[sess.AID] >= limits.MaxSessionsPerAID {
+		return fmt.Errorf("%w: operator at %d sessions", ErrLimitExceeded, limits.MaxSessionsPerAID)
 	}
 
 	h.byKeeperID[sess.KeeperID] = sess
@@ -592,6 +608,39 @@ func (h *Hub) CloseAllFor(ctx context.Context, sessions []*Session, reason Close
 	return n
 }
 
+// CloseAll tears down every session this Hub holds and returns how many it
+// closed. Unlike [Hub.CloseAllFor], whose sessions belong to a socket that is
+// already gone, the operators here are watching — so each gets an `error` frame
+// naming the reason before their pane goes dead.
+//
+// This is what makes `console.enabled: false` a switch rather than a claim
+// (NIM-292): a cluster that has just declared it carries no console plane must
+// not still be running the root shells it was carrying a second ago.
+//
+// The frame reuses `forbidden` rather than minting a wire code for the switch.
+// The frame set is a contract with the web UI (NIM-146) and an unknown code
+// renders as nothing there — an operator whose terminal vanished silently is
+// worse served than one told "forbidden" with the reason in the detail.
+func (h *Hub) CloseAll(ctx context.Context, reason CloseReason, detail string) int {
+	h.mu.RLock()
+	live := make([]*Session, 0, len(h.byKeeperID))
+	for _, sess := range h.byKeeperID {
+		live = append(live, sess)
+	}
+	h.mu.RUnlock()
+
+	n := 0
+	for _, sess := range live {
+		if sess.closed.Load() {
+			continue
+		}
+		h.Close(ctx, sess, reason)
+		sess.sink.DeliverError(NewError(sess.ClientID, ErrCodeForbidden, detail))
+		n++
+	}
+	return n
+}
+
 // Deliver routes one upstream console message to its socket.
 //
 // Called from the EventStream handler, which knows the SID the frame arrived on
@@ -746,7 +795,8 @@ func upstreamSessionID(msg *keeperv1.FromSoul) string {
 // The operator gets an `exit` from the Soul in the normal case — the close is a
 // real ConsoleClose, not a synthesized terminal.
 func (h *Hub) SweepIdle(ctx context.Context) int {
-	if h.limits.IdleTimeout <= 0 {
+	idleTimeout := h.currentLimits().IdleTimeout
+	if idleTimeout <= 0 {
 		return 0
 	}
 	now := time.Now()
@@ -754,7 +804,7 @@ func (h *Hub) SweepIdle(ctx context.Context) int {
 	h.mu.RLock()
 	stale := make([]*Session, 0)
 	for _, sess := range h.byKeeperID {
-		if sess.idleFor(now) > h.limits.IdleTimeout {
+		if sess.idleFor(now) > idleTimeout {
 			stale = append(stale, sess)
 		}
 	}
@@ -769,7 +819,7 @@ func (h *Hub) SweepIdle(ctx context.Context) int {
 		)
 		h.Close(ctx, sess, CloseIdleTimeout)
 		sess.sink.DeliverError(NewError(sess.ClientID, ErrCodeLimitExceeded,
-			"console closed after "+h.limits.IdleTimeout.String()+" without input"))
+			"console closed after "+idleTimeout.String()+" without input"))
 	}
 	return len(stale)
 }

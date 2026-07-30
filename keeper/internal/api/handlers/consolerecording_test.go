@@ -313,7 +313,7 @@ func TestConsoleRecordingCast_MaskedStaysMasked(t *testing.T) {
 	const secretRef = "vault:secret/db#password"
 
 	store := newReplayStore()
-	recorder, err := console.NewRecorder(store, console.RecorderConfig{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	recorder, err := console.NewRecorder(store, console.StaticRecorderConfig(console.RecorderConfig{}), slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}

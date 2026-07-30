@@ -259,7 +259,7 @@ func TestHub_DeliverForUnknownSessionIsDropped(t *testing.T) {
 
 func TestHub_PerOperatorAndGlobalLimits(t *testing.T) {
 	t.Run("per operator", func(t *testing.T) {
-		h, _ := newTestHub(t, HubDeps{Limits: Limits{MaxSessionsPerAID: 2}})
+		h, _ := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{MaxSessionsPerAID: 2})})
 		sink := &captureSink{}
 		mustOpen(t, h, "a", "host-a", "archon-a", sink)
 		mustOpen(t, h, "b", "host-b", "archon-a", sink)
@@ -274,7 +274,7 @@ func TestHub_PerOperatorAndGlobalLimits(t *testing.T) {
 	})
 
 	t.Run("global", func(t *testing.T) {
-		h, _ := newTestHub(t, HubDeps{Limits: Limits{MaxSessionsGlobal: 2}})
+		h, _ := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{MaxSessionsGlobal: 2})})
 		sink := &captureSink{}
 		mustOpen(t, h, "a", "host-a", "archon-a", sink)
 		mustOpen(t, h, "b", "host-b", "archon-b", sink)
@@ -291,7 +291,7 @@ func TestHub_PerOperatorAndGlobalLimits(t *testing.T) {
 // offline host would burn a slot from the operator's budget.
 func TestHub_FailedDispatchLeaksNoSlot(t *testing.T) {
 	d := &recordingDispatcher{openErr: errors.New("no active EventStream")}
-	h, _ := newTestHub(t, HubDeps{Dispatcher: d, Limits: Limits{MaxSessionsPerAID: 1}})
+	h, _ := newTestHub(t, HubDeps{Dispatcher: d, Limits: StaticLimits(Limits{MaxSessionsPerAID: 1})})
 	sink := &captureSink{}
 
 	for i := 0; i < 5; i++ {
@@ -430,7 +430,7 @@ func TestHub_CloseSurvivesDispatchFailure(t *testing.T) {
 // --- idle sweep ---
 
 func TestHub_SweepIdleClosesAbandonedSessions(t *testing.T) {
-	h, d := newTestHub(t, HubDeps{Limits: Limits{IdleTimeout: 30 * time.Millisecond}})
+	h, d := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{IdleTimeout: 30 * time.Millisecond})})
 	sink := &captureSink{}
 	idle := mustOpen(t, h, "idle", "host-a", "archon-a", sink)
 	active := mustOpen(t, h, "active", "host-b", "archon-a", sink)
@@ -462,7 +462,7 @@ func TestHub_SweepIdleClosesAbandonedSessions(t *testing.T) {
 // Output alone must NOT count as activity — a `tail -f` left running overnight
 // is exactly the abandoned root shell the sweep exists for.
 func TestHub_OutputDoesNotResetIdleTimer(t *testing.T) {
-	h, _ := newTestHub(t, HubDeps{Limits: Limits{IdleTimeout: 30 * time.Millisecond}})
+	h, _ := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{IdleTimeout: 30 * time.Millisecond})})
 	sink := &captureSink{}
 	sess := mustOpen(t, h, "tail", "host-a", "archon-a", sink)
 
@@ -482,7 +482,7 @@ func TestHub_OutputDoesNotResetIdleTimer(t *testing.T) {
 }
 
 func TestHub_SweepDisabledByZeroTimeout(t *testing.T) {
-	h, _ := newTestHub(t, HubDeps{Limits: Limits{IdleTimeout: -1}})
+	h, _ := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{IdleTimeout: -1})})
 	mustOpen(t, h, "pane", "host-a", "archon-a", &captureSink{})
 
 	time.Sleep(10 * time.Millisecond)
@@ -521,7 +521,7 @@ func TestHub_ResizeIgnoresZeroGeometry(t *testing.T) {
 // Concurrent opens and closes must keep the counters exact — the cap is a
 // security-adjacent limit, not a hint.
 func TestHub_ConcurrentOpenCloseKeepsCountersExact(t *testing.T) {
-	h, _ := newTestHub(t, HubDeps{Limits: Limits{MaxSessionsPerAID: 1000, MaxSessionsGlobal: 1000}})
+	h, _ := newTestHub(t, HubDeps{Limits: StaticLimits(Limits{MaxSessionsPerAID: 1000, MaxSessionsGlobal: 1000})})
 	sink := &captureSink{}
 
 	var wg sync.WaitGroup
@@ -577,5 +577,37 @@ func TestClusterBridge_NilIsSafe(t *testing.T) {
 
 	if NewClusterBridge(nil, "kid", testLogger()) != nil {
 		t.Fatal("NewClusterBridge with a nil redis client must yield nil")
+	}
+}
+
+// The plane switch has to reach sessions that are ALREADY open (NIM-292).
+// Gating the route stops the next console; without this an operator would
+// switch the plane off, watch /v1/console answer 404, and still have live root
+// shells behind it.
+func TestHub_CloseAllTearsDownEveryLiveSession(t *testing.T) {
+	h, d := newTestHub(t, HubDeps{})
+	sink := &captureSink{}
+	mustOpen(t, h, "a", "host-a", "archon-a", sink)
+	mustOpen(t, h, "b", "host-b", "archon-b", sink)
+
+	n := h.CloseAll(context.Background(), ClosePlaneDisabled, "the console plane was switched off on this cluster")
+	if n != 2 {
+		t.Fatalf("CloseAll closed %d sessions, want 2", n)
+	}
+	if h.Count() != 0 {
+		t.Fatalf("live sessions after CloseAll = %d, want 0", h.Count())
+	}
+	// The Soul is told, so the pty dies on the host rather than lingering.
+	if got := d.closeCount(); got != 2 {
+		t.Fatalf("ConsoleClose dispatched %d times, want 2 — a session dropped here leaves a root shell running on the host", got)
+	}
+	// And the operator is told, rather than watching a pane go quiet.
+	if _, _, _, errs := sink.counts(); errs != 2 {
+		t.Fatalf("error frames delivered = %d, want 2", errs)
+	}
+
+	// Idempotent: a second sweep over an already-drained Hub is a no-op.
+	if n := h.CloseAll(context.Background(), ClosePlaneDisabled, "again"); n != 0 {
+		t.Fatalf("second CloseAll closed %d, want 0", n)
 	}
 }

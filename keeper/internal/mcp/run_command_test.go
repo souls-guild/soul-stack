@@ -196,7 +196,7 @@ func newRunCommandFakesWithStore(res errand.DispatchResult, err error) (*fakeDis
 	d := &fakeDispatch{res: res, err: err}
 	a := &auditRecorder{}
 	store := consoletest.NewStore()
-	recorder, rerr := console.NewRecorder(store, console.RecorderConfig{},
+	recorder, rerr := console.NewRecorder(store, console.StaticRecorderConfig(console.RecorderConfig{}),
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if rerr != nil {
 		panic("newRunCommandFakes: " + rerr.Error())

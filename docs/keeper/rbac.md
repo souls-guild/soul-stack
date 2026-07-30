@@ -663,12 +663,19 @@ soul.traits-assign  soul.ssh-target-update  soul.console
 
 pinned against the catalog by `TestCatalog_WildcardRostersPinnedForReleaseNotes`, which fails when an added action makes this list stale. Note what the wildcard does *not* cover: `role.create-root`, `role.list-all` and `synod.list-all` are checked bare, so only an **unrestricted** `role.*` / `synod.*` reaches them. Withholding console access from a scoped role is done by narrowing the scope; there is no weaker right to grant instead (§ the recording rows above).
 
-**Keeper cannot switch the console plane off.** The `console:` block in `keeper.yml` is operator envelope only — sessions per Archon, per instance, idle timeout, recording cap — and its absence means built-in defaults, not "off"; the route is mounted by any real `keeper run`. The host has the last word: `console: {enabled: false}` in `soul.yml` makes the Soul refuse every open with a terminal `ConsoleExit`, whatever this catalog permits. So a host that must never be shelled is protected by that flag first and by a withheld `soul.console` second.
+**Keeper can switch the console plane off, and it is one statement rather than N** ([NIM-292](config.md#console)). `console: {enabled: false}` in `keeper.yml` removes **both halves** of the plane: `GET /v1/console` answers **404** and the MCP tool `keeper.soul.run-command` disappears from the catalogue. Sessions already open are closed. It is 404 and not 403 on purpose — a 403 would confirm that the cluster has a console plane, and a cluster that has declared it has none should not be answering that question. The key is also admitted to the SettingsStore overlay, so it can be set cluster-wide from the API; a value in the file outranks the cluster row, which is where the hard guarantee lives ([config.md § SettingsStore](config.md#settingsstore--the-admitted-keys-and-their-operator-surface)).
+
+**Recordings are not part of the switch.** `GET /v1/console/recordings…` stays mounted and readable with the plane off: a recording is evidence, and turning consoles off is a decision about new sessions, not a way to take last week's root shells away from an auditor.
+
+**The host still has its own last word, and it covers less than it looks like.** `console: {enabled: false}` in `soul.yml` makes the Soul refuse every interactive open with a terminal `ConsoleExit`, whatever this catalog permits. But that flag gates `ConsoleOpen` only — the **non-interactive** half rides the Errand transport and never reaches the host's console runner, so a host carrying `enabled: false` still executes `keeper.soul.run-command`. A host that must never be shelled therefore needs the Keeper-side switch, or a withheld `soul.console`; the `soul.yml` flag alone does not deliver it.
+
+**And neither switch closes the Errand path.** `core.cmd.shell` / `core.exec.run` through an Errand, a Voyage or a Cadence is a different plane with its own gate (`errand_shell_gate`, § Errand below), requiring `errand.run` **and** `soul.console`. Switching the console plane off leaves it exactly as it was. "No console plane here" is not "no root shells here".
 
 The right is checked **twice**, because the target host is not in the URL ([ADR-0074(c)](../adr/0074-interactive-console-pty.md)):
 
 | Gate | Where | Question | Refusal |
 |---|---|---|---|
+| `console.enabled` | chi middleware, **ahead of** the RBAC one | Does this cluster carry a console plane at all? | **HTTP 404**, identical to an unrouted path — asked before, and independently of, the caller's rights. |
 | `soul.console`, NoSelector | chi middleware, before the WebSocket upgrade | May this Archon open consoles at all? | **HTTP 403**, before any socket exists. |
 | `soul.console` + `host=<sid>` | in-handler, per `open` frame | May they open one on **this** host? | A session-scoped `error{code: "forbidden"}` frame; the socket and its other panes stay live. |
 | `soul.console` + `host=<sid>` | in-tool, MCP `keeper.soul.run-command` | May they run a command on **this** host? | MCP `forbidden`. |

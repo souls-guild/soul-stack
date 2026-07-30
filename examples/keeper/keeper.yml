@@ -294,6 +294,15 @@ acolytes: 0
 # "how many terminals may this Archon hold": a wall of 30 hosts is one session
 # on each of them. Absent block = the defaults below.
 # console:
+#   enabled: true                 # false = this cluster carries NO console plane:
+#                                 # /v1/console answers 404, the MCP tool
+#                                 # keeper.soul.run-command disappears, and the
+#                                 # sessions already open are closed. Recorded
+#                                 # sessions stay readable. Omitted = true.
+#                                 # Pin it HERE rather than in Postgres if it is
+#                                 # meant as a guarantee: the file outranks the
+#                                 # cluster row, so `setting.update` cannot
+#                                 # switch the plane back on behind you.
 #   max_sessions_per_archon: 30   # live consoles one Archon may hold (default 30)
 #   max_sessions_global: 256      # live consoles on THIS keeper instance (default 256)
 #   idle_timeout: 30m             # close after this long with no operator INPUT

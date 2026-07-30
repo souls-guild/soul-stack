@@ -222,3 +222,69 @@ Nothing is hidden by it. The recording is written **before** the socket is offer
 **Cost.** The queue stops being a channel and becomes a bounded slice under a mutex: a channel cannot be looked into, and its head may be a control frame. Removing one frame from the middle leaves every other frame in arrival order, which is the whole of what a terminal needs. The writer still takes one frame per wake-up, so its ping and drop-flush tickers keep their turn instead of starving behind a backlog.
 
 **Impl** — NIM-254. Guards: the newest chunk always reaches the operator under a sustained flood; a congested queue delivers `exit` instead of killing the socket.
+
+## Amendment 2026-07-30 (NIM-292) — Keeper can switch the console plane off
+
+Until now the only real off switch was per host: `console: {enabled: false}` in
+`soul.yml`. The `console:` block in `keeper.yml` was operator **envelope** only
+(sessions per Archon, per instance, idle timeout, recording cap), and its absence
+meant built-in defaults rather than "off" — so a cluster that must never carry
+consoles had two things to lean on, RBAC discipline and a file edit on every
+host, and neither is one statement. The first fails to a single administrator
+holding `*` (which, per the `soul.*` widening recorded above, is easier to hold
+by accident than to hold deliberately); the second is N files.
+
+**`console.enabled` joins `keeper.yml`, defaulting to `true`.** A file written
+before this key resolves exactly as it did.
+
+**It switches off BOTH halves of the plane, and that is the substance of the
+amendment.** `soul.console` is one privilege reached two ways — the interactive
+`GET /v1/console` and the non-interactive MCP `keeper.soul.run-command` (NIM-147
+above) — and they are wired through different objects: the WebSocket through the
+Hub, the tool through the Errand transport and the shared recorder. A switch that
+nil'd the Hub alone would have left an agent running arbitrary command lines as
+root on a cluster whose operator had just declared it carries no consoles. That
+is the failure this amendment exists to avoid, and it is why the switch is
+defined against the PRIVILEGE rather than against the Hub.
+
+**Off means 404, not 403, and the MCP tool is absent rather than refusing.** A
+403 states that the cluster has a console plane the caller may not use; a cluster
+that has declared it has none should not be answering that question at all. The
+route gate therefore runs **ahead** of the RBAC gate, so the answer depends on
+the cluster's configuration and not on the caller's rights, and its body is the
+one an unrouted path produces.
+
+**Sessions already open are closed** (`console_plane_disabled`). Gating the route
+stops the next console; without the drain an operator would switch the plane off,
+watch `/v1/console` answer 404, and still have live root shells behind it.
+
+**Recording playback is deliberately outside the switch.** `GET
+/v1/console/recordings…` stays mounted and readable. A recording is evidence, and
+turning consoles off is a decision about new sessions — not a way to take last
+week's root shells away from an auditor. This was already the wiring (the
+playback routes never consulted the Hub); the amendment makes it a stated
+property rather than an implementation detail.
+
+**The key is also served from the SettingsStore overlay**, so the plane can be
+switched cluster-wide from the API and the UI. That is an admission of a security
+gate into a fail-soft overlay and is recorded, with its cost, in
+[ADR-0073](0073-keeper-runtime-config-pg.md) — briefly: the fail-soft failure
+mode cannot occur here because the plane needs the same Postgres that recording
+needs, and the file outranks the cluster row, so pinning `enabled: false` in
+`keeper.yml` is the form of the guarantee that no `setting.update` can reverse.
+Admitting the key required giving the whole block a live apply path: the Hub and
+the recorder now resolve their envelopes per open, per sweep and per session
+rather than once at construction.
+
+**Two things this does NOT do, stated so they are not assumed.** It does not
+close the Errand path — `core.cmd.shell` / `core.exec.run` through an Errand, a
+Voyage or a Cadence has its own gate (`errand_shell_gate`, NIM-197 above) and is
+untouched, so "no console plane here" is not "no root shells here". And it does
+not fix the asymmetry on the host side: `console: {enabled: false}` in `soul.yml`
+gates interactive `ConsoleOpen` only, so a host carrying that flag still executes
+`keeper.soul.run-command`. The Keeper-side switch is the one that covers both
+halves; making the host-side flag do the same is tracked separately.
+
+`console.recording.retention` and `console.errand_shell_gate` stay file-only —
+the first for want of a live apply path, the second because it is NIM-197's key
+on NIM-197's clock. Impl — NIM-292.

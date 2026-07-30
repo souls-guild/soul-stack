@@ -71,15 +71,37 @@ order to act in.
   `setting.read` / `setting.update` / `setting.delete` are a **new resource**, so
   no `<resource>.*` covers them — only an unrestricted `*` does.
 
-- **Consoles are enabled on every host by default, and Keeper has no off switch
-  for them.** The `console:` block in `keeper.yml` is operator envelope only —
-  how many terminals one Archon holds, how long an abandoned one lives, the
-  recording cap — and its absence means built-in defaults, not "off". The route
-  is mounted by any real `keeper run`. The host-side switch is the real one:
-  `console: {enabled: false}` in `soul.yml` makes the Soul refuse every open with
-  a terminal `ConsoleExit`, whatever Keeper-side RBAC permits. Recording is
-  mandatory and has no key at all. So a host that must never be shelled is
-  protected by that flag plus withheld `soul.console`, in that order.
+- **Consoles are enabled by default, and switching them off cluster-wide is now
+  one statement.** `console: {enabled: false}` in `keeper.yml` — or the
+  `cfg_console_enabled` row, since the key is served from the SettingsStore
+  overlay — removes **both halves** of the console plane: `GET /v1/console`
+  answers **404**, and the MCP tool `keeper.soul.run-command` disappears from
+  `tools/list` and answers "tool not found". Sessions already open are closed.
+  Omitting the key means `true`, so a `keeper.yml` written before this release
+  behaves exactly as it did.
+
+  It is 404 and not 403 on purpose: a 403 would confirm that the cluster has a
+  console plane, which is the question a console-free cluster should not be
+  answering. Both halves go together because `soul.console` is one privilege
+  reached two ways — a switch that closed the WebSocket and left the agent-facing
+  tool live would read as a guarantee it does not give.
+
+  **Recorded sessions stay readable.** `GET /v1/console/recordings…` is outside
+  the switch: a recording is evidence, and turning consoles off is a decision
+  about new sessions, not a way to take last week's root shells away from an
+  auditor. Recording itself remains mandatory and has no key at all.
+
+  Two things this does **not** do. It does not close the Errand path —
+  `core.cmd.shell` / `core.exec.run` through an Errand, a Voyage or a Cadence has
+  its own gate (`console.errand_shell_gate`) and is untouched, so "no console
+  plane here" is not "no root shells here". And the host-side `console:
+  {enabled: false}` in `soul.yml` gates interactive opens only: a host carrying
+  that flag still executes `keeper.soul.run-command`. The Keeper-side switch is
+  the one that covers both halves.
+
+  If you rely on the guarantee, pin it in `keeper.yml` rather than in Postgres:
+  the file outranks the cluster row, so `setting.update` — which can otherwise
+  switch the plane back on — cannot reach a value written in the file.
 
 - **A scoped role is now refused where it used to pass.** `Enforcer.Check` did
   not apply a role's `default_scope` to the bare permissions under it, so a role

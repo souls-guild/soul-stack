@@ -22,10 +22,18 @@ import (
 // wraps it in a Store. Editing the file + Reload is equivalent to SIGHUP.
 func keeperFixtureStore(t *testing.T) (*config.Store[config.KeeperConfig], string) {
 	t.Helper()
+	return keeperFixtureStoreWith(t, "")
+}
+
+// keeperFixtureStoreWith is keeperFixtureStore with `extra` appended to the
+// fixture, for a test that needs a key the shipped example does not set.
+func keeperFixtureStoreWith(t *testing.T, extra string) (*config.Store[config.KeeperConfig], string) {
+	t.Helper()
 	data, err := os.ReadFile(filepath.FromSlash("../../../examples/keeper/keeper.yml"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
+	data = append(data, []byte(extra)...)
 	path := filepath.Join(t.TempDir(), "keeper.yml")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
