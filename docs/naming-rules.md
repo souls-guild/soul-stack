@@ -858,6 +858,8 @@ Audit-event is a structured record of an action in Keeper's audit-pipeline. Gene
 
 **Directory open**: new names are added by regular PR to this section when normalizing the corresponding write-path subsystems (see write-path table in [ADR-022(g)](adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). The full list of names in this document **is not standardized** - it is filled in upon implementation. After the first mention of a name in a normative formulation, it is stable—renaming requires a backward-compat plan.
 
+**Where the machine-readable list lives**: the authoritative set is the `EventType` const block in `shared/audit/event_types.go`. It is published to clients as the `enum` of `AuditEvent.type` in [`docs/keeper/openapi.yaml`](keeper/openapi.yaml), derived from those declarations by `make gen-audit-catalog` (see `shared/audit/event_types_gen_test.go`) — a name added to the code and not regenerated fails the build. This is what lets a console assert it can label every event keeper emits, in both directions; do not transcribe the list anywhere else. The `?type=` filter on `GET /v1/audit` deliberately stays unconstrained: it queries history, which may hold types since retired from the catalog.
+
 ### Categories by `source` (5 MVP values)
 
 `source` — closed enum that records who initiated the event ([ADR-022(b)](adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). It depends on the category which fields `audit_log` are required (`archon_aid` can be `NULL` for `signal` / `keeper_internal`), and which event-types fall into it.

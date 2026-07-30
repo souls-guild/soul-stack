@@ -34,7 +34,10 @@ import (
 // AuditEvent — a native audit_log record (element of AuditEventListReply.items). Shape 1:1 with
 // the former AuditEvent: archon_aid/correlation_id — `*string` with omitempty; payload — `map`
 // without omitempty (always an object); created_at — nanosecond time-wire (the value is truncated
-// to seconds by the handler layer); source — native enum type AuditEventSource (huma_enums.go).
+// to seconds by the handler layer); source — native enum type AuditEventSource (huma_enums.go);
+// type — native enum type AuditEventType, whose value set is the generated audit catalog
+// (huma_audit_event_type.go, NIM-346). Both enum types are `type X string`: the wire bytes are
+// unchanged, only the schema gained an enum.
 type AuditEvent struct {
 	ArchonAID     *string                `json:"archon_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CorrelationID *string                `json:"correlation_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`  // ULID (migration 001)
@@ -42,7 +45,7 @@ type AuditEvent struct {
 	ID            string                 `json:"id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (migration 001)
 	Payload       map[string]interface{} `json:"payload"`
 	Source        AuditEventSource       `json:"source"`
-	Type          string                 `json:"type"`
+	Type          AuditEventType         `json:"type"`
 }
 
 // AuditEventListReply — the native 200 body of GET /v1/audit (offset-envelope: items/offset/limit/
@@ -57,8 +60,10 @@ type AuditEventListReply struct {
 // === projection of domain handlers.AuditListPage (flat fields) → native wire-DTO ===
 
 // newAuditEvent projects the flat domain handlers.AuditEventView into a native AuditEvent.
-// Source — a native enum cast (same underlying string). created_at is already truncated to
-// seconds by the handler (byte-exact with the legacy wire).
+// Source/Type — native enum casts (same underlying string; the cast is unchecked on purpose,
+// a row already in audit_log is history and must render even if its type has since been
+// retired from the catalog). created_at is already truncated to seconds by the handler
+// (byte-exact with the legacy wire).
 func newAuditEvent(v handlers.AuditEventView) AuditEvent {
 	return AuditEvent{
 		ArchonAID:     v.ArchonAID,
@@ -67,7 +72,7 @@ func newAuditEvent(v handlers.AuditEventView) AuditEvent {
 		ID:            v.ID,
 		Payload:       v.Payload,
 		Source:        AuditEventSource(v.Source),
-		Type:          v.Type,
+		Type:          AuditEventType(v.Type),
 	}
 }
 

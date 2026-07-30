@@ -23,6 +23,12 @@ package api
 //           implements huma.SchemaProvider (emitting the same named schema with the same enum
 //           set), and the alias functions (aliasSoulStatusTransport / aliasIncarnationStatus)
 //           are redirected to these native types.
+//     A third mode lives OUTSIDE this file: AuditEventType (huma_audit_event_type.go) is inline
+//     like (a), but its 138 values are DERIVED from the audit catalog rather than declared as a
+//     const block — the set is open and authored in another module, so a copy here would drift.
+//     It reaches inline via SchemaProvider (a string kind never gets a $ref), which is why it
+//     does not contradict the "no SchemaProvider on inline enums" rule above: that rule is about
+//     the (b) implementations, which register a named schema and return a ref.
 //
 // NOTE ON SOULSTATUS. The SoulStatus const block carries 4 values (connected/disconnected/
 // expired/pending) — the trimmed contract set; the named schema (SchemaProvider) carries the

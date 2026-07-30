@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -127,12 +127,23 @@ gen: gen-openapi
 			$(PLUGIN_PROTO_FILES); \
 	fi
 
+# gen-audit-catalog - commits shared/audit/event_types_gen.go as a DERIVED file: the list of
+# every EventType constant, which Go cannot enumerate at runtime. The huma layer turns it into
+# the OpenAPI enum of AuditEvent.type (NIM-346), so gen-openapi depends on it - the dump embeds
+# whatever the catalog held at compile time, and regenerating the spec from a stale catalog would
+# publish a set that is missing the event just added.
+# Same mechanism as gen-openapi: a generate-test writes under GEN_AUDIT_CATALOG=1 and compares
+# without it, so the drift guard runs inside the ordinary `make test`.
+gen-audit-catalog:
+	@echo "audit event-type declarations -> $(AUDIT_CATALOG_COMMITTED)"
+	@GEN_AUDIT_CATALOG=1 go test ./shared/audit/ -run TestGeneratedEventTypes_NoDrift -count=1 >/dev/null
+
 # gen-openapi - commits docs/keeper/openapi.yaml as a DERIVED huma-generated file
 # (OpenAPI 3.1, for UI-vendor + git-review). Source of truth is the huma aggregator in
 # the code (HumaFullSpecYAML); there's no hand-written openapi.yaml anymore. The write is done by
 # a generate-test in the api package under GEN_OPENAPI=1 (no separate cmd-binary).
 # `-count=1` disables the cache (the test writes a file - nothing to cache).
-gen-openapi:
+gen-openapi: gen-audit-catalog
 	@echo "huma-dump -> $(OPENAPI_COMMITTED)"
 	@GEN_OPENAPI=1 go test ./keeper/internal/api/ -run TestCommittedOpenAPI_NoDrift -count=1 >/dev/null
 
@@ -720,6 +731,11 @@ dev-stand-free:
 #                   a failure means "forgot make gen-openapi". Delegates to the same
 #                   generate-test (without GEN_OPENAPI it compares instead of writing).
 OPENAPI_COMMITTED := docs/keeper/openapi.yaml
+
+# The audit event-type catalog: same derived-file model one module down. It has no separate
+# check- target because its guard is an ordinary package test (TestGeneratedEventTypes_NoDrift),
+# which `make test` already runs - a second entry point would just be another way to run it.
+AUDIT_CATALOG_COMMITTED := shared/audit/event_types_gen.go
 
 check-openapi:
 	@echo "openapi drift-guard: $(OPENAPI_COMMITTED) == huma-dump"
@@ -1471,6 +1487,7 @@ help:
 	@echo "Build and tests:"
 	@echo "  gen               protoc keeper+plugin + gen-openapi → committed gen"
 	@echo "  gen-openapi       huma-dump -> committed docs/keeper/openapi.yaml (derived, for UI)"
+	@echo "  gen-audit-catalog audit EventType constants -> committed shared/audit/event_types_gen.go"
 	@echo "  build             build keeper / soul-trial / soul / soul-lint / soulctl"
 	@echo "  build-soulctl     build only soulctl (operator client CLI)"
 	@echo "  test              go test ./... across all modules (no docker)"
@@ -1525,6 +1542,7 @@ help:
 	@echo "OpenAPI:"
 	@echo "  gen-openapi       regenerate committed openapi.yaml from the huma aggregator"
 	@echo "  check-openapi     CI guard on drift between committed openapi.yaml and huma-dump"
+	@echo "  gen-audit-catalog regenerate the audit event-type catalog feeding the AuditEvent.type enum"
 	@echo "  check-template    CI guard on drift of the embedded plugin template (skip without companion)"
 	@echo "  sync-webui        vendor dist/ from companion soul-stack-web -> keeper/internal/webui/assets/"
 	@echo "  check-webui       CI guard on drift of the embedded UI (skip without companion)"

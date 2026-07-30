@@ -809,6 +809,18 @@ order to act in.
   remote unless the set is complete and release-built, which turns a silent
   half-publication into a refusal an operator can read.
 
+- **`AuditEvent.type` is an enum in OpenAPI, so a client can prove it handles
+  every event.** `GET /v1/audit` used to publish the type as a bare string, and
+  the only list of what keeper can actually write was a Go const block a
+  consumer could not see. A console rendering a human label per type therefore
+  had nothing to check its coverage against: a newly added type shipped
+  unlabelled until a user noticed it, and labels for retired types sat there
+  just as invisibly. The spec now carries the full catalog, generated from those
+  declarations rather than transcribed — adding a constant without regenerating
+  fails the build, so the published set cannot fall behind the code. Only the
+  response field is narrowed; the `?type=` filter stays a free string, because a
+  filter has to keep matching historical rows whose type has since been retired.
+
 ### Security
 
 - **`errand.run` no longer reaches an arbitrary shell on its own**
