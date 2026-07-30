@@ -80,6 +80,15 @@ fi
 # assets/ is go:embed'ed and shipped to browsers, and this is a build fact for
 # reviewers, not a served file. One key per line so a re-sync shows up in the
 # diff as a readable SHA change rather than as minified churn.
+#
+# assets_sha256 is a fingerprint of the mirrored tree, and it is what makes the
+# commit= line above trustworthy (NIM-341). Without it, "the SHA did not move"
+# has two possible meanings — the bundle did not change, or the bundle changed
+# without going through this script — and a reviewer cannot tell them apart. With
+# it, `make check-webui-embed` catches a hand-edited bundle, or one vendored by an
+# older copy of this script, on every CI push and without needing the companion.
+ASSETS_SHA="$(cd "${DST}" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)"
+
 cat > "${CORE_REPO}/keeper/internal/webui/WEBUI_SOURCE" <<EOF
 # Provenance of keeper/internal/webui/assets/ (NIM-277). Written by
 # scripts/sync-webui.sh; do not edit by hand. Its purpose is to make an unpaired
@@ -88,6 +97,7 @@ cat > "${CORE_REPO}/keeper/internal/webui/WEBUI_SOURCE" <<EOF
 commit=${WEB_SHA}
 describe=${WEB_DESC}
 branch=${WEB_BRANCH}
+assets_sha256=${ASSETS_SHA}
 EOF
 
 echo "sync-webui.sh: recorded companion commit ${WEB_SHA} (${WEB_DESC}) in keeper/internal/webui/WEBUI_SOURCE"

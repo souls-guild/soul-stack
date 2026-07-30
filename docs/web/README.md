@@ -19,9 +19,32 @@ Vendored statics are updated from the companion repo with two Make targets:
 | Target | What does |
 |---|---|
 | `make sync-webui` | Vendoring: rsync `--delete` mirrors the assembled `dist/` companion `soul-stack-web` → `keeper/internal/webui/assets/`. Script - `scripts/sync-webui.sh`. |
-| `make check-webui` | Drift-guard in `make check`: error if the vendored copy diverges from the companion build ("forgot `sync-webui` after changing the UI"). Without an available companion repo - skip. |
+| `make check-webui` | Drift-guard in `make check`: error if the vendored copy diverges from the companion build ("forgot `sync-webui` after changing the UI"). Three outcomes, not two: no companion → skip (legitimate: CI, third-party clone); companion present but not built → **fail**; drift → fail. |
+| `make check-webui-embed` | Also in `make check`, and the only one of these that CI can actually run: the vendored tree must match the `assets_sha256` recorded in `WEBUI_SOURCE` when it was mirrored. Needs no companion, no docker, no token. |
+| `make check-webui-provenance` | On-demand: compares the recorded companion commit against the companion's local HEAD. A note, not a gate — the companion may legitimately be on another branch. |
 
 Typical cycle when changing the UI: edit in companion → build `dist/` there → `make sync-webui` in core → commit the updated snapshot.
+
+### What the guards do and do not cover
+
+`keeper/internal/webui/assets/` is a build artefact of another repository committed
+into this one, so the failure that matters is an **unpaired merge**: the UI moves in
+the companion and the vendored copy is not re-synced, after which keeper serves a
+bundle nobody built from current sources. That happened once already (NIM-273) and
+reached a release.
+
+`WEBUI_SOURCE` (next to `assets/`, deliberately outside it so `go:embed` does not
+ship it) answers "which companion commit produced these bytes", which is what makes
+an unpaired merge visible in review: the `commit=` line does not move while the UI
+changed. `check-webui-embed` is what makes that line trustworthy — if the bundle
+could change without the provenance changing, "the SHA did not move" would no longer
+imply "the bundle did not change".
+
+Still not covered: a companion that moved on while core was never re-synced at all.
+No commit in this repository touches `assets/` in that case, so nothing here can see
+it; detecting it needs read access to the private companion from CI, which is the
+open half of NIM-341. Until then that case rests on a reviewer of the release merge
+checking whether the UI moved without `commit=` moving.
 
 ## Why companion remains a separate repo
 

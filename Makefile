@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-openapi check-openapi check-template check-stand-template check-soul-template sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -746,6 +746,48 @@ check-webui:
 # from. Advisory, not fatal: the companion may legitimately sit on another
 # branch, and a hard failure there would be the permanently-red gate that
 # teaches everyone to stop reading it.
+# check-webui-embed — the embedded bundle matches the fingerprint recorded when it
+# was vendored. Runs in `check`, so CI runs it: no companion needed, no docker, no
+# token (NIM-341).
+#
+# What it is for. `check-webui` compares the mirror against the companion's build
+# and therefore cannot run in CI at all — the companion is never checked out
+# there, so it takes its skip branch on every push. That left the whole class
+# (NIM-273: web merged, bundle not re-synced, keeper served a stale UI) resting on
+# a reviewer noticing that WEBUI_SOURCE's commit= did not move. This check is what
+# makes that signal mean something: if the bundle can change WITHOUT the
+# provenance changing, then "the SHA did not move" no longer implies "the bundle
+# did not change", and the reviewer is reading a line that guarantees nothing.
+#
+# What it does NOT catch, stated so nobody mistakes its scope: a companion that
+# moved on while core was never re-synced at all. No commit here touches assets in
+# that scenario, so nothing inside this repository can see it — detecting it needs
+# read access to the private companion, which is the open half of NIM-341.
+check-webui-embed:
+	@rec=$$(sed -n 's/^assets_sha256=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
+	if [ ! -d keeper/internal/webui/assets ]; then \
+		echo "check-webui-embed: no embedded bundle directory - nothing to verify"; \
+		exit 0; \
+	fi; \
+	act=$$(cd keeper/internal/webui/assets && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1); \
+	if [ -z "$$rec" ]; then \
+		echo "check-webui-embed: FAIL - the embedded bundle carries no fingerprint."; \
+		echo "  keeper/internal/webui/WEBUI_SOURCE has no assets_sha256= line, so nothing"; \
+		echo "  ties the served bytes to the companion commit recorded next to them."; \
+		echo "  Re-vendor through the script, which writes both: make sync-webui"; \
+		exit 1; \
+	fi; \
+	if [ "$$rec" != "$$act" ]; then \
+		echo "check-webui-embed: FAIL - the embedded bundle does not match its own provenance."; \
+		echo "  recorded assets_sha256 = $$rec"; \
+		echo "  actual   assets_sha256 = $$act"; \
+		echo "  The bundle in keeper/internal/webui/assets/ changed without going through"; \
+		echo "  scripts/sync-webui.sh, so the commit= line next to it now describes different"; \
+		echo "  bytes than the ones keeper serves. Re-vendor: make sync-webui"; \
+		exit 1; \
+	fi; \
+	echo "check-webui-embed: embedded bundle matches its recorded fingerprint ($$(echo $$rec | cut -c1-12))"
+
 check-webui-provenance:
 	@rec=$$(sed -n 's/^commit=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
 	if [ -z "$$rec" ]; then \
@@ -939,7 +981,7 @@ sign:
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
-check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-doc-links check-vuln lint trial check-e2e-cloud
+check: check-fmt vet vet-tags build test test-plugins check-gen check-openapi check-template check-stand-template check-soul-template check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
 	@echo "check: all docker-free checks passed"
 	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
 	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
@@ -1315,6 +1357,7 @@ help:
 	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
 	@echo "  check-all         check + test-integration (L1, -race) + e2e (L3a) = what a green CI run means"
 	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
+	@echo "  check-webui-embed embedded UI bundle matches its recorded fingerprint (no companion needed)"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
 	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"
