@@ -44,6 +44,30 @@ One difference from CI survives on purpose: CI gives each tier its own runner,
 container-starting L1 packages. A failure at container startup there is that
 contention — rerun the package alone before believing it, and do not loosen a
 readiness wait to make it go away.
+- **A red tier no longer silences the tiers behind it** (NIM-373). `check` used
+to be a make prerequisite chain: the first failure stopped it, and the tiers that
+never ran left no trace whatsoever, so a gate that stopped after five of twenty
+was still reported as "the gate was run". Both gates now drive their tiers
+through [scripts/gate.sh](../../scripts/gate.sh), which runs each one, keeps
+going past a failure, and ends in a table with three outcomes rather than two:
+PASS, FAIL and **NOT RUN** — the last naming the tier that suppressed it. The
+exit code is non-zero unless every tier is PASS. This is the other half of what
+`check` already did for the tiers it never starts (NIM-316): it said what it
+skipped, and now it also says what it never reached.
+The one dependency kept is causal. `tier@build` in `GATE_CHECK_TIERS` means "if
+compilation failed, running this says nothing the build failure has not already
+said", and those tiers report NOT RUN. A bundle drift or a broken doc link
+suppresses nothing, because neither predicts anything about the integration
+suite. The tier order is unchanged on purpose: putting the static checks in
+front of the tests would only move which tier does the silencing, and with the
+chain gone the order decides nothing at all.
+Where the loss actually was differs by gate, and both are worth knowing.
+Locally, `check-webui` sits in the middle of `check`, so a drifted bundle kept
+`test-integration` and `e2e` from running at all — the expensive half of the gate
+lost to the cheapest tier in it. In CI those two are separate jobs and were never
+at risk; what was at risk there is the nine deterministic tiers sitting behind
+`test` inside the `check` job, OpenAPI and bundle drift among them. One fix, two
+very different prices.
 - `make check` still **compiles** the levels it cannot run: `vet-tags` vets
 L1/L3a/L3b/L3c sources under their own build tags without starting anything
 (docker-free). Without it a suite goes unbuildable unnoticed between docker runs -

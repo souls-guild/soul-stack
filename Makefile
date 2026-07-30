@@ -98,7 +98,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1115,7 +1115,38 @@ sign:
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
 # `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
 # over the examples/service/ corpus (catches broken case.yml assertions).
-check: check-fmt vet vet-tags build test test-plugins check-integration-set check-gen check-openapi check-template check-stand-template check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links check-vuln lint trial check-e2e-cloud
+# GATE_CHECK_TIERS / GATE_L1_TIERS — the gate's tiers, in the order they run.
+#
+# These are a LIST, not a prerequisite chain, and that is the whole point
+# (NIM-373). As prerequisites, the first red tier stopped every tier behind it
+# and left no record that they had not run: three times in one release a gate
+# that stopped after five of nineteen tiers was reported as "the gate was run".
+# scripts/gate.sh runs each one, records PASS / FAIL / NOT RUN, and returns
+# non-zero if anything is not PASS.
+#
+# `tier@build` declares the one causal dependency worth keeping: if compilation
+# fails, the tiers that RUN the compiled code say nothing the build failure has
+# not already said, so they are reported NOT RUN rather than run for a wall of
+# identical errors. Everything else is independent and now behaves that way —
+# an embedded-bundle drift tells you nothing about whether L1 passes, and it
+# must no longer be able to prevent L1 from answering.
+#
+# ★ The order is the order `check` has always had, deliberately. Moving the
+# static tiers in front of the tests looks like an improvement and is a trade:
+# their failures would then be the ones silencing the tests, and the blind spot
+# would move rather than close. With the chain gone the order no longer decides
+# what runs at all, so there is nothing to buy by changing it. `vet` and
+# `vet-tags` keep their place ahead of `build` and are NOT marked: they compile
+# the tree themselves, so on a broken build they report the same root cause
+# first-hand instead of being skipped for it.
+GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
+	check-integration-set check-gen check-openapi@build check-template check-stand-template \
+	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
+	check-vuln@build lint@build trial@build check-e2e-cloud check-gate
+GATE_L1_TIERS := test-race@build test-integration@build e2e@build
+
+check:
+	@scripts/gate.sh check $(GATE_CHECK_TIERS)
 	@echo "check: all docker-free checks passed"
 	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
 	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
@@ -1173,7 +1204,18 @@ check-ci:
 check-integration-set:
 	@scripts/check-integration-set.sh
 
-check-all: check test-race test-integration e2e
+# check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
+# decides whether a tier ran and what it said, so a regression there misreports
+# every other tier at once, and it would misreport them in the quiet direction:
+# an early exit restored by accident looks like a gate that finished. The guard
+# runs gate.sh against a throwaway Makefile of fake tiers and asserts all three
+# outcomes, including that the dependent of a failed tier leaves no trace in the
+# output. Docker-free, about a second.
+check-gate:
+	@scripts/gate-test.sh
+
+check-all:
+	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
 	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
 	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
 	@echo "check-all:   make e2e-live-gate   (curated subset, before a major batch commit)"
