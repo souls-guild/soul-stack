@@ -624,6 +624,15 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 
 **The keeper-internal bind is NOT gated by this.** `core.soul.registered` inside a scenario run binds hosts it has itself just created (still `pending`) and acts as the keeper, not as an operator — the connected-only rule and gate (b) apply to the operator path only.
 
+**A create that carries a roster is gated the same way** ([ADR-081](../adr/0081-roster-at-create.md), NIM-371). When the chosen create scenario declares an `input:` field as its roster (`source: { roster: true }`), `POST /v1/incarnations` writes `incarnation_membership` — so it must clear **both** gates above, not just `incarnation.create`:
+
+- **(a)** `incarnation.bind-member` over the incarnation **being created**, ANDed across every declared coven. The route middleware cannot ask it (this is the create route, and under a `name_template` the name does not exist until the plan resolves), so it is asked in-handler over the same contexts as create's own gate (b). Refusal is a `403` naming the input field, because that field — not a separate request — is the lever the operator has.
+- **(b)** the per-host check, unchanged and shared verbatim with the bind route.
+
+Both run **before** the row is inserted, so a refusal leaves no half-made incarnation. Without gate (a) here, create would be the way around it: an Archon holding only `incarnation.create` could compose a roster at birth that they would be refused a minute later. A create carrying **no** roster is unaffected — the permission is about populating an incarnation, not creating one.
+
+**The roster catalog is scoped by `soul.list`, not by a right of its own.** The create form fills its SID picker from `GET /v1/souls` (`?status=connected&sid_prefix=…`), which is already narrowed to the caller's soul visibility and fail-closed. Reusing that list rather than a second resolver is deliberate: "the picker cannot offer a SID the Archon could not otherwise see" then holds by construction. A dedicated endpoint would have been one more copy of the rule to keep in step — the failure class of [NIM-148](../adr/0074-interactive-console-pty.md) (existence oracle) and NIM-202/203 ("visible ⟺ grantable").
+
 ### Choir (5) — [ADR-044](../adr/0044-choir.md)
 
 CRUD named host topology inside incarnation (Choir / Voice, tables `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{name}/choirs*`, no MCP tools; bodies and semantics - [operator-api/choirs.md](operator-api/choirs.md)); routes are connected only when the ChoirDB pool is configured. Choir belongs to the incarnation, so the selector is the same as `incarnation.*`: `incarnation=` / `service=` / `coven=` (landing on path-`{name}`); bare - unrestricted. Those who mutate write audit, read-only `choir.list` - no.

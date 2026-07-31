@@ -274,12 +274,19 @@ func soulSshTargetOperation() huma.Operation {
 // the business pagination parse is done by the register handler via ParsePageWithCursor over the same
 // query values.
 type soulListInput struct {
-	Coven     string `query:"coven" doc:"filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope"`
-	Status    string `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"filter by status; outside enum -> 422"`
-	Transport string `query:"transport" enum:"agent,ssh" doc:"filter by transport; outside enum -> 422"`
-	Cursor    string `query:"cursor" doc:"keyset continuation cursor (regex-mode scope)"`
-	Offset    int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400; offset+cursor → 422)"`
-	Limit     int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+	// Coven is REPEATABLE (`?coven=a&coven=b`) and matches ANY of the labels given —
+	// the create-form roster picker asks for hosts across the set of covens an
+	// incarnation declares (NIM-371), and one label per request would make it union
+	// pages client-side over totals that each mean something else. One value behaves
+	// exactly as the single-valued parameter did.
+	Coven      []string `query:"coven" doc:"filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope"`
+	Status     string   `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"filter by status; outside enum -> 422"`
+	Transport  string   `query:"transport" enum:"agent,ssh" doc:"filter by transport; outside enum -> 422"`
+	Unassigned bool     `query:"unassigned" doc:"only hosts belonging to NO incarnation (incarnation_membership, NIM-124) — the free souls a create scenario can be rolled onto"`
+	SIDPrefix  string   `query:"sid_prefix" maxLength:"254" doc:"only SIDs starting with this prefix (autocomplete); matched literally, LIKE metacharacters included"`
+	Cursor     string   `query:"cursor" doc:"keyset continuation cursor (regex-mode scope)"`
+	Offset     int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400; offset+cursor → 422)"`
+	Limit      int32    `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // soulListOutput — huma output GET /v1/souls (FULL-TYPED). Body — a TAGGED native envelope

@@ -221,6 +221,8 @@
   "roleKebab": "Role — kebab-case (lowercase, цифры, дефис-разделитель), до 63 символов.",
   "roleOptional": "Role (опционально)",
   "rolePlaceholder": "master / replica / …",
+  "rosterCountMismatch": "Для этой топологии нужно ровно {{required}} душ, выбрано {{selected}}.",
+  "rosterHint": "Сценарий раскатывается на души, выбранные ниже — онбордженные и онлайн, из видимых вам.",
   "runAccepted": "Запуск принят: scenario",
   "runAcceptedTail": ". История пополнится после завершения прогона.",
   "runCommandOnHosts": "Запустить команду на этих хостах",

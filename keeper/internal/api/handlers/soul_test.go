@@ -1434,11 +1434,13 @@ func recordList(t *testing.T, h *SoulHandler, query, aid string) *httptest.Respo
 		claims = claimsFor(aid)
 	}
 	reply, err := h.ListTyped(req.Context(), claims, SoulListInput{
-		Coven:     q.Get("coven"),
-		Status:    q.Get("status"),
-		Transport: q.Get("transport"),
-		Page:      page,
-		Cursor:    cursor,
+		Covens:     q["coven"],
+		Status:     q.Get("status"),
+		Transport:  q.Get("transport"),
+		Unassigned: q.Get("unassigned") == "true",
+		SIDPrefix:  q.Get("sid_prefix"),
+		Page:       page,
+		Cursor:     cursor,
 	})
 	if err != nil {
 		writeProblemError(rec, req, err)

@@ -65,7 +65,7 @@ func TestIntegration_ListFilter_CovenResolvesInheritedLabels(t *testing.T) {
 		{"redis-prod", "by-name.example.com"},  // incarnation.name
 	} {
 		items, total, err := SelectAll(ctx, integrationPool,
-			ListFilter{Coven: tc.label}, unrestrictedScope(), 0, 10)
+			ListFilter{Covens: []string{tc.label}}, unrestrictedScope(), 0, 10)
 		if err != nil {
 			t.Fatalf("SelectAll(coven=%s): %v", tc.label, err)
 		}
@@ -77,7 +77,7 @@ func TestIntegration_ListFilter_CovenResolvesInheritedLabels(t *testing.T) {
 
 	// A label nobody carries, own or inherited, still matches nothing.
 	_, total, err := SelectAll(ctx, integrationPool,
-		ListFilter{Coven: "ghost"}, unrestrictedScope(), 0, 10)
+		ListFilter{Covens: []string{"ghost"}}, unrestrictedScope(), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(coven=ghost): %v", err)
 	}
@@ -113,7 +113,7 @@ func TestIntegration_ListFilter_AgreesWithTheScopeThatAuthorizesIt(t *testing.T)
 	}
 
 	filtered, filteredTotal, err := SelectAll(ctx, integrationPool,
-		ListFilter{Coven: "redis-prod"}, scope, 0, 10)
+		ListFilter{Covens: []string{"redis-prod"}}, scope, 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(scope+filter): %v", err)
 	}
@@ -143,7 +143,7 @@ func TestIntegration_CovenFilterIsLabel_IncarnationSelectorIsMembership(t *testi
 	seedMembership(t, "redis-prod", "member.example.com")
 
 	items, total, err := SelectAll(ctx, integrationPool,
-		ListFilter{Coven: "redis-prod"}, unrestrictedScope(), 0, 10)
+		ListFilter{Covens: []string{"redis-prod"}}, unrestrictedScope(), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(coven): %v", err)
 	}

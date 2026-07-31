@@ -178,6 +178,19 @@ type CreatePlan struct {
 	BareNoScenario bool
 	AutoCreate     bool
 	ComposedName   string
+	// RosterField / RosterSIDs carry the roster the chosen create scenario declared
+	// via `source: { roster: true }` (NIM-371): the field's name (for error text) and
+	// the SIDs the operator picked, read off the EFFECTIVE input so a declared
+	// `default:` is honoured like any other field.
+	//
+	// The caller binds these into `incarnation_membership` after the insert and
+	// BEFORE starting the bootstrap run. That order is the whole point: a run
+	// resolves its roster from that relation at start, so a scenario cannot bind
+	// itself — it aborts `no_hosts` before its first task (see the header of
+	// handlers/incarnation_members.go). Both empty when the scenario declares no
+	// roster: then nothing is bound and the create path is unchanged.
+	RosterField string
+	RosterSIDs  []string
 }
 
 // EffectiveName is the name the incarnation is created under: the composed name
@@ -266,6 +279,14 @@ func ResolveCreatePlan(
 				plan.ComposedName = composed
 				incarnationName = composed
 			}
+			// Roster (NIM-371) — read AFTER the input gate, off the merged values, so
+			// the SIDs handed back are the ones the run will actually see. Shape
+			// violations were already rejected by the gate (type/format/min_items),
+			// which is why extraction here needs no second validation pass.
+			if gate.RosterField != "" {
+				plan.RosterField = gate.RosterField
+				plan.RosterSIDs = rosterSIDsFromInput(gate.Merged[gate.RosterField])
+			}
 			art, err := loader.Load(ctx, serviceRef)
 			if err != nil {
 				return CreatePlan{}, fmt.Errorf("scenario: resolve create plan: load service snapshot: %w", err)
@@ -297,6 +318,46 @@ func ResolveCreatePlan(
 	}
 
 	return plan, nil
+}
+
+// rosterSIDsFromInput reads the roster field's value into a SID slice (NIM-371).
+// Both declared shapes are accepted: an array of SIDs (the multi-select form) and a
+// single SID string. JSON decoding gives `[]any` while a Go-side caller may pass
+// `[]string`, so both are handled.
+//
+// Non-string elements and empty strings are DROPPED rather than reported: the input
+// gate has already validated the field against its schema (`type`/`format: sid`/
+// `min_items`) by the time this runs, so anything left here cannot be a legal SID,
+// and a second error channel would only give the same rejection two spellings.
+func rosterSIDsFromInput(v any) []string {
+	switch val := v.(type) {
+	case nil:
+		return nil
+	case string:
+		if val == "" {
+			return nil
+		}
+		return []string{val}
+	case []string:
+		out := make([]string, 0, len(val))
+		for _, s := range val {
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(val))
+		for _, item := range val {
+			s, ok := item.(string)
+			if ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // composeIncarnationName renders `name_template` over the resolved input and

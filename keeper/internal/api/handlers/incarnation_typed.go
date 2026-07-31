@@ -142,6 +142,10 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// never req.Name.
 	name := req.Name
 	composedName := ""
+	// plan is read again after the insert (the roster bind, NIM-371), so it outlives
+	// the resolve block. Its zero value carries no roster — the stub-mode path binds
+	// nothing, exactly as before.
+	var plan scenario.CreatePlan
 	if runScenario {
 		ref, ok := h.services.Resolve(req.Service)
 		if !ok {
@@ -156,10 +160,11 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		// nil → stub plan (`create`, not bare, auto_create=true). preflighter is h.runner
 		// (type-assertion to scenario.AssertPreflighter inside; a ScenarioStarter fake →
 		// no-op).
-		plan, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject)
+		resolved, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject)
 		if perr != nil {
 			return zero, h.mapCreatePlanError(req.Name, req.Service, perr)
 		}
+		plan = resolved
 		createScenario = plan.CreateScenario
 		bareNoScenario = plan.BareNoScenario
 		autoCreate = plan.AutoCreate
@@ -189,6 +194,17 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	if err := ScreenIncarnationCreateScope(h.permChecker, claims.Subject,
 		name, req.Service, req.Covens); err != nil {
 		return zero, incProblem(problem.TypeForbidden, createScopeDetail(name, composedName, req.Covens))
+	}
+
+	// Roster (NIM-371): the chosen create scenario declared an input field as the
+	// souls it rolls onto (`source: { roster: true }`), and the operator filled it.
+	// EVERYTHING about that roster is screened HERE — before the insert — so a
+	// refusal leaves no half-made incarnation behind for the operator to clean up.
+	// The bind itself has to wait until the row exists (FK), and happens below,
+	// still before the run starts.
+	roster, perr := h.screenCreateRoster(ctx, claims, name, req.Service, req.Covens, plan)
+	if perr != nil {
+		return zero, perr
 	}
 
 	spec := map[string]any{}
@@ -256,6 +272,25 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// operator put it and reaches hosts by inheritance at read time, so it covers
 	// hosts that join later without any re-stamping — and cannot overwrite a label
 	// attached directly to a host.
+
+	// Roster bind (NIM-371) — AFTER the insert (FK `incarnation_membership.
+	// incarnation_name`) and BEFORE the bootstrap run below. Both halves of that
+	// sandwich are load-bearing: the relation cannot be written without the row, and
+	// the run resolves its roster from the relation at start, so binding after the
+	// start would be a run into an empty roster (`no_hosts`) with the hosts arriving
+	// too late to matter.
+	//
+	// Screening already happened above, so the only failures left here are
+	// infrastructural. They abort the create with a 500 and NO run: the incarnation
+	// stays behind, empty and StatusReady, which is the recoverable end state — the
+	// operator binds the roster via `POST .../members` and runs. Starting a run onto
+	// a roster we know is incomplete would instead hand them an error_locked to
+	// unlock first.
+	if len(roster) > 0 {
+		if perr := h.bindCreateRoster(ctx, claims, name, roster); perr != nil {
+			return zero, perr
+		}
+	}
 
 	// bareReady — a live runner stack, but the run is deliberately NOT started: bare
 	// incarnation (no create scenario) OR autoCreate=false (run deferred). In that case the

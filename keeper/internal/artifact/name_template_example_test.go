@@ -46,9 +46,14 @@ func TestExampleRedis_NameTemplateComposesReadmeName(t *testing.T) {
 		t.Fatal("create_from_souls lost its name_template — the corpus no longer covers composition")
 	}
 
+	// `hosts` is the scenario's declared roster (NIM-371) — required, and its size is
+	// checked by validate: against the topology, so a sentinel run with the default
+	// replicas_per_master=2 needs exactly three souls here. Composition itself does not
+	// read it; it is supplied because the input contract is resolved as a whole.
 	merged, err := config.ResolveInputContract(scn.Input, scn.Validate, map[string]any{
 		"name": "cache", "project": "billing", "subproject": "invoices",
 		"redis_type": "sentinel", "version": "7.4.1",
+		"hosts": []any{"node-1.example.com", "node-2.example.com", "node-3.example.com"},
 	})
 	if err != nil {
 		t.Fatalf("ResolveInputContract: %v", err)

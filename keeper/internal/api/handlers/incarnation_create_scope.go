@@ -86,6 +86,41 @@ func ScreenIncarnationCreateScope(checker middleware.PermissionChecker, aid, nam
 	return nil
 }
 
+// ScreenIncarnationCreateRosterScope is the create-path counterpart of the
+// `incarnation.bind-member` route gate (NIM-371). A create that carries a roster
+// writes `incarnation_membership` — the same relation `POST .../members` writes — so
+// it must clear the same permission, or create becomes the way around NIM-209's gate
+// (a): an operator holding only `incarnation.create` could compose a roster at birth
+// that they would be refused a minute later.
+//
+// Same AND over the declared dimensions as [ScreenIncarnationCreateScope], over the
+// same contexts from the same builder: the roster is part of the create request, so
+// the scope question is asked about the incarnation being created, not about hosts
+// (the per-host boundary is gate (b) of membership — [incarnation.ScreenBindCandidates]).
+//
+// checker nil → refusal, fail-closed like every other gate here.
+func ScreenIncarnationCreateRosterScope(checker middleware.PermissionChecker, aid, name, service string, covens []string) error {
+	if checker == nil || name == "" {
+		return ErrCreateRosterScopeExceeded
+	}
+	contexts := IncarnationCreateContexts(name, service, covens)
+	if len(contexts) == 0 {
+		return ErrCreateRosterScopeExceeded
+	}
+	for _, ctx := range contexts {
+		if err := checker.Check(aid, "incarnation", "bind-member", ctx); err != nil {
+			return ErrCreateRosterScopeExceeded
+		}
+	}
+	return nil
+}
+
+// ErrCreateRosterScopeExceeded — the create request declares a roster, but the caller
+// does not hold `incarnation.bind-member` over what it is creating. Separate from
+// [ErrCreateScopeExceeded] because the remedy differs: the operator may create this
+// incarnation, just not populate it in the same breath.
+var ErrCreateRosterScopeExceeded = errors.New("handlers: incarnation create roster exceeds the caller's bind-member scope")
+
 // createScopeDetail phrases the gate-(b) refusal so the operator knows which lever
 // to pull. A composed name is the interesting case — it is not in their request, so
 // naming it is the only way they can tell what was judged.

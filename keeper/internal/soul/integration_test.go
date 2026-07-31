@@ -285,7 +285,7 @@ func TestIntegration_SelectAll_FilterAndPaginate(t *testing.T) {
 		t.Errorf("pending total/len = %d/%d, want 2/2", totalPending, len(pending))
 	}
 
-	byCoven, _, err := SelectAll(ctx, integrationPool, ListFilter{Coven: "prod"}, unrestricted, 0, 10)
+	byCoven, _, err := SelectAll(ctx, integrationPool, ListFilter{Covens: []string{"prod"}}, unrestricted, 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(coven): %v", err)
 	}
@@ -346,7 +346,7 @@ func TestIntegration_SelectAll_Scope(t *testing.T) {
 
 	// filter ∩ scope: an operator with scope=[prod] filtering coven=staging → empty
 	// (staging is outside their scope, AND-intersection, not an expansion).
-	cross, crossTotal, err := SelectAll(ctx, integrationPool, ListFilter{Coven: "staging"}, covenScope("prod"), 0, 10)
+	cross, crossTotal, err := SelectAll(ctx, integrationPool, ListFilter{Covens: []string{"staging"}}, covenScope("prod"), 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll(filter=staging ∩ scope=prod): %v", err)
 	}

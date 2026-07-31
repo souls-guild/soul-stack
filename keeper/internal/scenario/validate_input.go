@@ -49,6 +49,12 @@ var ErrValidateFailed = errors.New("scenario: validate rule failed")
 type InputGate struct {
 	Merged       map[string]any
 	NameTemplate string
+	// RosterField is the `input:` field the scenario declares as its roster
+	// (`source: { roster: true }`, NIM-371), empty when it declares none. Read by
+	// [ResolveCreatePlan] to hand the create path the SIDs it must bind into
+	// `incarnation_membership` before the bootstrap run, without a second
+	// snapshot load/parse.
+	RosterField string
 }
 
 // InputScenarioLoader — the narrow [artifact.ServiceLoader] surface
@@ -116,7 +122,11 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 			return zero, fmt.Errorf("%w: %v", ErrInputInvalid, err)
 		}
 	}
-	return InputGate{Merged: merged, NameTemplate: scn.NameTemplate}, nil
+	return InputGate{
+		Merged:       merged,
+		NameTemplate: scn.NameTemplate,
+		RosterField:  config.RosterInputField(scn.Input),
+	}, nil
 }
 
 // loadScenarioManifest materializes the service snapshot and parses

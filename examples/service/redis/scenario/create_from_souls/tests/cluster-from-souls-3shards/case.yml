@@ -92,6 +92,15 @@ fixtures:
     shards: 3
     replicas_per_master: 0
     cluster_node_timeout: 5000
+    # The ROSTER (NIM-371) — declared input now, mirroring fixtures.hosts. `hosts` carries
+    # `source: { roster: true }`, so on a real create Keeper binds it into
+    # incarnation_membership before the run starts; the trial harness has no membership
+    # relation and takes fixtures.hosts as the roster, but the value must still satisfy the
+    # input contract and the size rule in validate: (shards*(1+replicas) = 3*1 = 3).
+    hosts:
+      - node-a.example.com
+      - node-b.example.com
+      - node-c.example.com
 
 assert:
   task_present:

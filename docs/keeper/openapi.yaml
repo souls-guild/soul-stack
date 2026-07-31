@@ -12514,13 +12514,17 @@ paths:
       description: Registry of souls with scoped visibility (ADR-047) and coven/status/transport filters. offset-fast-path or keyset (mode chosen server-side from Purview). Permission soul.list. Read-only, no audit.
       operationId: listSouls
       parameters:
-        - description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope
+        - description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope
           explode: false
           in: query
           name: coven
           schema:
-            description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); AND within scope
-            type: string
+            description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope
+            items:
+              type: string
+            type:
+              - array
+              - "null"
         - description: filter by status; outside enum -> 422
           explode: false
           in: query
@@ -12544,6 +12548,21 @@ paths:
             enum:
               - agent
               - ssh
+            type: string
+        - description: only hosts belonging to NO incarnation (incarnation_membership, NIM-124) — the free souls a create scenario can be rolled onto
+          explode: false
+          in: query
+          name: unassigned
+          schema:
+            description: only hosts belonging to NO incarnation (incarnation_membership, NIM-124) — the free souls a create scenario can be rolled onto
+            type: boolean
+        - description: only SIDs starting with this prefix (autocomplete); matched literally, LIKE metacharacters included
+          explode: false
+          in: query
+          name: sid_prefix
+          schema:
+            description: only SIDs starting with this prefix (autocomplete); matched literally, LIKE metacharacters included
+            maxLength: 254
             type: string
         - description: keyset continuation cursor (regex-mode scope)
           explode: false

@@ -13,18 +13,21 @@ description: >-
 # and the create_from_souls delta ADDS on top (never overriding covenant keys — otherwise
 # section_key_conflict).
 #
-# ★ create_from_souls DELTA — MINIMAL (create's twin without provision):
-#   - input  — NONE: covenant does NOT carry the provision section (that's create's delta,
-#     ADR-061), and create_from_souls by definition has NO provision → covenant.input = the
-#     effective input bit-for-bit. covenant's provisioned_* sets are provision-aware (ternary on
-#     input.provision): create_from_souls does not set provision → has(input.provision)=false →
-#     vm_ids/sids=[], provider='' (exactly the old constant defaults of the inline copy — render
-#     is IDENTICAL).
+# ★ create_from_souls DELTA — NEAR-MINIMAL (create's twin without provision):
+#   - input  — the four identity components feeding name_template, plus `hosts`: the ROSTER
+#     this run deploys onto (NIM-371). covenant does NOT carry the provision section (that's
+#     create's delta, ADR-061), and create_from_souls has no provision at all → covenant's
+#     provisioned_* sets are provision-aware (ternary on input.provision) and resolve to
+#     vm_ids/sids=[], provider='' here, exactly the old constant defaults of the inline copy.
+#     ★ `hosts` is where create and create_from_souls genuinely differ in KIND: create
+#     PRODUCES its hosts (provision), this one is GIVEN them, so where they come from has to
+#     be part of the request.
 #   - compute — ONLY sentinel_monitor_now (covenant does NOT carry it: it diverges from
 #     migrate_cluster by value). On create semantics =true (node-1 is the real master, sentinel
 #     monitors it right away — no role:slave fill-in phase, unlike migrate_cluster).
-#   - state_changes / validate — NONE (covenant covers them fully; create_from_souls adds no
-#     state fact/invariant on top — provisioned_* is already provision-aware).
+#   - state_changes — NONE (covenant covers it fully; provisioned_* is already provision-aware).
+#   - validate — the roster-size rules (NIM-371): the count of `hosts` against the declared
+#     topology. Appended to covenant's rules (this section merges add-only).
 #   - form / tasks — strictly local (form is NOT merged; tasks — a dispatcher by redis_type
 #     WITHOUT provision: the run rolls straight onto the existing roster).
 extends: covenant
@@ -68,6 +71,44 @@ name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input
 # feed name_template; covenant does not carry them (they are about WHO the instance is,
 # not HOW Redis is configured).
 input:
+  # ── The ROSTER — the souls this run rolls onto (NIM-371) ───────────────────────────
+  # `source: { roster: true }` is what makes this field the incarnation's composition
+  # rather than one more parameter of it. Two things read that declaration:
+  #
+  #   - the UI renders a SID picker over the free, onboarded, online souls the operator
+  #     may see, narrowed to the covens this incarnation declares;
+  #   - Keeper BINDS the chosen SIDs into `incarnation_membership` after inserting the
+  #     row and BEFORE starting this run.
+  #
+  # ★ WHY THE BIND IS THE LOAD-BEARING PART. A run resolves its roster from
+  # `incarnation_membership` at start (topology.LoadIncarnationHosts) and aborts
+  # `no_hosts` on an empty one. A scenario therefore cannot bind its own roster — it
+  # never reaches its first task. Before this field existed, create_from_souls could
+  # only be reached by creating the incarnation, binding hosts through the Hosts tab,
+  # and running the scenario by hand; the create form said as much in a hint.
+  #
+  # ★ input.hosts IS A JOURNAL, MEMBERSHIP IS THE TRUTH. This value records what the
+  # incarnation was created ON, write-once like every other input. The live
+  # composition is the membership relation, edited afterwards through the Hosts tab —
+  # so the two legitimately diverge once a host is added or removed, and the roster
+  # of a LATER run is the relation, never this field.
+  #
+  # ★ The COUNT is checked, but not here: `validate:` below rejects a roster that does
+  # not match the declared topology, on the request path, before anything is created.
+  hosts:
+    type: array
+    required: true
+    min_items: 1
+    max_items: 200
+    unique: true
+    items:
+      type: string
+      format: sid
+      source: { roster: true }
+    description: >-
+      Souls this Redis is deployed onto — already onboarded and online. The count must match
+      the topology: shards*(1+replicas_per_master) for cluster, 1+replicas_per_master for sentinel.
+
   name:
     type: string
     required: true
@@ -96,9 +137,43 @@ input:
 # form: — PURE PRESENTATION. The input contract lives in covenant.input (the effective input
 # after merge). ★ There is no provision section here (unlike create) — create_from_souls carries
 # no provision field, and the form does not show one.
+# ── Validate: create_from_souls DELTA on top of covenant.validate ────────────────────
+# Rules are appended to the covenant's (merge is add-only for this section), and are
+# INPUT-ONLY like every validate rule — which is exactly why the roster size can be
+# checked here at all: both sides of the comparison are operator input.
+#
+# ★ WHY THIS DUPLICATES THE SIZE-GUARD IN cluster.yml. That one is an `assert:` over
+# `soulprint.hosts` — the run's REAL roster — and it stays the authority: it catches a
+# host that fell out of the roster between create and render. But an assert reached
+# through the CREATE path is deferred to render (pre-flight runs BEFORE
+# incarnation.Create, so there is no roster to measure — NIM-235), and a failure there
+# is an `error_locked` the operator has to unlock. The rule here answers the same
+# question one layer earlier, on the request, as a 422: nothing is created, nothing to
+# unlock. The web form counts the same way a third time, so the operator is stopped
+# before they submit — three checks, in order of how cheap the refusal is.
+#
+# ★ cluster_topology takes precedence when given, matching the assert in cluster.yml:
+# then the node count is the sum of the declared shard sizes, not the formula.
+validate:
+  - that: "input.redis_type != 'cluster' || has(input.cluster_topology) || size(input.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
+    message: "cluster mode needs exactly shards*(1+replicas_per_master) souls in the roster: pick that many, otherwise the plugin would derive the shard count from the node count and ignore the declared shards."
+  - that: "input.redis_type != 'sentinel' || size(input.hosts) == 1 + int(input.replicas_per_master)"
+    message: "sentinel mode needs exactly 1+replicas_per_master souls in the roster (one master plus its replicas): adjust the roster or replicas_per_master."
+
 form:
   sections:
-    # 0. Identity — the components name_template composes the incarnation name from.
+    # 0. Roster — the souls the run rolls onto. FIRST, because it is the one thing this
+    # scenario cannot do without and the one create does not ask for at all: the
+    # operator picks WHERE before they describe WHAT.
+    - key: roster
+      title: "Roster"
+      description: "Already onboarded, online souls this Redis is deployed onto"
+      fields:
+        - name: hosts
+          label: "Souls"
+          hint: "Free onboarded souls in the declared covens. Pick exactly as many as the topology needs: shards*(1+replicas) for cluster, 1+replicas for sentinel."
+
+    # 1. Identity — the components name_template composes the incarnation name from.
     # ★ These are NOT settings: they are write-once identity (see name_template above),
     # so the UI shows them once, at create, with a live preview of the composed name.
     - key: identity
@@ -110,7 +185,7 @@ form:
         - { name: subproject, label: "Subproject", placeholder: "invoices" }
         - { name: service_type, label: "Purpose" }
 
-    # 1. Redis parameters — mode, network channel, version.
+    # 2. Redis parameters — mode, network channel, version.
     - key: redis
       title: "Redis Parameters"
       description: "Deployment mode, network channel, and version"
@@ -119,7 +194,7 @@ form:
         - { name: connection_mode, label: "Network Channel" }
         - { name: version, label: "Redis Version" }
 
-    # 2. Topology — replicas (both modes) + cluster specifics.
+    # 3. Topology — replicas (both modes) + cluster specifics.
     - key: topology
       title: "Topology"
       description: "Replicas (both modes) and Cluster parameters"
@@ -143,7 +218,7 @@ form:
           show_when: "input.redis_type == 'cluster'"
           hint: "List of shards; each shard is a list of SIDs [master, replica, …] (first = master). The operator distributes VMs across zones themselves. Unset -> the plugin lays out roles by sorted SID automatically."
 
-    # 3. Resources — memory, I/O threads, eviction policy.
+    # 4. Resources — memory, I/O threads, eviction policy.
     - key: resources
       title: "Resources"
       fields:
@@ -157,19 +232,19 @@ form:
           hint: "Number of Redis I/O threads (io-threads). 0 = single-threaded I/O. >0 — typically core count - 1."
         - { name: maxmemory_policy, label: "Eviction Policy" }
 
-    # 4. Persistence — save mode.
+    # 5. Persistence — save mode.
     - key: persistence
       title: "Persistence"
       fields:
         - { name: persistence, label: "Persistence Mode" }
 
-    # 5. Users — ACL.
+    # 6. Users — ACL.
     - key: users
       title: "Users"
       fields:
         - { name: users, label: "ACL Users" }
 
-    # 6. Configuration — passthrough directives for redis.conf and sentinel.conf.
+    # 7. Configuration — passthrough directives for redis.conf and sentinel.conf.
     - key: config
       title: "Configuration"
       description: "Passthrough directives for redis.conf and sentinel.conf"

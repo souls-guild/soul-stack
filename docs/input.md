@@ -335,6 +335,43 @@ With this scheme the operator sends:
 | `max_items` | integer | — | Maximum number of elements. |
 | `unique` | boolean | `false` | Elements must be unique. |
 
+## `source` — where the field's values come from
+
+A field whose values are SIDs can name the **catalog** they are chosen from. The UI turns that into an autocomplete; the value itself is still validated by `format: sid` like any other string.
+
+`source` is an **object-discriminator: exactly one** variant is active. It applies to `type: string` (single choice) and to `items` of a `type: array` (multi choice, bounded by `min_items` / `max_items`).
+
+| Variant | Catalog | Asked when |
+|---|---|---|
+| `incarnation_hosts: true` | Every host of the current incarnation ([ADR-044](adr/0044-choir.md) S-T1) | The incarnation exists — an operational run |
+| `choir: <name>` | The Voices of one Choir of the current incarnation | The incarnation exists |
+| `roster: true` | Onboarded, online souls the caller may see ([ADR-081](adr/0081-roster-at-create.md)) | **Create** — there is no incarnation yet |
+
+```yaml
+input:
+  hosts:
+    type: array
+    required: true
+    min_items: 1
+    unique: true
+    items:
+      type: string
+      format: sid
+      source: { roster: true }
+```
+
+> **The catalog narrows by `connected` and nothing else.** That much is an invariant — the keeper binds no other status. It deliberately does NOT filter by the incarnation's declared covens (a host inherits those only once it belongs to it, [ADR-080](adr/0080-label-inheritance-union.md) — a candidate cannot carry them yet) nor by "belongs to no incarnation" (membership is M:N: a host legitimately serves several). What keeps other operators' hosts out of the list is the RBAC scope of `soul.list`.
+>
+> **`roster` is more than a catalog — it is a declaration.** It marks the field whose value **is the composition** of the incarnation: on `POST /v1/incarnations` Keeper binds those SIDs into `incarnation_membership` after inserting the row and **before** starting the bootstrap run. That order is load-bearing — a run resolves its roster from that relation at start and aborts `no_hosts` on an empty one, which is why a scenario cannot bind its own hosts from the inside.
+>
+> Which field carries it is up to the author; Keeper finds it by the key, not by a blessed name. **At most one field per `input:` block** may declare it (`input_roster_source_duplicate`) — the keeper binds exactly one value, so a second has no defined meaning.
+>
+> The input value is a **journal** of what the incarnation was created on (write-once, like every input). The live composition is the membership relation, edited afterwards through the Hosts tab — so the two legitimately diverge, and later runs read the relation. Do **not** mirror the roster into `spec.hosts`: that declares host ROLES ([ADR-008](adr/0008-coven-stable-tags.md)) and binds nothing.
+>
+> **Count checks belong in `validate:`.** The requiredness and shape come from the schema (`required`, `min_items`, `format: sid`); a size rule against the topology (`size(input.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))`) is input-only and therefore expressible as a `validate:` rule — a 422 on the request instead of an `error_locked` from the render-time `assert`.
+
+The schema layer validates only the **structure** of `source` (known variant, value type, exactly one active); resolving the catalog and checking "value ∈ catalog" is the backend's job at form preparation.
+
 ## Type `object`
 
 | Key | Type | Default | Description |

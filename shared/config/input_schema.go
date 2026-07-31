@@ -17,6 +17,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -132,6 +133,7 @@ type InputSchema struct {
 // S-T1). Exactly one sub-key defines the set:
 //   - IncarnationHosts (`incarnation_hosts: true`) — all SIDs of the current incarnation;
 //   - Choir (`choir: <name>`) — the SIDs of a specific Choir part of the incarnation.
+//   - Roster (`roster: true`) — the souls an incarnation is being CREATED on (NIM-371).
 //
 // Schema validation checks only structural validity (known sub-keys, value types);
 // resolving the set and the "value ∈ set" check are done by the backend at form
@@ -139,6 +141,60 @@ type InputSchema struct {
 type InputSource struct {
 	IncarnationHosts bool   `yaml:"incarnation_hosts,omitempty" json:"incarnation_hosts,omitempty"`
 	Choir            string `yaml:"choir,omitempty" json:"choir,omitempty"`
+	// Roster marks the field whose value IS the incarnation's roster — the souls a
+	// create scenario rolls onto (NIM-371). It differs from the two sources above in
+	// what it can be asked at: they resolve against an incarnation that already
+	// exists, and a create form has none, so the catalog here is "onboarded, online
+	// souls the caller may see" — narrowed by nothing else. Occupancy is not a filter
+	// (membership is M:N) and neither are the incarnation's declared covens (a host
+	// inherits those only once it belongs to it, ADR-080).
+	//
+	// The key does double duty deliberately. For the UI it is where the SID list
+	// comes from. For the keeper it is the DECLARATION that this input carries the
+	// roster: `POST /v1/incarnations` binds that value into `incarnation_membership`
+	// before the bootstrap run starts, because a run resolves its roster from that
+	// relation and a scenario cannot bind itself (the run would abort `no_hosts`
+	// first — see the header of handlers/incarnation_members.go).
+	//
+	// Which input field it is on is therefore up to the scenario author, and the
+	// keeper finds it by this key rather than by a blessed field name.
+	Roster bool `yaml:"roster,omitempty" json:"roster,omitempty"`
+}
+
+// RosterInputField returns the name of the `input:` field a scenario declares as its
+// roster (`source: { roster: true }`, NIM-371) — on the field itself, or on `items:`
+// for the multi-select array form. Empty when the schema declares none: then the
+// scenario needs no roster at create and nothing is bound.
+//
+// A schema carrying more than one such field is an authoring error the config
+// validator rejects ([validateRosterSourceUniqueness]); here the FIRST by sorted
+// name wins, so the outcome stays deterministic instead of depending on map order
+// if one ever slips through.
+func RosterInputField(schema InputSchemaMap) string {
+	names := make([]string, 0, len(schema))
+	for name, prop := range schema {
+		if prop == nil {
+			continue
+		}
+		if declaresRosterSource(prop) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return names[0]
+}
+
+// declaresRosterSource reports whether one field declares the roster source, in
+// either of the two shapes `source:` is allowed on: directly on a `type: string`
+// field, or on `items:` of a `type: array` (the multi-select form, ADR-045 S8b).
+func declaresRosterSource(prop *InputSchema) bool {
+	if prop.Source != nil && prop.Source.Roster {
+		return true
+	}
+	return prop.Items != nil && prop.Items.Source != nil && prop.Items.Source.Roster
 }
 
 type requiredKind int
@@ -201,6 +257,7 @@ var (
 	inputSourceKnownKeys = map[string]bool{
 		"incarnation_hosts": true,
 		"choir":             true,
+		"roster":            true,
 	}
 )
 
@@ -361,6 +418,54 @@ func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix 
 			schema = m[paramName]
 		}
 		out = append(out, validateInputSchemaNode(schema, paramNode, paramPath)...)
+	}
+	out = append(out, validateRosterSourceUniqueness(m, node, pathPrefix)...)
+	return out
+}
+
+// validateRosterSourceUniqueness rejects a block declaring `source: { roster: true }`
+// on more than one field (NIM-371). The keeper binds ONE input value into
+// `incarnation_membership` at create, so a second declaration has no defined
+// meaning: it either loses a roster silently or asks which of the two is the real
+// composition of the incarnation. Caught at authoring time, where the answer is
+// "pick one", rather than at create time on the operator.
+//
+// Reported on the SECOND and later fields by sorted name, so the first stays the
+// one [RosterInputField] resolves to and the diagnostic points at the additions.
+func validateRosterSourceUniqueness(m InputSchemaMap, node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+	if len(m) < 2 {
+		return nil
+	}
+	var declared []string
+	for name, prop := range m {
+		if prop != nil && declaresRosterSource(prop) {
+			declared = append(declared, name)
+		}
+	}
+	if len(declared) < 2 {
+		return nil
+	}
+	sort.Strings(declared)
+	first := declared[0]
+	extra := map[string]bool{}
+	for _, name := range declared[1:] {
+		extra[name] = true
+	}
+
+	var out []diag.Diagnostic
+	for _, kv := range node.Values {
+		keyTok := kv.Key.GetToken()
+		if keyTok == nil || !extra[keyTok.Value] {
+			continue
+		}
+		out = append(out, diagAt(keyTok.Position.Line, keyTok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code: "input_roster_source_duplicate",
+			Message: fmt.Sprintf("input declares source.roster on %d fields (%s); at most one field may carry the incarnation roster",
+				len(declared), strings.Join(declared, ", ")),
+			Hint:     "keep source: { roster: true } on one field only — the keeper binds exactly one input value as the roster; " + first + " is the one it would resolve",
+			YAMLPath: pathPrefix + "." + keyTok.Value + ".source.roster",
+		}))
 	}
 	return out
 }
@@ -723,7 +828,7 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "input_source_invalid",
 			Message:  "source must be a mapping (object-discriminator)",
-			Hint:     "source: { incarnation_hosts: true } or source: { choir: <name> }",
+			Hint:     "source: { incarnation_hosts: true } or source: { choir: <name> } or source: { roster: true }",
 			YAMLPath: path + ".source",
 		}))
 		return out
@@ -740,7 +845,7 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "unknown_key",
 				Message:  `unknown field "` + name + `" in source`,
-				Hint:     "known source keys: incarnation_hosts (bool), choir (string)",
+				Hint:     "known source keys: incarnation_hosts (bool), choir (string), roster (bool)",
 				YAMLPath: path + ".source." + name,
 			}))
 			continue
@@ -762,13 +867,16 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 		if s.Source.Choir != "" {
 			active++
 		}
+		if s.Source.Roster {
+			active++
+		}
 	}
 	if active != 1 {
 		out = append(out, diagAtKV(kv, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "input_source_invalid",
 			Message:  fmt.Sprintf("source must declare exactly one active catalog, got %d", active),
-			Hint:     "set exactly one: incarnation_hosts: true OR choir: <name>",
+			Hint:     "set exactly one: incarnation_hosts: true OR choir: <name> OR roster: true",
 			YAMLPath: path + ".source",
 		}))
 	}
@@ -788,17 +896,17 @@ func validateSource(s *InputSchema, present map[string]*ast.MappingValueNode, pa
 }
 
 // validateSourceSubKey checks the value type of one known source sub-key.
-// incarnation_hosts — bool, choir — a non-empty string.
+// incarnation_hosts / roster — bool, choir — a non-empty string.
 func validateSourceSubKey(name string, sub *ast.MappingValueNode, path string) []diag.Diagnostic {
 	subPath := path + ".source." + name
 	switch name {
-	case "incarnation_hosts":
+	case "incarnation_hosts", "roster":
 		if _, ok := sub.Value.(*ast.BoolNode); !ok {
 			tok := sub.Value.GetToken()
 			return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "type_mismatch",
-				Message:  "source.incarnation_hosts must be bool",
+				Message:  "source." + name + " must be bool",
 				YAMLPath: subPath,
 			})}
 		}

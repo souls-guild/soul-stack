@@ -1337,7 +1337,27 @@ func covenInScope(label string, scope []string) bool {
 type ListFilter struct {
 	Status    Status
 	Transport Transport
-	Coven     string // ANY of one label; empty = no filter.
+	// Covens matches a host carrying ANY of these labels, own or inherited from an
+	// incarnation it belongs to (ADR-080 effective labels). Empty = no filter. A
+	// single-element slice is the one-label case; the plural exists because a create
+	// form declares a SET of covens and asks for hosts in any of them (NIM-371) —
+	// with one label per query the caller would have to union pages client-side and
+	// would get a total that means nothing.
+	Covens []string
+	// Unassigned narrows to hosts belonging to NO incarnation
+	// (`incarnation_membership`, NIM-124). The "free souls" filter behind the create
+	// form's roster picker (NIM-371): offering a host that already runs another
+	// service invites the operator to stack two services on it.
+	//
+	// It is a MEMBERSHIP question, deliberately not a label one: an incarnation's
+	// name is also a coven label carried by inheritance, so filtering by labels
+	// would leave a host that was unbound (or whose incarnation is gone) looking
+	// occupied, and vice versa.
+	Unassigned bool
+	// SIDPrefix narrows to SIDs starting with this string (autocomplete). Empty = no
+	// filter. Matched as a literal prefix, LIKE metacharacters included — a `%` here
+	// finds a SID containing one, it does not widen the match.
+	SIDPrefix string
 }
 
 // SelectAll returns a page of Souls with the user filter (filter) ∩ RBAC
@@ -1427,11 +1447,36 @@ func listFilterClauses(f ListFilter) ([]string, []any) {
 		args = append(args, string(f.Transport))
 		clauses = append(clauses, fmt.Sprintf("transport = $%d", len(args)))
 	}
-	if f.Coven != "" {
-		args = append(args, []string{f.Coven})
+	if len(f.Covens) > 0 {
+		args = append(args, f.Covens)
 		clauses = append(clauses, covenMatchSQL(len(args)))
 	}
+	if f.Unassigned {
+		clauses = append(clauses, unassignedSQL)
+	}
+	if f.SIDPrefix != "" {
+		// ESCAPE with a literal backslash: the prefix comes from an operator's
+		// keystrokes, so `%`/`_` must match themselves rather than turn an
+		// autocomplete query into a wildcard scan.
+		args = append(args, escapeLikePrefix(f.SIDPrefix)+"%")
+		clauses = append(clauses, fmt.Sprintf(`sid LIKE $%d ESCAPE '\'`, len(args)))
+	}
 	return clauses, args
+}
+
+// unassignedSQL — the host belongs to no incarnation (NIM-371). NOT EXISTS over
+// `incarnation_membership`, correlated on `souls.sid`: the column is qualified
+// because this fragment also lands in queries that join other tables carrying a
+// `sid` (the same reason the purview fragments qualify theirs).
+const unassignedSQL = `NOT EXISTS (SELECT 1 FROM incarnation_membership m WHERE m.sid = souls.sid)`
+
+// escapeLikePrefix makes a user-typed string safe as a LIKE prefix: the escape
+// character first (otherwise it would double-escape the metacharacters escaped
+// below), then the two metacharacters.
+func escapeLikePrefix(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	return strings.ReplaceAll(s, "_", `\_`)
 }
 
 // Stats — aggregated summary of the `souls` registry within the operator's

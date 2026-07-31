@@ -149,9 +149,13 @@ Permission: `soul.list`. MCP-tool: `keeper.soul.list`.
 
 | Param | Type | Meaning |
 |---|---|---|
-| `coven` | `string` | Filter by coven tag (exact-match by any value from `souls.coven[]`). Multiple - repetition of the query parameter. |
+| `coven` | `string`, repeatable | Filter by coven tag - the host's own or inherited from an incarnation it belongs to, that incarnation's name included ([ADR-080](../../adr/0080-label-inheritance-union.md)). Repeat the parameter to match **ANY** of the labels (`?coven=a&coven=b`). |
 | `status` | `enum` | `pending` / `connected` / `disconnected` / `expired`. |
 | `transport` | `enum` | `agent` / `ssh` ([push.md](../push.md)). |
+| `unassigned` | `bool` | Only hosts belonging to **no** incarnation (`incarnation_membership`) - the free souls a create scenario can be rolled onto ([ADR-081](../../adr/0081-roster-at-create.md)). A membership question, not a label one: an incarnation's name is also an inherited coven label, so a label-based filter would call a host with a stray self-attached tag occupied. |
+| `sid_prefix` | `string` | Only SIDs starting with this prefix (autocomplete). Matched **literally** - a `%` or `_` finds a SID containing one rather than widening the match. |
+
+Every filter is ANDed with the caller's `soul.list` scope and can only narrow it: naming a coven or a prefix outside the scope yields an empty page, never a confirmation that the host exists. This is what lets the create form's roster picker read the list directly ([ADR-081](../../adr/0081-roster-at-create.md)) instead of a second, separately-scoped resolver.
 
 **Response `200 SoulListReply`:**
 

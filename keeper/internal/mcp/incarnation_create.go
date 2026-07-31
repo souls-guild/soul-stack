@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -176,6 +177,20 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 				" or a declared coven is outside your scope (the request is refused whole, not trimmed)")
 	}
 
+	// Roster (NIM-371, parity with REST CreateTyped): the chosen create scenario may
+	// declare an input field as the souls it rolls onto (`source: { roster: true }`).
+	// Screened HERE — before the insert — via the SAME shared screening REST runs, so
+	// a refusal leaves no half-made incarnation behind. The bind itself waits for the
+	// row (FK) and happens below, still before the run starts.
+	roster, rosterErr := handlers.ScreenCreateRoster(ctx, h.deps.IncarnationDB, h.deps.RBAC,
+		h.deps.PurviewResolver, claims.Subject, name, a.Service, a.Covens, plan)
+	if rosterErr != nil {
+		return h.createRosterToolError(req, toolName, name, plan.RosterField, rosterErr)
+	}
+	if perr := h.rosterRejectionToolError(req, toolName, roster.Rejection); perr != nil {
+		return *perr
+	}
+
 	// Write spec.input only when input is non-empty — otherwise scenario-runner
 	// would see `"input": null` (key present) instead of "operator didn't pass
 	// input", which CEL can't distinguish (parity with REST).
@@ -235,6 +250,32 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// No projection onto member hosts (ADR-080, parity with REST CreateTyped):
 	// the labels stay on the incarnation and reach hosts by inheritance at read
 	// time, covering hosts that join later.
+
+	// Roster bind (NIM-371) — after the insert (FK) and BEFORE the run below: a run
+	// resolves its roster from `incarnation_membership` at start, so binding later
+	// would be a run into an empty roster with the hosts arriving too late. On
+	// failure the incarnation stays behind, empty and ready, and no run starts —
+	// recoverable with keeper.incarnation.bind-member (parity with REST).
+	if len(roster.SIDs) > 0 {
+		boundBy := claims.Subject
+		bound, bindErr := incarnation.AddMembersReporting(ctx, h.deps.IncarnationDB, name, roster.SIDs, &boundBy)
+		if bindErr != nil {
+			h.deps.Logger.Error("mcp: incarnation.create bind roster failed",
+				slog.String("name", name), slog.Any("error", bindErr))
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"incarnation "+name+" was created, but binding its roster failed — bind the hosts with keeper.incarnation.bind-member and run the create scenario")
+		}
+		// Same event the bind tool writes, `via: create` marking where it came from:
+		// a roster that appeared at birth and one bound a second later are the same
+		// fact about the incarnation (parity with REST bindCreateRoster).
+		h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
+			"name":           name,
+			"sids":           roster.SIDs,
+			"bound":          emptyIfNilSIDs(bound),
+			"already_member": []string{},
+			"via":            "create",
+		})
+	}
 
 	// apply_id is generated only when the bootstrap run starts (runCreate). bare
 	// (no create scenario) OR auto_create=false → the incarnation stays ready
@@ -322,4 +363,54 @@ func (h *Handler) createPlanToolError(req jsonRPCRequest, toolName, name, servic
 		slog.Any("error", err),
 	)
 	return h.toolError(req.ID, toolName, mcpCodeInternalError, "resolve create plan failed")
+}
+
+// createRosterToolError maps a [handlers.ScreenCreateRoster] error onto MCP codes
+// (NIM-371). Same buckets REST uses, so the two surfaces refuse the same request for
+// the same stated reason: shape → validation-failed, the bind-member gate →
+// forbidden, anything else → internal-error, logged.
+func (h *Handler) createRosterToolError(req jsonRPCRequest, toolName, name, field string, err error) jsonRPCResponse {
+	switch {
+	case errors.Is(err, handlers.ErrCreateRosterTooLarge), errors.Is(err, handlers.ErrCreateRosterInvalidSID):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	case errors.Is(err, handlers.ErrCreateRosterScopeExceeded):
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"incarnation.bind-member denied: input '"+field+"' declares a roster for "+name+
+				", and populating an incarnation needs bind-member over it — incarnation.create alone is not enough")
+	}
+	h.deps.Logger.Error("mcp: incarnation.create screen roster failed",
+		slog.String("name", name), slog.Any("error", err))
+	return h.toolError(req.ID, toolName, mcpCodeInternalError, "roster bind unavailable")
+}
+
+// rosterRejectionToolError maps the per-host rejection buckets of a create-carried
+// roster (NIM-371). Bucket ORDER is a security property, not cosmetics — identical to
+// REST bindRejectionProblem and to the bind tool: an operator who may not see a host
+// is told "forbidden", never that the host is disconnected. nil = clean screening.
+func (h *Handler) rosterRejectionToolError(req jsonRPCRequest, toolName string, rej *incarnation.BindRejection) *jsonRPCResponse {
+	if rej.Empty() {
+		return nil
+	}
+	var resp jsonRPCResponse
+	switch {
+	case len(rej.UnknownSIDs) > 0:
+		resp = h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"unknown SID(s) (not in the soul registry): "+strings.Join(rej.UnknownSIDs, ", "))
+	case len(rej.OutOfScope) > 0:
+		resp = h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"SID(s) outside the operator's soul scope: "+strings.Join(rej.OutOfScope, ", "))
+	default:
+		resp = h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"SID(s) not connected — only an onboarded, connected host can be bound: "+strings.Join(rej.NotConnected, ", "))
+	}
+	return &resp
+}
+
+// emptyIfNilSIDs normalizes a nil SID slice to an empty one, so an audit payload
+// carries an array rather than null (parity with the bind tool's reply shape).
+func emptyIfNilSIDs(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
 }

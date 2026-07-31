@@ -89,6 +89,16 @@ fixtures:
     redis_type: sentinel
     version: "7.4.1"
     replicas_per_master: 2
+    # The ROSTER (NIM-371) — the souls the run deploys onto, mirroring fixtures.hosts.
+    # It is declared input now, not an ambient property of the run: `hosts` carries
+    # `source: { roster: true }`, so Keeper binds it into incarnation_membership before
+    # the run starts. The trial harness has no membership relation — fixtures.hosts IS
+    # the roster here — but the value still has to satisfy the input contract, and the
+    # size rules in validate: measure exactly this list (1 master + 2 replicas = 3).
+    hosts:
+      - node-1.example.com
+      - node-2.example.com
+      - node-3.example.com
 
 assert:
   task_present:

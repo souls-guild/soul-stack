@@ -534,13 +534,22 @@ func presenceSnapshotStatus(status string) bool {
 // (OPPOSITE to presence fail-SAFE): no claims / nil-scoper / empty Purview → an EMPTY list
 // (not all souls).
 
-// SoulListInput — parameters of [SoulHandler.ListTyped] (FULL-TYPED). Coven/Status/Transport —
-// string filters (empty = do not apply). Page/Cursor — already parsed by the huma layer
+// SoulListInput — parameters of [SoulHandler.ListTyped] (FULL-TYPED). Status/Transport/
+// SIDPrefix — string filters (empty = do not apply); Covens — any-of (empty = do not
+// apply); Unassigned — membership filter. Page/Cursor — already parsed by the huma layer
 // (offset+cursor conflict and a broken cursor are resolved BEFORE ListTyped).
 type SoulListInput struct {
-	Coven     string
+	// Covens matches hosts carrying ANY of these labels (repeatable `?coven=`). Plural
+	// because the create-form roster picker asks for hosts across the SET of covens the
+	// incarnation declares (NIM-371).
+	Covens    []string
 	Status    string
 	Transport string
+	// Unassigned narrows to hosts belonging to no incarnation — the "free souls" view
+	// the roster picker offers (NIM-371).
+	Unassigned bool
+	// SIDPrefix narrows to SIDs with this prefix (autocomplete).
+	SIDPrefix string
 	Page      sharedapi.Page
 	Cursor    *sharedapi.KeysetCursor
 }
@@ -635,7 +644,18 @@ func emptySoulStatsView() SoulStatsView {
 func (h *SoulHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in SoulListInput) (SoulListReply, error) {
 	var zero SoulListReply
 	var filter soul.ListFilter
-	filter.Coven = in.Coven
+	filter.Unassigned = in.Unassigned
+	filter.SIDPrefix = in.SIDPrefix
+	for _, label := range in.Covens {
+		if label == "" {
+			continue
+		}
+		if !soul.ValidCoven(label) {
+			return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+				"invalid 'coven' filter "+label+": must match "+soul.CovenPattern)}
+		}
+		filter.Covens = append(filter.Covens, label)
+	}
 	if in.Status != "" {
 		st := soul.Status(in.Status)
 		if !soul.ValidStatus(st) {

@@ -186,11 +186,13 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 			return nil, perr
 		}
 		reply, err := soulH.ListTyped(ctx, claimsOrNil(ctx), handlers.SoulListInput{
-			Coven:     in.Coven,
-			Status:    in.Status,
-			Transport: in.Transport,
-			Page:      page,
-			Cursor:    cursor,
+			Covens:     in.Coven,
+			Status:     in.Status,
+			Transport:  in.Transport,
+			Unassigned: in.Unassigned,
+			SIDPrefix:  in.SIDPrefix,
+			Page:       page,
+			Cursor:     cursor,
 		})
 		if err != nil {
 			return nil, soulProblem(err)
