@@ -1088,6 +1088,23 @@ order to act in.
 
 ### Fixed
 
+- **An inline `gpg_key` on `core.repo` now lands under the name apt can actually
+  read.** apt picks its keyring parser from the file extension: an ASCII-armored
+  key is read only from `*.asc`, a dearmored one only from `*.gpg`. `core.repo`
+  wrote every inline key to `/etc/apt/keyrings/<name>.gpg` regardless of its form,
+  and armored is the form nearly every upstream publishes — `packages.redis.io`
+  included. The mismatch is not something apt reports as a bad file: it answers
+  `NO_PUBKEY` and discards the whole repository as unsigned, while the module's own
+  report said `changed=true` and everything downstream failed somewhere else, for
+  reasons that pointed nowhere near the key. The extension now follows the key's
+  content — armored to `<name>.asc`, otherwise `<name>.gpg` — and `signed-by=`
+  follows it, in both `Plan` and `Apply`. On a host that already carries an armored
+  key at the old `.gpg` name, the first run after upgrading writes the `.asc` file
+  and rewrites the `.list` line, reporting `changed=true` once; the stale `.gpg`
+  file is left in place, since `/etc/apt/keyrings/` is not a trust root on its own
+  and removing operator files is not this module's business. `gpg_key_path` is
+  unaffected — it references the name you chose and never renames anything.
+
 - **Keeper could not connect to a Redis that has ACL users at all.** `redis:` grew
   two optional keys, `username` and `sentinel_username`, and both now reach the
   driver in every topology — standalone, sentinel (where the sentinel identity is

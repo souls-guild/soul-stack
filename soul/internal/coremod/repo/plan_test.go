@@ -133,6 +133,46 @@ func TestPlan_Apt_KeyMissing_Drift(t *testing.T) {
 	assertRootUnchanged(t, root, before)
 }
 
+// TestPlan_Apt_ArmoredKey_Match_Clean — Plan must resolve the keyring to the
+// same .asc that Apply writes for an armored key; if the two paths disagree, a
+// converged host reports drift forever (NIM-388).
+func TestPlan_Apt_ArmoredKey_Match_Clean(t *testing.T) {
+	m, root := newModule(t, util.PkgMgrApt)
+	const key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nARMORED\n-----END PGP PUBLIC KEY BLOCK-----\n"
+	if err := os.MkdirAll(m.AptSourcesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(m.AptKeyringsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(m.AptKeyringsDir, "redis.asc")
+	if err := os.WriteFile(keyPath, []byte(key), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	listContent := "deb [signed-by=" + keyPath + "] https://packages.redis.io/deb bookworm\n"
+	if err := os.WriteFile(filepath.Join(m.AptSourcesDir, "redis.list"), []byte(listContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotRoot(t, root)
+
+	stream := &planStream{}
+	if err := m.Plan(&pluginv1.PlanRequest{
+		State: "present",
+		Params: mustStruct(t, map[string]any{
+			"name":    "redis",
+			"uri":     "https://packages.redis.io/deb",
+			"suite":   "bookworm",
+			"gpg_key": key,
+		}),
+	}, stream); err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if got := stream.last(); got == nil || got.GetChanged() {
+		t.Fatalf("changed=%v, want false (clean)", got.GetChanged())
+	}
+	assertRootUnchanged(t, root, before)
+}
+
 // TestPlan_Yum_Match_Clean — .repo matches → clean.
 func TestPlan_Yum_Match_Clean(t *testing.T) {
 	m, root := newModule(t, util.PkgMgrYum)

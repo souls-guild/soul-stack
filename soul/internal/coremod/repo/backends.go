@@ -56,10 +56,11 @@ func (m *Module) applyAbsent(stream grpc.ServerStreamingServer[pluginv1.ApplyEve
 
 // applyAptPresent writes /etc/apt/sources.list.d/<name>.list in the modern
 // deb822 one-line format with signed-by= pointing at the keyring. The key
-// (if set) is materialized at /etc/apt/keyrings/<name>.gpg.
+// (if set) is materialized under /etc/apt/keyrings/ — see aptKeyringPath for
+// how its extension is chosen.
 func (m *Module) applyAptPresent(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], mgr util.PkgMgr, p repoParams) error {
 	listPath := m.aptListPath(p)
-	keyPath := filepath.Join(m.AptKeyringsDir, p.name+".gpg")
+	keyPath := m.aptKeyringPath(p)
 
 	var warnings []string
 	addRepoWarnings(&warnings, mgr, p)
@@ -359,6 +360,23 @@ func (m *Module) ensureKey(keyPath, gpgKey string) (bool, error) {
 
 // aptListPath / yumRepoPath resolve the description-file path: the
 // operator-supplied dest overrides the backend default. Shared by Plan and Apply.
+// aptKeyringPath picks the keyring filename for an inline gpg_key from the
+// key's own form, because apt selects its parser from the extension: an
+// ASCII-armored key is read only from *.asc, a dearmored one only from *.gpg.
+// A mismatch is not an error apt reports — it answers NO_PUBKEY and drops the
+// whole repository as unsigned (NIM-388). Derived from the param alone, so
+// Plan stays read-safe.
+func (m *Module) aptKeyringPath(p repoParams) string {
+	if isArmoredKey(p.gpgKey) {
+		return filepath.Join(m.AptKeyringsDir, p.name+".asc")
+	}
+	return filepath.Join(m.AptKeyringsDir, p.name+".gpg")
+}
+
+func isArmoredKey(gpgKey string) bool {
+	return strings.HasPrefix(strings.TrimLeft(gpgKey, " \t\r\n"), "-----BEGIN PGP")
+}
+
 func (m *Module) aptListPath(p repoParams) string {
 	if p.dest != "" {
 		return p.dest

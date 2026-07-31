@@ -11,7 +11,8 @@ found - step drops (`no supported package manager detected`). Target artifacts b
 backend:
 
 - **apt** → `/etc/apt/sources.list.d/<name>.list` (one-line format) + key in
-`/etc/apt/keyrings/<name>.gpg`, which is referenced by `.list` through `signed-by=`
+`/etc/apt/keyrings/<name>.asc` or `<name>.gpg` (see the warning below on how the
+extension is chosen), which is referenced by `.list` through `signed-by=`
 (modern format, **not** `apt-key` - that is deprecated and puts the key in the general
 trust store without reference to the repository);
 - **dnf/yum** → `/etc/yum.repos.d/<name>.repo` (ini format);
@@ -30,7 +31,7 @@ trust store without reference to the repository);
 |---|---|---|---|
 | `name` | string | required | Repository name. Becomes the file name (`<name>.list`/`<name>.repo`), so it is validated: only `[A-Za-z0-9._-]`, without `/`, `\` and `..` (protection against path-traversal - writes outside the target directory). |
 | `uri` | string | required (for `present`) | Base URL of the repository. Valid `http://` and `https://` (`file://`/`ftp://`/blank - error). `http://` is legitimate for the interior mirror, but gives a mandatory warning (see Security). |
-| `gpg_key` | string | optional | Contents of the GPG key inline (ASCII-armored/PEM or binary keyring - written as is). For apt, it materializes in `/etc/apt/keyrings/<name>.gpg` (mode `0644`) and connects via `signed-by=`; for dnf/yum it is written to `gpgkey=`. The key **by URL is deliberately not fetched in core.repo** (ADR-071 §(g), option B): network/SSRF stays in [`core.url.fetched`](../url/README.md) (network_outbound + SSRF-guard + checksum), and the content is fed in here inline via `${ file(...) }`/`vault`. Critical for supply-chain. |
+| `gpg_key` | string | optional | Contents of the GPG key inline (ASCII-armored or dearmored keyring - written as is). For apt, it materializes in `/etc/apt/keyrings/` (mode `0644`) and connects via `signed-by=`; the extension follows the key's own form - `<name>.asc` when armored, `<name>.gpg` otherwise - because apt picks its parser from it (see the warning under "Upstream mirror"). For dnf/yum it is written to `gpgkey=`. The key **by URL is deliberately not fetched in core.repo** (ADR-071 §(g), option B): network/SSRF stays in [`core.url.fetched`](../url/README.md) (network_outbound + SSRF-guard + checksum), and the content is fed in here inline via `${ file(...) }`/`vault`. Critical for supply-chain. |
 | `gpg_key_path` | string | optional | Path to a GPG key **already present on the host** (variant B): apt writes `signed-by=<path>`, dnf/yum writes `gpgkey=<path>`. The module only **references** the key — it does **not** copy it — and **guards its existence** on plan/apply (missing path → explicit error, so the repo is never declared with a broken `signed-by=`). Mutually exclusive with `gpg_key`; deliver the key first with [`core.url.fetched`](../url/README.md)/`core.file`. Key **content** drift (rotation) is the delivering step's responsibility (its checksum), not `core.repo`'s — `core.repo` tracks only existence. Not for apk. Path must be absolute and `..`-free. |
 | `dest` | string | optional | Absolute path of the description file, overriding the backend default (`/etc/apt/sources.list.d/<name>.list`, `/etc/yum.repos.d/<name>.repo`). Useful when a vendor mandates a specific location. Not for apk (single `repositories` file). Path must be absolute and `..`-free. |
 | `gpg_check` | bool | optional (default `true`) | Cryptographic packet verification. `false` - opt-out, allowed, but gives a mandatory warning (symmetry of checksum-opt-out in core.url). For dnf/yum it is written in `gpgcheck=`. |
@@ -148,12 +149,12 @@ deb [signed-by=/etc/apt/keyrings/redis.asc arch=amd64] https://mirror.internal/r
 (`-----BEGIN PGP PUBLIC KEY BLOCK-----`) only from a `.asc` name, and a dearmored binary
 keyring only from a `.gpg` name. Get it the wrong way round and apt does not complain
 about the file — it reports `NO_PUBKEY <id>` and drops the whole repository as unsigned
-(verified on Debian 12). Most upstreams, redis.io included, serve the ARMORED form, so
-fetch it to a `.asc` path and reference that path — which is why this example uses
-`gpg_key_path` rather than the inline `gpg_key`: the inline key is always materialized at
-`/etc/apt/keyrings/<name>.gpg`, so it must be a dearmored keyring (dearmoring happens
-outside core.repo). Installing a package from the declared mirror is done by
-`core.pkg.installed` with an `=version` pin (S3/NIM-105).
+(verified on Debian 12). Most upstreams, redis.io included, serve the ARMORED form.
+An inline `gpg_key` picks its own extension from the key's form — armored goes to
+`/etc/apt/keyrings/<name>.asc`, anything else to `<name>.gpg`, and `signed-by=` follows —
+so you cannot get this pair wrong through `gpg_key`. With `gpg_key_path` the name is
+yours to choose, and this example makes the fetch write `.asc` for that reason. Installing
+a package from the declared mirror is done by `core.pkg.installed` with an `=version` pin.
 
 ### Referencing a key already on the host (variant B, no copy)
 

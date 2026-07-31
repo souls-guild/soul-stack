@@ -164,7 +164,8 @@ func TestApt_Present_WritesListWithSignedByAndKey(t *testing.T) {
 		t.Fatalf("changed=%v failed=%v msg=%s", ev.Changed, ev.Failed, ev.Message)
 	}
 	listPath := filepath.Join(m.AptSourcesDir, "docker.list")
-	keyPath := filepath.Join(m.AptKeyringsDir, "docker.gpg")
+	// Armored key -> .asc: apt reads an armored keyring only under that name.
+	keyPath := filepath.Join(m.AptKeyringsDir, "docker.asc")
 
 	got := read(t, listPath)
 	wantLine := "deb [signed-by=" + keyPath + "] https://download.docker.com/linux/ubuntu jammy stable\n"
@@ -173,6 +174,85 @@ func TestApt_Present_WritesListWithSignedByAndKey(t *testing.T) {
 	}
 	if k := read(t, keyPath); !strings.Contains(k, "BEGIN PGP PUBLIC KEY") {
 		t.Fatalf("key not materialized: %q", k)
+	}
+}
+
+// The extension apt parses by is decided by the key's own form, not by a
+// fixed name: armored -> .asc, dearmored -> .gpg. Getting it the wrong way
+// round makes apt answer NO_PUBKEY and drop the repository as unsigned, with
+// nothing in the module's own report to show for it (NIM-388).
+func TestApt_Present_ArmoredKeyMaterializesAsAsc(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":    "redis",
+		"uri":     "https://packages.redis.io/deb",
+		"suite":   "bookworm",
+		"gpg_key": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nARMORED\n-----END PGP PUBLIC KEY BLOCK-----\n",
+	})
+	ascPath := filepath.Join(m.AptKeyringsDir, "redis.asc")
+	if k := read(t, ascPath); !strings.Contains(k, "ARMORED") {
+		t.Fatalf("armored key must land at %s, got %q", ascPath, k)
+	}
+	if _, err := os.Stat(filepath.Join(m.AptKeyringsDir, "redis.gpg")); !os.IsNotExist(err) {
+		t.Fatalf("armored key must not be written as .gpg (stat err=%v)", err)
+	}
+	if got := read(t, filepath.Join(m.AptSourcesDir, "redis.list")); !strings.Contains(got, "signed-by="+ascPath+"]") {
+		t.Fatalf("signed-by must follow the key to .asc: %q", got)
+	}
+}
+
+// Anything that is not armored keeps the previous .gpg name. A real dearmored
+// keyring cannot travel inline at all — params cross the wire as protobuf
+// strings, which must be valid UTF-8 — so in practice this branch guards
+// against silently renaming keys that are simply not in armored form.
+func TestApt_Present_DearmoredKeyStaysGpg(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":    "redis",
+		"uri":     "https://packages.redis.io/deb",
+		"suite":   "bookworm",
+		"gpg_key": "BINARYKEYRING",
+	})
+	gpgPath := filepath.Join(m.AptKeyringsDir, "redis.gpg")
+	if k := read(t, gpgPath); !strings.Contains(k, "BINARYKEYRING") {
+		t.Fatalf("dearmored key must land at %s, got %q", gpgPath, k)
+	}
+	if _, err := os.Stat(filepath.Join(m.AptKeyringsDir, "redis.asc")); !os.IsNotExist(err) {
+		t.Fatalf("dearmored key must not be written as .asc (stat err=%v)", err)
+	}
+	if got := read(t, filepath.Join(m.AptSourcesDir, "redis.list")); !strings.Contains(got, "signed-by="+gpgPath+"]") {
+		t.Fatalf("signed-by must follow the key to .gpg: %q", got)
+	}
+}
+
+func TestApt_Present_ArmoredKeyIdempotent(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	params := map[string]any{
+		"name":    "redis",
+		"uri":     "https://packages.redis.io/deb",
+		"suite":   "bookworm",
+		"gpg_key": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nARMORED\n-----END PGP PUBLIC KEY BLOCK-----\n",
+	}
+	if !applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("first run: changed=false")
+	}
+	if applyTo(t, m, "present", params).Last().Changed {
+		t.Fatal("repeat run: changed=true (not idempotent)")
+	}
+}
+
+// A leading blank line is how a fetched key often arrives; it must not decide
+// the extension, otherwise the same key lands in two different files.
+func TestApt_Present_ArmoredKeyLeadingWhitespaceStillAsc(t *testing.T) {
+	m, _ := newModule(t, util.PkgMgrApt)
+	applyTo(t, m, "present", map[string]any{
+		"name":    "redis",
+		"uri":     "https://packages.redis.io/deb",
+		"suite":   "bookworm",
+		"gpg_key": "\n  -----BEGIN PGP PUBLIC KEY BLOCK-----\nARMORED\n-----END PGP PUBLIC KEY BLOCK-----\n",
+	})
+	if _, err := os.Stat(filepath.Join(m.AptKeyringsDir, "redis.asc")); err != nil {
+		t.Fatalf("leading whitespace must not change the verdict: %v", err)
 	}
 }
 
@@ -560,7 +640,9 @@ func TestValidate_RejectsBadArch(t *testing.T) {
 // NIM-104/ADR-071: mirroring redis.io in Nexus is declared with a single
 // core.repo.present (uri=Nexus, arch=amd64, inline gpg key — variant B: the
 // key is brought in by core.url.fetched → ${ file() }). Checks the exact apt
-// string, the keyring, and idempotency.
+// string, the keyring, and idempotency. redis.io serves the armored form, so
+// the keyring is expected at .asc — the version of this test that expected
+// .gpg was asserting a repository apt discards (NIM-388).
 func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
 	m, _ := newModule(t, util.PkgMgrApt)
 	const key = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nREDISKEY\n-----END PGP PUBLIC KEY BLOCK-----\n"
@@ -576,7 +658,7 @@ func TestApt_Present_RedisMirrorRecipe(t *testing.T) {
 	if !first.Last().Changed || first.Last().Failed {
 		t.Fatalf("recipe apply: changed=%v failed=%v", first.Last().Changed, first.Last().Failed)
 	}
-	keyPath := filepath.Join(m.AptKeyringsDir, "redis.gpg")
+	keyPath := filepath.Join(m.AptKeyringsDir, "redis.asc")
 	got := read(t, filepath.Join(m.AptSourcesDir, "redis.list"))
 	want := "deb [signed-by=" + keyPath + " arch=amd64] https://nexus.internal/repository/redis-apt bookworm main\n"
 	if got != want {

@@ -285,7 +285,7 @@ func (m *Module) planPresent(stream grpc.ServerStreamingServer[pluginv1.PlanEven
 			}
 		}
 		listPath := m.aptListPath(p)
-		keyPath := filepath.Join(m.AptKeyringsDir, p.name+".gpg")
+		keyPath := m.aptKeyringPath(p)
 		want := aptListContent(p, keyPath)
 		listDrift, err := fileDrift(listPath, want)
 		if err != nil {
