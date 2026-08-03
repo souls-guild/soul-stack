@@ -83,11 +83,6 @@ DIST_DIR := dist
 SBOM_DIR := $(DIST_DIR)/sbom
 PKG_DIR  := $(DIST_DIR)/pkg
 
-# Target Linux architecture for native packages (deb/rpm are always Linux).
-# Overridden externally: `make pkg PKG_ARCH=arm64`. nfpm reads ${ARCH} from
-# the environment for ${ARCH}-substitution in deploy/nfpm/*.yaml.
-PKG_ARCH ?= amd64
-
 # Prod-image names (docker-keeper / docker-soul targets). Local tags default to
 # `soul-stack/keeper` and `soul-stack/soul`; the operator retags them for their
 # own registry before push (`docker tag soul-stack/keeper:$(VERSION)
@@ -98,7 +93,7 @@ PKG_ARCH ?= amd64
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg pkg-keeper pkg-soul pkg-soul-lint sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1040,76 +1035,37 @@ sbom:
 	done
 	@echo "sbom: CycloneDX SBOM written to $(SBOM_DIR)/"
 
-# Native deb + rpm packages via nfpm. Binaries are rebuilt for Linux/$(PKG_ARCH)
-# (deb/rpm are always Linux, while the dev machine may be darwin) with the same ldflags as
-# `build` (+ `-s -w -trimpath` for a trimmed-down prod binary). nfpm configs -
-# deploy/nfpm/*.yaml; ${VERSION}/${ARCH} are substituted from the environment. The tool isn't
-# in PATH automatically; if not found - we print a go install hint and exit
-# with an error (not silently).
+# Native packages, built by goreleaser from the SAME nfpms: section a release uses
+# (.goreleaser.yaml). This target used to drive nfpm against a parallel set of
+# configs under deploy/nfpm/, which meant two descriptions of the same packages:
+# they drifted (`make pkg` produced 3 of the 7 shipped packages, and the
+# soul-stack-soul-lint -> soul-stack-lint rename had to be applied in both places
+# by hand). One source of truth removes that class of bug outright - a new or
+# renamed package appears here for free.
 #
-# Three canned recipes are reused by the per-component pkg-targets and the pkg aggregate:
-#   ensure-nfpm    - guard on nfpm being present in PATH.
-#   pkg-build-one  - cross-builds a single binary for linux/$(PKG_ARCH) (prod ldflags).
-#                    $(1) module, $(2) cmd-package/name, $(3) version-ldflags (empty for soul-lint).
-#   pkg-nfpm-one   - deb+rpm for a single nfpm config. $(1) - config name (=deploy/nfpm/$(1).yaml).
-define ensure-nfpm
-	@if ! command -v nfpm >/dev/null 2>&1; then \
-		echo "nfpm not found in PATH."; \
-		echo "install: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest"; \
+# Consequences of delegating, accepted deliberately:
+#   - needs `goreleaser`, not `nfpm`, in PATH (both are external, both via go install).
+#   - builds the whole shipped matrix - 7 packages x amd64/arm64 x deb/rpm/apk -
+#     rather than one architecture, so there is no PKG_ARCH knob any more.
+#   - no per-component variant: goreleaser cannot emit a single nfpm package, and
+#     keeping a second set of configs just for that is the very drift this removes.
+#   - `--clean` wipes $(DIST_DIR) first, so a previously generated $(SBOM_DIR)
+#     goes with it; re-run `make sbom` if you need both.
+# --skip: everything that is not a native package (archives, images, signing, SBOM,
+# and the brew/aur/winget publishers). --snapshot builds off an untagged tree.
+pkg:
+	@if ! command -v goreleaser >/dev/null 2>&1; then \
+		echo "goreleaser not found in PATH."; \
+		echo "install: go install github.com/goreleaser/goreleaser/v2@latest"; \
 		exit 1; \
 	fi
-endef
-
-define pkg-build-one
-	@echo "build linux/$(PKG_ARCH) $(2) for packaging (VERSION=$(VERSION))"
-	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=$(PKG_ARCH) go build -trimpath -ldflags '-s -w $(3)' -o $(BIN_DIR)/$(2) ./cmd/$(2)
-endef
-
-define pkg-nfpm-one
-	@for fmt in deb rpm; do \
-		echo "nfpm package $(1) ($$fmt)"; \
-		VERSION='$(VERSION)' ARCH='$(PKG_ARCH)' nfpm package \
-			--config deploy/nfpm/$(1).yaml \
-			--packager $$fmt \
-			--target $(PKG_DIR)/ || exit 1; \
-	done
-endef
-
-# Per-component native packages: build ONLY its own binary and package it as deb+rpm.
-# pkg-keeper / pkg-soul / pkg-soul-lint. The aggregate of all three is pkg.
-pkg-keeper:
-	$(call ensure-nfpm)
+	@echo "goreleaser snapshot: native packages only (VERSION=$(VERSION))"
+	@goreleaser release --snapshot --clean \
+		--skip=archive,docker,sign,sbom,homebrew,aur,winget || exit 1
 	@mkdir -p $(PKG_DIR)
-	$(call pkg-build-one,keeper,keeper,$(KEEPER_LDFLAGS))
-	$(call pkg-nfpm-one,keeper)
-	@echo "pkg-keeper: deb+rpm written to $(PKG_DIR)/"
-
-pkg-soul:
-	$(call ensure-nfpm)
-	@mkdir -p $(PKG_DIR)
-	$(call pkg-build-one,soul,soul,$(SOUL_LDFLAGS))
-	$(call pkg-nfpm-one,soul)
-	@echo "pkg-soul: deb+rpm written to $(PKG_DIR)/"
-
-pkg-soul-lint:
-	$(call ensure-nfpm)
-	@mkdir -p $(PKG_DIR)
-	$(call pkg-build-one,soul-lint,soul-lint,)
-	$(call pkg-nfpm-one,soul-lint)
-	@echo "pkg-soul-lint: deb+rpm written to $(PKG_DIR)/"
-
-# pkg - the aggregate: deb+rpm for all three components at once. Reuses the same
-# canned recipes as the per-component targets (no duplicated logic).
-pkg:
-	$(call ensure-nfpm)
-	@mkdir -p $(PKG_DIR)
-	$(call pkg-build-one,keeper,keeper,$(KEEPER_LDFLAGS))
-	$(call pkg-build-one,soul,soul,$(SOUL_LDFLAGS))
-	$(call pkg-build-one,soul-lint,soul-lint,)
-	$(call pkg-nfpm-one,keeper)
-	$(call pkg-nfpm-one,soul)
-	$(call pkg-nfpm-one,soul-lint)
-	@echo "pkg: deb+rpm written to $(PKG_DIR)/"
+	@find $(DIST_DIR) -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+		-exec mv -t $(PKG_DIR)/ {} +
+	@echo "pkg: $$(find $(PKG_DIR) -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) | wc -l) package(s) written to $(PKG_DIR)/"
 
 # Image signing (cosign) - DOCUMENTED STUB. Real signing requires a registry +
 # OIDC/keyless-identity (or a private key), which a local repo without
@@ -1628,8 +1584,5 @@ help:
 	@echo "  docker-keeper     PROD image of keeper (multi-stage distroless) -> \$$(KEEPER_IMAGE):\$$(VERSION); push to your own registry"
 	@echo "  docker-soul       PROD image of soul (multi-stage distroless) -> \$$(SOUL_IMAGE):\$$(VERSION); push to your own registry"
 	@echo "  sbom              CycloneDX SBOM over go modules (cyclonedx-gomod) -> dist/sbom/"
-	@echo "  pkg               native deb+rpm packages for all three components (nfpm) -> dist/pkg/"
-	@echo "  pkg-keeper        deb+rpm only keeper (nfpm) -> dist/pkg/"
-	@echo "  pkg-soul          deb+rpm only soul (nfpm) -> dist/pkg/"
-	@echo "  pkg-soul-lint     deb+rpm only soul-lint (nfpm) -> dist/pkg/"
+	@echo "  pkg               native deb/rpm/apk for the whole shipped set (goreleaser) -> dist/pkg/"
 	@echo "  sign              image signing (cosign) -- deferred, documented-stub"

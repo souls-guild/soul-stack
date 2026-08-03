@@ -39,7 +39,7 @@ Group=soul-stack
 
 # Config path is factored out into EnvironmentFile - the operator changes it without touching the unit.
 EnvironmentFile=/etc/keeper/keeper.env
-ExecStart=/usr/local/bin/keeper run --config=${KEEPER_CONFIG}
+ExecStart=/usr/bin/keeper run --config=${KEEPER_CONFIG}
 # Config hot-reload (ADR-021(b)): `systemctl reload keeper` re-reads keeper.yml
 # in place, without dropping Soul sessions.
 ExecReload=/bin/kill -HUP $MAINPID

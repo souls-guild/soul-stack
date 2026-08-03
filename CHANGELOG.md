@@ -952,6 +952,19 @@ order to act in.
 
 ### Changed
 
+- **`make pkg` now builds the packages a release actually ships.** It used to
+  drive `nfpm` against a separate set of configs under `deploy/nfpm/`, a second
+  description of the same packages that had drifted from the `nfpms:` section a
+  release is built from: it produced 3 of the 7 shipped packages, and it carried
+  the wrong binary path that broke the systemd units (above). The target is now a
+  packages-only `goreleaser --snapshot` build over that one definition, so a new
+  or renamed package needs no second edit. `deploy/nfpm/*.yaml` are removed (the
+  maintainer scripts under `deploy/nfpm/scripts/` stay — goreleaser references
+  them). Consequences: `make pkg` needs `goreleaser` rather than `nfpm` in PATH,
+  emits the whole matrix (every package × `amd64`/`arm64` × deb/rpm/apk) so the
+  `PKG_ARCH` knob is gone along with the `pkg-keeper`/`pkg-soul`/`pkg-soul-lint`
+  variants, and it wipes `dist/` first — re-run `make sbom` if you need both.
+
 - **BREAKING for plugin authors — a custom module's manifest now gates its
   params** ([ADR-0076](docs/adr/0076-engine-compat-window.md), amendment (t)).
   A param that `spec.states.<state>.input` does not declare fails the task with
@@ -1152,6 +1165,17 @@ order to act in.
   bench cluster, never production.
 
 ### Fixed
+
+- **The `keeper` and `soul` packages could not start the service they install.**
+  The package drops its binary at `/usr/bin/<name>`, but the systemd unit shipped
+  alongside it declared `ExecStart=/usr/local/bin/<name>` — so on a host installed
+  from the deb/rpm, `systemctl start keeper` failed with `status=203/EXEC` and the
+  daemon never came up. `/usr/local` is reserved for the local administrator and a
+  distribution package must not install there, so the units now point at
+  `/usr/bin`, where the binary actually is. The stale path came from a second,
+  unused set of packaging configs under `deploy/nfpm/` that drifted away from the
+  ones a release is built from; those are gone (see below). Docker images are
+  unaffected — they place the binary and their entrypoint at the same path.
 
 - **An inline `gpg_key` on `core.repo` now lands under the name apt can actually
   read.** apt picks its keyring parser from the file extension: an ASCII-armored

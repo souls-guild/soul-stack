@@ -133,7 +133,7 @@ make pkg    # native packages deb + rpm (nfpm) → dist/pkg/, binaries for linux
 make sbom   # CycloneDX SBOM by keeper/soul/soul-lint → dist/sbom/
 ```
 
-`make pkg` rebuilds binaries under `linux/$(PKG_ARCH)` (default `amd64`; `make pkg PKG_ARCH=arm64` - for arm) with the same ldflags injection version. `make sbom` builds SBOM in `app` mode (graph of what is actually linked). Both targets require external tooling (`nfpm`, `cyclonedx-gomod`) - they are not included in `make check`, they are set via `go install` (the hint is printed if not found). For bare cross-assembly of binaries without packages - `make build-linux`.
+`make pkg` runs a packages-only `goreleaser --snapshot` build, so it yields exactly the release set - every package, `amd64` + `arm64`, deb + rpm + apk - from the same `nfpms:` definition the tag build uses. `make sbom` builds SBOM in `app` mode (graph of what is actually linked). Both targets require external tooling (`goreleaser`, `cyclonedx-gomod`) - they are not included in `make check`, they are set via `go install` (the hint is printed if not found). For bare cross-assembly of binaries without packages - `make build-linux`.
 
 ### (h) Giveaway
 

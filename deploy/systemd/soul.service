@@ -46,7 +46,7 @@ User=soul-stack
 Group=soul-stack
 
 EnvironmentFile=/etc/soul/soul.env
-ExecStart=/usr/local/bin/soul run --config=${SOUL_CONFIG}
+ExecStart=/usr/bin/soul run --config=${SOUL_CONFIG}
 # Config hot-reload (ADR-021(b)): `systemctl reload soul` re-reads soul.yml
 # without dropping the Keeper session.
 ExecReload=/bin/kill -HUP $MAINPID

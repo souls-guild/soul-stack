@@ -2,7 +2,7 @@
 
 This guide is a step-by-step instruction "from scratch to connected Soul" for an operator who installs Soul Stack from our deb packages on his infrastructure. It covers installation, Vault provisioning, release of Keeper TLS material, filling out configs, bootstrap of the first Archon and onboarding of the first Soul.
 
-This is an **operational tutorial**, not a reference spec. Where a complete config grammar or RPC contract is needed, I provide a link to the regulatory document. The guide itself is based on real repository files: packages - [`deploy/nfpm/`](../../deploy/nfpm/), units - [`deploy/systemd/`](../../deploy/systemd/), example configs - [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) / [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
+This is an **operational tutorial**, not a reference spec. Where a complete config grammar or RPC contract is needed, I provide a link to the regulatory document. The guide itself is based on real repository files: packages - the `nfpms:` section of [`.goreleaser.yaml`](../../.goreleaser.yaml), units - [`deploy/systemd/`](../../deploy/systemd/), example configs - [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) / [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
 
 > **Package frame.** Our deb packages carry **only** binaries (`keeper` / `soul` / `soul-lint`), systemd units and example configs. **We DO NOT package Postgres, Redis and Vault** - this is an external infrastructure that the operator raises and operates himself. The guide assumes that they are already available. Product requirements for them - [infra.md](infra.md); differences dev↔prod - [keeper/prod-setup.md](../keeper/prod-setup.md).
 
@@ -67,11 +67,11 @@ Three packages (`make pkg` builds deb + rpm into `dist/`):
 sudo dpkg -i soul-stack-keeper_<version>_amd64.deb
 ```
 
-Package ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) decomposes:
+Package (the `keeper` entry under `nfpms:` in [`.goreleaser.yaml`](../../.goreleaser.yaml)) decomposes:
 
 | Path | What | Note |
 |---|---|---|
-| `/usr/local/bin/keeper` | binary, `0755` | — |
+| `/usr/bin/keeper` | binary, `0755` | — |
 | `/etc/systemd/system/keeper.service` | systemd-unit | `Type=notify` + `WatchdogSec=60s` (see [deployment.md → Readiness and watchdog](deployment.md#readiness-and-watchdog-typenotify)), `User=soul-stack`, hardening (`ProtectSystem=strict`, single writable `/var/lib/keeper`) |
 | `/etc/keeper/keeper.env` | env file, `config|noreplace` | sets `KEEPER_CONFIG=/etc/keeper/keeper.yml`; upgrade doesn't erase it |
 | `/etc/keeper/keeper.yml.example` | example config, `0640` | **working config is created by operator** by copying (step 5) |
@@ -84,7 +84,7 @@ Package ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) decomposes:
 sudo dpkg -i soul-stack-soul_<version>_amd64.deb
 ```
 
-Package ([`deploy/nfpm/soul.yaml`](../../deploy/nfpm/soul.yaml)) decomposes symmetrically: `/usr/local/bin/soul`, `/etc/systemd/system/soul.service` (also `Type=notify` + watchdog), `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
+Package (the `soul` entry under `nfpms:` in [`.goreleaser.yaml`](../../.goreleaser.yaml)) decomposes symmetrically: `/usr/bin/soul`, `/etc/systemd/system/soul.service` (also `Type=notify` + watchdog), `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
 
 > **Hardening soul unit is softer than keeper.** Soul uses Destiny (installs packages, edits files, manages services) - this requires real privileges on the host, so hard `ProtectSystem=strict` / `MemoryDenyWriteExecute` are **not** set for it ([`deploy/systemd/soul.service`](../../deploy/systemd/soul.service), comment in the header). The only writable path is `/var/lib/soul-stack` (SHA-256 + SoulSeed module cache).
 

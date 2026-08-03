@@ -151,17 +151,23 @@ go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
 make sbom
 ```
 
-### deb/rpm (`make pkg`)
+### deb/rpm/apk (`make pkg`)
 
-Native packages via `nfpm` (deb + rpm for each of the three binaries in
-`dist/pkg/`). Binaries are rebuilt for `linux/$(PKG_ARCH)` (deb/rpm are always
-Linux, the dev machine may be darwin); architecture overridden via
-`make pkg PKG_ARCH=arm64`. If `nfpm` isn't in PATH — a hint and error exit:
+Native packages via `goreleaser`, built from the `nfpms:` section of
+[`../.goreleaser.yaml`](../.goreleaser.yaml) — the same definition a release
+uses, so `make pkg` cannot produce a different set than the one that ships. Out
+comes the whole matrix into `dist/pkg/`: every package, `amd64` + `arm64`, as
+deb + rpm + apk. There is no per-architecture or per-component switch; the run
+starts by wiping `dist/`, so re-run `make sbom` afterwards if you need both. If
+`goreleaser` isn't in PATH — a hint and error exit:
 
 ```sh
-go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+go install github.com/goreleaser/goreleaser/v2@latest
 make pkg
 ```
+
+Maintainer scripts (`postinstall`/`preremove`/`postremove`) stay in
+[`nfpm/scripts/`](nfpm/scripts/) and are referenced from the goreleaser config.
 
 Installing the built package:
 

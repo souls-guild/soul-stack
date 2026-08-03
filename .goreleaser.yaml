@@ -141,9 +141,12 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
-# Native packages. Replicates deploy/nfpm/*.yaml (systemd units, env files,
-# example configs, maintainer scripts) so `apt install` / `dnf install` land a
-# working daemon. keeper+soul ship a unit; soul-lint is just the binary.
+# Native packages — the single definition of what Soul Stack ships as deb/rpm/apk
+# (systemd units, env files, example configs, maintainer scripts), so
+# `apt install` / `dnf install` land a working daemon. keeper+soul ship a unit;
+# the CLIs are just the binary. `make pkg` builds these same packages via
+# `goreleaser --snapshot`; there is deliberately no second set of nfpm configs to
+# drift against (NIM-409).
 nfpms:
   - id: keeper
     package_name: soul-stack-keeper

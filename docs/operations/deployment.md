@@ -8,8 +8,8 @@ Accordingly, [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-sou
 
 | Binar | Role | What | Where does it start |
 |---|---|---|---|
-| `keeper` | operator | Central server (gRPC bidi to Soul, OpenAPI, MCP, push module, Reaper). | Keeper host (`/usr/local/bin/keeper`). |
-| `soul` | operator | Agent daemon. In push mode - the same binary, launched `soul apply` via SSH. | Managed host (`/usr/local/bin/soul`). |
+| `keeper` | operator | Central server (gRPC bidi to Soul, OpenAPI, MCP, push module, Reaper). | Keeper host (`/usr/bin/keeper` from the package). |
+| `soul` | operator | Agent daemon. In push mode - the same binary, launched `soul apply` via SSH. | Managed host (`/usr/bin/soul` from the package). |
 | `soul-lint` | operator | Offline linter Destiny/Service/Manifest/Scenario. | CI / dev machine. |
 | `soul-trial` | test tool | Offline destiny/scenario/migration challenge runner ([ADR-023](../adr/0023-trial-test-runner.md)). Not a camera artifact. | CI / dev machine. |
 
@@ -18,11 +18,11 @@ Accordingly, [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-sou
 | Method | Team/source | When |
 |---|---|---|
 | From sources | `make build` ([`Makefile`](../../Makefile)) | dev / staging. Binary in `<module>/bin/<name>`. |
-| Native deb/rpm packages | `make pkg` (requires `nfpm`, see [`deploy/README.md`](../../deploy/README.md)). Artifacts in `dist/pkg/`. | Prod installation on Linux. nfpm configs - [`deploy/nfpm/`](../../deploy/nfpm/). |
+| Native deb/rpm/apk packages | `make pkg` (requires `goreleaser`, see [`deploy/README.md`](../../deploy/README.md)). Artifacts in `dist/pkg/`. | Prod installation on Linux. Package definitions - the `nfpms:` section of [`.goreleaser.yaml`](../../.goreleaser.yaml). |
 | Docker images | `docker build -f deploy/docker/<name>.Dockerfile -t soul-stack/<name> --build-arg VERSION=$(git describe …) .` (multi-stage, distroless runtime; see [`deploy/README.md`](../../deploy/README.md)). | Container rolling. |
 | SBOM | `make sbom` (CycloneDX via `cyclonedx-gomod`, mode `app`). Artifacts in `dist/sbom/`. | Compliance / supply-chain audit requirements. |
 
-`make pkg` rebuilds Linux binaries under `PKG_ARCH` (`amd64` default, overridden by `make pkg PKG_ARCH=arm64`) with `CGO_ENABLED=0 -trimpath -ldflags '-s -w'` and injects `VERSION` ldflags (see [`Makefile`](../../Makefile)).
+`make pkg` runs a `goreleaser --snapshot` build of the packages only, so it produces exactly what a release ships: every package, for `amd64` and `arm64`, as deb + rpm + apk. It wipes `dist/` first (`--clean`), so re-run `make sbom` if you need both (see [`Makefile`](../../Makefile)).
 
 Signing images (cosign / sigstore) - postponed until the appearance of CI + registry (`make sign` - documented stub), see [`deploy/README.md` § "Signing images"](../../deploy/README.md).
 
