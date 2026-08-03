@@ -488,48 +488,49 @@ Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal 
 
 **Manifest `lifecycle.auto_destroy` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_destroy: false`, deletion is **always** direct (DELETE without teardown), priority over `allow_destroy` - even `allow_destroy=false` does not run a teardown scenario and does not run into `422` "no scenario `destroy`." By default (`true`, backcompat), deletion follows the usual `allow_destroy` logic. Resolved from a snapshot of the deployed service-ref.
 
-#### `PATCH /v1/incarnations/{name}/hosts` — edit declared `spec.hosts[]`
+#### `PATCH /v1/incarnations/{name}/hosts` — REMOVED (NIM-330)
 
-Permission: `incarnation.update-hosts`. Path-param: `name`. **REST-only - no MCP-tool** (`manifest.go` does not contain `keeper.incarnation.hosts.update`; UI Hosts editing goes directly to REST). **Sync operation** (not async): edit declared `spec.hosts[]` is not a run, the response returns an updated incarnation, without `apply_id`.
+This endpoint edited `incarnation.spec.hosts[]`, and both are gone
+([ADR-044 amendment 2026-07-30](../../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)).
+It now answers **404**. Removed with it: the permissions `incarnation.update-hosts`
+and its deprecated alias `incarnation.update`, and the audit event
+`incarnation.hosts_updated`. Migration `108` strips the `hosts` key out of existing
+`spec` rows; migration `109` deletes the two permission strings out of
+`rbac_role_permissions` (the RBAC catalog is a closed enum and its enforcer is
+fail-closed — a leftover grant would abort the snapshot load, not merely fail a
+check).
 
-Edits the declared list of incarnation hosts (`spec.hosts[]`, [ADR-008](../../adr/0008-coven-stable-tags.md)). `spec.hosts` — declared-input of the next run (source of truth for bootstrap-`create` and topology-resolution `soulprint.hosts[].role`), **not** state-transition: `state_history`-row is not written. Atomicity - one PG transaction (`SELECT FOR UPDATE` → status guard → batch validation of SID in the registry `souls` → `UPDATE spec`).
+The field never carried the roster: a run's hosts are `incarnation_membership`
+(see [`POST .../members`](#post-v1incarnationsnamemembers--bind-hosts-to-the-roster)
+below), and `POST /v1/incarnations` never accepted `spec.hosts`. What it did carry
+was the **declared role** — and that has been an attribute of a Choir Voice since
+[ADR-044](../../adr/0044-choir.md) item 2.
 
-**Three mode semantics** above the current `spec.hosts[]`:
-- `replace` - complete replacement of the list with the passed set. Empty `hosts: []` is valid - deliberate clearing of declared-spec (`422` is deliberately **not** issued for an empty set).
-- `append` - insert-or-update by SID: new hosts are added, if the SID `role` matches the existing entry, it is overwritten. Empty `hosts: []` - no-op.
-- `remove` — delete records with passed SIDs; `role` in payload with `remove` is ignored (only `sid` is important). Empty `hosts: []` - no-op.
+**Where a declared role is set now.** Two paths, both already existing:
 
-**Request `IncarnationUpdateHostsRequest`:**
+- **In a scenario, at deploy time** — the keeper-side core module
+  [`core.choir.present`](../modules.md) (`on: keeper`), which is what makes the
+  removal lossless on the bootstrap-`create` path the old field existed to serve:
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `mode` | `enum` (`replace`/`append`/`remove`) | yes | Type of operation on `spec.hosts[]`. Unknown value → `422 validation-failed`. |
-| `hosts` | `list<IncarnationSpecHost>` | yes | A set for applying the mode operation. Can be empty (see mode semantics above). |
+  ```yaml
+  - name: put the seed node into the primary part
+    module: core.choir.present
+    on: keeper
+    params:
+      incarnation: "${ incarnation.name }"
+      choir: redis_primary
+      sid: "${ soulprint.hosts[0].sid }"
+      role: master
+  ```
 
-`IncarnationSpecHost` (item):
+- **Day-2, through the API** — `POST /v1/incarnations/{name}/choirs/{choir}/voices`
+  (permission `choir.add-voice`, audit `choir.voice_added`), with `role` in the body.
+  See [choirs.md](choirs.md).
 
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `sid` | `string` (FQDN) | yes | Host SID; must exist in the registry `souls` (otherwise `422`). |
-| `role` | `string` (kebab-case, 1..63) | optional | Declared role. Format `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` or missing/empty ([ADR-008](../../adr/0008-coven-stable-tags.md) allows null for hosts outside declared-spec). Operator-asserted string, the list is not predefined (`master`/`replica` - frequent, but not exhaustive). |
-
-```json
-{
-  "mode": "append",
-  "hosts": [
-    { "sid": "redis-prod-04.example.com", "role": "replica" },
-    { "sid": "redis-prod-05.example.com" }
-  ]
-}
-```
-
-**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{name}`) with `spec.hosts[]` edit already applied. `state`/`spec` are masked according to the general rule ([§ Masking state/spec in GET responses](../operator-api.md)).
-
-**Errors:** `400 malformed-request` (broken JSON / unknown body field - decoder in strict mode `DisallowUnknownFields`), `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked` (status `destroying` / `destroy_failed` - spec edit when demolition is meaningless; other statuses, including `applying`, are valid), `422 validation-failed` (invalid path-`name` / invalid `sid` / invalid `role` / unknown `mode` / SIDs are not in the registry `souls`), `500 internal-error`.
-
-**RBAC:** scope selector `incScope` (env-RBAC, parity `run`/`upgrade`/`destroy` - `coven=`/`service=`/`incarnation=` by path-`name`: declared `covens ∪ {name}` + `service`). Permission `incarnation.update-hosts` narrowed from the previous `incarnation.update` (PM-decision 2026-06-02); backcompat-alias `incarnation.update` is canonicalized to `incarnation.update-hosts` on the RBAC snapshot load.
-
-**Audit:** `incarnation.hosts_updated` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, mode, old_hosts, new_hosts}`) - written by the handler **after** commit (payload contains old/new snapshot, available only after `UpdateHosts`); does not go through generic audit-middleware.
+A host that no Voice places into a part has **no declared role** — an empty value,
+not a default group ([ADR-044 amendment 2026-06-30(b)](../../adr/0044-choir.md#adr-044-choir--named-host-topology-within-an-incarnation)).
+The **actual** role is unaffected and still comes only from a live probe +
+`register:` + `where:` ([ADR-008](../../adr/0008-coven-stable-tags.md)).
 
 #### `PUT /v1/incarnations/{name}/traits` — replace incarnation trait marks
 
@@ -559,7 +560,7 @@ The per-host counterpart is `POST /v1/souls/traits` (first-class, see [Soul → 
 
 **Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name` / invalid key / nested trait value), `500 internal-error`.
 
-**RBAC:** scope selector is the same as `incarnation.update-hosts` (env-RBAC, `coven=`/`service=`/`incarnation=` by path-`name`: declared `covens ∪ {name}` + `service`). trait-**key** NOT a scope-dimension - there is no gate for keys.
+**RBAC:** scope selector is the same as the other incarnation mutations (env-RBAC, `coven=`/`service=`/`incarnation=` by path-`name`: declared `covens ∪ {name}` + `service`). trait-**key** NOT a scope-dimension - there is no gate for keys.
 
 **Audit:** `incarnation.traits_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_keys, new_keys}`) - written by the handler **after** the commit. Payload carries only sorted lists of trait-**KEYS** before and after; the trait-**VALUES** themselves are NOT included in audit (secret-hygiene: trait-value can carry host infrastructure data - symmetrically `soul.traits-changed`).
 

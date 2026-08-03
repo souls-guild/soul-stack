@@ -141,7 +141,7 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where on a live soul** (ADR-056): a real probe step emits a per-host register, and the Passage action `where: register.*=='master'` is genuinely applied ONLY on the master host. L3b analog of `TestE2EStagedFailover_2Passage`, but via a real apply instead of a stub. |
 | `TestL3bDriftLive_HelloWorld` | 1 | Drift check on a live soul: create hello-world (`core.file.present` greeting file) → clean baseline → out-of-band file mutation → `CheckDrift` sees `drifted=1` via a real `core.file.Plan` → re-apply → `CheckDrift` clean again. Catches real Plan regressions (unlike L3a's stub Plan). |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Real `soul_beacon` plugin (gRPC-over-stdio): inotify portent → Vigil → Decree → Oracle → fired scenario on a live soul. |
-| `TestL3bRedisClusterCreate_FullLifecycle` | 3 | **SKIPPED (structural blocker, see below)**. Body kept: documents the target create-lifecycle + a reusable harness `SeedIncarnationForCreate` (direct-SQL seed of a declared role's spec.hosts[]). |
+| `TestL3bRedisClusterCreate_FullLifecycle` | 3 | **SKIPPED (structural blocker, see below)**. Body kept: documents the target create-lifecycle. Its `SeedIncarnationForCreate` helper is gone with `spec.hosts[]` (NIM-330) - a declared role is now a Voice, seeded via `incarnation_choir_voices` or laid down by a `core.choir.present` step. |
 
 ## Known coverage blockers (NOT-L3b-able)
 

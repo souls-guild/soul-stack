@@ -80,8 +80,6 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 			"incarnation.traits-set",
 			"incarnation.unbind-member",
 			"incarnation.unlock",
-			"incarnation.update",
-			"incarnation.update-hosts",
 			"incarnation.upgrade",
 			"incarnation.view-secrets",
 		},

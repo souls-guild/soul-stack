@@ -42,56 +42,6 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	}
 }
 
-// SpecHostDecl - a declared entry of `incarnation.spec.hosts[]` for
-// [Stack.SeedIncarnationForCreate]. The shape mirrors the
-// topology.parseDeclaredRoles parser (`{sid, role}`, ADR-008); role is
-// kebab-case (`primary`/`replica`/...), empty is allowed (host outside the
-// declared role).
-type SpecHostDecl struct {
-	SID  string
-	Role string
-}
-
-// SeedIncarnationForCreate inserts an incarnation in status='ready' with an
-// EMPTY state (`{}`) and declared `spec.hosts[]` (roles host-0/host-1/...).
-// Difference from [Stack.SeedIncarnationReady]: state is empty (create fills
-// it itself via state_changes), while spec carries the declared roles - read by
-// topology.parseDeclaredRoles when resolving
-// `soulprint.hosts.where("role == 'primary'")` in the create scenario.
-//
-// Why a separate helper: POST /v1/incarnations does NOT accept declared
-// spec.hosts (ADR-008, exactly as the spec explains), yet bootstrap-create
-// scenarios that target primary via
-// `soulprint.hosts.where("role == 'primary'")[0]` depend on these declared
-// roles. A direct SQL seed of spec.hosts BEFORE RunScenario(create) closes the
-// gap of "declared role unavailable offline".
-//
-// status='ready' -> the regular RunScenario(create) passes the lock gate
-// (lockRun starts a normal run from ready, run.go), no FromLocked hack needed.
-func (s *Stack) SeedIncarnationForCreate(t *testing.T, name, service, serviceVersion string, hosts []SpecHostDecl) {
-	t.Helper()
-	specHosts := make([]map[string]any, 0, len(hosts))
-	for _, h := range hosts {
-		obj := map[string]any{"sid": h.SID}
-		if h.Role != "" {
-			obj["role"] = h.Role
-		}
-		specHosts = append(specHosts, obj)
-	}
-	specJSON, err := json.Marshal(map[string]any{"hosts": specHosts})
-	if err != nil {
-		t.Fatalf("SeedIncarnationForCreate(%s): marshal spec: %v", name, err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := s.db.Exec(ctx, `
-		INSERT INTO incarnation (name, service, service_version, spec, state, status)
-		VALUES ($1, $2, $3, $4::jsonb, '{}'::jsonb, 'ready')
-	`, name, service, serviceVersion, string(specJSON)); err != nil {
-		t.Fatalf("SeedIncarnationForCreate(%s): %v", name, err)
-	}
-}
-
 // AllSoulIndexes — every soul container index, for the common
 // "bind the whole stack to one incarnation" case of
 // [Stack.CreateIncarnationOnRoster].

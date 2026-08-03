@@ -114,19 +114,6 @@ const (
 	// (RowsAffected==0 → no-op, event not written).
 	EventIncarnationDestroyCompleted EventType = "incarnation.destroy_completed"
 
-	// EventIncarnationHostsUpdated — an Archon edited the declared
-	// `spec.hosts[]` of an incarnation via the Operator API
-	// (`PATCH /v1/incarnations/{name}/hosts`) — supports three modes:
-	// replace (full list replacement), append (add / update role by SID) and
-	// remove (drop the given SIDs). `source: api` / `mcp`, `archon_aid` is
-	// the initiator. Payload: `{name, mode, old_hosts, new_hosts}` —
-	// `old_hosts`/`new_hosts` are the `spec.hosts[]` snapshot before and
-	// after (SID + role, not a secret); mode records the operation kind for
-	// diagnostics. declared `hosts` is the probe-spec source at bootstrap
-	// (ADR-008); an edit changes the resolver's namespacing topology for the
-	// next run.
-	EventIncarnationHostsUpdated EventType = "incarnation.hosts_updated"
-
 	// EventIncarnationTraitsChanged — an Archon fully replaced the
 	// operator-set trait labels of an incarnation (`incarnation.traits`,
 	// ADR-060 amend R1) via the Operator API

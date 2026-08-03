@@ -3,7 +3,6 @@ package topology
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -17,8 +16,14 @@ import (
 // Querier — narrow subset of pgxpool.Pool needed by resolver (read-only).
 // Symmetric to [soul.ExecQueryRower] / [incarnation.ExecQueryRower]: unit tests
 // use fake without spinning up PG, production uses real pool/Conn/Tx.
+//
+// Query only, no QueryRow: every read here is set-shaped (a roster, a set of
+// Voices). The single-row read this interface used to carry was `SELECT spec
+// FROM incarnation` for the declared roles of `spec.hosts[]`, and that field is
+// gone (ADR-044 amendment 2026-07-30 / NIM-330). Keeping the method off the
+// interface makes "the resolver does not consult incarnation.spec" a fact the
+// compiler enforces rather than an assertion a test has to remember to make.
 type Querier interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
@@ -93,20 +98,12 @@ WHERE m.incarnation_name = $1
 ORDER BY s.sid ASC
 `
 
-// incarnationSpecSQL reads spec of one incarnation to extract declared roles
-// (`spec.hosts[].role`). Cross-incarnation isolation: exactly one row by PK.
-const incarnationSpecSQL = `
-SELECT spec
-FROM incarnation
-WHERE name = $1
-`
-
 // choirVoicesSQL reads Choir memberships of all hosts of one incarnation in one
 // query (ADR-044, S-T4/S-T6): SID → names of Choirs where it is a Voice, + role
 // of Voice in each Choir. Cross-incarnation isolation — filter by
 // `incarnation_name` (PK includes it, ADR-044 section 3). One round-trip per
-// roster (symmetric to loadDeclaredRoles, no N+1); join by
-// `incarnation_choir_voices_sid_idx` (060_create_choirs.up.sql). ORDER BY choir_name —
+// roster (no N+1); join by `incarnation_choir_voices_sid_idx`
+// (060_create_choirs.up.sql). ORDER BY choir_name —
 // deterministic order of names inside `choirs[]` of each host and
 // deterministic role selection on multi-choir conflict (ADR-044 p.2:
 // absorption of declared role by Choir, see loadChoirMemberships).
@@ -119,7 +116,7 @@ ORDER BY sid ASC, choir_name ASC
 
 // LoadIncarnationHosts resolves scenario run hosts for incarnation
 // `incarnationName`: online member souls + last-reported soulprint + declared
-// role from `incarnation.spec.hosts[].role`.
+// role from the host's Choir Voice.
 //
 // Two-phase (ADR-006(a)):
 //   - Phase 1 (SQL, [rosterSQL]): candidates by incarnation_membership +
@@ -132,14 +129,10 @@ ORDER BY sid ASC, choir_name ASC
 //   - Nonexistent incarnation / no online hosts → empty slice, NOT
 //     error (PM-decision #3).
 //   - Cross-incarnation isolation: only member souls of `incarnationName` and
-//     spec of exactly this incarnation are read (membership join, PM-decision #4).
+//     Voices of exactly this incarnation are read (membership join, PM-decision #4).
 //   - Stale soulprint (`received_at < now - 10m`) → warn to logger,
 //     run is not blocked (ADR-018, PM-decision #2).
 func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName string) ([]*HostFacts, error) {
-	specRoles, err := r.loadDeclaredRoles(ctx, incarnationName)
-	if err != nil {
-		return nil, err
-	}
 	choirs, choirRoles, err := r.loadChoirMemberships(ctx, incarnationName)
 	if err != nil {
 		return nil, err
@@ -157,15 +150,12 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 		if err != nil {
 			return nil, err
 		}
-		// Precedence role (ADR-044 p.2): Choir absorbs declared role.
-		// voice.role (from incarnation_choir_voices) > spec.hosts[].role.
-		// spec.hosts[].role remains fallback for hosts WITHOUT Voice (and for
-		// bootstrap-create, where Choir memberships don't exist yet, wire-compatibility).
-		if voiceRole, ok := choirRoles[h.SID]; ok {
-			h.Role = voiceRole
-		} else {
-			h.Role = specRoles[h.SID]
-		}
+		// Declared role — Voice, and ONLY Voice (ADR-044 p.2 + amendment
+		// 2026-07-30/NIM-330: `spec.hosts[]` is gone, there is no second tier).
+		// A host with no Voice, and a Voice whose role is empty/NULL, both land
+		// here as "" — that is the declared answer "no role", not a missing one,
+		// so nothing downstream may substitute a default for it.
+		h.Role = choirRoles[h.SID]
 		h.Choirs = choirs[h.SID]
 		candidates = append(candidates, h)
 	}
@@ -237,31 +227,14 @@ func filterConnectedSnapshot(candidates []*HostFacts) []*HostFacts {
 	return out
 }
 
-// loadDeclaredRoles reads `incarnation.spec.hosts[].role` and builds a map
-// SID → declared role. Nonexistent incarnation → empty map (roles of all
-// hosts will be "" — allowed, ADR-008: declared role can be null for
-// hosts outside declared-spec).
-func (r *Resolver) loadDeclaredRoles(ctx context.Context, incarnationName string) (map[string]string, error) {
-	var specJSON []byte
-	err := r.pool.QueryRow(ctx, incarnationSpecSQL, incarnationName).Scan(&specJSON)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return map[string]string{}, nil
-		}
-		return nil, fmt.Errorf("topology: incarnation spec query: %w", err)
-	}
-	return parseDeclaredRoles(specJSON), nil
-}
-
 // loadChoirMemberships reads `incarnation_choir_voices` and builds two maps:
 //   - choirs: SID → names of Choirs where this SID is a Voice (ADR-044, S-T4);
-//   - roles:  SID → role of Voice (ADR-044, S-T6/p.2: Choir absorbs declared
-//     role, host role now comes from Voice, not from spec.hosts[].role).
+//   - roles:  SID → role of Voice (ADR-044, S-T6/p.2 + amendment 2026-07-30:
+//     Choir absorbed the declared role and is now its ONLY source).
 //
-// One query for entire roster (symmetric to loadDeclaredRoles, no N+1); each
-// SID can be present in multiple Choirs → slice of names. Hosts without
-// Voices are absent from both maps (Choirs remains nil, role — fallback
-// to spec in LoadIncarnationHosts).
+// One query for entire roster (no N+1); each SID can be present in multiple
+// Choirs → slice of names. Hosts without Voices are absent from both maps
+// (Choirs remains nil; the role map lookup in LoadIncarnationHosts yields "").
 //
 // Multi-choir role conflict (fixed by ADR-044 amendment): HostFacts.Role —
 // scalar, but SID can be a Voice in multiple Choirs of one incarnation with
@@ -269,7 +242,7 @@ func (r *Resolver) loadDeclaredRoles(ctx context.Context, incarnationName string
 // choir_name sort order Choir WITH NON-EMPTY role (SQL already ORDER BY ... choir_name
 // ASC, Choirs with empty/NULL role are skipped, so first encountered
 // non-empty role is the result) + WARN log about conflict. If roles are empty in all
-// Choirs — SID is not added to map roles → fallback to spec.
+// Choirs — SID is not added to map roles, and the host's role stays "".
 //
 // Cross-incarnation isolation — filter choirVoicesSQL by `incarnation_name`.
 // Order of names inside choirs slice is deterministic (ORDER BY choir_name in SQL).
@@ -289,7 +262,7 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 		// NULL when role is omitted (ADR-044 p.2/p.4 — role is optional). Scan into
 		// *string (pattern from crud.go scanVoice / scanHost for nullable), otherwise pgx
 		// fails with "cannot scan NULL into *string" and breaks entire roster. nil/empty
-		// role → no role → fallback to spec.hosts[].role in LoadIncarnationHosts.
+		// role → no role → the host's Role stays "" in LoadIncarnationHosts.
 		var sid, choirName string
 		var role *string
 		if err := rows.Scan(&sid, &choirName, &role); err != nil {
@@ -315,34 +288,6 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 		return nil, nil, fmt.Errorf("topology: choir voices iter: %w", err)
 	}
 	return choirs, roles, nil
-}
-
-// parseDeclaredRoles extracts SID → role from freeform incarnation spec.
-// Expected form: `spec.hosts` — list of objects with `sid` and `role`
-// (scenario/orchestration.md §4.1). spec is freeform (jsonb): any deviation
-// from form — skip element, NOT error (resolver is read-only, not spec validator;
-// spec form validation — at incarnation creation layer).
-func parseDeclaredRoles(specJSON []byte) map[string]string {
-	roles := map[string]string{}
-	if len(specJSON) == 0 {
-		return roles
-	}
-
-	var spec struct {
-		Hosts []struct {
-			SID  string `json:"sid"`
-			Role string `json:"role"`
-		} `json:"hosts"`
-	}
-	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return roles
-	}
-	for _, h := range spec.Hosts {
-		if h.SID != "" && h.Role != "" {
-			roles[h.SID] = h.Role
-		}
-	}
-	return roles
 }
 
 // scanHost parses one row of roster. soulprint_facts (JSONB) → map;
@@ -400,8 +345,8 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 // + timestamps.
 //
 // Difference from rosterSQL — filter is NOT by Coven membership, but by exact SID list;
-// incarnation-spec phase is not here (push run is not tied to incarnation,
-// declared roles don't apply — Role="" for all). Status filter is the same:
+// the Choir phase is not here (push run is not tied to an incarnation, so there are
+// no Voices to read — Role="" for all). Status filter is the same:
 // exclude terminal (`revoked`/`expired`/`destroyed`) and onboarding (`pending`) —
 // SshDispatcher makes no sense on "not-ready" hosts regardless of lease.
 //
@@ -421,8 +366,8 @@ ORDER BY sid ASC
 // [Resolver.LoadIncarnationHosts], but:
 //
 //   - input filter — SID list, not Coven label;
-//   - declared roles are absent (Role="" for all — push hosts are not tied to
-//     incarnation.spec);
+//   - declared roles are absent (Role="" for all — push hosts belong to no
+//     incarnation, so they have no Voice);
 //   - second phase (filterAlive) applies the same: lease-presence for
 //     fail-safe filter of "live" hosts; lease==nil → SQL-snapshot fallback.
 //

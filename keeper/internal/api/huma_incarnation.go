@@ -6,7 +6,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): mounted via
 //     newHumaIncarnationAPI(evt) (huma-audit-middleware variant B); the register func
 //     sets the payload from *Typed reply.AuditPayload via SetHumaAuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): mounted via
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): mounted via
 //     newHumaCadenceAPI (no audit wiring); audit is written BY the handler ITSELF inside
 //     *Typed (h.auditW.Write). Confusing the class = an S6 regression.
 //   - READ (get / list / history): newHumaCadenceAPI, no audit written.
@@ -197,34 +197,6 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 			return nil, incProblem(err)
 		}
 		return &incDestroyOutput{Status: http.StatusAccepted, Body: newIncarnationDestroyReply(body)}, nil
-	})
-}
-
-// registerHumaIncarnationUpdateHosts mounts PATCH /v1/incarnations/{name}/hosts
-// (SELF-AUDIT incarnation.hosts_updated — written BY the handler itself inside UpdateHostsTyped).
-// incH nil → no-op.
-func registerHumaIncarnationUpdateHosts(humaAPI huma.API, incH *handlers.IncarnationHandler) {
-	if incH == nil {
-		return
-	}
-	huma.Register(humaAPI, incUpdateHostsOperation(), func(ctx context.Context, in *incUpdateHostsInput) (*incUpdateHostsOutput, error) {
-		claims, ok := apimiddleware.ClaimsFromContext(ctx)
-		if !ok {
-			return nil, incMissingClaims()
-		}
-		items := make([]handlers.IncarnationSpecHostInput, len(in.Body.Hosts))
-		for i, h := range in.Body.Hosts {
-			role := ""
-			if h.Role != nil {
-				role = *h.Role
-			}
-			items[i] = handlers.IncarnationSpecHostInput{SID: h.SID, Role: role}
-		}
-		body, err := incH.UpdateHostsTyped(ctx, claims, in.Name, in.Body.Mode, items)
-		if err != nil {
-			return nil, incProblem(err)
-		}
-		return &incUpdateHostsOutput{Body: newIncarnationGetReply(body)}, nil
 	})
 }
 
@@ -481,7 +453,6 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationRerunLast(api, stub)
 		registerHumaIncarnationCheckDrift(api, stub)
 		registerHumaIncarnationDestroy(api, stub)
-		registerHumaIncarnationUpdateHosts(api, stub)
 		registerHumaIncarnationSetTraits(api, stub)
 		registerHumaIncarnationRevealSecret(api, stub)
 		registerHumaIncarnationRevealableSecrets(api, stub)

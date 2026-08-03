@@ -24,6 +24,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
@@ -33,6 +34,31 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
+
+// --- Voice role validation -------------------------------------------
+
+// voiceRolePattern — kebab-case role label (lowercase + hyphens), 1..63 chars.
+// A declared role is an operator-asserted string on a Voice (ADR-044 p.2; since
+// the amendment 2026-07-30 / NIM-330 this is its ONLY home — `spec.hosts[].role`
+// is gone). The values are not predefined in code (master/replica are common but
+// not exhaustive), so only the shape is validated, like Coven labels — the same
+// kebab-case invariant, no conflict with the scenario `on:` grammar.
+const voiceRolePattern = `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`
+
+var voiceRoleRe = regexp.MustCompile(voiceRolePattern)
+
+// validVoiceRole reports whether role is an acceptable declared role. Empty is
+// acceptable: ADR-044 amendment 2026-06-30(b) — a Voice may carry no role, which
+// resolves to "no declared role", not to a default one.
+func validVoiceRole(role string) bool {
+	if role == "" {
+		return true
+	}
+	if len(role) > 63 {
+		return false
+	}
+	return voiceRoleRe.MatchString(role)
+}
 
 // ChoirDB is a narrow surface over pgxpool.Pool for Choir/Voice CRUD operations
 // (ADR-044, S-T3). Combines [choir.ExecQueryRower] (Create/Get/List/Delete +
@@ -288,7 +314,7 @@ func (h *ChoirHandler) AddVoiceTyped(ctx context.Context, claims *jwt.Claims, na
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'sid' must match "+soul.SIDPattern)}
 	}
-	if req.Role != nil && !validHostRole(*req.Role) {
+	if req.Role != nil && !validVoiceRole(*req.Role) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"field 'role' must be lowercase kebab-case (1..63 chars)")}
 	}

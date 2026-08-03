@@ -58,7 +58,6 @@ var allEventTypes = []EventType{
 	"incarnation.destroy_failed",                // EventIncarnationDestroyFailed
 	"incarnation.destroy_started",               // EventIncarnationDestroyStarted
 	"incarnation.drift_checked",                 // EventIncarnationDriftChecked
-	"incarnation.hosts_updated",                 // EventIncarnationHostsUpdated
 	"incarnation.member_bound",                  // EventIncarnationMemberBound
 	"incarnation.member_unbound",                // EventIncarnationMemberUnbound
 	"incarnation.rerun_last",                    // EventIncarnationRerunLast

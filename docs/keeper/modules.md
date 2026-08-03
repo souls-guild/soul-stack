@@ -207,7 +207,7 @@ Before mutation, the module validates the existence of incarnation (`Incarnation
 | `incarnation` | string | required | The name of the incarnation to which Choir belongs. Checks for existence. |
 | `choir` | string | required | Choir's name. Validated by `ValidChoirName`; garbage → `failed`. |
 | `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`; invalid → `failed`. |
-| `role` | string | optional | Voice part in Choir (`present` only). |
+| `role` | string | optional | The host's **declared role** within the Choir (`present` only) - kebab-case, 1..63. Since [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330) this is the ONLY way to declare a role: `incarnation.spec.hosts[].role` and its `PATCH .../hosts` endpoint are gone, so a bootstrap-`create` that needs roles writes them with this step (`on: keeper`) before any task reads `soulprint.hosts[].role`. Omitted → SQL `NULL` = "no declared role", NOT a default group. |
 | `position` | int (≥ 0) | optional | Voice position (`present` only); negative → `failed`. |
 
 ### Output contract (`output:` module)

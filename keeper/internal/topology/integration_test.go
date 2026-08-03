@@ -135,12 +135,11 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	seedIncarnation(t, "redis-prod", map[string]any{
-		"hosts": []map[string]any{
-			{"sid": "a.example.com", "role": "master"},
-			{"sid": "b.example.com", "role": "replica"},
-		},
-	})
+	seedIncarnation(t, "redis-prod", map[string]any{})
+	// The declared roles come from Choir Voices — the only source since NIM-330
+	// (ADR-044 amendment 2026-07-30). The seed is here so the assertion below
+	// stays a real check on the role plumbing rather than "everything is empty".
+	seedChoir(t, "redis-prod", "parts")
 
 	// nil-lease resolver → SQL-presence fallback: connected — pass through;
 	// pending/destroyed cut by SQL phase, disconnected — fallback filter
@@ -151,6 +150,8 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 	seedSoul(t, "disc.example.com", nil, soul.StatusDisconnected)
 	seedSoul(t, "destroyed.example.com", nil, soul.StatusDestroyed)
 	seedMembership(t, "redis-prod", "a.example.com", "b.example.com", "pending.example.com", "disc.example.com", "destroyed.example.com")
+	seedVoiceRole(t, "redis-prod", "parts", "a.example.com", "master")
+	seedVoiceRole(t, "redis-prod", "parts", "b.example.com", "replica")
 
 	now := time.Now().UTC()
 	setSoulprint(t, "a.example.com",
@@ -341,35 +342,6 @@ func TestIntegration_LoadIncarnationHosts_MissingIncarnation_Empty(t *testing.T)
 	}
 	if len(hosts) != 0 {
 		t.Errorf("len(hosts) = %d, want 0", len(hosts))
-	}
-}
-
-func TestIntegration_LoadIncarnationHosts_UndeclaredHostRoleEmpty(t *testing.T) {
-	// ADR-008: host outside declared-spec → role "".
-	resetAll(t)
-	ctx := context.Background()
-
-	seedIncarnation(t, "redis-prod", map[string]any{
-		"hosts": []map[string]any{{"sid": "declared.example.com", "role": "master"}},
-	})
-	seedSoul(t, "declared.example.com", nil, soul.StatusConnected)
-	seedSoul(t, "extra.example.com", nil, soul.StatusConnected)
-	seedMembership(t, "redis-prod", "declared.example.com", "extra.example.com")
-
-	r := NewResolver(integrationPool, nil, nil)
-	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
-	if err != nil {
-		t.Fatalf("LoadIncarnationHosts: %v", err)
-	}
-	roles := map[string]string{}
-	for _, h := range hosts {
-		roles[h.SID] = h.Role
-	}
-	if roles["declared.example.com"] != "master" {
-		t.Errorf("declared role = %q, want master", roles["declared.example.com"])
-	}
-	if roles["extra.example.com"] != "" {
-		t.Errorf("undeclared role = %q, want empty", roles["extra.example.com"])
 	}
 }
 
@@ -617,8 +589,8 @@ func TestIntegration_OperatorBoundRosterIsVisibleToTheRunner(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	// A bare incarnation row, no declared spec.hosts[] — this is exactly the state
-	// `POST /v1/incarnations` leaves behind when the run is deferred. The operator
+	// A bare incarnation row — this is exactly the state `POST /v1/incarnations`
+	// leaves behind when the run is deferred. The operator
 	// row is the FK target of incarnation_membership.bound_by_aid: an operator bind
 	// is attributed, unlike the keeper-internal one.
 	seedOperator(t, "archon-alice")

@@ -57,7 +57,6 @@ import (
 //	POST   /v1/incarnations/{name}/upgrade           — migrate state_schema_version (ADR-019).
 //	GET    /v1/incarnations/{name}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
-//	PATCH  /v1/incarnations/{name}/hosts             — edit declared spec.hosts[] (ADR-008).
 //	PUT    /v1/incarnations/{name}/traits            — replace operator-set trait labels (ADR-060).
 //	POST   /v1/voyages                               — create Voyage (ADR-043 S5, RBAC-by-kind).
 //	POST   /v1/voyages/preview                       — dry-resolve scope without creating a Voyage (ADR-043 amendment §4).
@@ -511,7 +510,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// audit class): create/run/unlock/upgrade — WRITE-MIDDLEWARE-AUDIT variant B
 		// (newHumaIncarnationAPI(evt) — huma writes the response ITSELF, audit holds hctx.Status()
 		// + a carrier payload from *Typed-reply.AuditPayload, otherwise an S6 relapse); rerun-last/
-		// check-drift/destroy/update-hosts — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
+		// check-drift/destroy/traits-set — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
 		// INSIDE *Typed via h.auditW.Write — the payload is assembled after the domain operation;
 		// audit-middleware is NOT wired, newHumaCadenceAPI); list/get/history — read (no
 		// audit). TOPOLOGY: chi.Route("/{name}") is REMOVED — all incarnation ops carry the FULL
@@ -703,17 +702,6 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "destroy", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
-			})
-
-			// PATCH /v1/incarnations/{name}/hosts — edit declared spec.hosts[]
-			// (ADR-008). Permission incarnation.update-hosts (narrowed from incarnation.update,
-			// PM-decision 2026-06-02; the backcompat alias is canonicalized on snapshot load), scope
-			// incScope. WRITE-SELF-AUDIT: incarnation.hosts_updated is written by the handler itself (payload
-			// old/new snapshot after UpdateHosts; audit-middleware is NOT wired).
-			r.With(
-				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "update-hosts", incScope),
-			).Group(func(r chi.Router) {
-				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
 			})
 
 			// PUT /v1/incarnations/{name}/traits — wholesale replacement of operator-set

@@ -92,7 +92,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodDelete, "/v1/synods/{name}/roles/{role_name}"}: {events: []audit.EventType{audit.EventSynodRoleRevoked}},
 
 	// incarnations — MIXED audit class (middleware create/run/unlock/upgrade +
-	// self-audit rerun/check-drift/destroy/update-hosts), all must emit.
+	// self-audit rerun/check-drift/destroy/traits-set), all must emit.
 	{http.MethodPost, "/v1/incarnations"}:                             {events: []audit.EventType{audit.EventIncarnationCreated}},
 	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
 	{http.MethodPost, "/v1/incarnations/{name}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
@@ -100,7 +100,6 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:           {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler writes inside RerunLastTyped"},
 	{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:          {events: []audit.EventType{audit.EventIncarnationDriftChecked}, note: "self-audit: handler writes inside CheckDriftTyped"},
 	{http.MethodDelete, "/v1/incarnations/{name}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
-	{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:               {events: []audit.EventType{audit.EventIncarnationHostsUpdated}, note: "self-audit: handler writes inside UpdateHostsTyped"},
 	{http.MethodPut, "/v1/incarnations/{name}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
 	{http.MethodPost, "/v1/incarnations/{name}/members"}:              {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
 	{http.MethodDelete, "/v1/incarnations/{name}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},

@@ -7,7 +7,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): the event is written by the
 //     huma-audit-middleware (variant B) — guarded via assertMiddlewareAudit (audit
 //     on 2xx with a non-empty payload; empty on 4xx/403).
-//   - SELF-AUDIT (rerun-last/check-drift/destroy/update-hosts): the event is
+//   - SELF-AUDIT (rerun-last/check-drift/destroy/traits-set): the event is
 //     written by the handler ITSELF INSIDE *Typed — guarded via assertSelfAudit
 //     (event with requiredKey).
 //
@@ -119,7 +119,6 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:                    0,
 		{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:                   0,
 		{http.MethodDelete, "/v1/incarnations/{name}"}:                             0,
-		{http.MethodPatch, "/v1/incarnations/{name}/hosts"}:                        0,
 		{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        0,
 		{http.MethodGet, "/v1/incarnations/{name}/choirs"}:                         0,
 		{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}"}:              0,
@@ -127,10 +126,22 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		{http.MethodGet, "/v1/incarnations/{name}/choirs/{choir}/voices"}:          0,
 		{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}/voices/{sid}"}: 0,
 	}
+	// Routes that must NOT be on the PRODUCTION router. `want` above cannot
+	// express this: an untracked pattern is simply ignored by the walk, so a
+	// resurrected mount would pass unnoticed.
+	forbidden := map[route]int{
+		// PATCH .../hosts edited `incarnation.spec.hosts[]`, removed whole with
+		// the field (ADR-044 amendment 2026-07-30, NIM-330). A declared role is
+		// a Voice; POST .../choirs/{choir}/voices above is where it is written.
+		{http.MethodPatch, "/v1/incarnations/{name}/hosts"}: 0,
+	}
 	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		k := route{method: method, path: normalizePath(pattern)}
 		if _, tracked := want[k]; tracked {
 			want[k]++
+		}
+		if _, banned := forbidden[k]; banned {
+			forbidden[k]++
 		}
 		return nil
 	}); err != nil {
@@ -139,6 +150,11 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 	for k, n := range want {
 		if n != 1 {
 			t.Errorf("%s seen %d times, want 1 (0 = shadowed/not mounted -> 405; >1 = duplicate)", k, n)
+		}
+	}
+	for k, n := range forbidden {
+		if n != 0 {
+			t.Errorf("%s is mounted %d times on the production router, want 0 - the endpoint is removed", k, n)
 		}
 	}
 }
@@ -159,7 +175,7 @@ func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 
 // humaIncarnationRouter mounts ALL incarnation routes via huma exactly per the
 // router.go wiring: per-route RBAC + the correct audit class (MIDDLEWARE for
-// create/run/unlock/upgrade; SELF for rerun-last/check-drift/destroy/update-hosts;
+// create/run/unlock/upgrade; SELF for rerun-last/check-drift/destroy/traits-set;
 // read without audit) + a huma op with the full path /{name}[/...] on the
 // /v1/incarnations group. enforcer/auditW/incH are parameterized. injectClaims
 // replaces RequireJWT.
@@ -208,9 +224,6 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 			})
 			r.With(injectClaims, multi("destroy")).Group(func(r chi.Router) {
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
-			})
-			r.With(injectClaims, multi("update-hosts")).Group(func(r chi.Router) {
-				registerHumaIncarnationUpdateHosts(newHumaCadenceAPI(r), incH)
 			})
 			// secret reveal (NIM-74): POST self-audit + GET read, both under view-secrets.
 			r.With(injectClaims, multi("view-secrets")).Group(func(r chi.Router) {
@@ -815,42 +828,38 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 	}
 }
 
-// === SELF-AUDIT: update-hosts ===
+// === REMOVED: PATCH /v1/incarnations/{name}/hosts (NIM-330) ===
 
-func TestHumaIncarnation_UpdateHosts_WireAndSelfAudit(t *testing.T) {
+// TestHumaIncarnation_UpdateHostsIsGone pins how the removed endpoint answers.
+// `spec.hosts[]` and its editing endpoint were deleted whole (ADR-044 amendment
+// 2026-07-30), so a caller that still holds the old client — the web UI before it
+// re-vendors the spec, a script, a saved curl — must get a clean routing answer:
+// 404 (no such path) or 405 (path exists, method does not).
+//
+// The failure this guards against is a 5xx. A half-removal — the huma operation
+// unmounted but the chi group left behind, or the reverse — surfaces as a nil
+// handler panic or an internal error, which reads to the caller as "the endpoint
+// is broken" rather than "the endpoint is gone", and would send someone hunting
+// through keeper logs for a fault that does not exist. A 2xx would be worse
+// still: it would mean the route is somehow live after the domain behind it was
+// deleted.
+func TestHumaIncarnation_UpdateHostsIsGone(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	db := &incTestDB{
-		selectByName:  func(name string) pgx.Row { return incRow(name, "ready", "{}") },
-		soulsExisting: map[string]struct{}{"web1.example.com": {}},
-	}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, auditCap, nil, nil)
-	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
 	rec := httptest.NewRecorder()
 	body := `{"mode":"replace","hosts":[{"sid":"web1.example.com","role":"master"}]}`
 	req := httptest.NewRequest(http.MethodPatch, "/v1/incarnations/redis-prod/hosts", strings.NewReader(body))
 	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	var reply struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
-		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
-	}
-	if reply.Name != "redis-prod" {
-		t.Errorf("reply.name = %q, want redis-prod", reply.Name)
-	}
-	assertSelfAudit(t, auditCap, audit.EventIncarnationHostsUpdated, "mode")
-}
 
-func TestHumaIncarnation_UpdateHosts_BadMode_422(t *testing.T) {
-	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/v1/incarnations/redis-prod/hosts", strings.NewReader(`{"mode":"bogus","hosts":[]}`))
-	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (enum mode); body=%s", rec.Code, rec.Body.String())
+	switch rec.Code {
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		// The two acceptable answers.
+	default:
+		t.Fatalf("PATCH /v1/incarnations/{name}/hosts = %d, want 404 or 405 "+
+			"(the endpoint is removed, NIM-330); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a removed endpoint wrote audit: %v", auditEventTypes(auditCap))
 	}
 }
 
@@ -969,11 +978,18 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 	for _, want := range []string{
 		"createIncarnation", "listIncarnations", "getIncarnation", "getIncarnationHistory",
 		"runIncarnationScenario", "unlockIncarnation", "upgradeIncarnation",
-		"rerunLastIncarnation", "checkIncarnationDrift", "destroyIncarnation", "updateIncarnationHosts",
+		"rerunLastIncarnation", "checkIncarnationDrift", "destroyIncarnation",
 	} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("spec does not contain op %q", want)
 		}
+	}
+	// updateIncarnationHosts is gone with `spec.hosts[]` (NIM-330). It is checked
+	// here rather than only in the committed-spec drift guard because the web UI
+	// vendors this fragment: an operation left in the contract would be re-generated
+	// into a client for an endpoint that answers 404.
+	if strings.Contains(frag, "updateIncarnationHosts") {
+		t.Error("spec still publishes op \"updateIncarnationHosts\" - the endpoint is removed (NIM-330)")
 	}
 }
 
@@ -1028,7 +1044,7 @@ func auditEventTypes(cap *auditCaptureWriter) []audit.EventType {
 
 // incTestDB — a minimal [handlers.IncarnationDB] for huma wire tests: covers
 // insert (create), SelectByName (get/run/unlock/upgrade/destroy/history probe),
-// unlock/rerun SELECT FOR UPDATE, souls-existence (update-hosts), list COUNT/SELECT.
+// unlock/rerun SELECT FOR UPDATE, souls-existence (bind-member), list COUNT/SELECT.
 type incTestDB struct {
 	insertRow     func() pgx.Row
 	selectByName  func(name string) pgx.Row

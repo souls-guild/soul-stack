@@ -133,7 +133,6 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationRerunLast(api, stub)
 			registerHumaIncarnationCheckDrift(api, stub)
 			registerHumaIncarnationDestroy(api, stub)
-			registerHumaIncarnationUpdateHosts(api, stub)
 			registerHumaIncarnationSetTraits(api, stub)
 			registerHumaIncarnationBindMembers(api, stub)
 			registerHumaIncarnationUnbindMember(api, stub)

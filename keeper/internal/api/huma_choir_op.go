@@ -130,7 +130,7 @@ type voiceAddInput struct {
 // schema name (huma DefaultSchemaNamer; hand-written VoiceAddRequest, N4).
 type VoiceAddRequest struct {
 	SID      string  `json:"sid" required:"true" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of a host - a member of the incarnation"`
-	Role     *string `json:"role,omitempty" doc:"declared-role (kebab-case, 1..63)"`
+	Role     *string `json:"role,omitempty" maxLength:"63" doc:"declared-role (kebab-case, 1..63)"`
 	Position *int    `json:"position,omitempty" doc:"ordinal index in the batch (>= 0)"`
 }
 

@@ -28,9 +28,7 @@ var incarnationContractSchemas = []string{
 	"IncarnationRerunLastRequest",
 	"IncarnationRerunLastReply",
 	"IncarnationCheckDriftRequest",
-	"IncarnationUpdateHostsRequest",
 	"IncarnationSetTraitsRequest",
-	"IncarnationSpecHost",
 	"IncarnationGetReply",
 	"IncarnationDestroyReply",
 	"IncarnationStatus",
@@ -48,8 +46,6 @@ var incarnationForbiddenSchemas = []string{
 	"IncUpgradeHumaBody",
 	"IncRerunHumaBody",
 	"IncCheckDriftHumaBody",
-	"IncUpdateHostsHumaBody",
-	"IncHostHumaBody",
 	// Generic names that DefaultSchemaNamer WOULD produce from an unaliased
 	// sharedapi.PagedResponse[T] (generic brackets collapse into concatenation):
 	// the envelope alias must displace them with contract names.

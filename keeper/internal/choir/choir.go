@@ -9,8 +9,9 @@
 //
 // Source of truth for the declared topology is these tables, NOT
 // `incarnation.state` (state is committed only under a cross-host barrier,
-// ADR-044 item 4). `voice.role` subsumes the declared role
-// `incarnation.spec.hosts[].role` (ADR-044 item 2).
+// ADR-044 item 4). `voice.role` IS the declared role — it subsumed
+// `incarnation.spec.hosts[].role` (ADR-044 item 2) and, since the amendment
+// 2026-07-30 (NIM-330) removed that field, it is the only source of one.
 //
 // Membership invariant (ADR-044 item 3): a Voice is created only for a SID
 // that is ALREADY a member of this incarnation — its `souls.coven[]` contains

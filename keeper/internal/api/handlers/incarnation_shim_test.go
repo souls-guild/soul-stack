@@ -259,36 +259,6 @@ func incCheckDrift(h *IncarnationHandler, r *http.Request) *httptest.ResponseRec
 	return rec
 }
 
-// incUpdateHosts — shim for PATCH /v1/incarnations/{name}/hosts.
-func incUpdateHosts(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
-	rec := httptest.NewRecorder()
-	claims, _ := shimClaims(r)
-	name := chi.URLParam(r, "name")
-	var body struct {
-		Mode  string `json:"mode"`
-		Hosts []struct {
-			SID  string  `json:"sid"`
-			Role *string `json:"role"`
-		} `json:"hosts"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	items := make([]IncarnationSpecHostInput, len(body.Hosts))
-	for i, hst := range body.Hosts {
-		role := ""
-		if hst.Role != nil {
-			role = *hst.Role
-		}
-		items[i] = IncarnationSpecHostInput{SID: hst.SID, Role: role}
-	}
-	view, err := h.UpdateHostsTyped(r.Context(), claims, name, body.Mode, items)
-	if err != nil {
-		renderProblem(rec, err)
-		return rec
-	}
-	writeJSON(rec, http.StatusOK, shimGetReplyJSON(view), shimLogger)
-	return rec
-}
-
 // incSetTraits — shim for PUT /v1/incarnations/{name}/traits: decode body.traits →
 // SetTraitsTyped.
 func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {

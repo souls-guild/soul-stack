@@ -76,7 +76,6 @@ components:
             - incarnation.destroy_failed
             - incarnation.destroy_started
             - incarnation.drift_checked
-            - incarnation.hosts_updated
             - incarnation.member_bound
             - incarnation.member_unbound
             - incarnation.rerun_last
@@ -2031,19 +2030,6 @@ components:
           description: full set of trait-tags (key -> scalar|list of scalars); empty/omitted = clear (ADR-060)
           type: object
       type: object
-    IncarnationSpecHost:
-      additionalProperties: false
-      properties:
-        role:
-          description: declared role (kebab-case 1..63) or null
-          maxLength: 63
-          type: string
-        sid:
-          description: SID (FQDN) of the host - must already exist in souls
-          type: string
-      required:
-        - sid
-      type: object
     IncarnationStatus:
       description: "Runtime instance status. In proto the constants have a family-prefix (INCARNATION_STATUS_READY), in the JSON API - short forms. `drift` - an informational Scry status (ADR-031), NOT blocking: remediation = a regular apply, which on success returns the incarnation to `ready`."
       enum:
@@ -2110,27 +2096,6 @@ components:
           type: string
       required:
         - reason
-      type: object
-    IncarnationUpdateHostsRequest:
-      additionalProperties: false
-      properties:
-        hosts:
-          description: host list for mode operation (empty legitimate for replace)
-          items:
-            $ref: "#/components/schemas/IncarnationSpecHost"
-          type:
-            - array
-            - "null"
-        mode:
-          description: operation type over spec.hosts[]
-          enum:
-            - replace
-            - append
-            - remove
-          type: string
-      required:
-        - mode
-        - hosts
       type: object
     IncarnationUpgradePathsReply:
       additionalProperties: false
@@ -5352,6 +5317,7 @@ components:
           type: integer
         role:
           description: declared-role (kebab-case, 1..63)
+          maxLength: 63
           type: string
         sid:
           description: SID (FQDN) of a host - a member of the incarnation
@@ -8545,70 +8511,6 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Incarnation state transition history (paged)
-      tags:
-        - incarnation
-  /v1/incarnations/{name}/hosts:
-    patch:
-      description: Three modes (replace/append/remove) over declared hosts (ADR-008). Permission incarnation.update-hosts.
-      operationId: updateIncarnationHosts
-      parameters:
-        - description: incarnation name
-          in: path
-          name: name
-          required: true
-          schema:
-            description: incarnation name
-            type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/IncarnationUpdateHostsRequest"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/IncarnationGetReply"
-          description: OK
-        "400":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Bad Request
-        "403":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Forbidden
-        "404":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Not Found
-        "409":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Conflict
-        "422":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Unprocessable Entity
-        "500":
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/HumaProblemError"
-          description: Internal Server Error
-      summary: Edit declared spec.hosts[] of an incarnation
       tags:
         - incarnation
   /v1/incarnations/{name}/members:

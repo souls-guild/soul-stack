@@ -14,13 +14,15 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakePool - Querier stub. Routes QueryRow/Query by SQL content:
-// `incarnation` -> spec, `souls` -> roster, `incarnation_choir_voices` ->
-// choir-membership (ADR-044, S-T4). Unknown SQL - panic (test bug).
+// fakePool - Querier stub. Routes Query by SQL content: `souls` -> roster,
+// `incarnation_choir_voices` -> choir-membership (ADR-044, S-T4). Unknown SQL -
+// panic (test bug).
+//
+// There is deliberately no `incarnation` branch and no spec field: since NIM-330
+// the resolver has no second source for a host's role, and [Querier] no longer
+// even carries QueryRow. A regression that reintroduced a spec read would not
+// compile.
 type fakePool struct {
-	specJSON []byte
-	specErr  error // e.g. pgx.ErrNoRows for a missing incarnation
-
 	rosterRows []rosterRow
 	rosterErr  error // Query or iteration error
 
@@ -49,16 +51,6 @@ type rosterRow struct {
 	receivedAt  *time.Time // nil = NULL
 }
 
-func (p *fakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	if strings.Contains(sql, "FROM incarnation") {
-		if p.specErr != nil {
-			return errRow{err: p.specErr}
-		}
-		return specRow{spec: p.specJSON}
-	}
-	panic("fakePool.QueryRow: unexpected SQL: " + sql)
-}
-
 func (p *fakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FROM incarnation_choir_voices"):
@@ -74,18 +66,6 @@ func (p *fakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 	default:
 		panic("fakePool.Query: unexpected SQL: " + sql)
 	}
-}
-
-type errRow struct{ err error }
-
-func (r errRow) Scan(_ ...any) error { return r.err }
-
-// specRow returns spec to single *[]byte destination (incarnationSpecSQL).
-type specRow struct{ spec []byte }
-
-func (r specRow) Scan(dest ...any) error {
-	*(dest[0].(*[]byte)) = r.spec
-	return nil
 }
 
 // rosterRows iterates rosterRow by rosterRow, scan in order of rosterSQL.
@@ -214,14 +194,11 @@ func mustJSON(t *testing.T, v any) []byte {
 
 func TestLoadIncarnationHosts_HappyPath(t *testing.T) {
 	now := time.Now().UTC()
-	specJSON := mustJSON(t, map[string]any{
-		"hosts": []map[string]any{
-			{"sid": "a.example.com", "role": "master"},
-			{"sid": "b.example.com", "role": "replica"},
-		},
-	})
 	p := &fakePool{
-		specJSON: specJSON,
+		choirRows: []choirVoiceRow{
+			{sid: "a.example.com", choirName: "primaries", role: strPtr("master")},
+			{sid: "b.example.com", choirName: "replicas", role: strPtr("replica")},
+		},
 		rosterRows: []rosterRow{
 			{
 				sid:         "a.example.com",
@@ -276,8 +253,11 @@ func TestLoadIncarnationHosts_HappyPath(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_MissingIncarnation_EmptySlice(t *testing.T) {
-	// PM-decision #3: nonexistent incarnation → empty slice, NOT error.
-	p := &fakePool{specErr: pgx.ErrNoRows, rosterRows: nil}
+	// PM-decision #3: nonexistent incarnation → empty slice, NOT error. Both
+	// reads are set-shaped, so a missing incarnation is indistinguishable from
+	// an empty roster here — deliberately (the caller that needs to tell them
+	// apart asks the incarnation layer, not the resolver).
+	p := &fakePool{rosterRows: nil}
 	r := newResolver(p, nil)
 
 	hosts, err := r.LoadIncarnationHosts(context.Background(), "ghost")
@@ -292,7 +272,7 @@ func TestLoadIncarnationHosts_MissingIncarnation_EmptySlice(t *testing.T) {
 func TestLoadIncarnationHosts_NoCandidates_EmptySlice(t *testing.T) {
 	// Incarnation exists, but there are no non-terminal/non-onboarding candidates
 	// (phase-1 SQL returned empty). → empty slice, not error.
-	p := &fakePool{specJSON: mustJSON(t, map[string]any{}), rosterRows: nil}
+	p := &fakePool{rosterRows: nil}
 	r := newResolver(p, nil)
 
 	hosts, err := r.LoadIncarnationHosts(context.Background(), "redis-prod")
@@ -309,7 +289,6 @@ func TestLoadIncarnationHosts_NoCandidates_EmptySlice(t *testing.T) {
 func TestLoadIncarnationHosts_LeaseAware_FiltersByLiveLease(t *testing.T) {
 	// Phase 2: candidate with live lease is targeted; without lease — filtered.
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "online.example.com", coven: []string{"redis-prod"}, status: "connected"},
 			{sid: "offline.example.com", coven: []string{"redis-prod"}, status: "connected"},
@@ -335,7 +314,6 @@ func TestLoadIncarnationHosts_LeaseAware_PresenceNotFromStatus(t *testing.T) {
 	// disconnected snapshot with live lease (idle Soul, reconnect not reflected in PG)
 	// → is targeted; connected snapshot without lease (stale) → NOT targeted.
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "idle.example.com", coven: []string{"redis-prod"}, status: "disconnected"},
 			{sid: "stale.example.com", coven: []string{"redis-prod"}, status: "connected"},
@@ -359,7 +337,6 @@ func TestLoadIncarnationHosts_LeaseAware_RedisError_FallsBackToSQLSnapshot(t *te
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "conn.example.com", coven: []string{"redis-prod"}, status: "connected"},
 			{sid: "disc.example.com", coven: []string{"redis-prod"}, status: "disconnected"},
@@ -383,7 +360,6 @@ func TestLoadIncarnationHosts_LeaseAware_RedisError_FallsBackToSQLSnapshot(t *te
 func TestLoadIncarnationHosts_NilLease_FallsBackToSQLSnapshot(t *testing.T) {
 	// lease==nil (single-instance dev / unit) → SQL-presence snapshot.
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "conn.example.com", coven: []string{"redis-prod"}, status: "connected"},
 			{sid: "disc.example.com", coven: []string{"redis-prod"}, status: "disconnected"},
@@ -400,16 +376,18 @@ func TestLoadIncarnationHosts_NilLease_FallsBackToSQLSnapshot(t *testing.T) {
 	}
 }
 
-func TestLoadIncarnationHosts_RoleEmptyForUndeclaredHost(t *testing.T) {
-	// ADR-008: host tied to incarnation outside declared-spec has
-	// declared role "". Resolver does not invent role from binding fact.
+func TestLoadIncarnationHosts_RoleEmptyForHostWithoutVoice(t *testing.T) {
+	// ADR-008 + ADR-044 amendment 2026-07-30: a member host that no Voice
+	// places into a part has declared role "". The resolver does not invent a
+	// role from the fact of membership, and there is no longer any second
+	// source it could invent one from.
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{
-			"hosts": []map[string]any{{"sid": "declared.example.com", "role": "master"}},
-		}),
 		rosterRows: []rosterRow{
-			{sid: "declared.example.com", coven: []string{"redis-prod"}},
+			{sid: "voiced.example.com", coven: []string{"redis-prod"}},
 			{sid: "extra.example.com", coven: []string{"redis-prod"}},
+		},
+		choirRows: []choirVoiceRow{
+			{sid: "voiced.example.com", choirName: "primaries", role: strPtr("master")},
 		},
 	}
 	r := newResolver(p, nil)
@@ -419,10 +397,10 @@ func TestLoadIncarnationHosts_RoleEmptyForUndeclaredHost(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if hosts[0].Role != "master" {
-		t.Errorf("declared host role = %q, want master", hosts[0].Role)
+		t.Errorf("voiced host role = %q, want master", hosts[0].Role)
 	}
 	if hosts[1].Role != "" {
-		t.Errorf("undeclared host role = %q, want empty", hosts[1].Role)
+		t.Errorf("host without a Voice role = %q, want empty", hosts[1].Role)
 	}
 }
 
@@ -431,7 +409,6 @@ func TestLoadIncarnationHosts_ChoirMemberships(t *testing.T) {
 	// multiple Choirs → multiple names (deterministic order from SQL);
 	// host without Voices → nil Choirs (symmetry with empty declared role).
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "a.example.com", coven: []string{"redis-prod"}},
 			{sid: "b.example.com", coven: []string{"redis-prod"}},
@@ -461,15 +438,10 @@ func TestLoadIncarnationHosts_ChoirMemberships(t *testing.T) {
 	}
 }
 
-func TestLoadIncarnationHosts_VoiceRoleOverridesSpec(t *testing.T) {
-	// ADR-044 p.2: Choir absorbs declared role. voice.role (from
-	// incarnation_choir_voices) overrides spec.hosts[].role.
+func TestLoadIncarnationHosts_RoleComesFromVoice(t *testing.T) {
+	// ADR-044 p.2: the Choir absorbed the declared role; voice.role (from
+	// incarnation_choir_voices) IS the role, with nothing behind it.
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{
-			"hosts": []map[string]any{
-				{"sid": "a.example.com", "role": "spec-master"},
-			},
-		}),
 		rosterRows: []rosterRow{
 			{sid: "a.example.com", coven: []string{"redis-prod"}},
 		},
@@ -484,36 +456,39 @@ func TestLoadIncarnationHosts_VoiceRoleOverridesSpec(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if hosts[0].Role != "voice-master" {
-		t.Errorf("role = %q, want voice-master (Voice overrides spec)", hosts[0].Role)
+		t.Errorf("role = %q, want voice-master", hosts[0].Role)
 	}
 }
 
-func TestLoadIncarnationHosts_SpecRoleFallbackWhenNoVoice(t *testing.T) {
-	// ADR-044 p.2: spec.hosts[].role remains fallback for hosts WITHOUT Voice
-	// (bootstrap-create, wire-compatibility). Also fallback when Voice has no role:
-	//   - nullrole — Voice with SQL NULL role (AddVoice writes NULL when role is omitted,
-	//     migration 060). This is the path where resolver failed "cannot scan
-	//     NULL into *string"; without scan fix, test fails here, not in assertion.
-	//   - emptyrole — Voice with role="" (Go string) → also fallback to spec.
+// TestLoadIncarnationHosts_NoRoleSourceLeavesRoleEmpty pins the invariant NIM-330
+// exists to create: a declared role comes from a Voice or it does not come at
+// all. Three ways a host can end up without one, all of which used to fall
+// through to `spec.hosts[].role`:
+//
+//   - novoice   — no row in incarnation_choir_voices at all;
+//   - nullrole  — a Voice with SQL NULL role (AddVoice writes NULL when role is
+//     omitted, migration 060). This is also the path where the resolver once
+//     failed with "cannot scan NULL into *string"; without the scan fix the test
+//     dies here rather than in the assertion;
+//   - emptyrole — a Voice with role="" (Go string).
+//
+// All three must resolve to "" — "no declared role", NOT a default group
+// (ADR-044 amendment 2026-06-30(b), now the only rule). The complementary half
+// of this guard — a spec that still CARRIES hosts[] in the database being
+// ignored — cannot be written here, because [Querier] no longer exposes the
+// single-row read the fallback needed; it lives in
+// TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted.
+func TestLoadIncarnationHosts_NoRoleSourceLeavesRoleEmpty(t *testing.T) {
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{
-			"hosts": []map[string]any{
-				{"sid": "novoice.example.com", "role": "spec-master"},
-				{"sid": "nullrole.example.com", "role": "spec-replica"},
-				{"sid": "emptyrole.example.com", "role": "spec-arbiter"},
-			},
-		}),
 		rosterRows: []rosterRow{
+			{sid: "emptyrole.example.com", coven: []string{"redis-prod"}},
 			{sid: "novoice.example.com", coven: []string{"redis-prod"}},
 			{sid: "nullrole.example.com", coven: []string{"redis-prod"}},
-			{sid: "emptyrole.example.com", coven: []string{"redis-prod"}},
 		},
 		choirRows: []choirVoiceRow{
-			// novoice.example.com — without Voices at all.
-			// nullrole.example.com — Voice with SQL NULL role (role: nil) → fallback.
-			{sid: "nullrole.example.com", choirName: "voters", role: nil},
-			// emptyrole.example.com — Voice with role="" → fallback to spec.
+			// novoice.example.com — no Voice at all.
 			{sid: "emptyrole.example.com", choirName: "voters", role: strPtr("")},
+			{sid: "nullrole.example.com", choirName: "voters", role: nil},
 		},
 	}
 	r := newResolver(p, nil)
@@ -522,14 +497,13 @@ func TestLoadIncarnationHosts_SpecRoleFallbackWhenNoVoice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
-	if hosts[0].Role != "spec-master" {
-		t.Errorf("host[0] role = %q, want spec-master (no Voice → fallback to spec)", hosts[0].Role)
+	if len(hosts) != 3 {
+		t.Fatalf("len(hosts) = %d, want 3", len(hosts))
 	}
-	if hosts[1].Role != "spec-replica" {
-		t.Errorf("host[1] role = %q, want spec-replica (NULL voice.role → fallback to spec)", hosts[1].Role)
-	}
-	if hosts[2].Role != "spec-arbiter" {
-		t.Errorf("host[2] role = %q, want spec-arbiter (empty voice.role → fallback to spec)", hosts[2].Role)
+	for _, h := range hosts {
+		if h.Role != "" {
+			t.Errorf("%s role = %q, want empty — a role may only come from a Voice", h.SID, h.Role)
+		}
 	}
 }
 
@@ -541,11 +515,6 @@ func TestLoadIncarnationHosts_MultiChoirRoleConflict_FirstBySortNameWins(t *test
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{
-			"hosts": []map[string]any{
-				{"sid": "a.example.com", "role": "spec-role"},
-			},
-		}),
 		rosterRows: []rosterRow{
 			{sid: "a.example.com", coven: []string{"redis-prod"}},
 		},
@@ -582,7 +551,6 @@ func TestLoadIncarnationHosts_StaleSoulprintWarns(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	old := time.Now().UTC().Add(-30 * time.Minute)
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "stale.example.com", coven: []string{"redis-prod"}, receivedAt: ptrTime(old)},
 		},
@@ -609,7 +577,6 @@ func TestLoadIncarnationHosts_FreshSoulprintNoWarn(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	fresh := time.Now().UTC().Add(-time.Minute)
 	p := &fakePool{
-		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
 			{sid: "fresh.example.com", coven: []string{"redis-prod"}, receivedAt: ptrTime(fresh)},
 			{sid: "neverreported.example.com", coven: []string{"redis-prod"}}, // zero received_at
@@ -625,28 +592,10 @@ func TestLoadIncarnationHosts_FreshSoulprintNoWarn(t *testing.T) {
 	}
 }
 
-func TestLoadIncarnationHosts_MalformedSpecRolesIgnored(t *testing.T) {
-	// spec is freeform: broken/unexpected hosts → roles "", not error.
-	p := &fakePool{
-		specJSON:   []byte(`{"hosts": "not-an-array"}`),
-		rosterRows: []rosterRow{{sid: "a.example.com", coven: []string{"redis-prod"}}},
-	}
-	r := newResolver(p, nil)
-
-	hosts, err := r.LoadIncarnationHosts(context.Background(), "redis-prod")
-	if err != nil {
-		t.Fatalf("LoadIncarnationHosts: %v", err)
-	}
-	if hosts[0].Role != "" {
-		t.Errorf("role = %q, want empty for malformed spec", hosts[0].Role)
-	}
-}
-
 func TestLoadIncarnationHosts_BadSoulprintJSONErrors(t *testing.T) {
 	// Broken soulprint_facts JSONB — data corruption, not normal case:
 	// resolver must return error, not silently return empty soulprint.
 	p := &fakePool{
-		specJSON:   mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{{sid: "a.example.com", coven: []string{"redis-prod"}, factsJSON: []byte(`{bad`)}},
 	}
 	r := newResolver(p, nil)
@@ -654,39 +603,6 @@ func TestLoadIncarnationHosts_BadSoulprintJSONErrors(t *testing.T) {
 	_, err := r.LoadIncarnationHosts(context.Background(), "redis-prod")
 	if err == nil {
 		t.Fatal("LoadIncarnationHosts returned nil err on broken soulprint JSON")
-	}
-}
-
-// --- parseDeclaredRoles -----------------------------------------------
-
-func TestParseDeclaredRoles(t *testing.T) {
-	cases := []struct {
-		name string
-		json string
-		want map[string]string
-	}{
-		{"empty", "", map[string]string{}},
-		{"empty-object", "{}", map[string]string{}},
-		{"no-hosts", `{"replicas": 3}`, map[string]string{}},
-		{"two-roles", `{"hosts":[{"sid":"a","role":"master"},{"sid":"b","role":"replica"}]}`,
-			map[string]string{"a": "master", "b": "replica"}},
-		{"role-without-sid-skipped", `{"hosts":[{"role":"master"}]}`, map[string]string{}},
-		{"sid-without-role-skipped", `{"hosts":[{"sid":"a"}]}`, map[string]string{}},
-		{"malformed", `{bad`, map[string]string{}},
-		{"hosts-wrong-type", `{"hosts":"x"}`, map[string]string{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseDeclaredRoles([]byte(tc.json))
-			if len(got) != len(tc.want) {
-				t.Fatalf("len = %d, want %d (%v)", len(got), len(tc.want), got)
-			}
-			for k, v := range tc.want {
-				if got[k] != v {
-					t.Errorf("roles[%q] = %q, want %q", k, got[k], v)
-				}
-			}
-		})
 	}
 }
 

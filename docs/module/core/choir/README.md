@@ -35,7 +35,7 @@ falls (otherwise `absent` on the typo of the incarnation name would have been qu
 | `incarnation` | string | required | The name of the incarnation to which Choir belongs. Checks for existence. |
 | `choir` | string | required | Choir's name. Validated by `ValidChoirName`; garbage - the step falls. |
 | `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`; invalid - the step falls. |
-| `role` | string | optional | Voice part in Choir. |
+| `role` | string | optional | The host's **declared role** within the Choir (kebab-case, 1..63) - and, since [ADR-044 amendment 2026-07-30](../../../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330), the only place one can be declared. Omitted → SQL `NULL` = "no declared role", not a default group. |
 | `position` | int (≥ 0) | optional | Voice position. Negative - the step decreases. |
 
 ## absent — params

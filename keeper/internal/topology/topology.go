@@ -26,20 +26,20 @@ import (
 const stalenessThreshold = 10 * time.Minute
 
 // HostFacts — logical view of a run host: registry data from `souls`
-// (SID, Coven, last-reported soulprint) + declared role (source — Choir
-// Voice, fallback — `incarnation.spec.hosts[].role`; ADR-044 p.2, ADR-008,
+// (SID, Coven, last-reported soulprint) + declared role (source — the host's
+// Choir Voice, and nothing else; ADR-044 p.2 + amendment 2026-07-30, ADR-008,
 // scenario/orchestration.md §4.1).
 //
 // Soulprint — deserialized JSONB `souls.soulprint_facts` (map, not typed:
 // scenario resolver accesses arbitrary paths `soulprint.self.<path>`
 // via CEL, typing — at proto SoulprintFacts layer, not here).
 //
-// Role — declared, NOT actual. Source by precedence (ADR-044 p.2): role
-// of Voice from `incarnation_choir_voices` (Choir absorbed declared role) >
-// `spec.hosts[].role` (fallback for hosts WITHOUT Voice and for bootstrap-create,
-// wire-compatibility). Can be empty ("") for hosts outside declared-spec without
-// Voice (ADR-008). Actual role — only probe + `where:` on scenario side,
-// not here.
+// Role — declared, NOT actual. The sole source is the role of the host's Voice
+// in `incarnation_choir_voices` (ADR-044 p.2; the `spec.hosts[].role` fallback
+// was removed with the field itself, amendment 2026-07-30/NIM-330). Empty ("")
+// for a host with no Voice and for a Voice with an empty/NULL role — that is
+// "no declared role", NOT a default group (ADR-044 amendment 2026-06-30(b)).
+// Actual role — only probe + `where:` on scenario side, not here.
 //
 // Choirs — names of Choirs (ADR-044) where SID is a Voice (memberships from
 // `incarnation_choir_voices`, 060_create_choirs.up.sql). Stable per-host fact for

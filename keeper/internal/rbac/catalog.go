@@ -18,7 +18,7 @@ import "sort"
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
-//   - incarnation (16): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / update-hosts / update (deprecated alias) / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
+//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
 //   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -127,22 +127,6 @@ var AllowedPermissions = map[string]struct{}{
 	"incarnation.upgrade":     {},
 	"incarnation.destroy":     {},
 	"incarnation.check-drift": {},
-	// incarnation.update-hosts — changes the declared `spec.hosts[]` of an
-	// incarnation record via the Operator API (`PATCH
-	// /v1/incarnations/{name}/hosts`, UI Hosts editing): same scope
-	// selector incarnation/coven/service as other incarnation mutations
-	// (run/unlock/upgrade). Name narrowed from the former
-	// `incarnation.update` (PM-decision 2026-06-02) to make room for
-	// future update-covens/update-spec — each operation gets its own
-	// permission.
-	"incarnation.update-hosts": {},
-	// incarnation.update — DEPRECATED alias for `incarnation.update-hosts`.
-	// Kept in the catalog (closed enum, names are never removed): roles/
-	// operators in keeper.yml / DB with the historical name must NOT fail
-	// snapshot load. [ParsePermission] canonicalizes it to
-	// `incarnation.update-hosts` (see [deprecatedActionAliases]), so such
-	// roles keep access to /hosts.
-	"incarnation.update": {},
 	// incarnation.traits-set — a wholesale replacement of an incarnation's
 	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060) via
 	// `PUT /v1/incarnations/{name}/traits`. The labels stay on the
@@ -150,9 +134,9 @@ var AllowedPermissions = map[string]struct{}{
 	// is the per-INSTANCE counterpart of the per-HOST `soul.traits-assign`
 	// and neither overwrites the other. Action is
 	// hyphenated (`traits-set`) since the permission grammar is exactly
-	// `<resource>.<action>` (pattern: soul.traits-assign /
-	// incarnation.update-hosts). Same scope selector
-	// incarnation/coven/service by path-{name} as incarnation.update-hosts.
+	// `<resource>.<action>` (pattern: soul.traits-assign). Same scope
+	// selector incarnation/coven/service by path-{name} as the other
+	// incarnation mutations.
 	"incarnation.traits-set": {},
 	// incarnation.bind-member / incarnation.unbind-member — the OPERATOR
 	// path for incarnation membership (`POST /v1/incarnations/{name}/members`,
@@ -433,21 +417,6 @@ var AllowedPermissions = map[string]struct{}{
 	"profile.create":  {},
 	"profile.read":    {},
 	"profile.delete":  {},
-}
-
-// deprecatedActionAliases — DEPRECATED permission names → their canonical
-// form. Key/value is the full `<resource>.<action>` form. [ParsePermission]
-// canonicalizes the key to the value on snapshot load, so
-// [Permission.Matches] stays a plain string comparison and the router only
-// mounts the canonical name. Both names remain valid in
-// [AllowedPermissions] (closed enum, names are never removed): roles in
-// keeper.yml / DB with the old name don't fail load and keep their access.
-//
-//   - `incarnation.update` → `incarnation.update-hosts` (PM-decision
-//     2026-06-02): the old name covered only `PATCH /hosts`, narrowed to
-//     make room for future update-covens/update-spec.
-var deprecatedActionAliases = map[string]string{
-	"incarnation.update": "incarnation.update-hosts",
 }
 
 // IsAllowedPermission checks a `<resource>.<action>` string against the

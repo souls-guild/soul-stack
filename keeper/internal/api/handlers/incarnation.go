@@ -268,41 +268,6 @@ func (h *IncarnationHandler) ContextReader() IncarnationContextReader {
 	return h.db
 }
 
-// --- host-role validation (PATCH .../hosts) ----------------------------
-
-// hostsRolePattern — kebab-case role label (lowercase + hyphens), 1..63 chars.
-// The declared role is an operator-asserted string from `incarnation.spec.hosts[].role`
-// (ADR-008): values are not predefined in code (master/replica are common but not
-// exhaustive), so we validate only the shape, like Coven labels (same kebab-case
-// invariant, no conflict with the scenario-on: grammar).
-const hostsRolePattern = `^[a-z][a-z0-9]*(-[a-z0-9]+)*$`
-
-var hostsRoleRe = regexp.MustCompile(hostsRolePattern)
-
-func validHostRole(role string) bool {
-	if role == "" {
-		return true
-	}
-	if len(role) > 63 {
-		return false
-	}
-	return hostsRoleRe.MatchString(role)
-}
-
-// specHostsToPayload — a snapshot of hosts[] for the audit payload. Symmetric to
-// the jsonb form of `spec.hosts` (see [incarnation.readSpecHosts]).
-func specHostsToPayload(hosts []incarnation.SpecHost) []map[string]any {
-	out := make([]map[string]any, 0, len(hosts))
-	for _, h := range hosts {
-		obj := map[string]any{"sid": h.SID}
-		if h.Role != "" {
-			obj["role"] = h.Role
-		}
-		out = append(out, obj)
-	}
-	return out
-}
-
 // --- RBAC scope (NIM-128 boolean scope) -------------------------------
 
 // incScopeColumns maps the NIM-128 scope dimensions onto the `incarnation`

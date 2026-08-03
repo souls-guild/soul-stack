@@ -54,7 +54,7 @@ The 200 body of the reveal endpoint carries plaintext and **does NOT pass throug
 A new scoped right **`incarnation.view-secrets`** ([ADR-047](0047-purview.md), catalog — [rbac.md](../keeper/rbac.md#permissions-directory)):
 
 - **Strictly more privileged than `incarnation.get`** — reading a (masked) incarnation ≠ revealing its secrets; a separate right, not a facet of `get`.
-- **Scope as for incarnation mutations** — selectors `coven=`/`service=`/`incarnation=` by the path `name` (parity with `incarnation.update-hosts`/`incarnation.traits-set`).
+- **Scope as for incarnation mutations** — selectors `coven=`/`service=`/`incarnation=` by the path `name` (parity with `incarnation.traits-set`).
 - **Fail-closed 404 outside scope** — an operator outside scope gets `404` (parity with Get: we do not expose the existence of a foreign incarnation), not `403`.
 - **MCP — no (REST-only)** — reveal is a UI action of the State view (like `form-prefill`), not an automatable operation; an MCP tool is not created.
 

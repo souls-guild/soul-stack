@@ -259,7 +259,8 @@
   - **Per-host overrides declared on the incarnation (`spec.hosts[].traits`).**
     Preserves a single source of truth, but cannot label a host that belongs to no
     incarnation, has no answer for a host in two, and makes labelling one VM an
-    edit of the incarnation.
+    edit of the incarnation. (Moot since 2026-07-30: `spec.hosts[]` itself is
+    removed, [ADR-044 amendment](0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role).)
   - **Fixing Trait only, leaving Coven as it is.** Rejected by the user: the two
     axes would carry different inheritance semantics, which is the confusion this
     ticket started from.

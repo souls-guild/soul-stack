@@ -133,7 +133,7 @@ const (
 //     `reason == ""` (UnlockTyped / RerunLastTyped; both TypeValidationFailed → 422).
 //   - covenRuntimeMaxLen: the length of a Coven label — soul.ValidCoven len>63 → 422
 //     (soul.go:81, covenMaxLen=63). The same limit applies to the declared role
-//     (validHostRole len>63, incarnation.go:177) and to the incarnation name via the
+//     (validVoiceRole len>63, handlers/choir.go) and to the incarnation name via the
 //     pattern `{0,62}` (max 63). There is no exported const for covenMaxLen (the literal
 //     is in ValidCoven) — a candidate for export as soul.CovenMaxLen.
 //
@@ -143,7 +143,7 @@ const (
 // runtime value is taken directly via strconv.Itoa (not a literal).
 const (
 	reasonRuntimeMinLen = "1"  // reason == "" → 422 (lower bound)
-	covenRuntimeMaxLen  = "63" // ValidCoven / validHostRole len > 63 → 422
+	covenRuntimeMaxLen  = "63" // ValidCoven / validVoiceRole len > 63 → 422
 )
 
 // sshUserRuntimeMinLen — ssh_user non-emptiness. The runtime 422s on `req.SSHUser == ""`
@@ -1431,20 +1431,20 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "UpdateSshTargetTyped (handlers/soul.go:1529, ssh_user == \"\" → 422)",
 	},
 
-	// --- coven/role length 63 (ValidCoven / validHostRole len>63 → 422) ---
+	// --- coven/role length 63 (ValidCoven / validVoiceRole len>63 → 422) ---
 	// maxLength on []string fields sits on items (covens/labels). There is NO tag for
 	// the lower bound: an empty role/coven/incarnation-selector is valid (opt/no-op),
 	// minLength:1 would falsely 422 a valid empty value.
 	{
-		// maxLength sits on the nested IncarnationSpecHost.Role (the elem of
-		// PATCH .../hosts body.hosts[]) — we reference the element struct
-		// directly (constraintTag doesn't descend into a slice element).
-		name:      "IncarnationSpecHost role maxLength",
-		structPtr: &IncarnationSpecHost{},
+		// A Voice's role is the ONLY declared-role surface left (ADR-044
+		// amendment 2026-07-30 / NIM-330 removed PATCH .../hosts and with it
+		// IncarnationSpecHost, which used to carry this bound).
+		name:      "VoiceAddRequest role maxLength",
+		structPtr: &VoiceAddRequest{},
 		fieldPath: []string{"Role"},
 		tag:       tagMaxLength,
 		runtime:   covenRuntimeMaxLen,
-		source:    "validHostRole (handlers/incarnation.go:177, len(role) > 63 → 422)",
+		source:    "validVoiceRole (handlers/choir.go, len(role) > 63 → 422)",
 	},
 	{
 		name:      "soul.create covens[] maxLength",

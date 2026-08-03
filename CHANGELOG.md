@@ -419,6 +419,48 @@ order to act in.
   role deliberately. Check your automation's `covens` against its role before
   upgrading; this is the one change here that can break something that worked.
 
+- **`PATCH /v1/incarnations/{name}/hosts` is gone, and two permissions go with
+  it — check your roles before upgrading.** The field it edited,
+  `incarnation.spec.hosts[]`, is removed whole
+  ([ADR-044 amendment 2026-07-30](docs/adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)).
+  The endpoint answers 404, the audit event `incarnation.hosts_updated` is
+  retired, and `incarnation.update-hosts` together with its deprecated alias
+  `incarnation.update` leave the permission catalog.
+
+  **This one cannot be left to sort itself out.** The catalog is a closed enum and
+  the enforcer is fail-closed: a role still carrying either string would fail to
+  parse, and a failed parse aborts the whole RBAC snapshot load rather than
+  dropping one grant. Migration `109_drop_permission_update_hosts` deletes those
+  rows for you — bare and scoped forms alike (`… on coven=prod`) — so a normal
+  migrated upgrade is safe. A cluster whose roles are restored or hand-edited
+  around the migration is not; grep `rbac_role_permissions` for the two names if
+  you manage that table yourself. `incarnation.*` grants are unaffected: a
+  wildcard expands over the catalog at load time and is simply two actions
+  shorter.
+
+  **Nothing is lost functionally.** The field never carried the roster — a run's
+  hosts are `incarnation_membership`, and `POST /v1/incarnations` never accepted
+  `spec.hosts` — and its `role` had been superseded by the Choir Voice since
+  [ADR-044](docs/adr/0044-choir.md) item 2, surviving only as a fallback for
+  bootstrap-`create`. That fallback stopped covering anything when the keeper-side
+  `core.choir` module landed: a create scenario now writes its own Voices with a
+  `core.choir.present` step (`on: keeper`, params `incarnation` / `choir` / `sid` /
+  `role` / `position`) before any task reads a role, and day-2 the same is
+  `POST /v1/incarnations/{name}/choirs/{choir}/voices`. **A host that no Voice
+  places into a part has an empty declared role** — not a default group — which
+  was already the rule for hosts outside the declared spec.
+
+  Migration `108_drop_incarnation_spec_hosts` strips the `hosts` key out of
+  existing `spec` jsonb, so `GET /v1/incarnations/{name}` stops advertising a
+  topology nothing reads. `soulprint.hosts[].role` / `soulprint.self.role` are
+  unchanged in the scenario context — they are simply fed from one source now. The
+  **actual** role is untouched and still comes only from a live probe +
+  `register:` + `where:`.
+
+  The alias-canonicalization machinery in `ParsePermission` is removed along with
+  the only alias it served. A future rename follows the pattern of migration
+  `095`: drop the old name and migrate the rows.
+
 ### Added
 
 - **The composed incarnation name, previewed before it is permanent**
@@ -842,6 +884,29 @@ order to act in.
   fails the build, so the published set cannot fall behind the code. Only the
   response field is narrowed; the `?type=` filter stays a free string, because a
   filter has to keep matching historical rows whose type has since been retired.
+
+### Removed
+
+- **`incarnation.spec.hosts[]` and its editing endpoint**
+  ([ADR-044 amendment 2026-07-30](docs/adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)).
+  The field decided nothing on either axis it appeared to: the roster of a run has
+  been `incarnation_membership` since NIM-124, and the declared role has been a
+  Choir Voice since ADR-044 item 2 — `spec.hosts[].role` survived only as a
+  fallback for hosts without one. Meanwhile the UI's "Add host" button read as
+  "add a host to this incarnation" while editing a list no resolver consulted.
+
+  Removed together: the `PATCH /v1/incarnations/{name}/hosts` endpoint and its
+  OpenAPI schemas, the permissions `incarnation.update-hosts` and
+  `incarnation.update`, the audit event type `incarnation.hosts_updated`, and the
+  resolver's spec fallback — a declared role now comes from a Voice or not at all.
+  Migrations `108` / `109` clean the `spec` key and the dead grants. See the
+  Upgrade notes above, which cover the fail-closed RBAC consequence and the
+  replacement (`core.choir.present` in a scenario, `POST .../choirs/{choir}/voices`
+  day-2).
+
+  The `topology.Querier` interface lost `QueryRow` in the same change: every read
+  the resolver makes is set-shaped now, so "the resolver does not consult
+  `incarnation.spec`" is enforced by the compiler rather than asserted by a test.
 
 ### Security
 
@@ -1582,7 +1647,7 @@ This section covers the actual state of the code and documentation as of 2026-05
 - The same `soul` binary works in pull (daemon) and push (oneshot) — modules apply the same way.
 
 ### Scenario / Destiny
-- Coven = stable tags only, role is NOT Coven ([ADR-008](docs/adr/0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only)); declared role only in `incarnation.spec.hosts[].role`.
+- Coven = stable tags only, role is NOT Coven ([ADR-008](docs/adr/0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only)); the declared role lives only in the host's Choir Voice (it was `incarnation.spec.hosts[].role` until the [ADR-044 amendment 2026-07-30](docs/adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) removed that field).
 - Full scenario-DSL set ([ADR-009](docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation)): `on:`/`where:`/`serial:`/`run_once:`/`apply:`/`state_changes` + two-level resource resolution.
 - Templating engine ([ADR-010](docs/adr/0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)): CEL for YAML expressions, Go text/template + sprig allowlist for files, `${ … }` marker, strict mode, secret masking.
 - Top-level `output:` in `destiny.yml`, read via `register:` on the applier task.

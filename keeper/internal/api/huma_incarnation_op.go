@@ -8,7 +8,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): huma-audit-middleware writes the
 //     event OUTSIDE (variant B). The registerHuma* func sets the payload via
 //     SetHumaAuditPayload from the *Typed reply.AuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): the handler ITSELF
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): the handler ITSELF
 //     writes audit INSIDE *Typed; audit-middleware is not wired (newHumaCadenceAPI).
 //
 // All incarnation huma ops carry the FULL path /{name}[/...] relative to the group
@@ -512,56 +512,6 @@ func incDestroyOperation() huma.Operation {
 	}
 }
 
-// === PATCH /v1/incarnations/{name}/hosts (update-hosts) — SELF-AUDIT incarnation.hosts_updated (200+body) ===
-//
-// PATCH presence: mode semantics (replace/append/remove) do NOT require distinguishing
-// omitted/null/value (mode/hosts are required-operation semantics, not sparse-update fields).
-// Hence the form — `*string omitempty` for role (parity legacy IncarnationSpecHost), NOT
-// the Optional[T] presence-tier from huma_optional.go (see huma_optional.go §"Other PATCH ...
-// don't detect presence").
-
-// incUpdateHostsInput — huma input for PATCH .../hosts. Name — path; Body — typed body.
-type incUpdateHostsInput struct {
-	Name string `path:"name" doc:"incarnation name"`
-	Body IncarnationUpdateHostsRequest
-}
-
-// IncarnationSpecHost — one hosts[] entry. sid required; role opt. (kebab-case 1..63
-// or empty — domain validation 422). additionalProperties:false → unknown field → 400.
-// The name = the contract schema name (T4b); a huma form with validation tags, distinct from
-// IncarnationSpecHost (the domain model without huma tags).
-type IncarnationSpecHost struct {
-	SID  string  `json:"sid" required:"true" doc:"SID (FQDN) of the host - must already exist in souls"`
-	Role *string `json:"role,omitempty" maxLength:"63" doc:"declared role (kebab-case 1..63) or null"`
-}
-
-// IncarnationUpdateHostsRequest — Go form of the PATCH .../hosts body. mode required (enum);
-// hosts — an array (empty is legitimate for replace). additionalProperties:false → unknown
-// field → 400. The name = the contract schema name (T4b).
-type IncarnationUpdateHostsRequest struct {
-	Mode  string                `json:"mode" required:"true" enum:"replace,append,remove" doc:"operation type over spec.hosts[]"`
-	Hosts []IncarnationSpecHost `json:"hosts" required:"true" doc:"host list for mode operation (empty legitimate for replace)"`
-}
-
-// incUpdateHostsOutput — huma-output PATCH .../hosts (FULL-TYPED). Status=200; Body —
-// the full native IncarnationGetReply after the edit (byte-exact with legacy).
-type incUpdateHostsOutput struct {
-	Body IncarnationGetReply
-}
-
-func incUpdateHostsOperation() huma.Operation {
-	return huma.Operation{
-		OperationID:   "updateIncarnationHosts",
-		Method:        http.MethodPatch,
-		Path:          "/{name}/hosts",
-		Summary:       "Edit declared spec.hosts[] of an incarnation",
-		Description:   "Three modes (replace/append/remove) over declared hosts (ADR-008). Permission incarnation.update-hosts.",
-		Tags:          []string{"incarnation"},
-		DefaultStatus: http.StatusOK,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
-	}
-}
-
 // === PUT /v1/incarnations/{name}/traits (set-traits) — SELF-AUDIT incarnation.traits_changed (200+body) ===
 
 // incSetTraitsInput — huma input for PUT .../traits. Name — path; Body — typed body.
@@ -579,7 +529,7 @@ type IncarnationSetTraitsRequest struct {
 }
 
 // incSetTraitsOutput — huma-output PUT .../traits (FULL-TYPED). Status=200; Body —
-// the full native IncarnationGetReply after the replacement (byte-exact with GET / update-hosts).
+// the full native IncarnationGetReply after the replacement (byte-exact with GET).
 type incSetTraitsOutput struct {
 	Body IncarnationGetReply
 }

@@ -11,7 +11,7 @@ package handlers
 //     (variant B) writes audit from OUTSIDE. *Typed returns a reply CARRYING the audit-payload
 //     (field AuditPayload) — the huma register func sets it via SetHumaAuditPayload.
 //     The *Typed functions do NOT write audit themselves.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / update-hosts): the handler writes
+//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): the handler writes
 //     audit ITSELF via h.auditW.Write INSIDE *Typed (the payload is built only after
 //     the domain operation — previous_status / drift_summary / old-new snapshot). audit
 //     middleware is NOT wired on these routes.
@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -988,90 +987,6 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 	return IncarnationDestroyView{ApplyID: applyID}, nil
 }
 
-// --- UpdateHosts (SELF-AUDIT incarnation.hosts_updated) ---------------
-
-// IncarnationSpecHostInput — NATIVE hosts[] element of PATCH .../hosts (handler-native). Replaces
-// IncarnationSpecHost: SID + optional Role (empty = not set).
-type IncarnationSpecHostInput struct {
-	SID  string
-	Role string
-}
-
-// UpdateHostsTyped — extracted domain function PATCH /v1/incarnations/{name}/hosts
-// (SELF-AUDIT: the handler writes incarnation.hosts_updated ITSELF — old/new snapshot payload
-// after UpdateHosts). Parity with (w,r)-UpdateHosts: three modes over the declared spec.hosts[] →
-// 200 + a full IncarnationGetView. mode/items arrive as arguments (native, bound
-// on the huma layer).
-func (h *IncarnationHandler) UpdateHostsTyped(ctx context.Context, claims *jwt.Claims, name, mode string, items []IncarnationSpecHostInput) (IncarnationGetView, error) {
-	var zero IncarnationGetView
-
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
-	}
-
-	hMode := incarnation.UpdateHostsMode(mode)
-	if !incarnation.ValidHostsMode(hMode) {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'mode' must be one of replace/append/remove")
-	}
-
-	hosts := make([]incarnation.SpecHost, 0, len(items))
-	for i, item := range items {
-		role := item.Role
-		if !soul.ValidSID(item.SID) {
-			return zero, incProblem(problem.TypeValidationFailed,
-				fmt.Sprintf("hosts[%d].sid must match %s", i, soul.SIDPattern))
-		}
-		if !validHostRole(role) {
-			return zero, incProblem(problem.TypeValidationFailed,
-				fmt.Sprintf("hosts[%d].role must be lowercase kebab-case (1..63 chars) or empty", i))
-		}
-		hosts = append(hosts, incarnation.SpecHost{SID: item.SID, Role: role})
-	}
-
-	changedBy := claims.Subject
-	res, err := incarnation.UpdateHosts(ctx, h.db, incarnation.UpdateHostsInput{
-		Name:         name,
-		Hosts:        hosts,
-		Mode:         hMode,
-		ChangedByAID: &changedBy,
-	})
-	if err != nil {
-		var unk *incarnation.ErrUnknownSouls
-		switch {
-		case errors.Is(err, incarnation.ErrIncarnationNotFound):
-			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
-		case errors.Is(err, incarnation.ErrIncarnationNotEditable):
-			return zero, incProblem(problem.TypeIncarnationLocked,
-				"incarnation "+name+" status does not allow spec edits (destroying / destroy_failed)")
-		case errors.As(err, &unk):
-			return zero, incProblem(problem.TypeValidationFailed,
-				"unknown SID(s) in souls registry: "+strings.Join(unk.Missing, ", "))
-		default:
-			h.logger.Error("incarnation.update-hosts: failed",
-				slog.String("name", name), slog.String("mode", string(hMode)), slog.Any("error", err))
-			return zero, incProblem(problem.TypeInternalError, "update incarnation hosts failed")
-		}
-	}
-
-	if h.auditW != nil {
-		_ = h.auditW.Write(ctx, &audit.Event{
-			EventType: audit.EventIncarnationHostsUpdated,
-			Source:    audit.SourceAPI,
-			ArchonAID: claims.Subject,
-			Payload: map[string]any{
-				"name":      name,
-				"mode":      string(hMode),
-				"old_hosts": specHostsToPayload(res.OldHosts),
-				"new_hosts": specHostsToPayload(res.NewHosts),
-			},
-		})
-	}
-
-	// schema-aware masking of spec/state in the update-hosts reply (the same detailed view).
-	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
-	return toIncarnationGetView(res.Incarnation, schema), nil
-}
-
 // --- SetTraits (SELF-AUDIT incarnation.traits_changed) ----------------
 
 // SetTraitsTyped — extracted domain function PUT /v1/incarnations/{name}/traits
@@ -1119,7 +1034,7 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		})
 	}
 
-	// schema-aware masking of spec/state in the reply (the same detailed view as GET / update-hosts).
+	// schema-aware masking of spec/state in the reply (the same detailed view as GET).
 	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
 	return toIncarnationGetView(res.Incarnation, schema), nil
 }

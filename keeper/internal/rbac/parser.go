@@ -99,17 +99,6 @@ func ParsePermission(raw string) (Permission, error) {
 		return Permission{}, fmt.Errorf("permission %q: unknown_permission (resource.action not in catalog rbac.md -> §Permissions Catalog)", raw)
 	}
 
-	// A DEPRECATED alias is canonicalized to the new name (scope is kept):
-	// roles with the old name match requests by the canonical resource.action
-	// without touching [Permission.Matches]. A wildcard action (`incarnation.*`)
-	// is not canonicalized — it already covers the canonical name.
-	if action != "*" {
-		if canon, ok := deprecatedActionAliases[resource+"."+action]; ok {
-			dotIdx := strings.IndexByte(canon, '.')
-			resource, action = canon[:dotIdx], canon[dotIdx+1:]
-		}
-	}
-
 	p := Permission{Resource: resource, Action: action}
 
 	if tail != "" {
