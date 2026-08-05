@@ -4,12 +4,23 @@
 // (Choir, ADR-044).
 //
 // Since the amendment 2026-07-30 (NIM-330) the answer is: from the host's Voice
-// (`incarnation_choir_voices.role`) and from nowhere else. `spec.hosts[]` — the
-// former fallback tier — is removed, and migration 108 strips the key from
-// existing rows. These tests seed the key back by direct SQL anyway, because
-// `incarnation.spec` is freeform jsonb: a restore from an old dump, a
-// hand-written row, or any future writer could put `hosts[]` there again, and
-// the resolver must keep ignoring it. A returned fallback fails these tests.
+// (`incarnation_choir_voices.role`) and from nowhere else.
+//
+// These tests used to seed the retired `spec.hosts[]` tier back by direct SQL
+// and assert the resolver ignored it — `incarnation.spec` was freeform jsonb, so
+// an old dump or a hand-written row could put the key back at any time.
+// Migration 112 (NIM-408) dropped that column, so THAT tier can no longer be
+// seeded and the negative test can no longer be written. This is narrower than
+// "a fallback is now impossible": the row still carries freeform jsonb in
+// `state` and `traits`, and 112's down migration restores `spec` outright.
+//
+// What closes the general case is the first test below: a member with no Voice
+// must resolve to an EMPTY role, so any fallback tier — from any source — that
+// hands such a host a role reddens it. That is broader than what the
+// spec-seeding version could assert.
+//
+// What is left, then, is the positive rule in its three states: no Voice, a
+// Voice with a NULL role, and a Voice with a role.
 //
 // Before Wave5 Pass1 this test was impossible because of the import cycle
 // (tide_target.go); after decoupling, the topology resolver is tested directly
@@ -26,15 +37,6 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
-
-// specWithDeclaredHost is the shape `incarnation.spec.hosts[]` used to have. It
-// is seeded ON PURPOSE in the tests below — the assertion is that it changes
-// nothing.
-func specWithDeclaredHost(sid, role string) map[string]any {
-	return map[string]any{
-		"hosts": []map[string]any{{"sid": sid, "role": role}},
-	}
-}
 
 // seedChoir inserts a Choir (declared group) into incarnation. It is needed
 // because of the FK from incarnation_choir_voices to
@@ -77,24 +79,6 @@ func seedVoiceRole(t *testing.T, incarnationName, choirName, sid, role string) {
 	}
 }
 
-// assertSpecHostsStillSeeded guards the guard. These tests are only meaningful
-// while `spec.hosts[]` is actually present in the row — if a future change made
-// the seed a no-op (a spec validator dropping unknown keys, say), the tests
-// would keep passing while asserting nothing. Read it back and insist.
-func assertSpecHostsStillSeeded(t *testing.T, incarnationName string) {
-	t.Helper()
-	var present bool
-	err := integrationPool.QueryRow(context.Background(),
-		`SELECT spec ? 'hosts' FROM incarnation WHERE name = $1`, incarnationName).Scan(&present)
-	if err != nil {
-		t.Fatalf("read back spec of %s: %v", incarnationName, err)
-	}
-	if !present {
-		t.Fatalf("spec.hosts of %s was not stored, so this test asserts nothing "+
-			"-- fix the seed before trusting the result", incarnationName)
-	}
-}
-
 // assertNullRoleScannable is a guard: NULL role in incarnation_choir_voices
 // must be read through the same *string scan as in the resolver
 // (loadChoirMemberships). If the scan used plain string, pgx would fail with
@@ -118,25 +102,24 @@ func assertNullRoleScannable(t *testing.T, incarnationName, choirName, sid strin
 	}
 }
 
-// TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted is the NIM-330
-// guard, in the shape that would have passed before the change and must fail
-// after any return of the fallback: the incarnation row carries a declared role
-// for this exact SID in `spec.hosts[]`, the host is a member, and it has NO
-// Voice. The resolved role must be EMPTY.
+// TestIntegration_LoadIncarnationHosts_MemberWithoutVoiceHasNoRole is the
+// NIM-330 rule stated positively: a host that is a member of the incarnation but
+// belongs to no Choir resolves to an EMPTY role, and this is a normal answer
+// rather than an error or a default.
 //
 // ADR-008 called a declared role "the only place of declared topology"; ADR-044
-// p.2 moved that to the Voice and kept the spec as a fallback for
-// bootstrap-`create`; the amendment 2026-07-30 removed the fallback along with
-// the field. A host nobody put into a part has no declared role, and an empty
-// role is the honest answer -- not a default, and not a leftover from the spec.
-func TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted(t *testing.T) {
+// p.2 moved that to the Voice and kept `spec.hosts[]` as a fallback for
+// bootstrap-`create`; the amendment 2026-07-30 removed the fallback, and NIM-410
+// removed the column it lived in. A host nobody put into a part has no declared
+// role, and an empty role is the honest answer -- there is no longer a tier
+// underneath for it to fall through to.
+func TestIntegration_LoadIncarnationHosts_MemberWithoutVoiceHasNoRole(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	seedIncarnation(t, "redis-prod", specWithDeclaredHost("a.example.com", "replica"))
+	seedIncarnation(t, "redis-prod")
 	seedSoul(t, "a.example.com", nil, soul.StatusConnected)
 	seedMembership(t, "redis-prod", "a.example.com")
-	assertSpecHostsStillSeeded(t, "redis-prod")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -147,8 +130,8 @@ func TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted(t *testing
 		t.Fatalf("got %v, want [a.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "" {
-		t.Errorf("role = %q, want \"\" -- the host has no Voice, and spec.hosts[].role "+
-			"is NOT a source of a declared role (ADR-044 amendment 2026-07-30, NIM-330)",
+		t.Errorf("role = %q, want \"\" -- the host has no Voice, and the Voice is the only "+
+			"source of a declared role (ADR-044 amendment 2026-07-30, NIM-330)",
 			hosts[0].Role)
 	}
 	if hosts[0].Choirs != nil {
@@ -159,9 +142,7 @@ func TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted(t *testing
 // TestIntegration_NullVoiceRole_RoleEmpty covers the degenerate Voice: the row
 // exists but its role is SQL NULL (AddVoice writes NULL when role is omitted,
 // migration 060). That used to fall through to `spec.hosts[].role`; it now
-// resolves to an empty role. The spec is seeded with a role for this SID
-// precisely so a restored fallback would be caught here rather than silently
-// agreeing with the expectation.
+// resolves to an empty role, and there is nothing behind it to fall through to.
 //
 // The Voice itself is NOT erased by having no role -- the host still carries a
 // stable `choirs[]` fact for `where:` targeting.
@@ -169,13 +150,12 @@ func TestIntegration_NullVoiceRole_RoleEmpty(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	seedIncarnation(t, "redis-prod", specWithDeclaredHost("b.example.com", "replica"))
+	seedIncarnation(t, "redis-prod")
 	seedSoul(t, "b.example.com", nil, soul.StatusConnected)
 	seedMembership(t, "redis-prod", "b.example.com")
 	seedChoir(t, "redis-prod", "voters")
 	seedVoiceNullRole(t, "redis-prod", "voters", "b.example.com")
 
-	assertSpecHostsStillSeeded(t, "redis-prod")
 	assertNullRoleScannable(t, "redis-prod", "voters", "b.example.com")
 
 	r := NewResolver(integrationPool, nil, nil)
@@ -187,7 +167,7 @@ func TestIntegration_NullVoiceRole_RoleEmpty(t *testing.T) {
 		t.Fatalf("got %v, want [b.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "" {
-		t.Errorf("role = %q, want \"\" (NULL voice.role is \"no role\"; there is no spec tier behind it)",
+		t.Errorf("role = %q, want \"\" (NULL voice.role is \"no role\"; there is no tier behind it)",
 			hosts[0].Role)
 	}
 	if got := hosts[0].Choirs; len(got) != 1 || got[0] != "voters" {
@@ -198,19 +178,17 @@ func TestIntegration_NullVoiceRole_RoleEmpty(t *testing.T) {
 // TestIntegration_ExplicitVoiceRole_IsTheRole is the positive control: an
 // explicit non-NULL `voice.role` is what the resolver returns. Without it the
 // two tests above would also pass on a resolver that always returned an empty
-// role. The spec carries a DIFFERENT role for the same SID, so the assertion
-// distinguishes "read the Voice" from "read the spec".
+// role, which is the one way all three could be green while the feature is
+// dead.
 func TestIntegration_ExplicitVoiceRole_IsTheRole(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	seedIncarnation(t, "redis-prod", specWithDeclaredHost("c.example.com", "replica"))
+	seedIncarnation(t, "redis-prod")
 	seedSoul(t, "c.example.com", nil, soul.StatusConnected)
 	seedMembership(t, "redis-prod", "c.example.com")
 	seedChoir(t, "redis-prod", "voters")
 	seedVoiceRole(t, "redis-prod", "voters", "c.example.com", "primary")
-
-	assertSpecHostsStillSeeded(t, "redis-prod")
 
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -221,7 +199,8 @@ func TestIntegration_ExplicitVoiceRole_IsTheRole(t *testing.T) {
 		t.Fatalf("got %v, want [c.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "primary" {
-		t.Errorf("role = %q, want Voice role \"primary\" (the spec says \"replica\" and is not read)",
+		t.Errorf("role = %q, want Voice role \"primary\" (an empty role here would mean the "+
+			"resolver never reads voice.role at all)",
 			hosts[0].Role)
 	}
 	if got := hosts[0].Choirs; len(got) != 1 || got[0] != "voters" {

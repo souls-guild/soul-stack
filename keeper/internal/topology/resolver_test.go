@@ -473,11 +473,13 @@ func TestLoadIncarnationHosts_RoleComesFromVoice(t *testing.T) {
 //   - emptyrole — a Voice with role="" (Go string).
 //
 // All three must resolve to "" — "no declared role", NOT a default group
-// (ADR-044 amendment 2026-06-30(b), now the only rule). The complementary half
-// of this guard — a spec that still CARRIES hosts[] in the database being
-// ignored — cannot be written here, because [Querier] no longer exposes the
-// single-row read the fallback needed; it lives in
-// TestIntegration_LoadIncarnationHosts_SpecHostsRoleIsNotConsulted.
+// (ADR-044 amendment 2026-06-30(b), now the only rule). This guard used to have
+// a complementary half — a spec that still CARRIED hosts[] in the database being
+// ignored — which could not be written here because [Querier] does not expose
+// the single-row read that fallback needed. That half no longer exists anywhere:
+// migration 112 (NIM-408) dropped `incarnation.spec`, so the ignored-spec case
+// can no longer be constructed. The real-PG side of the rule is
+// TestIntegration_LoadIncarnationHosts_MemberWithoutVoiceHasNoRole.
 func TestLoadIncarnationHosts_NoRoleSourceLeavesRoleEmpty(t *testing.T) {
 	p := &fakePool{
 		rosterRows: []rosterRow{

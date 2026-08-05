@@ -52,8 +52,9 @@ var (
 	// (purge_apply_runs). Fail-closed: rerunning without the saved input would
 	// apply defaults or fail input validation, so instead we reject — operator
 	// does a plain unlock and runs the scenario manually with explicit input.
-	// The create path (last-failed == created_scenario) never hits this sentinel:
-	// its input comes from incarnation.spec.input. Handler maps to 409.
+	// Since NIM-408 there is no create/day-2 fork here: every path reads the same
+	// state_history.run snapshot, so the create path hits this sentinel too when
+	// the attempt has none. Handler maps to 409.
 	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last has no run snapshot to replay (the attempt failed before dispatch, or predates the snapshot) — pass the input to run with, or unlock and start the scenario yourself")
 	ErrIncarnationBusy       = errors.New("incarnation: run in progress (applying)")
 	ErrIncarnationLocked     = errors.New("incarnation: locked — unlock required before upgrade")
@@ -986,10 +987,9 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // created_scenario": rerun-last reruns the actually failed operation.
 //
 // Input filled ONLY by [UnlockForRerun] (for [Unlock] — nil): input of failed
-// run. On create path — saved operator-input incarnation.spec.input
-// (read under same FOR UPDATE). On day-2 path — input from recipe of failed
-// apply_run (`apply_runs.recipe.input`, invariant A: vault-ref as strings, secrets
-// not revealed). Caller passes it to RunSpec.Input — rerun-last
+// run, read from that attempt's own state_history.run snapshot under the same
+// FOR UPDATE (NIM-408; invariant A: vault-ref as strings, secrets not revealed).
+// One source for create and day-2 alike. Caller passes it to RunSpec.Input — rerun-last
 // recovers failure with SAME input values (version/shards/user/…),
 // not defaults. nil = scenario without input.
 type UnlockResult struct {
@@ -1063,14 +1063,21 @@ func ServiceRefFromRunSnapshot(raw []byte) artifact.ServiceRef {
 	return envelope.ServiceRef
 }
 
-// InputFromSpec extracts `input` key from freeform jsonb object: either
-// incarnation.spec (create path) or apply_run recipe (day-2 path, [UnlockForRerun]).
+// InputFromRunSnapshot extracts the `input` key from a decoded state_history.run
+// snapshot ([UnlockForRerun]). It used to serve a second caller reading
+// incarnation.spec on the create path; NIM-408 removed that column, leaving the
+// run snapshot as the only source rerun-last reads.
+//
+// Not the only place the input is STORED — `apply_runs` still carries it in
+// both `recipe` and `input` (see applyrun.insertPlannedSQL). The snapshot is the
+// only copy that outlives the retention purge, which is why it is the one read
+// here; see the comment on the read itself for the two-lifetime problem it fixed.
 // Missing key / non-object form → nil without error (jsonb freeform).
-func InputFromSpec(spec map[string]any) map[string]any {
-	if spec == nil {
+func InputFromRunSnapshot(run map[string]any) map[string]any {
+	if run == nil {
 		return nil
 	}
-	raw, ok := spec["input"]
+	raw, ok := run["input"]
 	if !ok {
 		return nil
 	}
@@ -1392,13 +1399,11 @@ var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not neede
 //
 // Recovery of failed run's input (so restart proceeds with SAME
 // values, not defaults):
-//   - create-path (last failed == incarnation.created_scenario): input from
-//     incarnation.spec.input, read under same FOR UPDATE (lives with incarnation).
-//   - day-2-path (else, including bare-incarnation with created_scenario IS NULL):
-//     input from recipe of failed apply_run (`apply_runs.recipe.input` by apply_id
-//     of last snapshot; invariant A — vault-ref as strings, secrets not
-//     revealed). Recipe unavailable → fail-closed [ErrRerunInputUnavailable]
-//     (reasons and semantics — see sentinel), transaction NOT committed.
+//   - one path for both create and day-2 (NIM-408): input from the failed
+//     attempt's own state_history.run snapshot, read under the same FOR UPDATE
+//     (invariant A — vault-ref as strings, secrets not revealed). No snapshot →
+//     fail-closed [ErrRerunInputUnavailable] (reasons and semantics — see
+//     sentinel), transaction NOT committed.
 //
 // Caller (handler / MCP-tool) AFTER successful commit starts
 // [UnlockResult.Scenario] via runner.Start with same applyID passed here:
@@ -1562,7 +1567,7 @@ LIMIT 1
 			// defaults.
 			return nil, ErrRerunInputUnavailable
 		}
-		rerunInput = InputFromSpec(run)
+		rerunInput = InputFromRunSnapshot(run)
 		fromUpgrade, _ = run["from_upgrade"].(bool)
 		attemptRef := ServiceRefFromRunSnapshot(lastRun)
 		refGit, refRef = attemptRef.Git, attemptRef.Ref

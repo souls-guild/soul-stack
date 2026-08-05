@@ -23,9 +23,8 @@ import (
 // started separately.
 
 // SeedIncarnationReady inserts a ready (status='ready') incarnation with a
-// baseline state directly into Postgres. spec is an empty `{}` (mutating
-// scenarios don't read spec). Used when the regular create flow is unavailable
-// on L3b.
+// baseline state directly into Postgres. Used when the regular create flow is
+// unavailable on L3b.
 func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion string, state map[string]any) {
 	t.Helper()
 	stateJSON, err := json.Marshal(state)
@@ -35,8 +34,8 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO incarnation (name, service, service_version, spec, state, status)
-		VALUES ($1, $2, $3, '{}'::jsonb, $4::jsonb, 'ready')
+		INSERT INTO incarnation (name, service, service_version, state, status)
+		VALUES ($1, $2, $3, $4::jsonb, 'ready')
 	`, name, service, serviceVersion, string(stateJSON)); err != nil {
 		t.Fatalf("SeedIncarnationReady(%s): %v", name, err)
 	}
@@ -64,7 +63,7 @@ const soulprintBootstrapWaitSec = 60
 //
 // THE BOOTSTRAP ORDER LIVES HERE (NIM-192) — one place, not per test:
 //
-//  1. seed the `incarnation` row (status='ready', spec/state empty) — direct SQL;
+//  1. seed the `incarnation` row (status='ready', empty state) — direct SQL;
 //  2. bind each soul as a member (incarnation_membership);
 //  3. wait for each member's first SoulprintReport;
 //  4. run the create scenario as an ordinary explicit run.
