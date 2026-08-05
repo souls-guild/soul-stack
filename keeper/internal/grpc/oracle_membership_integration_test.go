@@ -1,20 +1,23 @@
 //go:build integration
 
-// Oracle subject resolution against live PG (NIM-224, narrowed by NIM-281).
-// Two questions run in sequence here and must not be confused; each has its own
-// tests below:
+// Oracle subject resolution against live PG (NIM-224, narrowed by NIM-281,
+// widened on the subject axis by NIM-280). Two questions run in sequence here
+// and must not be confused; each has its own tests below:
 //
-//   - the SUBJECT match reads `souls.coven[]` — the tags an operator attached
-//     to the host, and nothing else. A Decree is bound to the hosts an operator
-//     labelled for it; membership lends a host no tag, so
-//     `subject_coven: [<incarnation>]` reaches only hosts actually tagged with
-//     that string.
+//   - the SUBJECT match reads a label on TWO levels (NIM-280): the tags an
+//     operator attached to the host (`souls.coven[]`), and the same tag on an
+//     incarnation the host is a member of (`incarnation.covens`), which reaches
+//     every host on that roster. The union is formed for the duration of one
+//     match and nothing is written to `souls`. A name is still not a label on
+//     either level, so `subject_coven: [<incarnation-name>]` reaches only hosts
+//     an operator actually tagged with that string.
 //   - the MEMBERSHIP gate reads `incarnation_membership` directly, because a
 //     coven tag is a label anyone holding `soul.coven-assign` may attach and so
 //     cannot decide who belongs where.
 //
-// Together they mean a Decree fires on a host only if the operator both tagged
-// it and bound it — two acts, in two places, neither derivable from the other.
+// Together they mean a Decree fires on a host only if a label reached it — its
+// own or its incarnation's — AND the roster says it belongs. Targeting is what
+// NIM-280 widened; authorization was not, and the tests below hold that line.
 //
 // Live PG rather than the fake: the questions are answered from two different
 // relations, and a fake that answers both from one field cannot fail the way
@@ -50,8 +53,9 @@ const (
 //
 // memberCovens are the tags an operator attached to membershipMember, on top of
 // the `linux` both hosts carry. incarnationCovens are the tags carried by the
-// incarnation itself; under NIM-281 they describe the incarnation and reach no
-// host, and the tests pass them only to prove exactly that.
+// incarnation itself; a subject reads them as the second level and they reach
+// every host on the roster (NIM-280), while an RBAC scope never sees them. The
+// two are kept separate here so a test can say which level it is exercising.
 func seedMembershipFixture(t *testing.T, ctx context.Context, subjectCoven, memberCovens, incarnationCovens []string) *eventStreamHandler {
 	t.Helper()
 	resetOracleCrossSide(t)
@@ -151,25 +155,61 @@ func TestIntegration_OracleSubject_HitsExactlyTaggedHosts(t *testing.T) {
 	}
 }
 
-// TestIntegration_OracleSubject_IncarnationLabelsDoNotBind — the NIM-281 guard on
-// the reactor, in both spellings an operator might reach for. A Decree scoped to
-// the incarnation's NAME, on an incarnation that also carries the tag `cache`,
-// fires on nobody: the member is bound, but it is tagged neither `redis-prod`
-// nor `cache`, and belonging lends it neither. Binding a rule to an
-// incarnation's hosts means tagging those hosts.
-func TestIntegration_OracleSubject_IncarnationLabelsDoNotBind(t *testing.T) {
+// TestIntegration_OracleSubject_IncarnationNameIsNotALabel — the NIM-281 guard
+// on the reactor, kept exactly where NIM-280 did NOT widen. A Decree scoped
+// `subject_coven: [redis-prod]` — the incarnation's NAME — fires on nobody. The
+// member is bound and the incarnation carries a tag, but the tag is `cache`, and
+// a name is a label on neither level: not on the host, not on the incarnation.
+// Reaching an incarnation by its own identity is the `incarnation=` dimension.
+//
+// Distinct from TestIntegration_OracleMembershipGate_CovenTagIsNotMembership
+// below: there the string IS a real tag an operator attached to a host and the
+// MEMBERSHIP gate refuses; here nothing carries the string at all, so the
+// SUBJECT match itself must miss.
+func TestIntegration_OracleSubject_IncarnationNameIsNotALabel(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{membershipInc, "cache"}, nil, []string{"cache"})
+	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil, []string{"cache"})
 	bindMember(t, ctx, membershipMember)
 
 	emit(t, ctx, h, membershipMember)
 	emit(t, ctx, h, membershipOutside)
 
 	if firedFor(t, ctx, membershipMember) {
-		t.Error("a member matched a subject spelled like its incarnation — neither the name nor the incarnation's tag is a label on its hosts")
+		t.Error("a member matched a subject spelled like its incarnation's NAME — a name is not a label on the host or on the incarnation")
 	}
 	if firedFor(t, ctx, membershipOutside) {
-		t.Error("a non-member matched an incarnation-spelled subject")
+		t.Error("a non-member matched an incarnation-name-spelled subject")
+	}
+}
+
+// TestIntegration_OracleSubject_IncarnationTagReachesMembers — the other half of
+// the NIM-280 widening, and the one worth pinning down: a Decree scoped
+// `subject_coven: [cache]` fires for a host that carries NO tag of its own, on
+// the strength of the tag its incarnation carries. The union is formed at match
+// time; nothing is written to `souls`.
+//
+// The non-member is the control. It carries no tag either and is not on the
+// roster, so it must stay silent — the second level reaches an incarnation's
+// MEMBERS, not everyone.
+//
+// ⚠ This is the escalation-shaped edge NIM-280 accepted deliberately: tagging an
+// incarnation `cache` widens every existing `coven=cache` subject to its whole
+// roster without editing a single rule. It is declared behaviour, so it is
+// tested positively — a later reading of this file must not "restore" the old
+// assertion and quietly narrow targeting back.
+func TestIntegration_OracleSubject_IncarnationTagReachesMembers(t *testing.T) {
+	ctx := context.Background()
+	h := seedMembershipFixture(t, ctx, []string{"cache"}, nil, []string{"cache"})
+	bindMember(t, ctx, membershipMember)
+
+	emit(t, ctx, h, membershipMember)
+	emit(t, ctx, h, membershipOutside)
+
+	if !firedFor(t, ctx, membershipMember) {
+		t.Error("an untagged member did not match its incarnation's tag — the subject's second level does not reach the roster (NIM-280)")
+	}
+	if firedFor(t, ctx, membershipOutside) {
+		t.Error("a non-member matched the incarnation's tag — the second level must reach members only")
 	}
 }
 
