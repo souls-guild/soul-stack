@@ -124,6 +124,12 @@ func (r hAugurRow) Scan(dest ...any) error {
 			*dd = r.values[i].(time.Time)
 		case *[]byte:
 			*dd = r.values[i].([]byte)
+		case *[]string:
+			if r.values[i] == nil {
+				*dd = nil
+			} else {
+				*dd = r.values[i].([]string)
+			}
 		case **string:
 			if r.values[i] == nil {
 				*dd = nil
@@ -514,7 +520,7 @@ func TestHumaRite_Create_GoldenWire(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/rites",
-		strings.NewReader(`{"omen":"vault-prod","coven":"prod","allow":{"paths":["secret/data/app"]}}`))
+		strings.NewReader(`{"omen":"vault-prod","subject":{"coven":["prod"]},"allow":{"paths":["secret/data/app"]}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -524,7 +530,7 @@ func TestHumaRite_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"allow":{"paths":["secret/data/app"]},"coven":"prod","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","delegate":false,"id":42,"omen":"vault-prod"}`
+	const golden = `{"allow":{"paths":["secret/data/app"]},"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","delegate":false,"id":42,"omen":"vault-prod","subject":{"coven":["prod"]}}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift rite.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -534,7 +540,7 @@ func TestHumaRite_Create_UnknownField_400(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/rites",
-		strings.NewReader(`{"omen":"vault-prod","coven":"prod","allow":{"a":1},"bogus":1}`))
+		strings.NewReader(`{"omen":"vault-prod","subject":{"coven":["prod"]},"allow":{"a":1},"bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -546,7 +552,7 @@ func TestHumaRite_Create_MissingOmen_422(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/rites",
-		strings.NewReader(`{"coven":"prod","allow":{"a":1}}`))
+		strings.NewReader(`{"subject":{"coven":["prod"]},"allow":{"a":1}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (missing required omen); body=%s", rec.Code, rec.Body.String())
@@ -558,7 +564,7 @@ func TestHumaRite_Create_RBACDeny_403(t *testing.T) {
 	r := humaAugurRouter(t, strictDenyAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/rites",
-		strings.NewReader(`{"omen":"vault-prod","coven":"prod","allow":{"a":1}}`))
+		strings.NewReader(`{"omen":"vault-prod","subject":{"coven":["prod"]},"allow":{"a":1}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -570,7 +576,7 @@ func TestHumaAudit_RiteCreate_RecordsOnSuccess(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, auditCap, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/rites",
-		strings.NewReader(`{"omen":"vault-prod","coven":"prod","allow":{"paths":["secret/data/app"]}}`))
+		strings.NewReader(`{"omen":"vault-prod","subject":{"coven":["prod"]},"allow":{"paths":["secret/data/app"]}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -585,8 +591,11 @@ func TestHumaAudit_RiteCreate_RecordsOnSuccess(t *testing.T) {
 
 func TestHumaRite_List_GoldenWire(t *testing.T) {
 	pool := &hAugurPool{riteListRows: [][]any{
-		// scanRite: id, omen, coven, sid, allow, delegate, token_ttl, token_num_uses, created_by_aid, created_at.
-		{int64(42), "vault-prod", "prod", nil, []byte(`{"paths":["secret/data/app"]}`), false, nil, nil, nil, augurAt},
+		// scanRite (riteColumns): id, omen, sid, service, incarnation, coven,
+		// trait_key, trait_value, allow, delegate, token_ttl, token_num_uses,
+		// created_by_aid, created_at.
+		{int64(42), "vault-prod", nil, nil, nil, []string{"prod"}, nil, nil,
+			[]byte(`{"paths":["secret/data/app"]}`), false, nil, nil, nil, augurAt},
 	}}
 	r := humaAugurRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()
@@ -600,7 +609,7 @@ func TestHumaRite_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"allow":{"paths":["secret/data/app"]},"coven":"prod","created_at":"2026-06-13T10:00:00Z","delegate":false,"id":42,"omen":"vault-prod"}]}`
+	const golden = `{"items":[{"allow":{"paths":["secret/data/app"]},"created_at":"2026-06-13T10:00:00Z","delegate":false,"id":42,"omen":"vault-prod","subject":{"coven":["prod"]}}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift rite.list:\n got  = %s\n want = %s", got, golden)
 	}

@@ -6,7 +6,12 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
+
+// covenSel — the coven spelling of a subject, by far the most used in this file.
+func covenSel(c ...string) subject.Selector { return subject.Selector{Covens: c} }
 
 func newTestService(t *testing.T, db ExecQueryRower) *Service {
 	t.Helper()
@@ -31,7 +36,7 @@ func TestService_CreateVigil_OK(t *testing.T) {
 	svc := newTestService(t, &fakeDB{})
 	v, err := svc.CreateVigil(context.Background(), CreateVigilInput{
 		Name:     "web-conf",
-		Coven:    []string{"web"},
+		Subject:  covenSel("web"),
 		Interval: "30s",
 		Check:    "core.beacon.file_changed",
 		Enabled:  true,
@@ -53,10 +58,13 @@ func TestService_CreateVigil_ValidationBeforeDB(t *testing.T) {
 		name string
 		in   CreateVigilInput
 	}{
-		{"bad name", CreateVigilInput{Name: "BAD", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.file_changed"}},
-		{"bad interval", CreateVigilInput{Name: "x", Coven: []string{"web"}, Interval: "nope", Check: "core.beacon.file_changed"}},
-		{"unknown check", CreateVigilInput{Name: "x", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.bogus"}},
-		{"subject both", CreateVigilInput{Name: "x", Coven: []string{"web"}, SID: strptr("h1"), Interval: "30s", Check: "core.beacon.file_changed"}},
+		{"bad name", CreateVigilInput{Name: "BAD", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed"}},
+		{"bad interval", CreateVigilInput{Name: "x", Subject: covenSel("web"), Interval: "nope", Check: "core.beacon.file_changed"}},
+		{"unknown check", CreateVigilInput{Name: "x", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.bogus"}},
+		{"subject two dimensions", CreateVigilInput{Name: "x", Subject: subject.Selector{Covens: []string{"web"}, SIDs: []string{"h1"}}, Interval: "30s", Check: "core.beacon.file_changed"}},
+		{"subject none", CreateVigilInput{Name: "x", Interval: "30s", Check: "core.beacon.file_changed"}},
+		{"subject half-written incarnation", CreateVigilInput{Name: "x", Subject: subject.Selector{Incarnation: "redis-prod"}, Interval: "30s", Check: "core.beacon.file_changed"}},
+		{"subject half-written trait", CreateVigilInput{Name: "x", Subject: subject.Selector{TraitKey: "tier"}, Interval: "30s", Check: "core.beacon.file_changed"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -75,7 +83,7 @@ func TestService_CreateVigil_Duplicate(t *testing.T) {
 	db := &fakeDB{insertErr: &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "vigils_pkey"}}
 	svc := newTestService(t, db)
 	_, err := svc.CreateVigil(context.Background(), CreateVigilInput{
-		Name: "web-conf", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.file_changed",
+		Name: "web-conf", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed",
 	})
 	if !errors.Is(err, ErrVigilAlreadyExists) {
 		t.Errorf("err = %v, want ErrVigilAlreadyExists", err)
@@ -89,7 +97,7 @@ func TestService_CreateDecree_OK(t *testing.T) {
 		Name:            "restart-on-down",
 		OnBeacon:        "db-svc",
 		WhereCEL:        &where,
-		Coven:           []string{"db"},
+		Subject:         covenSel("db"),
 		IncarnationName: "prod-db",
 		ActionScenario:  "restart_service",
 	})
@@ -109,7 +117,7 @@ func TestService_CreateDecree_BadWhereCEL(t *testing.T) {
 		Name:            "x",
 		OnBeacon:        "db-svc",
 		WhereCEL:        &bad,
-		Coven:           []string{"db"},
+		Subject:         covenSel("db"),
 		IncarnationName: "prod-db",
 		ActionScenario:  "restart_service",
 	})
@@ -128,10 +136,10 @@ func TestService_CreateDecree_ValidationBeforeDB(t *testing.T) {
 		name string
 		in   CreateDecreeInput
 	}{
-		{"bad incarnation", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Coven: []string{"db"}, IncarnationName: "BAD..NAME", ActionScenario: "restart_service"}},
-		{"bad scenario", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Coven: []string{"db"}, IncarnationName: "prod-db", ActionScenario: "Bad-Scenario"}},
+		{"bad incarnation", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "BAD..NAME", ActionScenario: "restart_service"}},
+		{"bad scenario", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "Bad-Scenario"}},
 		{"subject neither", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", IncarnationName: "prod-db", ActionScenario: "restart_service"}},
-		{"bad cooldown", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Coven: []string{"db"}, IncarnationName: "prod-db", ActionScenario: "restart_service", Cooldown: "nope"}},
+		{"bad cooldown", CreateDecreeInput{Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Cooldown: "nope"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

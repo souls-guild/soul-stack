@@ -23,9 +23,16 @@
 > config a host is owed; the incarnation's labels decide which overlays of that
 > config apply. No host label is involved on either step.
 >
-> Known narrowing left open: a Vigil/Decree or Augur Rite subject is `sid` XOR
-> `coven`, so nothing can now bind one to "every member of incarnation X" without
-> tagging those hosts by hand — **NIM-280**.
+> Known narrowing, **closed the same day by NIM-280** — and closed without
+> reviving this ADR. A rule's subject grew to four dimensions (`sid` /
+> `incarnation` / `coven` / `trait`), and its two label dimensions read the host's
+> labels unioned with its incarnations' — but **only inside one selector match**,
+> for targeting alone
+> ([ADR-008 / NIM-280](0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)).
+> That is the opposite of what this ADR decided: nothing is written to `souls`, no
+> other reader sees the union, and the RBAC scope predicate keeps reading the
+> row's own column. The distinction is the whole point — a union in ONE consumer
+> that asked for it is not a label the host carries.
 >
 > **Everything below is kept as the record of a decision that was made, built and
 > withdrawn. Do not implement from it.**

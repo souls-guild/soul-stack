@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // Sentinel errors of the CRUD layer. The handler side (OpenAPI/MCP, a
@@ -197,12 +199,12 @@ func DeleteOmen(ctx context.Context, db ExecQueryRower, name string) error {
 // --- Rite -------------------------------------------------------------
 
 const riteInsertSQL = `
-INSERT INTO rites (omen, coven, sid, allow, delegate, token_ttl, token_num_uses, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO rites (omen, sid, service, incarnation, coven, trait_key, trait_value, allow, delegate, token_ttl, token_num_uses, created_by_aid)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, created_at
 `
 
-const riteColumns = `id, omen, coven, sid, allow, delegate, token_ttl, token_num_uses, created_by_aid, created_at`
+const riteColumns = `id, omen, sid, service, incarnation, coven, trait_key, trait_value, allow, delegate, token_ttl, token_num_uses, created_by_aid, created_at`
 
 // InsertRite inserts a new Rite. Before writing, it resolves the Omen
 // (through the same db) for service validation that the DB CHECK can't
@@ -212,8 +214,9 @@ const riteColumns = `id, omen, coven, sid, allow, delegate, token_ttl, token_num
 //     ([ValidateTokenFields] — the other half of the invariant, ⇒vault via join);
 //   - token_ttl format ([config.ParseDuration] inside ValidateTokenFields).
 //
-// The subject XOR invariant is checked both here ([ValidateSubjectXOR]) and
-// by the DB CHECK rites_subject_xor — defence in depth.
+// The subject's exactly-one-of-four invariant is checked both here
+// ([ValidateSubject]) and by the DB CHECK rites_subject_one_of — defence in
+// depth.
 //
 // Returns: [ErrOmenNotFound] if the Omen doesn't exist; wrapped fmt.Errorf on
 // an FK/CHECK violation.
@@ -224,7 +227,7 @@ func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 	if r.Omen == "" {
 		return fmt.Errorf("augur: rite omen is empty")
 	}
-	if err := ValidateSubjectXOR(r); err != nil {
+	if err := ValidateSubject(r); err != nil {
 		return err
 	}
 
@@ -240,17 +243,10 @@ func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 	}
 
 	var (
-		coven, sid   any
 		createdByAID any
 		tokenTTL     any
 		tokenNumUses any
 	)
-	if r.Coven != nil {
-		coven = *r.Coven
-	}
-	if r.SID != nil {
-		sid = *r.SID
-	}
 	if r.CreatedByAID != nil {
 		createdByAID = *r.CreatedByAID
 	}
@@ -262,7 +258,8 @@ func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 	}
 
 	row := db.QueryRow(ctx, riteInsertSQL,
-		r.Omen, coven, sid, []byte(r.Allow), r.Delegate, tokenTTL, tokenNumUses, createdByAID,
+		r.Omen, r.SID, r.Service, r.Incarnation, r.Coven, r.TraitKey, r.TraitValue,
+		[]byte(r.Allow), r.Delegate, tokenTTL, tokenNumUses, createdByAID,
 	)
 	if err := row.Scan(&r.ID, &r.CreatedAt); err != nil {
 		return mapRiteInsertError(err)
@@ -287,15 +284,14 @@ func scanRite(row pgx.Row) (*Rite, error) {
 	var (
 		r            Rite
 		allow        []byte
-		coven        *string
-		sid          *string
 		tokenTTL     *string
 		tokenNumUses *int
 		createdByAID *string
 	)
 	err := row.Scan(
-		&r.ID, &r.Omen, &coven, &sid, &allow,
-		&r.Delegate, &tokenTTL, &tokenNumUses, &createdByAID, &r.CreatedAt,
+		&r.ID, &r.Omen,
+		&r.SID, &r.Service, &r.Incarnation, &r.Coven, &r.TraitKey, &r.TraitValue,
+		&allow, &r.Delegate, &tokenTTL, &tokenNumUses, &createdByAID, &r.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -304,8 +300,6 @@ func scanRite(row pgx.Row) (*Rite, error) {
 		return nil, fmt.Errorf("augur: scan rite: %w", err)
 	}
 	r.Allow = allow
-	r.Coven = coven
-	r.SID = sid
 	r.TokenTTL = tokenTTL
 	r.TokenNumUses = tokenNumUses
 	r.CreatedByAID = createdByAID
@@ -342,17 +336,24 @@ ORDER BY created_at DESC, id ASC`
 	return collectRites(rows)
 }
 
-// SelectRitesBySubject returns Rites matching the request subject: sid-Rites
-// with rites.sid == sid OR coven-Rites with rites.coven ∈ covens
-// (authorization §6). An empty covens is fine (then only sid-Rites match).
-// Used when resolving AugurRequest in a separate slice. Sort order
-// `created_at DESC, id ASC`.
-func SelectRitesBySubject(ctx context.Context, db ExecQueryRower, sid string, covens []string) ([]*Rite, error) {
-	const sql = `SELECT ` + riteColumns + `
+// SelectRitesBySubject returns the Rites whose subject reaches this host
+// (authorization §6), for resolving an AugurRequest.
+//
+// The WHERE clause is [subject.MatchSQL] — the same predicate
+// [subject.Selector.Matches] implements in Go, over the same resolved host.
+// This is a GRANT query, so the two answering differently would not merely be
+// untidy: it would be a grant handed out or withheld for a reason no test
+// covers.
+//
+// Sort order `created_at DESC, id ASC`.
+func SelectRitesBySubject(ctx context.Context, db ExecQueryRower, host subject.Host) ([]*Rite, error) {
+	var b subject.ArgBinder
+	pred := subject.MatchSQL(subject.RiteColumns, host.Args(), b.Bind)
+	sql := `SELECT ` + riteColumns + `
 FROM rites
-WHERE sid = $1 OR coven = ANY($2)
+WHERE ` + pred + `
 ORDER BY created_at DESC, id ASC`
-	rows, err := db.Query(ctx, sql, sid, covens)
+	rows, err := db.Query(ctx, sql, b.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("augur: list rites by subject query: %w", err)
 	}

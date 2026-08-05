@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
@@ -41,31 +42,37 @@ type Decision struct {
 // carries no secret values.
 func denied(reason string) *Decision { return &Decision{Allowed: false, Reason: reason} }
 
-// OmenReader / RiteReader / CovenReader — narrow registry surfaces needed by
+// OmenReader / RiteReader / HostReader — narrow registry surfaces needed by
 // resolve. Narrowing (instead of passing a *pgxpool.Pool) isolates
 // enforcement from CRUD and allows a fake in unit tests without spinning up
 // PG. The real implementations are closures over [SelectOmenByName] /
-// [SelectRitesBySubject] / the soul registry (see the grpc-handler wire-up).
+// [SelectRitesBySubject] / [subject.LoadHost] (see the grpc-handler wire-up).
 type OmenReader interface {
 	OmenByName(ctx context.Context, name string) (*Omen, error)
 }
 
 type RiteReader interface {
-	RitesBySubject(ctx context.Context, sid string, covens []string) ([]*Rite, error)
+	RitesBySubject(ctx context.Context, host subject.Host) ([]*Rite, error)
 }
 
-// CovenReader resolves covens by SID from the AUTHORITATIVE registry
-// (souls.coven[]), NOT from the request payload (augur.md §6.2: covens are
-// taken from the registry, not from the AugurRequest). Returns
+// HostReader resolves the subject facts by SID from the AUTHORITATIVE
+// registries — the host's own covens and traits plus its incarnation
+// memberships — NOT from the request payload (augur.md §6.2). Returns
 // [ErrSubjectUnknown] when the Soul isn't in the registry.
-type CovenReader interface {
-	CovensBySID(ctx context.Context, sid string) ([]string, error)
+//
+// It replaced a covens-only reader with NIM-280: a Rite may now be written on
+// any of four dimensions, and answering "does this grant reach the caller"
+// needs the whole picture, not one column of it.
+type HostReader interface {
+	HostBySID(ctx context.Context, sid string) (subject.Host, error)
 }
 
 // ErrSubjectUnknown — the SID wasn't found in the souls registry. Resolve
 // treats it as Denied (no authoritative subject → no grant), not as ERROR:
-// for the broker this is a normal denial, not a Keeper failure.
-var ErrSubjectUnknown = errors.New("augur: sid not found in souls registry")
+// for the broker this is a normal denial, not a Keeper failure. Aliases
+// [subject.ErrHostUnknown] so a reader built on [subject.LoadHost] satisfies
+// the contract without translating the error.
+var ErrSubjectUnknown = subject.ErrHostUnknown
 
 // Resolve — the authorization resolve (augur.md §6). default-deny: any
 // failed check → Decision{Allowed:false} + Reason, without reading the
@@ -77,8 +84,8 @@ var ErrSubjectUnknown = errors.New("augur: sid not found in souls registry")
 //  3. The delegate branch of Slice C — only delegate=false (broker).
 //     delegate=true (MVP-2) → denied (minting/issuing a cred is a separate
 //     slice).
-//  4. covens by SID from the registry (CovensBySID) — the authoritative
-//     source.
+//  4. the subject facts by SID from the registries (HostBySID) — the
+//     authoritative source.
 //  5. A Rite is found (RitesBySubject) for this Omen. No → denied.
 //  6. query ∈ Rite.allow, an EXACT match by source_type shape:
 //     vault      — paths, AFTER normalizing the vault path (otherwise
@@ -97,7 +104,7 @@ func Resolve(
 	ctx context.Context,
 	omens OmenReader,
 	rites RiteReader,
-	covens CovenReader,
+	hosts HostReader,
 	sid, omenName, query string,
 ) (*Decision, error) {
 	omen, err := omens.OmenByName(ctx, omenName)
@@ -115,15 +122,15 @@ func Resolve(
 		return denied(fmt.Sprintf("unknown source_type %q", omen.SourceType)), nil
 	}
 
-	covenList, err := covens.CovensBySID(ctx, sid)
+	host, err := hosts.HostBySID(ctx, sid)
 	if err != nil {
 		if errors.Is(err, ErrSubjectUnknown) {
 			return denied("subject not registered"), nil
 		}
-		return nil, fmt.Errorf("augur: resolve covens for sid %q: %w", sid, err)
+		return nil, fmt.Errorf("augur: resolve subject for sid %q: %w", sid, err)
 	}
 
-	candidates, err := rites.RitesBySubject(ctx, sid, covenList)
+	candidates, err := rites.RitesBySubject(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("augur: resolve rites for sid %q: %w", sid, err)
 	}

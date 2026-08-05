@@ -15,6 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -155,14 +156,39 @@ func scanOracleT(dest, values []any) error {
 	return nil
 }
 
-func vigilTRow(name, interval, check string, coven []string) []any {
-	now := time.Now()
-	return []any{name, coven, nil, interval, check, []byte("{}"), true, now, now, nil}
+// subjectTCols — the six subject columns in the order both registries declare
+// them (sid, service, incarnation, coven, trait_key, trait_value). Written from
+// a selector rather than column by column, so a fixture cannot spell a shape the
+// domain would reject.
+func subjectTCols(sel subject.Selector) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return []any{
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+	}
 }
 
-func decreeTRow(name, onBeacon, incarnation, scenario string, coven []string) []any {
+// vigilTRow — one `vigils` row in vigilColumns order (14 values).
+func vigilTRow(name, interval, check string, sel subject.Selector) []any {
 	now := time.Now()
-	return []any{name, onBeacon, nil, coven, nil, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil}
+	row := []any{name}
+	row = append(row, subjectTCols(sel)...)
+	return append(row, interval, check, []byte("{}"), true, now, now, nil)
+}
+
+// decreeTRow — one `decrees` row in decreeColumns order (17 values). The subject
+// columns sit between where_cel and incarnation_name — the rule's WHO, opposite
+// the incarnation_name that names its target.
+func decreeTRow(name, onBeacon, incarnation, scenario string, sel subject.Selector) []any {
+	now := time.Now()
+	row := []any{name, onBeacon, nil}
+	row = append(row, subjectTCols(sel)...)
+	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil)
 }
 
 // --- harness ---
@@ -252,10 +278,10 @@ func TestOracleTools_NilGuard(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`},
+		{"keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
 		{"keeper.oracle.vigil.list", `{}`},
 		{"keeper.oracle.vigil.delete", `{"name":"x"}`},
-		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","coven":["db"],"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
+		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
 		{"keeper.oracle.decree.list", `{}`},
 		{"keeper.oracle.decree.delete", `{"name":"x"}`},
 	}
@@ -281,8 +307,8 @@ func TestOracleTools_RBACForbidden(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`},
-		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","coven":["db"],"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
+		{"keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
+		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
 		{"keeper.oracle.decree.delete", `{"name":"x"}`},
 	}
 	for _, tc := range cases {
@@ -308,14 +334,19 @@ func TestOracleTools_Validation(t *testing.T) {
 		args string
 		want string
 	}{
-		{"vigil-no-name", "keeper.oracle.vigil.create", `{"coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-bad-interval", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"nope","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-unknown-check", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.bogus"}`, mcpCodeValidationFailed},
-		{"vigil-subject-xor", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"sid":"h1","interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-unknown-field", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed","z":1}`, mcpCodeMalformedRequest},
-		{"decree-no-name", "keeper.oracle.decree.create", `{"on_beacon":"b","coven":["db"],"incarnation_name":"prod-db","action_scenario":"restart_service"}`, mcpCodeValidationFailed},
-		{"decree-bad-scenario", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","coven":["db"],"incarnation_name":"prod-db","action_scenario":"Bad-Scenario"}`, mcpCodeValidationFailed},
-		{"decree-bad-where", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","coven":["db"],"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.x =="}`, mcpCodeValidationFailed},
+		{"vigil-no-name", "keeper.oracle.vigil.create", `{"subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-bad-interval", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"nope","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-unknown-check", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.bogus"}`, mcpCodeValidationFailed},
+		// Exactly-one-of, both ways round: two dimensions at once and none at all.
+		{"vigil-two-subject-dimensions", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"],"sid":["h1"]},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-empty-subject", "keeper.oracle.vigil.create", `{"name":"x","subject":{},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		// The flat `coven`/`sid` keys of the old shape are gone, so spelling one is an
+		// unknown field — malformed-request, not a subject diagnostic.
+		{"vigil-flat-coven-gone", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeMalformedRequest},
+		{"vigil-unknown-field", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed","z":1}`, mcpCodeMalformedRequest},
+		{"decree-no-name", "keeper.oracle.decree.create", `{"on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`, mcpCodeValidationFailed},
+		{"decree-bad-scenario", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"Bad-Scenario"}`, mcpCodeValidationFailed},
+		{"decree-bad-where", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.x =="}`, mcpCodeValidationFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,7 +366,7 @@ func TestOracleTools_Validation(t *testing.T) {
 func TestOracleVigilCreate_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.create",
-		`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`)
+		`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -375,7 +406,7 @@ func TestOracleVigilCreate_Duplicate409(t *testing.T) {
 		vigilInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "vigils_pkey"},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.create",
-		`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`)
+		`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -390,8 +421,8 @@ func TestOracleVigilList_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{
 		vigilCount: 2,
 		vigilListRows: [][]any{
-			vigilTRow("web-conf", "30s", "core.beacon.file_changed", []string{"web"}),
-			vigilTRow("db-svc", "1m", "core.beacon.service_down", []string{"db"}),
+			vigilTRow("web-conf", "30s", "core.beacon.file_changed", subject.Selector{Covens: []string{"web"}}),
+			vigilTRow("db-svc", "1m", "core.beacon.service_down", subject.Selector{Service: "redis", Incarnation: "redis-prod"}),
 		},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.list", `{}`)
@@ -408,6 +439,15 @@ func TestOracleVigilList_Success(t *testing.T) {
 	}
 	if len(out.Vigils) != 2 || out.Total != 2 {
 		t.Fatalf("out = %+v", out)
+	}
+	// The projection emits the dimension each Vigil was WRITTEN with, so a listing
+	// says what the rule IS rather than which columns happen to be NULL.
+	if got := out.Vigils[0].Subject; len(got.Coven) != 1 || got.Coven[0] != "web" || got.Incarnation != nil {
+		t.Errorf("coven vigil subject = %+v", got)
+	}
+	inc := out.Vigils[1].Subject.Incarnation
+	if inc == nil || inc.Service != "redis" || inc.Name != "redis-prod" || out.Vigils[1].Subject.Coven != nil {
+		t.Errorf("incarnation vigil subject = %+v", out.Vigils[1].Subject)
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("list emitted %d audit events, want 0", len(rec.events))
@@ -453,7 +493,7 @@ func TestOracleVigilDelete_NotFound404(t *testing.T) {
 func TestOracleDecreeCreate_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.create",
-		`{"name":"restart-on-down","on_beacon":"db-svc","coven":["db"],"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.severity == \"critical\""}`)
+		`{"name":"restart-on-down","on_beacon":"db-svc","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.severity == \"critical\""}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -486,7 +526,7 @@ func TestOracleDecreeList_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{
 		decreeCount: 1,
 		decreeListRows: [][]any{
-			decreeTRow("restart-on-down", "db-svc", "prod-db", "restart_service", []string{"db"}),
+			decreeTRow("restart-on-down", "db-svc", "prod-db", "restart_service", subject.Selector{TraitKey: "tier", TraitValue: "gold"}),
 		},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.list", `{}`)
@@ -503,6 +543,15 @@ func TestOracleDecreeList_Success(t *testing.T) {
 	}
 	if len(out.Decrees) != 1 || out.Total != 1 {
 		t.Fatalf("out = %+v", out)
+	}
+	// subject.trait is the rule's WHO; incarnation_name stays its target — the two
+	// live side by side in the same view and must not be conflated.
+	tr := out.Decrees[0].Subject.Trait
+	if tr == nil || tr.Key != "tier" || tr.Value != "gold" {
+		t.Errorf("trait decree subject = %+v", out.Decrees[0].Subject)
+	}
+	if out.Decrees[0].IncarnationName != "prod-db" {
+		t.Errorf("incarnation_name = %q, want prod-db", out.Decrees[0].IncarnationName)
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("list emitted %d audit events, want 0", len(rec.events))

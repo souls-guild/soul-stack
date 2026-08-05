@@ -20,6 +20,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // oracleClaims constructs keeperjwt.Claims for calling Typed directly.
@@ -191,21 +192,40 @@ func wantOracleProblem(t *testing.T, err error, want string) {
 	}
 }
 
-func covenPtr(v ...string) *[]string { s := append([]string{}, v...); return &s }
-
-// vigilRow — a vigils row (collectVigils: name, coven, sid, interval_spec,
-// check_addr, params, enabled, created_at, updated_at, created_by_aid).
-func vigilRow(name, interval, check string, coven []string) []any {
-	now := time.Now()
-	return []any{name, coven, nil, interval, check, []byte("{}"), true, now, now, nil}
+// subjectCols flattens a selector into the seven subject columns both registries
+// share, in schema order: sid, service, incarnation, coven, trait_key, trait_value
+// (the sid/coven arms stay arrays, the scalar arms go NULL when unset).
+func subjectCols(sel subject.Selector) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return []any{
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+	}
 }
 
-// decreeRow — a decrees row (collectDecrees: name, on_beacon, where_cel,
-// subject_coven, subject_sid, incarnation_name, action_scenario, action_input,
-// cooldown, enabled, created_at, updated_at, created_by_aid).
-func decreeRow(name, onBeacon, incarnation, scenario string, coven []string) []any {
+// vigilRow — a vigils row in vigilColumns order (collectVigils: name, sid,
+// service, incarnation, coven, trait_key, trait_value, interval_spec,
+// check_addr, params, enabled, created_at, updated_at, created_by_aid).
+func vigilRow(name, interval, check string, sel subject.Selector) []any {
 	now := time.Now()
-	return []any{name, onBeacon, nil, coven, nil, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil}
+	row := append([]any{name}, subjectCols(sel)...)
+	return append(row, interval, check, []byte("{}"), true, now, now, nil)
+}
+
+// decreeRow — a decrees row in decreeColumns order (collectDecrees: name,
+// on_beacon, where_cel, subject_sid, subject_service, subject_incarnation,
+// subject_coven, subject_trait_key, subject_trait_value, incarnation_name,
+// action_scenario, action_input, cooldown, enabled, created_at, updated_at,
+// created_by_aid).
+func decreeRow(name, onBeacon, incarnation, scenario string, sel subject.Selector) []any {
+	now := time.Now()
+	row := append([]any{name, onBeacon, nil}, subjectCols(sel)...)
+	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil)
 }
 
 // --- Vigil CreateVigilTyped: domain classification ---
@@ -213,7 +233,7 @@ func decreeRow(name, onBeacon, incarnation, scenario string, coven []string) []a
 func TestOracleHandler_CreateVigilTyped_201(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	reply, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "web-conf", Coven: covenPtr("web"), Interval: "30s", Check: "core.beacon.file_changed",
+		Name: "web-conf", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed",
 	})
 	if err != nil {
 		t.Fatalf("CreateVigilTyped: %v", err)
@@ -229,7 +249,7 @@ func TestOracleHandler_CreateVigilTyped_201(t *testing.T) {
 func TestOracleHandler_CreateVigilTyped_BadInterval_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	_, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "x", Coven: covenPtr("web"), Interval: "notaduration", Check: "core.beacon.file_changed",
+		Name: "x", Subject: covenSel("web"), Interval: "notaduration", Check: "core.beacon.file_changed",
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
@@ -237,16 +257,26 @@ func TestOracleHandler_CreateVigilTyped_BadInterval_422(t *testing.T) {
 func TestOracleHandler_CreateVigilTyped_UnknownCheck_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	_, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "x", Coven: covenPtr("web"), Interval: "30s", Check: "core.beacon.bogus",
+		Name: "x", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.bogus",
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
 
-func TestOracleHandler_CreateVigilTyped_SubjectXOR_422(t *testing.T) {
+// TestOracleHandler_CreateVigilTyped_SubjectNotExactlyOne_422 — a Vigil names
+// its subject on EXACTLY ONE of the four dimensions; both too many and none at
+// all are 422.
+func TestOracleHandler_CreateVigilTyped_SubjectNotExactlyOne_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
-	sid := "h1.example"
+
 	_, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "x", Coven: covenPtr("web"), SID: &sid, Interval: "30s", Check: "core.beacon.file_changed",
+		Name:     "x",
+		Subject:  subject.Selector{Covens: []string{"web"}, SIDs: []string{"h1.example"}},
+		Interval: "30s", Check: "core.beacon.file_changed",
+	})
+	wantOracleProblem(t, err, problem.TypeValidationFailed)
+
+	_, err = h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
+		Name: "x", Interval: "30s", Check: "core.beacon.file_changed",
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
@@ -256,7 +286,7 @@ func TestOracleHandler_CreateVigilTyped_Duplicate_409(t *testing.T) {
 		vigilInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "vigils_pkey"},
 	})
 	_, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "web-conf", Coven: covenPtr("web"), Interval: "30s", Check: "core.beacon.file_changed",
+		Name: "web-conf", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed",
 	})
 	wantOracleProblem(t, err, problem.TypeVigilExists)
 }
@@ -272,7 +302,7 @@ func TestOracleHandler_CreateVigilTyped_ParamsByteExact(t *testing.T) {
 	const params = `{"zzz":1,"a":2,"mmm":3}`
 	raw := json.RawMessage(params)
 	reply, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "web-conf", Coven: covenPtr("web"), Interval: "30s", Check: "core.beacon.file_changed", Params: &raw,
+		Name: "web-conf", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed", Params: &raw,
 	})
 	if err != nil {
 		t.Fatalf("CreateVigilTyped: %v", err)
@@ -288,8 +318,8 @@ func TestOracleHandler_ListVigilsTyped_200(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{
 		vigilCount: 2,
 		vigilListValues: [][]any{
-			vigilRow("web-conf", "30s", "core.beacon.file_changed", []string{"web"}),
-			vigilRow("db-svc", "1m", "core.beacon.service_down", []string{"db"}),
+			vigilRow("web-conf", "30s", "core.beacon.file_changed", covenSel("web")),
+			vigilRow("db-svc", "1m", "core.beacon.service_down", covenSel("db")),
 		},
 	})
 	page, err := h.ListVigilsTyped(context.Background(), 0, 50)
@@ -320,7 +350,7 @@ func TestOracleHandler_ListVigilsTyped_OutOfRange_400(t *testing.T) {
 
 func TestOracleHandler_GetVigilTyped_200(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{
-		vigilGetValues: vigilRow("web-conf", "30s", "core.beacon.file_changed", []string{"web"}),
+		vigilGetValues: vigilRow("web-conf", "30s", "core.beacon.file_changed", covenSel("web")),
 	})
 	view, err := h.GetVigilTyped(context.Background(), "web-conf")
 	if err != nil {
@@ -365,7 +395,7 @@ func TestOracleHandler_DeleteVigilTyped_NotFound_404(t *testing.T) {
 func TestOracleHandler_CreateDecreeTyped_201(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	reply, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "restart-on-down", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service",
+		Name: "restart-on-down", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service",
 	})
 	if err != nil {
 		t.Fatalf("CreateDecreeTyped: %v", err)
@@ -378,7 +408,7 @@ func TestOracleHandler_CreateDecreeTyped_201(t *testing.T) {
 func TestOracleHandler_CreateDecreeTyped_BadIncarnation_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	_, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "x", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "BAD..NAME", ActionScenario: "restart_service",
+		Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "BAD..NAME", ActionScenario: "restart_service",
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
@@ -386,7 +416,7 @@ func TestOracleHandler_CreateDecreeTyped_BadIncarnation_422(t *testing.T) {
 func TestOracleHandler_CreateDecreeTyped_BadScenario_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	_, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "x", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "Bad-Scenario",
+		Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "Bad-Scenario",
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
@@ -395,7 +425,7 @@ func TestOracleHandler_CreateDecreeTyped_BadWhereCEL_422(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	where := "event.data.x =="
 	_, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "x", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
+		Name: "x", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
 	})
 	wantOracleProblem(t, err, problem.TypeValidationFailed)
 }
@@ -404,7 +434,7 @@ func TestOracleHandler_CreateDecreeTyped_ValidWhereCEL_201(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	where := `event.data.severity == "critical"`
 	_, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "crit", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
+		Name: "crit", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
 	})
 	if err != nil {
 		t.Fatalf("CreateDecreeTyped: %v", err)
@@ -424,7 +454,7 @@ func TestOracleHandler_CreateDecreeTyped_Duplicate_409(t *testing.T) {
 		decreeInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "decrees_pkey"},
 	})
 	_, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "restart-on-down", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service",
+		Name: "restart-on-down", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service",
 	})
 	wantOracleProblem(t, err, problem.TypeDecreeExists)
 }
@@ -438,7 +468,7 @@ func TestOracleHandler_CreateDecreeTyped_ActionInputByteExact(t *testing.T) {
 	const actionInput = `{"zzz":1,"a":2,"mmm":3}`
 	raw := json.RawMessage(actionInput)
 	reply, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "restart-on-down", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", ActionInput: &raw,
+		Name: "restart-on-down", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", ActionInput: &raw,
 	})
 	if err != nil {
 		t.Fatalf("CreateDecreeTyped: %v", err)
@@ -454,7 +484,7 @@ func TestOracleHandler_ListDecreesTyped_200(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{
 		decreeCount: 1,
 		decreeListValues: [][]any{
-			decreeRow("restart-on-down", "db-svc", "prod-db", "restart_service", []string{"db"}),
+			decreeRow("restart-on-down", "db-svc", "prod-db", "restart_service", covenSel("db")),
 		},
 	})
 	page, err := h.ListDecreesTyped(context.Background(), 0, 50)
@@ -496,7 +526,7 @@ func TestOracleHandler_DeleteDecreeTyped_NotFound_404(t *testing.T) {
 func TestOracleHandler_CreateVigilTyped_AuditPayload(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	reply, err := h.CreateVigilTyped(context.Background(), oracleClaims("archon-alice"), VigilCreateInput{
-		Name: "web-conf", Coven: covenPtr("web"), Interval: "30s", Check: "core.beacon.file_changed",
+		Name: "web-conf", Subject: covenSel("web"), Interval: "30s", Check: "core.beacon.file_changed",
 	})
 	if err != nil {
 		t.Fatalf("CreateVigilTyped: %v", err)
@@ -523,7 +553,7 @@ func TestOracleHandler_CreateDecreeTyped_AuditPayload(t *testing.T) {
 	h := newOracleHandler(t, &oracleFakePool{})
 	where := `event.data.severity == "critical"`
 	reply, err := h.CreateDecreeTyped(context.Background(), oracleClaims("archon-alice"), DecreeCreateInput{
-		Name: "restart-on-down", OnBeacon: "db-svc", Coven: covenPtr("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
+		Name: "restart-on-down", OnBeacon: "db-svc", Subject: covenSel("db"), IncarnationName: "prod-db", ActionScenario: "restart_service", Where: &where,
 	})
 	if err != nil {
 		t.Fatalf("CreateDecreeTyped: %v", err)

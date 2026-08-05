@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -57,20 +58,17 @@ func ValidSourceType(s SourceType) bool {
 // the CHECK omens_name_format in migration 032 (like providers.NamePattern).
 const NamePattern = `^[a-z0-9-]{1,63}$`
 
-// CovenPattern — shape of a Rite subject's Coven label. Same as the CHECK
-// rites_coven_format in migration 033.
-const CovenPattern = `^[a-z0-9][a-z0-9-]*$`
+// CovenPattern — shape of a Coven label. Re-exported from [subject] so the
+// three subject-bearing registries state one shape once.
+const CovenPattern = subject.CovenPattern
 
-var (
-	nameRe  = regexp.MustCompile(NamePattern)
-	covenRe = regexp.MustCompile(CovenPattern)
-)
+var nameRe = regexp.MustCompile(NamePattern)
 
 // ValidName checks an Omen name against the canonical shape (kebab 1..63).
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// ValidCoven checks a Rite subject's Coven label.
-func ValidCoven(coven string) bool { return covenRe.MatchString(coven) }
+// ValidCoven checks a single Coven label.
+func ValidCoven(coven string) bool { return subject.ValidCoven(coven) }
 
 // ValidAuthRef checks that auth_ref is a valid vault-ref
 // (`vault:<mount>/<path>`), using the same parser as providers.credentials_ref
@@ -93,21 +91,68 @@ type Omen struct {
 
 // Rite — runtime representation of a `rites` registry row (access grant).
 //
-// Subject is strictly XOR: exactly one of Coven / SID is non-empty. allow is
-// raw JSONB (shape depends on the Omen's SourceType, validated via
-// ValidateAllow). TokenTTL / TokenNumUses are only meaningful for a
-// vault-Omen with Delegate=true.
+// The subject is exactly one of four dimensions (CHECK rites_subject_one_of,
+// NIM-280) — see [subject.Selector] and [Rite.Subject]. allow is raw JSONB
+// (shape depends on the Omen's SourceType, validated via ValidateAllow).
+// TokenTTL / TokenNumUses are only meaningful for a vault-Omen with
+// Delegate=true.
+//
+// A Rite is a GRANT, so widening its subject widens access to a real external
+// system. That is why the resolution stays strictly one-directional: an
+// incarnation's label reaches its members (an operator asked for that by
+// tagging the incarnation), but nothing here ever reaches back the other way,
+// and no Rite is consulted for what an ARCHON may do — see the boundary note on
+// package [subject].
 type Rite struct {
 	ID           int64           `json:"id"`
 	Omen         string          `json:"omen"`
-	Coven        *string         `json:"coven,omitempty"`
-	SID          *string         `json:"sid,omitempty"`
+	SID          []string        `json:"sid,omitempty"`
+	Service      *string         `json:"service,omitempty"`
+	Incarnation  *string         `json:"incarnation,omitempty"`
+	Coven        []string        `json:"coven,omitempty"`
+	TraitKey     *string         `json:"trait_key,omitempty"`
+	TraitValue   *string         `json:"trait_value,omitempty"`
 	Allow        json.RawMessage `json:"allow"`
 	Delegate     bool            `json:"delegate"`
 	TokenTTL     *string         `json:"token_ttl,omitempty"`
 	TokenNumUses *int            `json:"token_num_uses,omitempty"`
 	CreatedByAID *string         `json:"created_by_aid,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// Subject renders the Rite's stored columns as the shared selector.
+func (r *Rite) Subject() subject.Selector {
+	return subject.Selector{
+		SIDs:        r.SID,
+		Service:     derefStr(r.Service),
+		Incarnation: derefStr(r.Incarnation),
+		Covens:      r.Coven,
+		TraitKey:    derefStr(r.TraitKey),
+		TraitValue:  derefStr(r.TraitValue),
+	}
+}
+
+// SetSubject writes the selector back into the stored columns. Every unset
+// dimension becomes NULL, which is what keeps the SQL predicate exact: a Rite
+// grants only through the dimension it was written with.
+func (r *Rite) SetSubject(s subject.Selector) {
+	r.SID, r.Coven = s.SIDs, s.Covens
+	r.Service, r.Incarnation = ptrStr(s.Service), ptrStr(s.Incarnation)
+	r.TraitKey, r.TraitValue = ptrStr(s.TraitKey), ptrStr(s.TraitValue)
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func ptrStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // allow shape by source_type (augur.md §4.2). Shapes are closed: unknown
@@ -210,18 +255,10 @@ func ValidateTokenFields(src SourceType, r *Rite) error {
 	return nil
 }
 
-// ValidateSubjectXOR checks the Rite subject XOR invariant: exactly one of
-// Coven / SID is non-empty, and a given Coven matches the shape. SID format
-// isn't enforced at this layer (SID's FQDN semantics belong to the registry
-// side).
-func ValidateSubjectXOR(r *Rite) error {
-	hasCoven := r.Coven != nil && *r.Coven != ""
-	hasSID := r.SID != nil && *r.SID != ""
-	if hasCoven == hasSID {
-		return fmt.Errorf("augur: rite subject must be exactly one of coven / sid (XOR)")
-	}
-	if hasCoven && !ValidCoven(*r.Coven) {
-		return fmt.Errorf("augur: invalid coven %q (must match %s)", *r.Coven, CovenPattern)
-	}
-	return nil
+// ValidateSubject checks the Rite subject's exactly-one-of-four invariant and
+// the form of every populated element, through the validator all three
+// subject-bearing registries share. Symmetric with the CHECK
+// rites_subject_one_of (defence in depth).
+func ValidateSubject(r *Rite) error {
+	return subject.Validate(r.Subject(), "augur: rite")
 }

@@ -47,8 +47,8 @@ Soul Keeper (Augur) External system
  │── AugurRequest ───────────────▶│                                       │
  │   {request_id, apply_id,       │ 1. resolve omen by name               │
  │    omen_name, query}           │ 2. SID ← mTLS peer cert               │
- │                                │ 3. SID → covens (registry)            │
- │                                │ 4. find Rite(omen, coven|sid)         │
+ │                                │ 3. SID → labels, rosters (registry)   │
+ │                                │ 4. find Rite(omen) reaching SID       │
  │                                │ 5. query ∈ Rite.allow ?               │
  │                                │ 6. branch by delegate / source_type   │
  │                                │                                       │
@@ -81,27 +81,40 @@ The Augur registry lives in Postgres, managed via OpenAPI / MCP - similar to [Pr
 
 ### 4.2 Table `rites` - grant / policy-mapping
 
-**Rite** - grant: permission "such and such an entity can, through Augur, obtain such and such values from such and such Omen, in such and such mode." Associates a subject (Coven or specific SID) with an Omen, an allow-list, and a delivery mode.
+**Rite** - grant: permission "such and such an entity can, through Augur, obtain such and such values from such and such Omen, in such and such mode." Associates a subject (named hosts, an incarnation's roster, or a label) with an Omen, an allow-list, and a delivery mode.
 
 | Column | Type | Meaning |
 |---|---|---|
 | `id` | `BIGINT` / `UUID` PK | Rite's surrogate key. |
 | `omen` | `TEXT REFERENCES omens(name) ON DELETE CASCADE` | Omen, which grant refers to. **CASCADE**: deleting an Omen removes all of its Rites (see §9 fork). |
-| `coven` | `TEXT NULL` | Subject-grant by Coven-label. **XOR** with `sid`. |
-| `sid` | `TEXT NULL` | Subject-grant for a specific SID. **XOR** with `coven`. |
+| `sid` | `TEXT[] NULL` | Subject dimension: named hosts, by identity. |
+| `service` + `incarnation` | `TEXT NULL` (pair) | Subject dimension: the `<service>.<name>` address of an incarnation - grants every host on its roster. Both halves or neither (`rites_subject_incarnation_pair`). |
+| `coven` | `TEXT[] NULL` | Subject dimension: Coven labels - grants a host carrying one of them **and** every member of an incarnation carrying one. |
+| `trait_key` + `trait_value` | `TEXT NULL` (pair) | Subject dimension: one trait pair, with the same two-level reach as `coven`. Both halves or neither (`rites_subject_trait_pair`). |
 | `allow` | `JSONB` | Allow-list of allowed values. The form depends on `source_type` Omen (see below). |
 | `delegate` | `BOOLEAN NOT NULL DEFAULT false` | `false` - broker (MVP-1); `true` - delegation (MVP-2). |
 | `token_ttl` | `interval` / `TEXT` (duration) `NULL` | **Only for `vault`-Omen with `delegate=true`**: TTL of the mined scoped token. `NULL` for prom/elk. |
 | `token_num_uses` | `INT NULL` | **Only for `vault`-Omen with `delegate=true`**: minable token usage limit. `NULL` for prom/elk. |
 
-**Subject is strictly XOR.** Exactly one of `coven` / `sid` is non-empty (CHECK-constraint). `coven`-Rite applies to all Souls carrying this label; `sid`-Rite - to one host.
+**The subject is EXACTLY ONE of four dimensions** ([NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only), migration 113, CHECK `rites_subject_one_of`; an empty array counts as absent, so `coven: []` is refused rather than stored as a grant that binds to everything):
 
-**A `coven`-Rite matches `souls.coven[]`.** A host carries the tags an operator attached to it and nothing else - belonging to an incarnation attaches none ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Two consequences when writing a Rite:
+| written as | grants |
+|---|---|
+| `sid: [<sid>, …]` | those hosts, by identity |
+| `incarnation: {service, name}` | every host on that incarnation's roster (`incarnation_membership`) |
+| `coven: [<label>, …]` | a host carrying one of the labels, **and** every member of an incarnation carrying one |
+| `trait: {key, value}` | the same two-level reach, on the traits map |
 
-- `coven: <incarnation-name>` does NOT grant that incarnation's members. It matches whatever hosts somebody tagged with that string. To grant a set of hosts, tag them (`POST /v1/souls/coven`) and write the Rite against that tag - including hosts bound later.
-- a tag on the incarnation (`incarnation.covens[]`) describes the incarnation and grants no host.
+The incarnation address is the **pair** `<service>.<name>`, never the bare name - an incarnation name is only unique within its service, and spelling the address in full is what keeps dropping that uniqueness a migration rather than a rewrite of every stored Rite.
 
-A Rite's subject is `coven` XOR `sid` with no incarnation dimension, so "the members of incarnation X" cannot be expressed at all; that gap is tracked as NIM-280. The failure is **loud** - an unmatched subject is default-denied, so a host refused mid-apply says so.
+**The two label dimensions read both levels.** A `coven`- or `trait`-Rite matches the host's own `souls.coven[]` / `souls.traits` **unioned with** the labels of every incarnation it is a member of - resolved at match time, for the duration of that one match. Nothing is written to `souls`: a host still carries only what an operator attached to it, so this is not the label inheritance [NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited) removed. Consequences worth knowing before writing a Rite:
+
+- `coven: ["<incarnation-name>"]` still does NOT grant that incarnation's members. A name is not one of an incarnation's labels; the roster is addressed by `incarnation: {service, name}`, which reads the membership relation.
+- ⚠ **Labelling an incarnation is a grant-affecting act.** Putting `prod` on an incarnation widens every existing `coven: ["prod"]` Rite to its members, with no Rite edited - the audit trail records an incarnation update, not a grant change. Since a Rite hands out a secret, prefer `incarnation` or `sid` where that is not wanted.
+- ⚠ Symmetrically, **unbinding a host revokes every Rite that reached it through its incarnation** on the next request.
+- ★ This is targeting only. An Archon's RBAC scope (`soul.list on coven=prod`) is resolved by a different code path that reads the host's own column and nothing else, so no labelling ever widens what an **operator** may do.
+
+The failure is **loud** - an unmatched subject is default-denied, so a host refused mid-apply says so.
 
 A Rite has no incarnation dimension of its own, so it cannot tell a member from a host merely **tagged** with that incarnation's name - both carry the label. Where that distinction matters, put a dedicated tag on the incarnation and scope the Rite to it (see NIM-280).
 
@@ -165,8 +178,8 @@ Forward-compat: new `result` options are added only-add, without reuse field num
 The decision to satisfy `AugurRequest` is made by Keeper. Algorithm:
 
 1. **Omen exists.** `omens` contains an entry with `name == omen_name`. Otherwise → `denied`.
-2. **SID → covens.** SID is taken from mTLS peer cert; covens are the host's own `souls.coven[]` ([storage.md](storage.md)) - operator-attached tags, with nothing added by membership ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)).
-3. **Rite found.** There is a Rite with `omen == omen_name` and a subject matching the request: either `rites.sid == SID` or `rites.coven ∈ covens(SID)`. Otherwise → `denied`.
+2. **SID → labels and rosters.** SID is taken from mTLS peer cert. Keeper reads the host's own `souls.coven[]` / `souls.traits` ([storage.md](storage.md)) - operator-attached tags, with nothing written into them by membership ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)) - together with the incarnations it is a member of and *their* labels.
+3. **Rite found.** There is a Rite with `omen == omen_name` whose subject reaches the SID: `sid` contains it, or `service`+`incarnation` names an incarnation it is on the roster of, or `coven` / `trait_key`+`trait_value` matches the host's own labels **or** those of any incarnation it belongs to ([NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)). Otherwise → `denied`. The second level is read here, at match time, and only here - it never becomes a label on the host, and it is never consulted when authorizing an **operator**.
 4. **Query in allow-list.** `query` ∈ `Rite.allow` (in the form `source_type`: path in `paths`, query in `queries`, index in `indices`). Otherwise → `denied`.
 5. **Branching.** From `Rite.delegate` and `Omen.source_type`:
 

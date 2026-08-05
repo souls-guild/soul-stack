@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pgutil"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 const (
@@ -24,21 +25,27 @@ var (
 	ErrDecreeNotFound = errors.New("oracle: decree not found")
 )
 
-const vigilColumns = `name, coven, sid, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid`
+const vigilColumns = `name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid`
 
-// SelectActiveVigilsForSubject returns enabled Vigils active for the
-// subject (sid-Vigil with vigils.sid == sid OR coven-Vigil with an
-// intersection of vigils.coven ∩ covens). Resolves the set for VigilSnapshot on connect.
+// SelectActiveVigilsForSubject returns the enabled Vigils whose subject reaches
+// this host, resolving the set for VigilSnapshot on connect.
 //
-// An empty covens is allowed (then only sid-Vigils). Sorting by `name ASC` is
-// a deterministic snapshot order (ReplaceAll on the Soul doesn't depend on
-// the order, but stability simplifies tests/diagnostics).
-func SelectActiveVigilsForSubject(ctx context.Context, db ExecQueryRower, sid string, covens []string) ([]*Vigil, error) {
-	const sql = `SELECT ` + vigilColumns + `
+// The WHERE clause is [subject.MatchSQL] — the very predicate
+// [subject.Selector.Matches] implements in Go, fed the same resolved host. That
+// is the point of building it rather than writing the four arms by hand here: a
+// hand-written copy would drift the first time a dimension changes, and it would
+// drift silently, because a unit test of the matcher never executes this query.
+//
+// Sorting by `name ASC` is a deterministic snapshot order (ReplaceAll on the
+// Soul doesn't depend on the order, but stability simplifies tests/diagnostics).
+func SelectActiveVigilsForSubject(ctx context.Context, db ExecQueryRower, host subject.Host) ([]*Vigil, error) {
+	var b subject.ArgBinder
+	pred := subject.MatchSQL(subject.VigilColumns, host.Args(), b.Bind)
+	sql := `SELECT ` + vigilColumns + `
 FROM vigils
-WHERE enabled AND (sid = $1 OR coven && $2)
+WHERE enabled AND ` + pred + `
 ORDER BY name ASC`
-	rows, err := db.Query(ctx, sql, sid, covens)
+	rows, err := db.Query(ctx, sql, b.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("oracle: list vigils by subject query: %w", err)
 	}
@@ -64,7 +71,8 @@ func collectVigils(rows pgx.Rows) ([]*Vigil, error) {
 func scanVigil(row pgx.Row) (*Vigil, error) {
 	v := &Vigil{}
 	err := row.Scan(
-		&v.Name, &v.Coven, &v.SID, &v.IntervalSpec, &v.CheckAddr,
+		&v.Name, &v.SID, &v.Service, &v.Incarnation, &v.Coven, &v.TraitKey, &v.TraitValue,
+		&v.IntervalSpec, &v.CheckAddr,
 		&v.Params, &v.Enabled, &v.CreatedAt, &v.UpdatedAt, &v.CreatedByAID,
 	)
 	if err != nil {
@@ -130,7 +138,7 @@ func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-const decreeColumns = `name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid`
+const decreeColumns = `name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid`
 
 // SelectDecreesByBeacon returns enabled Decrees reacting to the given
 // Vigil (decrees.on_beacon == beacon). Hot path of the match flow: for every
@@ -170,7 +178,9 @@ func collectDecrees(rows pgx.Rows) ([]*Decree, error) {
 func scanDecree(row pgx.Row) (*Decree, error) {
 	d := &Decree{}
 	err := row.Scan(
-		&d.Name, &d.OnBeacon, &d.WhereCEL, &d.SubjectCoven, &d.SubjectSID,
+		&d.Name, &d.OnBeacon, &d.WhereCEL,
+		&d.SubjectSID, &d.SubjectService, &d.SubjectIncarnation, &d.SubjectCoven,
+		&d.SubjectTraitKey, &d.SubjectTraitValue,
 		&d.IncarnationName, &d.ActionScenario, &d.ActionInput, &d.Cooldown,
 		&d.Enabled, &d.CreatedAt, &d.UpdatedAt, &d.CreatedByAID,
 	)
@@ -240,10 +250,10 @@ func DeleteDecree(ctx context.Context, db ExecQueryRower, name string) error {
 // from `oracle_fires` (cooldown state, ADR-030(a)). (zero, false, nil) means the
 // pair hasn't fired yet (no row): cooldown is not active. Used by
 // [WithinCooldown].
-func LastFiredAt(ctx context.Context, db ExecQueryRower, decree, subject string) (time.Time, bool, error) {
+func LastFiredAt(ctx context.Context, db ExecQueryRower, decree, subjectSID string) (time.Time, bool, error) {
 	const sql = `SELECT fired_at FROM oracle_fires WHERE decree = $1 AND subject = $2`
 	var firedAt time.Time
-	err := db.QueryRow(ctx, sql, decree, subject).Scan(&firedAt)
+	err := db.QueryRow(ctx, sql, decree, subjectSID).Scan(&firedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return time.Time{}, false, nil
@@ -262,12 +272,12 @@ func LastFiredAt(ctx context.Context, db ExecQueryRower, decree, subject string)
 // consistent with the cooldown check and the audit). An FK violation on a
 // missing decree is mapped to a wrapped error (a caller programming error:
 // the Decree was read by match but deleted before record).
-func RecordFire(ctx context.Context, db ExecQueryRower, decree, subject string, firedAt time.Time) error {
+func RecordFire(ctx context.Context, db ExecQueryRower, decree, subjectSID string, firedAt time.Time) error {
 	const sql = `
 INSERT INTO oracle_fires (decree, subject, fired_at)
 VALUES ($1, $2, $3)
 ON CONFLICT (decree, subject) DO UPDATE SET fired_at = EXCLUDED.fired_at`
-	if _, err := db.Exec(ctx, sql, decree, subject, firedAt); err != nil {
+	if _, err := db.Exec(ctx, sql, decree, subjectSID, firedAt); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
 			return fmt.Errorf("oracle: record fire FK violation on %s: %w", pgErr.ConstraintName, err)

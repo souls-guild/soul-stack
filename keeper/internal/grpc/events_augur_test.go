@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -22,20 +23,33 @@ import (
 )
 
 // augurFakeDB — implements augurDB (augur.ExecQueryRower + soul.ExecQueryRower).
-// Routes by SQL: SELECT ... FROM omens → an omen row; FROM souls → a soul row
-// (the host's covens); FROM rites → a rite set.
+// Routes by SQL: SELECT ... FROM omens → an omen row; FROM souls → the subject
+// facts ([subject.LoadHost]); FROM rites → a rite set.
 //
-// There is one place a coven can come from, because in production there is one
-// (NIM-281): `souls.coven`, what an operator attached to that host. The fake
-// carries no membership at all — a subject resolve that consulted membership
-// would find nothing here and fail the guards below.
+// A label still exists only where an operator attached it (NIM-281): `hostCovens`
+// is what is on the HOST, `member[].Covens` what is on the INCARNATION. The two
+// are kept apart in the fixture so a guard can tell them apart — belonging to an
+// incarnation lends the host nothing, while a label on the incarnation reaches
+// its members (NIM-280), and those are different sentences.
 type augurFakeDB struct {
-	omenRow   func() pgx.Row // SelectOmenByName
-	soulRow   func() pgx.Row // SelectBySID (the host's covens)
-	riteRows  func() (pgx.Rows, error)
-	queryRows int
-	// gotCovens — the covens the resolve actually matched Rites against.
-	gotCovens []string
+	omenRow  func() pgx.Row // SelectOmenByName
+	riteRows func() (pgx.Rows, error)
+
+	// hostCovens / hostTraits — labels an operator attached to THIS host.
+	hostCovens []string
+	hostTraits []byte
+	// member — the incarnations the host belongs to, carrying their own labels.
+	member []subject.Incarnation
+	// hostUnknown — the SID is not in the souls registry.
+	hostUnknown bool
+
+	// gotHostSID — the SID the subject load actually ran for.
+	gotHostSID string
+	// gotHost — the subject the resolve matched Rites against, rebuilt from the
+	// query arguments (not from the fixture): a resolve that dropped a dimension
+	// is then visibly missing it here, and the Rites on that dimension stop
+	// matching instead of passing on a fixture's goodwill.
+	gotHost subject.Host
 }
 
 func (f *augurFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -43,64 +57,124 @@ func (f *augurFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, 
 }
 
 func (f *augurFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	switch {
-	case strings.Contains(sql, "FROM omens"):
-		if f.omenRow != nil {
-			return f.omenRow()
-		}
-	case strings.Contains(sql, "FROM souls"):
-		if f.soulRow != nil {
-			return f.soulRow()
-		}
+	if strings.Contains(sql, "FROM omens") && f.omenRow != nil {
+		return f.omenRow()
 	}
 	return augurErrRow{err: pgx.ErrNoRows}
 }
 
 func (f *augurFakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	f.queryRows++
-	if !strings.Contains(sql, "FROM rites") || f.riteRows == nil {
-		return &augurEmptyRows{}, nil
+	switch {
+	case strings.Contains(sql, "FROM souls"):
+		f.gotHostSID, _ = args[0].(string)
+		return f.hostRows(), nil
+	case strings.Contains(sql, "FROM rites") && f.riteRows != nil:
+		rows, err := f.riteRows()
+		if err != nil {
+			return nil, err
+		}
+		f.gotHost = augurHostFromArgs(args)
+		return filterAugurRitesBySubject(rows, f.gotHost), nil
 	}
-	rows, err := f.riteRows()
-	if err != nil {
-		return nil, err
-	}
-	sid, _ := args[0].(string)
-	covens, _ := args[1].([]string)
-	f.gotCovens = covens
-	return filterAugurRitesBySubject(rows, sid, covens), nil
+	return &augurEmptyRows{}, nil
 }
 
-// filterAugurRitesBySubject applies the subject predicate of
-// SelectRitesBySubject (`WHERE sid = $1 OR coven = ANY($2)`) to the fixture
-// rows. Without it the fake hands back every Rite regardless of the covens the
-// resolve computed — and then no unit test could tell a correct subject
-// resolution from a broken one, which is precisely how NIM-249 stayed invisible.
-func filterAugurRitesBySubject(rows pgx.Rows, sid string, covens []string) pgx.Rows {
+// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.name,
+// i.covens, i.traits — one row per membership, the host's own labels repeated in
+// each, and a single NULL-incarnation row when the host belongs to nothing.
+func (f *augurFakeDB) hostRows() pgx.Rows {
+	if f.hostUnknown {
+		return &augurRiteRows{}
+	}
+	if len(f.member) == 0 {
+		return &augurRiteRows{rows: [][]any{{f.hostCovens, f.hostTraits, nil, nil, nil, nil}}}
+	}
+	rows := make([][]any, 0, len(f.member))
+	for _, inc := range f.member {
+		traits, _ := json.Marshal(inc.Traits)
+		if inc.Traits == nil {
+			traits = nil
+		}
+		rows = append(rows, []any{f.hostCovens, f.hostTraits, inc.Service, inc.Name, inc.Covens, traits})
+	}
+	return &augurRiteRows{rows: rows}
+}
+
+// augurHostFromArgs rebuilds the subject from SelectRitesBySubject's flattened
+// arguments (sid, covens, incarnation services, incarnation names, trait pairs).
+// Rebuilding from the ARGUMENTS rather than from the fixture is the point: it is
+// what the query would actually have filtered on.
+func augurHostFromArgs(args []any) subject.Host {
+	h := subject.Host{}
+	h.SID, _ = args[0].(string)
+	h.Covens, _ = args[1].([]string)
+	svcs, _ := args[2].([]string)
+	names, _ := args[3].([]string)
+	for i, name := range names {
+		if i < len(svcs) {
+			h.Member = append(h.Member, subject.Incarnation{Service: svcs[i], Name: name})
+		}
+	}
+	pairs, _ := args[4].([]string)
+	byKey := map[string][]any{}
+	for _, p := range pairs {
+		if k, v, ok := strings.Cut(p, "="); ok {
+			byKey[k] = append(byKey[k], v)
+		}
+	}
+	for k, vs := range byKey {
+		if h.Traits == nil {
+			h.Traits = map[string]any{}
+		}
+		// One value stays scalar, several become a list — the two shapes the
+		// matcher distinguishes (a list trait matches by membership).
+		if len(vs) == 1 {
+			h.Traits[k] = vs[0]
+			continue
+		}
+		h.Traits[k] = vs
+	}
+	return h
+}
+
+// filterAugurRitesBySubject applies the REAL matcher ([subject.Selector.Matches])
+// to the fixture rows, rather than a second copy of the predicate written here.
+// Without any filter the fake would hand back every Rite regardless of the
+// subject the resolve computed, and no unit test could tell a correct subject
+// resolution from a broken one — precisely how NIM-249 stayed invisible. Using
+// the real matcher also means this fake cannot drift away from the rule it stands
+// in for.
+func filterAugurRitesBySubject(rows pgx.Rows, host subject.Host) pgx.Rows {
 	src, ok := rows.(*augurRiteRows)
 	if !ok {
 		return rows
 	}
-	inCovens := make(map[string]struct{}, len(covens))
-	for _, c := range covens {
-		inCovens[c] = struct{}{}
-	}
 	kept := make([][]any, 0, len(src.rows))
 	for _, r := range src.rows {
-		// riteColumns order: id, omen, coven, sid, …
-		if riteSID, ok := r[3].(string); ok && riteSID == sid {
-			kept = append(kept, r)
-			continue
-		}
-		riteCoven, ok := r[2].(string)
-		if !ok {
-			continue
-		}
-		if _, hit := inCovens[riteCoven]; hit {
+		if augurRiteSelector(r).Matches(host) {
 			kept = append(kept, r)
 		}
 	}
 	return &augurRiteRows{rows: kept}
+}
+
+// augurRiteSelector reads the subject out of a fixture row, in riteColumns order:
+// id, omen, sid, service, incarnation, coven, trait_key, trait_value, …
+func augurRiteSelector(r []any) subject.Selector {
+	str := func(v any) string {
+		s, _ := v.(string)
+		return s
+	}
+	sids, _ := r[2].([]string)
+	covens, _ := r[5].([]string)
+	return subject.Selector{
+		SIDs:        sids,
+		Service:     str(r[3]),
+		Incarnation: str(r[4]),
+		Covens:      covens,
+		TraitKey:    str(r[6]),
+		TraitValue:  str(r[7]),
+	}
 }
 
 type augurErrRow struct{ err error }
@@ -219,23 +293,32 @@ func augurOmenRowVault(name string) pgx.Row {
 	return augurValRow{vals: []any{name, "vault", "https://vault:8200", "vault:secret/keeper/augur/" + name, nil, augurTestNow}}
 }
 
-// augurSoulRow — a soul row with the given covens (11 columns per selectBySIDSQL:
-// sid, transport, status, coven, traits, registered_at, last_seen_at,
-// last_seen_by_kid, created_by_aid, requested_at, note). nil = NULL column
-// (traits NULL → empty map in scanSoul, ADR-060).
-func augurSoulRow(sid string, covens []string) pgx.Row {
-	return augurValRow{vals: []any{
-		sid, "agent", "connected", covens, nil, augurTestNow,
-		nil, nil, nil, nil, nil,
-	}}
+// augurRiteRow — a rite row in riteColumns order (id, omen, sid, service,
+// incarnation, coven, trait_key, trait_value, allow, delegate, token_ttl,
+// token_num_uses, created_by_aid, created_at). sel supplies the subject; every
+// dimension it does not carry stays NULL.
+func augurRiteRowAllow(id int, omen string, sel subject.Selector, allow []byte) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return []any{
+		int64(id), omen,
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+		allow, false, nil, nil, nil, augurTestNow,
+	}
 }
 
-// augurRiteRow — a rite row (coven subject) with allow.paths. nil = NULL column.
-func augurRiteRow(id int, omen, coven string, paths ...string) []any {
-	return []any{
-		int64(id), omen, coven, nil, augurAllowPaths(paths...),
-		false, nil, nil, nil, augurTestNow,
-	}
+func augurRiteRow(id int, omen string, sel subject.Selector, paths ...string) []any {
+	return augurRiteRowAllow(id, omen, sel, augurAllowPaths(paths...))
+}
+
+// augurCovenRite — the terse spelling of the dimension most of these cases use.
+func augurCovenRite(id int, omen, coven string, paths ...string) []any {
+	return augurRiteRow(id, omen, subject.Selector{Covens: []string{coven}}, paths...)
 }
 
 // stubKV — fake augur.KVReader.
@@ -345,10 +428,10 @@ func recvReply(t *testing.T, outCh <-chan *keeperv1.FromKeeper) *keeperv1.AugurR
 func TestAugur_RoundTrip_OK(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{data: map[string]any{"username": "svc", "password": "s3cr3t"}}
@@ -401,8 +484,8 @@ func TestAugur_RoundTrip_OK(t *testing.T) {
 func TestAugur_RoundTrip_Denied_NoRite(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: nil}, nil // no Rites
 		},
@@ -431,103 +514,136 @@ func TestAugur_RoundTrip_Denied_NoRite(t *testing.T) {
 	}
 }
 
-// --- subject resolution reads the host's own covens (NIM-281) ---
+// --- subject resolution reads the AUTHORITATIVE host facts (NIM-281 / NIM-280) ---
 
-// augurMemberDB — an Omen + one coven-Rite naming `riteCoven`, and a host whose
-// covens are `own`.
-func augurMemberDB(sid, riteCoven string, own []string) *augurFakeDB {
+// augurMemberDB — an Omen + one Rite carrying `riteSel`, and a host whose own
+// covens are `own` and whose memberships are `member`.
+func augurMemberDB(riteSel subject.Selector, own []string, member ...subject.Incarnation) *augurFakeDB {
 	return &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, own) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: own,
+		member:     member,
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", riteCoven, "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{
+				augurRiteRow(1, "vault-prod", riteSel, "secret/keeper/db"),
+			}}, nil
 		},
 	}
 }
 
-// TestAugur_OwnCovenTagAuthorizesRite — the positive half: a Rite scoped to
-// `redis-prod` authorizes a host tagged `redis-prod`. The subject a Rite matches
-// is the host's own coven set, and it is matched against exactly that.
-func TestAugur_OwnCovenTagAuthorizesRite(t *testing.T) {
+// augurAsk runs one request against the fixture and returns the reply.
+func augurAsk(t *testing.T, db *augurFakeDB, reqID string) *keeperv1.AugurReply {
+	t.Helper()
 	const sid = "host.example.com"
-	db := augurMemberDB(sid, "redis-prod", []string{"redis-prod"})
 	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
 	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
-
 	h.processAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
-		RequestId: "req-m1", OmenName: "vault-prod", Query: "secret/keeper/db",
+		RequestId: reqID, OmenName: "vault-prod", Query: "secret/keeper/db",
 	})
-
 	reply := recvReply(t, outCh)
+	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK && kv.gotPath != "" {
+		t.Errorf("ReadKV must NOT be called on a non-OK reply, got path %q", kv.gotPath)
+	}
+	return reply
+}
+
+// TestAugur_OwnCovenTagAuthorizesRite — the positive baseline: a Rite scoped to
+// `redis-prod` authorizes a host tagged `redis-prod`.
+func TestAugur_OwnCovenTagAuthorizesRite(t *testing.T) {
+	db := augurMemberDB(subject.Selector{Covens: []string{"redis-prod"}}, []string{"redis-prod"})
+
+	reply := augurAsk(t, db, "req-m1")
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
 		t.Fatalf("status = %v (%q), want OK — the host carries the Rite's coven",
 			reply.GetStatus(), reply.GetError())
 	}
-	if len(db.gotCovens) == 0 {
+	if len(db.gotHost.Covens) == 0 {
 		t.Fatal("resolve matched Rites against an empty coven set")
 	}
 }
 
-// TestAugur_MembershipDoesNotAuthorizeCovenRite — GUARD (NIM-281): a host bound
-// to incarnation `redis-prod` but not tagged with it does NOT match a Rite
-// scoped to `redis-prod`. Membership grants no label, so there is no subject to
-// match and the default-deny stands.
+// TestAugur_MembershipAloneDoesNotAuthorizeCovenRite — GUARD (NIM-281): a host
+// bound to incarnation `redis-prod` that carries NO label, and not tagged
+// `redis-prod` itself, does not match a Rite scoped to `redis-prod`. Belonging
+// attaches nothing; what reaches a member is a label an operator actually put on
+// the incarnation, and here there is none.
 //
-// This is a secret-reading path, so the direction matters: if the resolve ever
-// starts folding membership back into the subject, every host bound to an
-// incarnation silently gains that incarnation's Rites — a widening of who can
-// read which Vault path, decided by a bind operation nobody read as a grant.
-// The fake carries no membership precisely so the widening cannot come from the
-// fixture: it would have to come from the resolve itself, and then this test
-// still passes while [TestAugur_IncarnationTagDoesNotReachMembers] does not.
-func TestAugur_MembershipDoesNotAuthorizeCovenRite(t *testing.T) {
-	const sid = "host.example.com"
-	db := augurMemberDB(sid, "redis-prod", []string{"db"}) // member of redis-prod, tagged `db`
-	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
-	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
+// This is a secret-reading path, so the direction matters: if belonging alone
+// ever started counting, every host bound to an incarnation would silently gain
+// that incarnation's Rites — a widening of who can read which Vault path,
+// decided by a bind operation nobody read as a grant.
+func TestAugur_MembershipAloneDoesNotAuthorizeCovenRite(t *testing.T) {
+	db := augurMemberDB(
+		subject.Selector{Covens: []string{"redis-prod"}},
+		[]string{"db"}, // the host's own tag
+		subject.Incarnation{Service: "redis", Name: "redis-prod"}, // unlabelled
+	)
 
-	h.processAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
-		RequestId: "req-m2", OmenName: "vault-prod", Query: "secret/keeper/db",
-	})
-
-	reply := recvReply(t, outCh)
+	reply := augurAsk(t, db, "req-m2")
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
 		t.Fatalf("status = %v, want DENIED (belonging to an incarnation is not a tag)", reply.GetStatus())
 	}
-	if kv.gotPath != "" {
-		t.Errorf("ReadKV must NOT be called on denied, got path %q", kv.gotPath)
+}
+
+// TestAugur_IncarnationCovenReachesMembers — NIM-280, and the declared reversal
+// of the NIM-281-era rule that a label on an incarnation reached nobody. A coven
+// an operator put ON THE INCARNATION reaches its members: the label is still only
+// where it was attached, but a subject reads both levels.
+//
+// ⚠ The consequence is deliberate and worth stating on a secret-reading path:
+// tagging an incarnation `cache` widens every existing `coven: [cache]` Rite to
+// that incarnation's hosts, with no Rite edited. The label namespace is shared,
+// so a tag is a grant-shaped act.
+func TestAugur_IncarnationCovenReachesMembers(t *testing.T) {
+	db := augurMemberDB(
+		subject.Selector{Covens: []string{"cache"}},
+		[]string{"db"}, // the host itself is NOT tagged `cache`
+		subject.Incarnation{Service: "redis", Name: "redis-prod", Covens: []string{"cache"}},
+	)
+
+	reply := augurAsk(t, db, "req-m3")
+	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
+		t.Fatalf("status = %v (%q), want OK — a coven on the incarnation reaches its members",
+			reply.GetStatus(), reply.GetError())
 	}
 }
 
-// TestAugur_IncarnationTagDoesNotReachMembers — GUARD (NIM-281): a tag put on
-// the incarnation and on no host reaches nobody. `coven: cache` authorizes hosts
-// tagged `cache`, not hosts of incarnations tagged `cache`.
-func TestAugur_IncarnationTagDoesNotReachMembers(t *testing.T) {
-	const sid = "host.example.com"
-	db := augurMemberDB(sid, "cache", []string{"db"}) // the `cache` tag is on the incarnation
-	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
-	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
+// TestAugur_IncarnationSubjectReachesMembers — NIM-280's own dimension: a Rite
+// addressed to `redis.redis-prod` covers the hosts that are MEMBERS of it, and
+// membership is the only thing it reads.
+func TestAugur_IncarnationSubjectReachesMembers(t *testing.T) {
+	sel := subject.Selector{Service: "redis", Incarnation: "redis-prod"}
 
-	h.processAugurRequest(context.Background(), sid, "sess", &keeperv1.AugurRequest{
-		RequestId: "req-m3", OmenName: "vault-prod", Query: "secret/keeper/db",
-	})
-
-	reply := recvReply(t, outCh)
-	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
-		t.Fatalf("status = %v, want DENIED — an incarnation's tag stays on the incarnation", reply.GetStatus())
+	member := augurMemberDB(sel, []string{"db"},
+		subject.Incarnation{Service: "redis", Name: "redis-prod"})
+	if reply := augurAsk(t, member, "req-m4"); reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
+		t.Fatalf("status = %v (%q), want OK — the host is a member",
+			reply.GetStatus(), reply.GetError())
 	}
-	if kv.gotPath != "" {
-		t.Errorf("ReadKV must NOT be called on denied, got path %q", kv.gotPath)
+
+	// The name is unique only within its service, so the service half is part of
+	// the address: the same name elsewhere is a different incarnation.
+	other := augurMemberDB(sel, []string{"db"},
+		subject.Incarnation{Service: "valkey", Name: "redis-prod"})
+	if reply := augurAsk(t, other, "req-m5"); reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
+		t.Fatalf("status = %v, want DENIED — same name, different service", reply.GetStatus())
+	}
+
+	// A host merely TAGGED with a coven spelled like the incarnation is not a
+	// member: that conflation is the escalation NIM-281 closed.
+	lookalike := augurMemberDB(sel, []string{"redis-prod"})
+	if reply := augurAsk(t, lookalike, "req-m6"); reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
+		t.Fatalf("status = %v, want DENIED — a tag spelled like an incarnation is not membership", reply.GetStatus())
 	}
 }
 
 func TestAugur_Denied_QueryNotInAllow(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{data: map[string]any{"x": "y"}}
@@ -552,15 +668,11 @@ func TestAugur_Denied_QueryNotInAllow(t *testing.T) {
 // uses the authoritative SID.
 func TestAugur_SIDFromMTLS(t *testing.T) {
 	const authoritativeSID = "host.example.com"
-	var soulQueriedSID string
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row {
-			soulQueriedSID = authoritativeSID // fake only returns covens for this SID
-			return augurSoulRow(authoritativeSID, []string{"prod"})
-		},
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{data: map[string]any{"k": "v"}}
@@ -574,8 +686,8 @@ func TestAugur_SIDFromMTLS(t *testing.T) {
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
 		t.Fatalf("status = %v, want OK", reply.GetStatus())
 	}
-	if soulQueriedSID != authoritativeSID {
-		t.Errorf("covens resolved for %q, want authoritative %q", soulQueriedSID, authoritativeSID)
+	if db.gotHostSID != authoritativeSID {
+		t.Errorf("subject resolved for %q, want authoritative %q", db.gotHostSID, authoritativeSID)
 	}
 	// audit records the authoritative SID.
 	if aw.snapshot()[0].Payload["sid"] != authoritativeSID {
@@ -586,10 +698,10 @@ func TestAugur_SIDFromMTLS(t *testing.T) {
 func TestAugur_VaultReadFail_Error(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{err: errors.New("vault down")}
@@ -614,10 +726,10 @@ func TestAugur_VaultReadFail_Error(t *testing.T) {
 func TestAugur_GoroutinePath(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{data: map[string]any{"k": "v"}}
@@ -666,12 +778,12 @@ func augurOmenRowELK(name string) pgx.Row {
 
 func augurRiteRowQueries(id int, omen, coven string, queries ...string) []any {
 	b, _ := json.Marshal(map[string][]string{"queries": queries})
-	return []any{int64(id), omen, coven, nil, b, false, nil, nil, nil, augurTestNow}
+	return augurRiteRowAllow(id, omen, subject.Selector{Covens: []string{coven}}, b)
 }
 
 func augurRiteRowIndices(id int, omen, coven string, indices ...string) []any {
 	b, _ := json.Marshal(map[string][]string{"indices": indices})
-	return []any{int64(id), omen, coven, nil, b, false, nil, nil, nil, augurTestNow}
+	return augurRiteRowAllow(id, omen, subject.Selector{Covens: []string{coven}}, b)
 }
 
 func jsonRespDoer(body string) augur.HTTPDoer {
@@ -683,8 +795,8 @@ func jsonRespDoer(body string) augur.HTTPDoer {
 func TestAugur_Prometheus_RoundTrip_OK(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowProm("prom-main") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowProm("prom-main") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: [][]any{augurRiteRowQueries(1, "prom-main", "prod", "up")}}, nil
 		},
@@ -713,8 +825,8 @@ func TestAugur_Prometheus_RoundTrip_OK(t *testing.T) {
 func TestAugur_Prometheus_Denied_QueryNotInAllow(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowProm("prom-main") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowProm("prom-main") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: [][]any{augurRiteRowQueries(1, "prom-main", "prod", "up")}}, nil
 		},
@@ -735,8 +847,8 @@ func TestAugur_Prometheus_Denied_QueryNotInAllow(t *testing.T) {
 func TestAugur_ELK_RoundTrip_OK(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowELK("elk-logs") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowELK("elk-logs") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: [][]any{augurRiteRowIndices(1, "elk-logs", "prod", "logs-app")}}, nil
 		},
@@ -772,8 +884,8 @@ func TestAugur_Semaphore_Overflow(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
 	}}
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowProm("prom-main") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowProm("prom-main") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: [][]any{augurRiteRowQueries(1, "prom-main", "prod", "up")}}, nil
 		},
@@ -854,10 +966,10 @@ func newAugurHandlerWithMetrics(t *testing.T, db augurDB, kv augur.KVReader, doe
 func TestAugurMetrics_FetchOK(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
-			return &augurRiteRows{rows: [][]any{augurRiteRow(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
+			return &augurRiteRows{rows: [][]any{augurCovenRite(1, "vault-prod", "prod", "secret/keeper/db")}}, nil
 		},
 	}
 	kv := &stubKV{data: map[string]any{"k": "v"}}
@@ -890,8 +1002,8 @@ func TestAugurMetrics_FetchOK(t *testing.T) {
 func TestAugurMetrics_Denied(t *testing.T) {
 	const sid = "host.example.com"
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowVault("vault-prod") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: nil}, nil // no Rites → denied
 		},
@@ -924,8 +1036,8 @@ func TestAugurMetrics_SemaphoreOverflow(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
 	}}
 	db := &augurFakeDB{
-		omenRow: func() pgx.Row { return augurOmenRowProm("prom-main") },
-		soulRow: func() pgx.Row { return augurSoulRow(sid, []string{"prod"}) },
+		omenRow:    func() pgx.Row { return augurOmenRowProm("prom-main") },
+		hostCovens: []string{"prod"},
 		riteRows: func() (pgx.Rows, error) {
 			return &augurRiteRows{rows: [][]any{augurRiteRowQueries(1, "prom-main", "prod", "up")}}, nil
 		},

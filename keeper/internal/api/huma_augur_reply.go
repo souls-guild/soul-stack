@@ -53,18 +53,17 @@ type OmenListReply struct {
 }
 
 // RiteView — native projection of a rites registry row (create + element RiteListReply.items[]).
-// Shape 1:1 with the former RiteView: allow — json.RawMessage (byte-passthrough JSONB); coven/sid/
-// created_by_aid/token_num_uses/token_ttl — *-optional WITH omitempty; created_at — nanosecond
-// time-wire; id — int64.
+// allow — json.RawMessage (byte-passthrough JSONB); subject — the nested four-dimension
+// object ([Subject], NIM-280); created_by_aid/token_num_uses/token_ttl — *-optional WITH
+// omitempty; created_at — nanosecond time-wire; id — int64.
 type RiteView struct {
 	Allow        json.RawMessage `json:"allow"`
-	Coven        *string         `json:"coven,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	CreatedByAID *string         `json:"created_by_aid,omitempty"`
 	Delegate     bool            `json:"delegate"`
 	ID           int64           `json:"id"`
 	Omen         string          `json:"omen" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.NamePattern (FK to omens.name)
-	SID          *string         `json:"sid,omitempty"`
+	Subject      Subject         `json:"subject"`
 	TokenNumUses *int            `json:"token_num_uses,omitempty"`
 	TokenTTL     *string         `json:"token_ttl,omitempty"`
 }

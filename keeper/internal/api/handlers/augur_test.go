@@ -26,6 +26,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -197,18 +198,27 @@ func omenRow(name, src, endpoint, authRef string) []any {
 	return []any{name, src, endpoint, authRef, nil, time.Now()}
 }
 
-// riteRow — a rites row (scanRite: id, omen, coven, sid, allow, delegate,
-// token_ttl, token_num_uses, created_by_aid, created_at).
-func riteRow(id int64, omen string, coven *string, allow []byte) []any {
-	return []any{id, omen, anyStr(coven), nil, allow, false, nil, nil, nil, time.Now()}
+// riteRow — a rites row in riteColumns order (scanRite: id, omen, sid, service,
+// incarnation, coven, trait_key, trait_value, allow, delegate, token_ttl,
+// token_num_uses, created_by_aid, created_at).
+func riteRow(id int64, omen string, sel subject.Selector, allow []byte) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return []any{
+		id, omen,
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+		allow, false, nil, nil, nil, time.Now(),
+	}
 }
 
-func anyStr(s *string) any {
-	if s == nil {
-		return nil
-	}
-	return *s
-}
+// covenSel / sidSel — the two one-line subjects most fixtures need.
+func covenSel(c ...string) subject.Selector { return subject.Selector{Covens: c} }
+func sidSel(s ...string) subject.Selector   { return subject.Selector{SIDs: s} }
 
 // --- Omen CreateOmenTyped: domain classification ---
 
@@ -341,9 +351,8 @@ func TestAugurHandler_CreateRiteTyped_201(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
 		omenGetValues: omenRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
-	cov := "web"
 	reply, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "vault-prod", Coven: &cov, Allow: json.RawMessage(`{"paths":["secret/app"]}`),
+		Omen: "vault-prod", Subject: covenSel("web"), Allow: json.RawMessage(`{"paths":["secret/app"]}`),
 	})
 	if err != nil {
 		t.Fatalf("CreateRiteTyped: %v", err)
@@ -369,9 +378,8 @@ func TestAugurHandler_CreateRiteTyped_AllowByteExact(t *testing.T) {
 	})
 	// policies BEFORE paths — deliberately the reverse of lexicographic order.
 	const allow = `{"policies":["app-ro"],"paths":["secret/app","secret/db"]}`
-	cov := "web"
 	reply, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "vault-prod", Coven: &cov, Allow: json.RawMessage(allow),
+		Omen: "vault-prod", Subject: covenSel("web"), Allow: json.RawMessage(allow),
 	})
 	if err != nil {
 		t.Fatalf("CreateRiteTyped: %v", err)
@@ -382,21 +390,32 @@ func TestAugurHandler_CreateRiteTyped_AllowByteExact(t *testing.T) {
 	}
 }
 
-func TestAugurHandler_CreateRiteTyped_SubjectXOR_422(t *testing.T) {
-	// coven and sid together — an XOR violation (checked before the Omen resolve).
+// TestAugurHandler_CreateRiteTyped_SubjectNotExactlyOne_422 — a Rite names its
+// subject on EXACTLY ONE of the four dimensions. Both failure directions are
+// 422 and both are checked before the Omen resolve, so a malformed subject
+// never reaches the registry.
+func TestAugurHandler_CreateRiteTyped_SubjectNotExactlyOne_422(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{})
-	cov, sid := "web", "h1.example"
+
+	// Two dimensions at once.
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "vault-prod", Coven: &cov, SID: &sid, Allow: json.RawMessage(`{"paths":["x"]}`),
+		Omen:    "vault-prod",
+		Subject: subject.Selector{Covens: []string{"web"}, SIDs: []string{"h1.example"}},
+		Allow:   json.RawMessage(`{"paths":["x"]}`),
+	})
+	wantAugurProblem(t, err, problem.TypeValidationFailed)
+
+	// None at all.
+	_, err = h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
+		Omen: "vault-prod", Allow: json.RawMessage(`{"paths":["x"]}`),
 	})
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
 
 func TestAugurHandler_CreateRiteTyped_OmenNotFound_404(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{omenGetValues: nil}) // Omen resolve → ErrNoRows
-	cov := "web"
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "ghost", Coven: &cov, Allow: json.RawMessage(`{"paths":["x"]}`),
+		Omen: "ghost", Subject: covenSel("web"), Allow: json.RawMessage(`{"paths":["x"]}`),
 	})
 	wantAugurProblem(t, err, problem.TypeNotFound)
 }
@@ -406,9 +425,8 @@ func TestAugurHandler_CreateRiteTyped_BadAllowShape_422(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
 		omenGetValues: omenRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
-	cov := "web"
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "vault-prod", Coven: &cov, Allow: json.RawMessage(`{"queries":["up"]}`),
+		Omen: "vault-prod", Subject: covenSel("web"), Allow: json.RawMessage(`{"queries":["up"]}`),
 	})
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
@@ -417,9 +435,9 @@ func TestAugurHandler_CreateRiteTyped_TokenWithoutDelegate_422(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{
 		omenGetValues: omenRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
-	cov, ttl := "web", "5m"
+	ttl := "5m"
 	_, err := h.CreateRiteTyped(context.Background(), augurClaims("archon-alice"), RiteCreateInput{
-		Omen: "vault-prod", Coven: &cov, Allow: json.RawMessage(`{"paths":["x"]}`), TokenTTL: &ttl,
+		Omen: "vault-prod", Subject: covenSel("web"), Allow: json.RawMessage(`{"paths":["x"]}`), TokenTTL: &ttl,
 	})
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
@@ -427,9 +445,8 @@ func TestAugurHandler_CreateRiteTyped_TokenWithoutDelegate_422(t *testing.T) {
 // --- Rite List / Delete: domain classification ---
 
 func TestAugurHandler_ListRitesTyped_200(t *testing.T) {
-	cov := "web"
 	h := newAugurHandler(t, &augurFakePool{
-		riteListValues: [][]any{riteRow(1, "vault-prod", &cov, []byte(`{"paths":["x"]}`))},
+		riteListValues: [][]any{riteRow(1, "vault-prod", covenSel("web"), []byte(`{"paths":["x"]}`))},
 	})
 	res, err := h.ListRitesTyped(context.Background(), "vault-prod")
 	if err != nil {

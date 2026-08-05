@@ -33,6 +33,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
@@ -257,13 +258,13 @@ func (h *AugurHandler) omenError(op, name, callerAID string, err error) error {
 // allow is byte-passthrough JSONB ([json.RawMessage], ADR-051 category D): the domain's
 // raw bytes travel as-is, without unmarshal→map→marshal (re-marshal would reorder the
 // keys — PG JSONB canonicalization ≠ Go `map`-marshal lexicographic order).
-// coven/sid/token_*/created_by_aid are nullable (nil → key omitted). created_at is
-// UTC + Truncate(Second).
+// Subject is the resolved four-dimension selector (NIM-280) — package api projects it
+// into the nested wire object. token_*/created_by_aid are nullable (nil → key omitted).
+// created_at is UTC + Truncate(Second).
 type RiteView struct {
 	ID           int64
 	Omen         string
-	Coven        *string
-	SID          *string
+	Subject      subject.Selector
 	Allow        json.RawMessage
 	Delegate     bool
 	TokenTTL     *string
@@ -276,8 +277,7 @@ func toRiteView(r *augur.Rite) RiteView {
 	return RiteView{
 		ID:           r.ID,
 		Omen:         r.Omen,
-		Coven:        r.Coven,
-		SID:          r.SID,
+		Subject:      r.Subject(),
 		Allow:        r.Allow,
 		Delegate:     r.Delegate,
 		TokenTTL:     r.TokenTTL,
@@ -288,14 +288,13 @@ func toRiteView(r *augur.Rite) RiteView {
 }
 
 // RiteCreateInput — NATIVE request form for POST /v1/augur/rites (handler-native).
-// Replaces RiteCreateRequest: subject is XOR coven/sid; allow is
-// `json.RawMessage` (byte-passthrough JSONB, ADR-051 category D); delegate is
-// pointer-optional (omitted → false). The service validates XOR subject / allow-shape /
-// token fields.
+// Replaces RiteCreateRequest: Subject is exactly one of the four dimensions
+// ([subject.Selector]); allow is `json.RawMessage` (byte-passthrough JSONB, ADR-051
+// category D); delegate is pointer-optional (omitted → false). The service validates the
+// subject / allow-shape / token fields.
 type RiteCreateInput struct {
 	Omen         string
-	Coven        *string
-	SID          *string
+	Subject      subject.Selector
 	Allow        json.RawMessage
 	Delegate     *bool
 	TokenTTL     *string
@@ -332,8 +331,7 @@ func (h *AugurHandler) CreateRiteTyped(ctx context.Context, claims *keeperjwt.Cl
 	callerAID := claims.Subject
 	rite, err := h.svc.CreateRite(ctx, augur.CreateRiteInput{
 		Omen:         req.Omen,
-		Coven:        req.Coven,
-		SID:          req.SID,
+		Subject:      req.Subject,
 		Allow:        req.Allow,
 		Delegate:     req.Delegate != nil && *req.Delegate,
 		TokenTTL:     req.TokenTTL,
@@ -343,7 +341,7 @@ func (h *AugurHandler) CreateRiteTyped(ctx context.Context, claims *keeperjwt.Cl
 	if err != nil {
 		return zero, h.riteError("augur.rite.create", callerAID, err)
 	}
-	return RiteCreateReply{View: toRiteView(rite), Subject: riteSubject(rite), CallerAID: callerAID}, nil
+	return RiteCreateReply{View: toRiteView(rite), Subject: rite.Subject().String(), CallerAID: callerAID}, nil
 }
 
 // RiteListResult — domain result of GET /v1/augur/rites?omen=<name> (handler-
@@ -426,17 +424,4 @@ func (h *AugurHandler) riteError(op, callerAID string, err error) error {
 			slog.String("by_aid", callerAID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" failed")}
 	}
-}
-
-// riteSubject — human-readable form of a Rite's subject for the audit-payload
-// (`coven=<v>` / `sid=<v>`). XOR is guaranteed by validation; if both are empty
-// (theoretically impossible after insert) — empty string.
-func riteSubject(r *augur.Rite) string {
-	if r.Coven != nil && *r.Coven != "" {
-		return "coven=" + *r.Coven
-	}
-	if r.SID != nil && *r.SID != "" {
-		return "sid=" + *r.SID
-	}
-	return ""
 }

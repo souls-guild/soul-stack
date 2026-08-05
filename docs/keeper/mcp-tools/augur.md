@@ -4,7 +4,7 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.augur.omen.
 
 ### Augur (6)
 
-Augur registries - Omen (external system) and Rite (grant) ([ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). 4-segment tool-name `keeper.augur.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (`omen.create` / `rite.list` / …, selector - NoSelector). Business logic (validation `name`/`source_type`/`auth_ref`, XOR subject, allow-shape by `source_type`, token fields only for vault-delegate) lives in `augur.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("augur registry is not configured"). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** - this is a machine gRPC request, not an operator operation ([rbac.md §Augur](../rbac.md)).
+Augur registries - Omen (external system) and Rite (grant) ([ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). 4-segment tool-name `keeper.augur.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (`omen.create` / `rite.list` / …, selector - NoSelector). Business logic (validation `name`/`source_type`/`auth_ref`, exactly-one-of subject, allow-shape by `source_type`, token fields only for vault-delegate) lives in `augur.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("augur registry is not configured"). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** - this is a machine gRPC request, not an operator operation ([rbac.md §Augur](../rbac.md)).
 
 #### `keeper.augur.omen.create`
 
@@ -48,23 +48,24 @@ Errors: `not-found` (no entry). Audit: `omen.revoked` (payload `{name}`).
 
 #### `keeper.augur.rite.create`
 
-Creates Rite (grant): subject (`coven` **XOR** `sid`) × `omen` → `allow`-list + `delegate` + opt. `token_ttl`/`token_num_uses` (vault-delegate only). Permission: `rite.create`. Endpoint: [`POST /v1/augur/rites`](../operator-api/augur.md). Async: no.
+Creates Rite (grant): `subject` × `omen` → `allow`-list + `delegate` + opt. `token_ttl`/`token_num_uses` (vault-delegate only). Permission: `rite.create`. Endpoint: [`POST /v1/augur/rites`](../operator-api/augur.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `omen` | `string` | yes | Omen, which grant refers to. |
-| `coven` | `string` | no | Subject by Coven tag (XOR with `sid`). |
-| `sid` | `string` | no | Subject by specific SID (XOR with `coven`). |
+| `subject` | `object` | yes | Which hosts the grant covers - exactly one of `sid` / `incarnation` / `coven` / `trait` (see below). |
 | `allow` | `object` | yes | Allow-list; form by `source_type` Omen (vault `{paths?,policies?}` / prometheus `{queries}` / elk `{indices}`). |
 | `delegate` | `boolean` | no | `false` - broker; `true` - delegation. |
 | `token_ttl` | `string` | no | TTL of minted scoped token; vault-delegate only. |
 | `token_num_uses` | `integer` | no | Token usage limit; vault-delegate only. |
 
-**Output:** `RiteView` — `{id, omen, coven?, sid?, allow, delegate, token_ttl?, token_num_uses?, created_by_aid?, created_at}`.
+`subject` is the same nested object as on a [Vigil / Decree](oracle.md) ([NIM-280](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)): `sid: [...]` grants named hosts; `incarnation: {service, name}` grants every host on that roster; `coven: [...]` and `trait: {key, value}` grant a host carrying the label **and** every member of an incarnation carrying it. Zero or two dimensions, or half a pair, is `validation-failed`; an empty array counts as absent. ⚠ Because a Rite hands out a secret, that second level matters: labelling an incarnation `prod` widens every `coven: ["prod"]` Rite to its members with no Rite edited - prefer `incarnation` or `sid` where that is not wanted. ★ The widening is targeting only; an Archon's RBAC scope is never affected. Details: [operator-api/augur.md → Subject](../operator-api/augur.md#subject).
 
-Errors: `not-found` (Omen does not exist), `validation-failed` (XOR violation / broken `allow` / token field). Audit: `rite.created` (payload `{id, omen, subject, delegate, created_by_aid}` - `allow`-list is NOT included).
+**Output:** `RiteView` — `{id, omen, subject, allow, delegate, token_ttl?, token_num_uses?, created_by_aid?, created_at}`; `subject` carries only the dimension the Rite was written with.
+
+Errors: `not-found` (Omen does not exist), `validation-failed` (subject with zero / two dimensions or half a pair / broken `allow` / token field). Audit: `rite.created` (payload `{id, omen, subject, delegate, created_by_aid}` - `allow`-list is NOT included).
 
 #### `keeper.augur.rite.list`
 

@@ -13,6 +13,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -23,8 +24,8 @@ import (
 //
 // Required for wire-up:
 //   - DB — the decrees / oracle_fires registry (match + cooldown) + souls and
-//     incarnation_membership (the subject's effective covens by authoritative
-//     SID, and the cross-incarnation membership guard);
+//     incarnation_membership (the subject facts by authoritative SID, and the
+//     cross-incarnation membership guard);
 //   - Where — sandbox CEL for Decree where-predicates (event.data);
 //   - Enqueuer — enqueues the named scenario on the work queue (ADR-027);
 //   - AuditWriter — `oracle.fired` / `decree.circuit_tripped` on triggers.
@@ -54,8 +55,8 @@ type OracleDeps struct {
 
 // oracleDB — the combined PG surface the Oracle resolve needs: decrees /
 // oracle_fires (oracle.ExecQueryRower), a souls + label reader
-// (soul.ExecQueryRower) for the subject's effective covens, and the membership
-// relation (incarnation.ExecQueryRower) for the cross-incarnation guard.
+// (soul.ExecQueryRower) for the subject facts, and the membership relation
+// (incarnation.ExecQueryRower) for the cross-incarnation guard.
 // *pgxpool.Pool satisfies all three (identical Exec/Query/QueryRow surfaces).
 type oracleDB interface {
 	oracle.ExecQueryRower
@@ -110,16 +111,16 @@ func (d *OracleDeps) validate() error {
 }
 
 // vigilSource — implements [VigilSource] over the vigils + souls registry
-// (connect-time broadcast VigilSnapshot, ADR-030). Resolves the host's covens
-// ([subjectCovens]), then the active Vigil set by sid ∪ covens, and projects it
-// into transport [keeperv1.VigilDef]. Wired up in the daemon with the same pool
-// as OracleDeps.DB.
+// (connect-time broadcast VigilSnapshot, ADR-030). Resolves the subject facts
+// ([subjectHost]), then the active Vigil set matching them, and projects it into
+// transport [keeperv1.VigilDef]. Wired up in the daemon with the same pool as
+// OracleDeps.DB.
 //
-// It reads the covens exactly as the Decree side does — the host's own tags
-// (NIM-281) — and that agreement is deliberate: a Vigil and the Decree reacting
-// to its Portents are written against one subject expression, so a rule must
-// reach the host on both halves or the chain breaks at the quieter end — the
-// check never ships, and no Portent is ever emitted to match against.
+// It resolves the subject exactly as the Decree side does, and that agreement is
+// deliberate: a Vigil and the Decree reacting to its Portents are written against
+// one subject expression, so a rule must reach the host on both halves or the
+// chain breaks at the quieter end — the check never ships, and no Portent is ever
+// emitted to match against.
 type vigilSource struct {
 	db oracleDB
 }
@@ -131,14 +132,14 @@ func NewVigilSource(db oracleDB) VigilSource {
 }
 
 func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*keeperv1.VigilDef, error) {
-	// An unregistered host (onboarding incomplete) resolves to empty covens —
-	// a coven Vigil won't match, but a sid Vigil still can.
-	covens, err := subjectCovens(ctx, s.db, sid)
+	// An unregistered host (onboarding incomplete) resolves to a bare subject —
+	// a coven/trait/incarnation Vigil won't match, but a sid Vigil still can.
+	host, err := subjectHost(ctx, s.db, sid)
 	if err != nil {
-		return nil, fmt.Errorf("grpc: vigil source covens resolve: %w", err)
+		return nil, fmt.Errorf("grpc: vigil source subject resolve: %w", err)
 	}
 
-	vigils, err := oracle.SelectActiveVigilsForSubject(ctx, s.db, sid, covens)
+	vigils, err := oracle.SelectActiveVigilsForSubject(ctx, s.db, host)
 	if err != nil {
 		return nil, err
 	}
@@ -170,11 +171,11 @@ func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*ke
 // Flow (default-deny):
 //  1. SelectDecreesByBeacon(beacon_name) — enabled Decrees on this Vigil.
 //     Empty → nothing (no rule → no action).
-//  2. Subject covens from the registry — the host's own tags (NOT from the
-//     payload).
-//  3. For each Decree: SubjectMatches (sid/coven) — no → skip; membership in
-//     the target incarnation (the relation, not the labels) — no → skip;
-//     where-CEL (if set) over event.data — false → skip.
+//  2. Subject facts from the registries — the host's own labels and its
+//     incarnation memberships (NOT from the payload).
+//  3. For each Decree: SubjectMatches (one of the four dimensions) — no → skip;
+//     membership in the target incarnation (the relation, not the labels) — no →
+//     skip; where-CEL (if set) over event.data — false → skip.
 //  4. Cooldown check per-(decree, subject): within the window → skip + debug log.
 //  5. EnqueueScenario(action_scenario, action_input) → RecordFire → audit
 //     oracle.fired.
@@ -223,11 +224,12 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 		return
 	}
 
-	// Subject covens from the authoritative registry (NOT from the payload):
-	// the tags an operator attached to this host (NIM-281).
-	covens, err := subjectCovens(ctx, deps.DB, sid)
+	// Subject facts from the authoritative registries (NOT from the payload):
+	// the labels an operator attached to this host (NIM-281) and the incarnations
+	// it belongs to (NIM-280).
+	host, err := subjectHost(ctx, deps.DB, sid)
 	if err != nil {
-		h.logger.Warn("eventstream: oracle subject covens resolve failed",
+		h.logger.Warn("eventstream: oracle subject resolve failed",
 			slog.String("sid", sid),
 			slog.String("session_id", sessionID),
 			slog.Any("error", err),
@@ -239,30 +241,31 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 	// access styles): we pass evt whole into evaluateDecree. The activation is
 	// assembled in WhereEvaluator.EvalEvent.
 	for _, decree := range decrees {
-		h.evaluateDecree(ctx, deps, sid, sessionID, beacon, decree, covens, evt)
+		h.evaluateDecree(ctx, deps, sid, sessionID, beacon, decree, host, evt)
 	}
 }
 
-// subjectCovens resolves the covens of a Vigil/Decree subject by authoritative
-// SID: the host's own `souls.coven[]` and nothing else.
+// subjectHost resolves a Vigil/Decree subject by authoritative SID: the host's
+// own covens and traits, plus the incarnations it belongs to with their own
+// labels ([subject.LoadHost]).
 //
-// A coven tag exists only where an operator attached it (NIM-281). Belonging to
-// an incarnation is not a label, so `subject_coven: [<incarnation-name>]` does
-// NOT reach that incarnation's members — it reaches the hosts an operator tagged
-// that way. A rule that means "the members of X" belongs on the membership
-// relation, not on the coven axis.
+// A label exists only where an operator attached it (NIM-281), and an
+// incarnation's label reaches its members only because an operator put it on the
+// incarnation. Membership itself is read from `incarnation_membership`, never
+// inferred from a matching label — `subject_coven: [<incarnation-name>]` still
+// reaches the hosts an operator tagged that way and nothing else.
 //
-// ErrSoulNotFound → empty covens (the host isn't registered yet; a sid-rule can
-// still match by SID, a coven-rule cannot).
-func subjectCovens(ctx context.Context, db oracleDB, sid string) ([]string, error) {
-	s, err := soul.SelectBySID(ctx, db, sid)
+// [subject.ErrHostUnknown] → a bare Host carrying only the SID (the host isn't
+// registered yet; a sid-rule can still match, the other three cannot).
+func subjectHost(ctx context.Context, db oracleDB, sid string) (subject.Host, error) {
+	h, err := subject.LoadHost(ctx, db, sid)
 	if err != nil {
-		if errors.Is(err, soul.ErrSoulNotFound) {
-			return nil, nil
+		if errors.Is(err, subject.ErrHostUnknown) {
+			return subject.Host{SID: sid}, nil
 		}
-		return nil, err
+		return subject.Host{}, err
 	}
-	return s.Coven, nil
+	return h, nil
 }
 
 // evaluateDecree applies one Decree to a Portent: subject match → where-CEL →
@@ -274,10 +277,10 @@ func (h *eventStreamHandler) evaluateDecree(
 	deps *OracleDeps,
 	sid, sessionID, beacon string,
 	decree *oracle.Decree,
-	covens []string,
+	host subject.Host,
 	evt *keeperv1.PortentEvent,
 ) {
-	if !oracle.SubjectMatches(decree, sid, covens) {
+	if !oracle.SubjectMatches(decree, host) {
 		h.logger.Debug("eventstream: oracle decree subject mismatch — skip",
 			slog.String("sid", sid), slog.String("decree", decree.Name))
 		return
@@ -289,12 +292,13 @@ func (h *eventStreamHandler) evaluateDecree(
 	// incarnation's scenario on a host outside it (protection against
 	// cross-incarnation escalation, ADR-030(b)).
 	//
-	// ★ Read from `incarnation_membership`, NEVER from the covens resolved
-	// above. NIM-124 moved membership into its own relation, and a coven tag is
-	// a label anyone with `soul.coven-assign` may attach: `incName ∈ covens`
-	// holds for any host merely tagged with the incarnation's name, which would
-	// hand a non-member the right to run that incarnation's scenarios — precisely
-	// what this gate refuses.
+	// ★ Read from `incarnation_membership`, NEVER from the labels resolved above.
+	// NIM-124 moved membership into its own relation, and a coven tag is a label
+	// anyone with `soul.coven-assign` may attach: `incName ∈ covens` holds for any
+	// host merely tagged with the incarnation's name, which would hand a non-member
+	// the right to run that incarnation's scenarios — precisely what this gate
+	// refuses. The subject match above answers a different question (may this host
+	// FIRE the rule); this one answers what the reaction may act ON.
 	//
 	// A resolve failure is fail-closed (skip, like every other uncertainty in
 	// this handler): the guard is the last barrier before enqueueing a scenario

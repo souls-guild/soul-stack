@@ -76,6 +76,11 @@ were the reason: an operator could not attach a label to a host and have it surv
   union; NIM-281 removes the union too. **A host's traits are `souls.traits`, full stop** — what an operator attached to that host, in every reader
   (the RBAC scope predicate, `soulprint.self.traits`, `soulprint.hosts[].traits`). `incarnation.traits` labels the incarnation object and reaches no host.
   The two levels stay independent as above; they simply never meet. To label a host, use `POST /v1/souls/traits` — it is the only way one gets a trait.
+
+  **One exception, added the same day by [NIM-280](0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only):**
+  a rule's SUBJECT (`trait: {key, value}` on a Vigil / Decree / Augur Rite) is matched over the host's traits **unioned with those of every incarnation
+  it is a member of**, for the duration of that one match. It is a targeting read and nothing else — `souls.traits` is untouched, and every reader listed
+  above, the RBAC trait scope included, still sees the bare column. ★ Targeting expands; authorization never does.
 - **The per-soul write path is no longer deprecated.** `POST /v1/souls/traits`, permission `soul.traits-assign` and the MCP tool
   `keeper.soul.traits-assign` are the per-host counterpart of `incarnation.traits-set`. They gain **gate (b)** — the pair being attached must lie inside
   the operator's own trait-scope — which item 7's original reasoning ("a trait key is NOT an RBAC scope dimension") no longer supports: NIM-128 made

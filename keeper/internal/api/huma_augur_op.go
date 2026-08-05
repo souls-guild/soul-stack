@@ -175,17 +175,16 @@ type riteCreateInput struct {
 }
 
 // RiteCreateRequest — Go shape of the POST /v1/augur/rites body (code-first source
-// of both the schema AND validation, handler-native). omen + XOR subject (coven/sid)
-// + allow (byte-passthrough JSONB, ADR-051 category D) + delegate + token fields.
-// allow is json.RawMessage (required:"true"): the raw body bytes go straight to the
-// service validator. The XOR subject and the allow/token shape are domain-validated
-// in CreateRiteTyped (422). additionalProperties:false → unknown → 400. The struct
-// name is the contract schema name in OpenAPI (committed handwritten spec →
+// of both the schema AND validation, handler-native). omen + subject (exactly one of
+// the four dimensions, [Subject]) + allow (byte-passthrough JSONB, ADR-051 category D)
+// + delegate + token fields. allow is json.RawMessage (required:"true"): the raw body
+// bytes go straight to the service validator. The subject and the allow/token shape are
+// domain-validated in CreateRiteTyped (422). additionalProperties:false → unknown → 400.
+// The struct name is the contract schema name in OpenAPI (committed handwritten spec →
 // RiteCreateRequest).
 type RiteCreateRequest struct {
 	Omen         string          `json:"omen" required:"true" doc:"Omen the grant belongs to"`
-	Coven        *string         `json:"coven,omitempty" doc:"grant subject by Coven label (XOR with sid)"`
-	SID          *string         `json:"sid,omitempty" doc:"grant subject by specific SID (XOR with coven)"`
+	Subject      Subject         `json:"subject" required:"true" doc:"which hosts the grant covers — exactly one of sid / incarnation / coven / trait"`
 	Allow        json.RawMessage `json:"allow" required:"true" doc:"allow-list; shape depends on Omen source_type (passed through as-is)"`
 	Delegate     *bool           `json:"delegate,omitempty" doc:"false - broker (MVP-1); true - delegation (MVP-2)"`
 	TokenTTL     *string         `json:"token_ttl,omitempty" doc:"TTL of the minted scoped token; vault-delegate only"`

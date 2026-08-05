@@ -34,6 +34,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
@@ -72,15 +73,15 @@ func OracleSpecStub() *OracleHandler {
 // --- Vigil ------------------------------------------------------------
 
 // VigilView is the FLAT wire form of a Vigil (create-201 / list-item / get-200),
-// handler-native. Coven — `*[]string` (nil when empty, omitempty parity); SID/
-// CreatedByAID — *string nullable (nil → key omitted). params — byte-passthrough
-// JSONB ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is, without
-// unmarshal→map→marshal (a re-marshal would reorder keys). created_at/updated_at —
-// UTC + Truncate(Second) (pinned here, as in the oracle (w,r) reference).
+// handler-native. Subject is the resolved four-dimension selector (NIM-280) — package
+// api projects it into the nested wire object. CreatedByAID — *string nullable (nil →
+// key omitted). params — byte-passthrough JSONB ([json.RawMessage], ADR-051 category
+// D): raw bytes are returned as-is, without unmarshal→map→marshal (a re-marshal would
+// reorder keys). created_at/updated_at — UTC + Truncate(Second) (pinned here, as in the
+// oracle (w,r) reference).
 type VigilView struct {
 	Name         string
-	Coven        *[]string
-	SID          *string
+	Subject      subject.Selector
 	Interval     string
 	Check        string
 	Params       json.RawMessage
@@ -97,8 +98,7 @@ func toVigilView(v *oracle.Vigil) VigilView {
 	}
 	return VigilView{
 		Name:         v.Name,
-		Coven:        slicePtrIfNotEmpty(v.Coven),
-		SID:          v.SID,
+		Subject:      v.Subject(),
 		Interval:     v.IntervalSpec,
 		Check:        v.CheckAddr,
 		Params:       params,
@@ -110,13 +110,13 @@ func toVigilView(v *oracle.Vigil) VigilView {
 }
 
 // VigilCreateInput is the NATIVE request form of POST /v1/vigils (handler-native).
-// Replaces VigilCreateRequest: subject — XOR coven/sid; params — `json.RawMessage`
-// (byte-passthrough JSONB, ADR-051 category D); enabled — pointer-optional (omitted →
-// true). The XOR subject / the form of interval/check/params are validated by the service.
+// Replaces VigilCreateRequest: Subject — exactly one of the four dimensions
+// ([subject.Selector]); params — `json.RawMessage` (byte-passthrough JSONB, ADR-051
+// category D); enabled — pointer-optional (omitted → true). The subject and the form of
+// interval/check/params are validated by the service.
 type VigilCreateInput struct {
 	Name     string
-	Coven    *[]string
-	SID      *string
+	Subject  subject.Selector
 	Interval string
 	Check    string
 	Params   *json.RawMessage
@@ -155,8 +155,7 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 	callerAID := claims.Subject
 	v, err := h.svc.CreateVigil(ctx, oracle.CreateVigilInput{
 		Name:      req.Name,
-		Coven:     derefStrings(req.Coven),
-		SID:       req.SID,
+		Subject:   req.Subject,
 		Interval:  req.Interval,
 		Check:     req.Check,
 		Params:    derefRawMessage(req.Params),
@@ -170,7 +169,7 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 		View:      toVigilView(v),
 		Check:     v.CheckAddr,
 		Interval:  v.IntervalSpec,
-		Subject:   vigilSubject(v),
+		Subject:   v.Subject().String(),
 		CallerAID: callerAID,
 	}, nil
 }
@@ -280,16 +279,16 @@ func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error 
 // --- Decree -----------------------------------------------------------
 
 // DecreeView is the FLAT wire form of a Decree (create-201 / list-item / get-200),
-// handler-native. Coven — `*[]string` (nil when empty); Where/SID/CreatedByAID —
-// *string nullable (nil → key omitted). action_input — byte-passthrough JSONB
-// ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is. created_at/
-// updated_at — UTC + Truncate(Second).
+// handler-native. Subject is WHO may fire the rule (the four-dimension selector,
+// NIM-280); IncarnationName is the opposite end — WHAT the reaction acts on. Where/
+// CreatedByAID — *string nullable (nil → key omitted). action_input — byte-passthrough
+// JSONB ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is.
+// created_at/updated_at — UTC + Truncate(Second).
 type DecreeView struct {
 	Name            string
 	OnBeacon        string
 	Where           *string
-	Coven           *[]string
-	SID             *string
+	Subject         subject.Selector
 	IncarnationName string
 	ActionScenario  string
 	ActionInput     json.RawMessage
@@ -309,8 +308,7 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 		Name:            d.Name,
 		OnBeacon:        d.OnBeacon,
 		Where:           d.WhereCEL,
-		Coven:           slicePtrIfNotEmpty(d.SubjectCoven),
-		SID:             d.SubjectSID,
+		Subject:         d.Subject(),
 		IncarnationName: d.IncarnationName,
 		ActionScenario:  d.ActionScenario,
 		ActionInput:     input,
@@ -323,14 +321,15 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 }
 
 // DecreeCreateInput is the NATIVE request form of POST /v1/decrees (handler-native).
-// Replaces DecreeCreateRequest: subject — XOR coven/sid; action_input — `json.RawMessage`
-// (byte-passthrough JSONB, ADR-051 category D); cooldown/enabled — pointer-optional
-// (enabled omitted → true). The XOR subject / where-CEL / cooldown are validated by the service.
+// Replaces DecreeCreateRequest: Subject — exactly one of the four dimensions, WHO may
+// fire the rule ([subject.Selector]); IncarnationName — the TARGET the reaction acts on;
+// action_input — `json.RawMessage` (byte-passthrough JSONB, ADR-051 category D);
+// cooldown/enabled — pointer-optional (enabled omitted → true). The subject / where-CEL /
+// cooldown are validated by the service.
 type DecreeCreateInput struct {
 	Name            string
 	OnBeacon        string
-	Coven           *[]string
-	SID             *string
+	Subject         subject.Selector
 	IncarnationName string
 	ActionScenario  string
 	ActionInput     *json.RawMessage
@@ -374,8 +373,7 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 		Name:            req.Name,
 		OnBeacon:        req.OnBeacon,
 		WhereCEL:        req.Where,
-		Coven:           derefStrings(req.Coven),
-		SID:             req.SID,
+		Subject:         req.Subject,
 		IncarnationName: req.IncarnationName,
 		ActionScenario:  req.ActionScenario,
 		ActionInput:     derefRawMessage(req.ActionInput),
@@ -386,7 +384,7 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 	if err != nil {
 		return zero, h.decreeError("oracle.decree.create", req.Name, callerAID, err)
 	}
-	return DecreeCreateReply{View: toDecreeView(d), Subject: decreeSubject(d), CallerAID: callerAID}, nil
+	return DecreeCreateReply{View: toDecreeView(d), Subject: d.Subject().String(), CallerAID: callerAID}, nil
 }
 
 // DecreeListPage is the domain paged result of GET /v1/decrees (handler-native). Package
@@ -508,27 +506,4 @@ func derefRawMessage(p *json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return *p
-}
-
-// vigilSubject / decreeSubject — the human-readable subject form for the audit payload
-// (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
-func vigilSubject(v *oracle.Vigil) string { return subjectLabel(v.Coven, v.SID) }
-
-func decreeSubject(d *oracle.Decree) string { return subjectLabel(d.SubjectCoven, d.SubjectSID) }
-
-func subjectLabel(coven []string, sid *string) string {
-	if len(coven) > 0 {
-		s := "coven="
-		for i, c := range coven {
-			if i > 0 {
-				s += ","
-			}
-			s += c
-		}
-		return s
-	}
-	if sid != nil && *sid != "" {
-		return "sid=" + *sid
-	}
-	return ""
 }

@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // Management-Service for Oracle registries (operator-facing CRUD for Vigil /
@@ -73,14 +75,14 @@ func NewService(d ServiceDeps) (*Service, error) {
 
 // --- Vigil ------------------------------------------------------------
 
-// CreateVigilInput — parameters for CreateVigil. Subject is XOR Coven/SID.
-// Params is raw JSONB (shape depends on Check; deep params validation is
-// deferred along with typed-payload, ADR-030). CallerAID is optional (nil →
-// created_by_aid IS NULL; the transport fills it in from claims).
+// CreateVigilInput — parameters for CreateVigil. Subject carries exactly one of
+// the four dimensions ([subject.Selector]). Params is raw JSONB (shape depends
+// on Check; deep params validation is deferred along with typed-payload,
+// ADR-030). CallerAID is optional (nil → created_by_aid IS NULL; the transport
+// fills it in from claims).
 type CreateVigilInput struct {
 	Name      string
-	Coven     []string
-	SID       *string
+	Subject   subject.Selector
 	Interval  string
 	Check     string
 	Params    json.RawMessage
@@ -105,20 +107,19 @@ func (s *Service) CreateVigil(ctx context.Context, in CreateVigilInput) (*Vigil,
 	if !ValidCheckAddr(in.Check) {
 		return nil, fmt.Errorf("%w: unknown check %q (must be a known core.beacon address)", ErrValidation, in.Check)
 	}
-	if err := validateSubjectXOR(in.Coven, in.SID); err != nil {
+	if err := s.validateSubject(ctx, in.Subject); err != nil {
 		return nil, err
 	}
 
 	v := &Vigil{
 		Name:         in.Name,
-		Coven:        in.Coven,
-		SID:          in.SID,
 		IntervalSpec: in.Interval,
 		CheckAddr:    in.Check,
 		Params:       in.Params,
 		Enabled:      in.Enabled,
 		CreatedByAID: in.CallerAID,
 	}
+	v.setSubject(in.Subject)
 	if err := InsertVigil(ctx, s.pool, v); err != nil {
 		return nil, err
 	}
@@ -143,17 +144,17 @@ func (s *Service) DeleteVigil(ctx context.Context, name string) error {
 
 // --- Decree -----------------------------------------------------------
 
-// CreateDecreeInput — parameters for CreateDecree. Subject is XOR Coven/SID.
-// IncarnationName — the target incarnation of the reaction (required,
-// ADR-030). WhereCEL — an optional predicate over event.data (compile-checked
-// on create). ActionInput — the raw JSONB scenario input. CallerAID is
-// optional.
+// CreateDecreeInput — parameters for CreateDecree. Subject carries exactly one
+// of the four dimensions — WHO may fire the rule ([subject.Selector]).
+// IncarnationName is the opposite end: the TARGET incarnation the reaction acts
+// on (required, ADR-030). WhereCEL — an optional predicate over event.data
+// (compile-checked on create). ActionInput — the raw JSONB scenario input.
+// CallerAID is optional.
 type CreateDecreeInput struct {
 	Name            string
 	OnBeacon        string
 	WhereCEL        *string
-	Coven           []string
-	SID             *string
+	Subject         subject.Selector
 	IncarnationName string
 	ActionScenario  string
 	ActionInput     json.RawMessage
@@ -186,7 +187,7 @@ func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decr
 	if !ValidScenario(in.ActionScenario) {
 		return nil, fmt.Errorf("%w: invalid action_scenario %q (must match %s)", ErrValidation, in.ActionScenario, ScenarioPattern)
 	}
-	if err := validateSubjectXOR(in.Coven, in.SID); err != nil {
+	if err := s.validateSubject(ctx, in.Subject); err != nil {
 		return nil, err
 	}
 	if err := validateCooldown(in.Cooldown); err != nil {
@@ -202,8 +203,6 @@ func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decr
 		Name:            in.Name,
 		OnBeacon:        in.OnBeacon,
 		WhereCEL:        in.WhereCEL,
-		SubjectCoven:    in.Coven,
-		SubjectSID:      in.SID,
 		IncarnationName: in.IncarnationName,
 		ActionScenario:  in.ActionScenario,
 		ActionInput:     in.ActionInput,
@@ -211,6 +210,7 @@ func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decr
 		Enabled:         in.Enabled,
 		CreatedByAID:    in.CallerAID,
 	}
+	d.setSubject(in.Subject)
 	if err := InsertDecree(ctx, s.pool, d); err != nil {
 		return nil, err
 	}

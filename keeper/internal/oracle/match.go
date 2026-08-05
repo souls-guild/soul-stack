@@ -3,45 +3,29 @@ package oracle
 import (
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // SubjectMatches checks the Decree's subject binding against the sending host
-// (ADR-030(b)). A Decree's subject is strictly XOR (schema CHECK decrees_subject_xor):
-//   - SubjectSID is set → match if subjectSID == *d.SubjectSID;
-//   - SubjectCoven is set → match if there's an intersection of SubjectCoven ∩ covens.
+// (ADR-030(b)). The four dimensions and the two levels coven / trait read live
+// in [subject.Selector.Matches] — one implementation for Vigil, Decree and Rite,
+// so a rule spelled the same way in two registries cannot bind differently.
 //
-// subjectSID is the authoritative host SID (from the mTLS peer cert, NOT PortentEvent.sid).
-// covens are the host's covens from the registry (authoritative, NOT from the
-// payload): `souls.coven[]`, the tags an operator attached to that host and
-// nothing else (NIM-281). Belonging to an incarnation lends the host no tag, so
-// `subject_coven: [<incarnation>]` binds only hosts actually tagged with that
-// string — to bind a rule to an incarnation's members, tag them.
+// host is the AUTHORITATIVE picture, resolved from the registries by the SID of
+// the mTLS peer cert ([subject.LoadHost]) — never from PortentEvent, which the
+// Soul controls and which carries the SID only as an echo for logs.
 //
 // The subject binding is a defense layer: it restricts which hosts can even
 // trigger the rule (untrusted input, ADR-030(b)). It answers "may this rule see
-// the host" — NOT "does the host belong to the Decree's incarnation", which is a
-// separate gate over `incarnation_membership` (incarnation.IsMember): a coven is
-// a label anyone may attach and so cannot carry a membership decision.
-func SubjectMatches(d *Decree, subjectSID string, covens []string) bool {
-	if d.SubjectSID != nil {
-		return *d.SubjectSID == subjectSID
-	}
-	if len(d.SubjectCoven) == 0 {
-		// The schema's XOR invariant guarantees we never reach here (one of the
-		// subjects is non-empty). Fail-safe: no subject → no match (default-deny).
-		return false
-	}
-	want := make(map[string]struct{}, len(d.SubjectCoven))
-	for _, c := range d.SubjectCoven {
-		want[c] = struct{}{}
-	}
-	for _, c := range covens {
-		if _, ok := want[c]; ok {
-			return true
-		}
-	}
-	return false
+// the host" — NOT "does the host belong to the Decree's TARGET incarnation",
+// which stays a separate gate over `incarnation_membership`
+// (incarnation.IsMember). The two must not collapse into one even now that a
+// subject can name an incarnation: the subject's incarnation says who may fire
+// the rule, the target says what the reaction acts on, and a rule fired by one
+// incarnation's host against another's is exactly the case the gate exists for.
+func SubjectMatches(d *Decree, host subject.Host) bool {
+	return d.Subject().Matches(host)
 }
 
 // WithinCooldown reports whether the (decree, subject) pair is within the cooldown

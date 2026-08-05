@@ -15,6 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -130,6 +131,15 @@ func scanAugurT(dest, values []any) error {
 			*d = values[i].(time.Time)
 		case *[]byte:
 			*d = values[i].([]byte)
+		case *[]string:
+			// The sid/coven subject columns are text[]; a NULL-free array scans
+			// straight through, an absent one lands as nil (not an empty slice),
+			// so a selector round-trips as the dimension it was written with.
+			if values[i] == nil {
+				*d = nil
+			} else {
+				*d = values[i].([]string)
+			}
 		case **string:
 			if values[i] == nil {
 				*d = nil
@@ -153,12 +163,21 @@ func omenTRow(name, src, endpoint, authRef string) []any {
 	return []any{name, src, endpoint, authRef, nil, time.Now()}
 }
 
-func riteTRow(id int64, omen string, coven *string, allow []byte) []any {
-	var cov any
-	if coven != nil {
-		cov = *coven
+// riteTRow — one `rites` row in riteColumns order (id, omen, the six subject
+// columns, allow, delegate, token_ttl, token_num_uses, created_by_aid,
+// created_at). The subject is written from a selector rather than column by
+// column, so a fixture cannot spell a shape the domain would reject.
+func riteTRow(id int64, omen string, sel subject.Selector, allow []byte) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
 	}
-	return []any{id, omen, cov, nil, allow, false, nil, nil, nil, time.Now()}
+	return []any{id, omen,
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+		allow, false, nil, nil, nil, time.Now()}
 }
 
 // --- harness ---
@@ -307,7 +326,13 @@ func TestAugurTools_Validation(t *testing.T) {
 		{"omen-bad-authref", "keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"plain"}`, mcpCodeValidationFailed},
 		{"omen-unknown-field", "keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p","z":1}`, mcpCodeMalformedRequest},
 		{"rite-no-omen", "keeper.augur.rite.create", `{"allow":{"paths":["x"]}}`, mcpCodeValidationFailed},
-		{"rite-bad-allow-shape", "keeper.augur.rite.create", `{"omen":"vault-prod","coven":"web","allow":{"queries":["up"]}}`, mcpCodeValidationFailed},
+		{"rite-bad-allow-shape", "keeper.augur.rite.create", `{"omen":"vault-prod","subject":{"coven":["web"]},"allow":{"queries":["up"]}}`, mcpCodeValidationFailed},
+		// Exactly-one-of, both ways round: two dimensions at once and none at all.
+		// The flat `coven`/`sid` keys of the old shape are gone, so spelling one is
+		// an unknown field — malformed-request, not a subject diagnostic.
+		{"rite-two-subject-dimensions", "keeper.augur.rite.create", `{"omen":"vault-prod","subject":{"coven":["web"],"sid":["h1"]},"allow":{"paths":["x"]}}`, mcpCodeValidationFailed},
+		{"rite-empty-subject", "keeper.augur.rite.create", `{"omen":"vault-prod","subject":{},"allow":{"paths":["x"]}}`, mcpCodeValidationFailed},
+		{"rite-flat-coven-gone", "keeper.augur.rite.create", `{"omen":"vault-prod","coven":"web","allow":{"paths":["x"]}}`, mcpCodeMalformedRequest},
 		{"rite-list-no-omen", "keeper.augur.rite.list", `{}`, mcpCodeValidationFailed},
 		{"rite-delete-bad-id", "keeper.augur.rite.delete", `{"id":0}`, mcpCodeValidationFailed},
 	}
@@ -433,7 +458,7 @@ func TestAugurRiteCreate_Success(t *testing.T) {
 		omenGetRow: omenTRow("vault-prod", "vault", "e", "vault:s/p"),
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.augur.rite.create",
-		`{"omen":"vault-prod","coven":"web","allow":{"paths":["secret/app"]}}`)
+		`{"omen":"vault-prod","subject":{"coven":["web"]},"allow":{"paths":["secret/app"]}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -463,7 +488,7 @@ func TestAugurRiteCreate_Success(t *testing.T) {
 func TestAugurRiteCreate_OmenNotFound404(t *testing.T) {
 	h, _ := newAugurToolHandler(t, augurAdminCfg(), &augurFakePool{omenGetRow: nil})
 	resp := callTool(t, h, "archon-alice", "keeper.augur.rite.create",
-		`{"omen":"ghost","coven":"web","allow":{"paths":["x"]}}`)
+		`{"omen":"ghost","subject":{"coven":["web"]},"allow":{"paths":["x"]}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -473,9 +498,11 @@ func TestAugurRiteCreate_OmenNotFound404(t *testing.T) {
 }
 
 func TestAugurRiteList_Success(t *testing.T) {
-	cov := "web"
 	h, rec := newAugurToolHandler(t, augurAdminCfg(), &augurFakePool{
-		riteListRows: [][]any{riteTRow(1, "vault-prod", &cov, []byte(`{"paths":["x"]}`))},
+		riteListRows: [][]any{
+			riteTRow(1, "vault-prod", subject.Selector{Covens: []string{"web"}}, []byte(`{"paths":["x"]}`)),
+			riteTRow(2, "vault-prod", subject.Selector{Service: "redis", Incarnation: "redis-prod"}, []byte(`{"paths":["y"]}`)),
+		},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.augur.rite.list", `{"omen":"vault-prod"}`)
 	if resp.Error != nil {
@@ -489,8 +516,17 @@ func TestAugurRiteList_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if len(out.Rites) != 1 || out.Rites[0].Omen != "vault-prod" {
+	if len(out.Rites) != 2 || out.Rites[0].Omen != "vault-prod" {
 		t.Fatalf("out = %+v", out)
+	}
+	// The projection emits the dimension the rule was WRITTEN with, so a listing
+	// says what each Rite is instead of which columns happen to be NULL.
+	if got := out.Rites[0].Subject; len(got.Coven) != 1 || got.Coven[0] != "web" || got.Incarnation != nil {
+		t.Errorf("coven rite subject = %+v", got)
+	}
+	inc := out.Rites[1].Subject.Incarnation
+	if inc == nil || inc.Service != "redis" || inc.Name != "redis-prod" || out.Rites[1].Subject.Coven != nil {
+		t.Errorf("incarnation rite subject = %+v", out.Rites[1].Subject)
 	}
 	if len(rec.events) != 0 {
 		t.Errorf("list emitted %d audit events, want 0", len(rec.events))

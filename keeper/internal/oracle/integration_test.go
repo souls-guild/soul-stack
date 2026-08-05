@@ -20,6 +20,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
 
@@ -97,11 +98,12 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 	// coven-Vigil (web), sid-Vigil (host-a), disabled-Vigil (web), and an
 	// unrelated coven-Vigil (db).
 	mustInsertVigil(t, &Vigil{Name: "web-watch", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertVigil(t, &Vigil{Name: "host-watch", SID: strptr("host-a.example.com"), IntervalSpec: "1m", CheckAddr: "core.beacon.file_changed", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{Name: "host-watch", SID: []string{"host-a.example.com"}, IntervalSpec: "1m", CheckAddr: "core.beacon.file_changed", Enabled: true, CreatedByAID: &aid})
 	mustInsertVigil(t, &Vigil{Name: "web-disabled", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: false, CreatedByAID: &aid})
 	mustInsertVigil(t, &Vigil{Name: "db-watch", Coven: []string{"db"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
-	got, err := SelectActiveVigilsForSubject(ctx, integrationPool, "host-a.example.com", []string{"web", "prod"})
+	host := subject.Host{SID: "host-a.example.com", Covens: []string{"web", "prod"}}
+	got, err := SelectActiveVigilsForSubject(ctx, integrationPool, host)
 	if err != nil {
 		t.Fatalf("SelectActiveVigilsForSubject: %v", err)
 	}
@@ -195,22 +197,48 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 	}
 }
 
-func TestIntegration_DecreeSubjectXOR(t *testing.T) {
+// TestIntegration_DecreeSubjectOneOf — the four-dimension CHECK is the last line
+// of defence under the service layer: a rule that names two subjects has two
+// answers to "which hosts", and a rule that names none would match every host on
+// the fleet. Both are refused by the database itself (NIM-280, migration 113).
+func TestIntegration_DecreeSubjectOneOf(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
 	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
-	// Both subjects are set → CHECK decrees_subject_xor.
-	err := InsertDecree(ctx, integrationPool, &Decree{
-		Name: "bad", OnBeacon: "svc-down",
-		SubjectCoven: []string{"web"}, SubjectSID: strptr("host-a"),
-		IncarnationName: "web-app",
-		ActionScenario:  "restart", Enabled: true, CreatedByAID: &aid,
-	})
-	if err == nil {
-		t.Fatal("expected CHECK-violation on subject XOR")
+	base := func(d *Decree) *Decree {
+		d.OnBeacon, d.IncarnationName, d.ActionScenario = "svc-down", "web-app", "restart"
+		d.Enabled, d.CreatedByAID = true, &aid
+		return d
+	}
+	svc, inc := "redis", "redis-prod"
+	key, value := "tier", "gold"
+
+	cases := []struct {
+		name   string
+		decree *Decree
+	}{
+		{"coven+sid", base(&Decree{Name: "bad-coven-sid", SubjectCoven: []string{"web"}, SubjectSID: []string{"host-a"}})},
+		{"coven+incarnation", base(&Decree{Name: "bad-coven-inc", SubjectCoven: []string{"web"}, SubjectService: &svc, SubjectIncarnation: &inc})},
+		{"sid+trait", base(&Decree{Name: "bad-sid-trait", SubjectSID: []string{"host-a"}, SubjectTraitKey: &key, SubjectTraitValue: &value})},
+		// Half-written pairs: a service with no name cannot address anything, and
+		// the row must not survive as "no dimension set".
+		{"service-without-incarnation", base(&Decree{Name: "bad-half-inc", SubjectService: &svc})},
+		{"trait-key-without-value", base(&Decree{Name: "bad-half-trait", SubjectTraitKey: &key})},
+		// No dimension at all — the fail-open case.
+		{"empty", base(&Decree{Name: "bad-empty"})},
+		// An empty array is not a dimension: `array_length(…, 1)` is NULL, and the
+		// CHECK counts it as absent rather than as an unrestricted match.
+		{"empty-coven-array", base(&Decree{Name: "bad-empty-coven", SubjectCoven: []string{}})},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if err := InsertDecree(ctx, integrationPool, c.decree); err == nil {
+				t.Fatal("expected a CHECK violation: the subject must be exactly one dimension")
+			}
+		})
 	}
 }
 
@@ -288,7 +316,7 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 	svc := newIntegrationService(t)
 
 	v, err := svc.CreateVigil(ctx, CreateVigilInput{
-		Name: "web-conf", Coven: []string{"web"}, Interval: "30s",
+		Name: "web-conf", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s",
 		Check: "core.beacon.file_changed", Enabled: true, CallerAID: &aid,
 	})
 	if err != nil {
@@ -322,10 +350,10 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 	}
 
 	// Duplicate → ErrVigilAlreadyExists.
-	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); err != nil {
+	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); err != nil {
 		t.Fatalf("CreateVigil(dup #1): %v", err)
 	}
-	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); !errors.Is(err, ErrVigilAlreadyExists) {
+	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); !errors.Is(err, ErrVigilAlreadyExists) {
 		t.Errorf("CreateVigil(dup #2) = %v, want ErrVigilAlreadyExists", err)
 	}
 }
@@ -343,7 +371,7 @@ func TestIntegration_DecreeCRUD(t *testing.T) {
 	where := `event.data.severity == "critical"`
 	d, err := svc.CreateDecree(ctx, CreateDecreeInput{
 		Name: "restart-on-down", OnBeacon: "svc-down", WhereCEL: &where,
-		Coven: []string{"db"}, IncarnationName: "prod-db",
+		Subject: subject.Selector{Covens: []string{"db"}}, IncarnationName: "prod-db",
 		ActionScenario: "restart_service", Cooldown: "5m", Enabled: true, CallerAID: &aid,
 	})
 	if err != nil {

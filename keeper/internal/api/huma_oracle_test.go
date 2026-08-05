@@ -68,14 +68,19 @@ func (p *hOraclePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 		if p.vigilGetMissing {
 			return hOracleRow{err: pgx.ErrNoRows}
 		}
-		// scanVigil: name, coven, sid, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid.
-		return hOracleRow{values: []any{"web-conf", []string{"web"}, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil}}
+		// scanVigil (vigilColumns): name, sid, service, incarnation, coven,
+		// trait_key, trait_value, interval_spec, check_addr, params, enabled,
+		// created_at, updated_at, created_by_aid.
+		return hOracleRow{values: []any{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil}}
 	case strings.Contains(sql, "FROM decrees") && strings.Contains(sql, "WHERE name"):
 		if p.decreeGetMissing {
 			return hOracleRow{err: pgx.ErrNoRows}
 		}
-		// scanDecree: name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid.
-		return hOracleRow{values: []any{"on-conf", "web-conf", nil, []string{"web"}, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil}}
+		// scanDecree (decreeColumns): name, on_beacon, where_cel, subject_sid,
+		// subject_service, subject_incarnation, subject_coven, subject_trait_key,
+		// subject_trait_value, incarnation_name, action_scenario, action_input,
+		// cooldown, enabled, created_at, updated_at, created_by_aid.
+		return hOracleRow{values: []any{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil}}
 	case strings.Contains(sql, "COUNT(*) FROM vigils"):
 		return hOracleRow{values: []any{len(p.vigilListRows)}}
 	case strings.Contains(sql, "COUNT(*) FROM decrees"):
@@ -226,7 +231,7 @@ func TestHumaVigil_Create_GoldenWire(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`))
+		strings.NewReader(`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -236,7 +241,7 @@ func TestHumaVigil_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"check":"core.beacon.file_changed","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"interval":"30s","name":"web-conf","params":{},"subject":{"coven":["web"]},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift vigil.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -246,7 +251,7 @@ func TestHumaVigil_Create_UnknownField_400(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed","bogus":1}`))
+		strings.NewReader(`{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed","bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -258,7 +263,7 @@ func TestHumaVigil_Create_MissingCheck_422(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"x","coven":["web"],"interval":"30s"}`))
+		strings.NewReader(`{"name":"x","subject":{"coven":["web"]},"interval":"30s"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (missing required check); body=%s", rec.Code, rec.Body.String())
@@ -270,7 +275,7 @@ func TestHumaVigil_Create_RBACDeny_403(t *testing.T) {
 	r := humaOracleRouter(t, strictDenyAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`))
+		strings.NewReader(`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -282,7 +287,7 @@ func TestHumaAudit_VigilCreate_RecordsOnSuccess(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, auditCap, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`))
+		strings.NewReader(`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -298,7 +303,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnRBACDeny(t *testing.T) {
 	r := humaOracleRouter(t, strictDenyAll{}, auditCap, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"web-conf","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`))
+		strings.NewReader(`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -313,7 +318,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, auditCap, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/vigils",
-		strings.NewReader(`{"name":"x","coven":["web"],"interval":"30s"}`))
+		strings.NewReader(`{"name":"x","subject":{"coven":["web"]},"interval":"30s"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
@@ -327,7 +332,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 
 func TestHumaVigil_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{vigilListRows: [][]any{
-		{"web-conf", []string{"web"}, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil},
+		{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil},
 	}}
 	r := humaOracleRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()
@@ -341,7 +346,7 @@ func TestHumaVigil_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"check":"core.beacon.file_changed","created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"subject":{"coven":["web"]},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift vigil.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -411,7 +416,7 @@ func TestHumaVigil_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"check":"core.beacon.file_changed","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"check":"core.beacon.file_changed","created_at":"2026-06-13T10:00:00Z","enabled":true,"interval":"30s","name":"web-conf","params":{},"subject":{"coven":["web"]},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift vigil.get:\n got  = %s\n want = %s", got, golden)
 	}
@@ -486,7 +491,7 @@ func TestHumaDecree_Create_GoldenWire(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/decrees",
-		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","coven":["web"],"incarnation_name":"web","action_scenario":"reload"}`))
+		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"incarnation_name":"web","action_scenario":"reload"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -496,7 +501,7 @@ func TestHumaDecree_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"action_input":{},"action_scenario":"reload","cooldown":"0s","coven":["web"],"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"action_input":{},"action_scenario":"reload","cooldown":"0s","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift decree.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -506,7 +511,7 @@ func TestHumaDecree_Create_UnknownField_400(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/decrees",
-		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","coven":["web"],"incarnation_name":"web","action_scenario":"reload","bogus":1}`))
+		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"incarnation_name":"web","action_scenario":"reload","bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -518,7 +523,7 @@ func TestHumaDecree_Create_MissingOnBeacon_422(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/decrees",
-		strings.NewReader(`{"name":"on-conf","coven":["web"],"incarnation_name":"web","action_scenario":"reload"}`))
+		strings.NewReader(`{"name":"on-conf","subject":{"coven":["web"]},"incarnation_name":"web","action_scenario":"reload"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (missing required on_beacon); body=%s", rec.Code, rec.Body.String())
@@ -530,7 +535,7 @@ func TestHumaDecree_Create_RBACDeny_403(t *testing.T) {
 	r := humaOracleRouter(t, strictDenyAll{}, nil, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/decrees",
-		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","coven":["web"],"incarnation_name":"web","action_scenario":"reload"}`))
+		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"incarnation_name":"web","action_scenario":"reload"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -542,7 +547,7 @@ func TestHumaAudit_DecreeCreate_RecordsOnSuccess(t *testing.T) {
 	r := humaOracleRouter(t, strictAllowAll{}, auditCap, &hOraclePool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/decrees",
-		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","coven":["web"],"incarnation_name":"web","action_scenario":"reload"}`))
+		strings.NewReader(`{"name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"incarnation_name":"web","action_scenario":"reload"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -557,7 +562,7 @@ func TestHumaAudit_DecreeCreate_RecordsOnSuccess(t *testing.T) {
 
 func TestHumaDecree_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{decreeListRows: [][]any{
-		{"on-conf", "web-conf", nil, []string{"web"}, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil},
+		{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil},
 	}}
 	r := humaOracleRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()
@@ -571,7 +576,7 @@ func TestHumaDecree_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"action_input":{},"action_scenario":"reload","cooldown":"0s","coven":["web"],"created_at":"2026-06-13T10:00:00Z","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"action_input":{},"action_scenario":"reload","cooldown":"0s","created_at":"2026-06-13T10:00:00Z","enabled":true,"incarnation_name":"web","name":"on-conf","on_beacon":"web-conf","subject":{"coven":["web"]},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift decree.list:\n got  = %s\n want = %s", got, golden)
 	}

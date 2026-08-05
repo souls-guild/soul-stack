@@ -37,8 +37,7 @@ func registerHumaVigilCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 		}
 		reply, err := oracleH.CreateVigilTyped(ctx, claims, handlers.VigilCreateInput{
 			Name:     in.Body.Name,
-			Coven:    in.Body.Coven,
-			SID:      in.Body.SID,
+			Subject:  in.Body.Subject.selector(),
 			Interval: in.Body.Interval,
 			Check:    in.Body.Check,
 			Params:   in.Body.Params,
@@ -116,8 +115,7 @@ func registerHumaDecreeCreate(humaAPI huma.API, oracleH *handlers.OracleHandler)
 		reply, err := oracleH.CreateDecreeTyped(ctx, claims, handlers.DecreeCreateInput{
 			Name:            in.Body.Name,
 			OnBeacon:        in.Body.OnBeacon,
-			Coven:           in.Body.Coven,
-			SID:             in.Body.SID,
+			Subject:         in.Body.Subject.selector(),
 			IncarnationName: in.Body.IncarnationName,
 			ActionScenario:  in.Body.ActionScenario,
 			ActionInput:     in.Body.ActionInput,

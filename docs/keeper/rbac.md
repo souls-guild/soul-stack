@@ -870,11 +870,11 @@ CRUD registries of the external access broker Augur (Omen - external system, Rit
 | `omen.create` | Creating an Omen record in Postgres (`omens`) - external system (vault/prometheus/elk) with vault-ref to master-cred. |
 | `omen.list` | Listing Omens in the registry. |
 | `omen.delete` | Removing Omen record (cascade removes related Rites - `rites.omen ON DELETE CASCADE`). |
-| `rite.create` | Creating a Rite record in Postgres (`rites`) - grant a subject (coven/sid) to Omen with allow-list and `delegate`. |
+| `rite.create` | Creating a Rite record in Postgres (`rites`) - grant a subject (exactly one of `sid` / `incarnation` / `coven` / `trait`, [augur.md §4.2](augur.md)) access to an Omen with an allow-list and `delegate`. ⚠ Holding this permission is no longer the only way to widen a grant: since [NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only) a `coven`/`trait` Rite also reaches every member of an incarnation carrying that label, so `incarnation.traits-set` (labels the incarnation) and `incarnation.bind-member` (adds a host to its roster) extend an existing grant with no Rite edited - the audit trail records the incarnation change, not a grant change. |
 | `rite.list` | Listing Rites in the registry. |
 | `rite.delete` | Removing Rite record. |
 
-> **Live-fetch from Soul (`AugurRequest`) RBAC-permission is not controlled** - this is not an operator operation via OpenAPI / MCP, but a machine request from Soul via gRPC EventStream. Live-fetch authorization is a separate Augur mechanism (Omen + Rite + allow-list by mTLS→SID→covens, [augur.md → Authorization](augur.md)), not the Archon's RBAC-permission.
+> **Live-fetch from Soul (`AugurRequest`) RBAC-permission is not controlled** - this is not an operator operation via OpenAPI / MCP, but a machine request from Soul via gRPC EventStream. Live-fetch authorization is a separate Augur mechanism (Omen + Rite + allow-list, resolved mTLS→SID→subject match, [augur.md → Authorization](augur.md)), not the Archon's RBAC-permission.
 
 ### Oracle (6) - [ADR-030](../adr/0030-vigil-oracle.md)
 
@@ -882,14 +882,14 @@ CRUD of Oracle beacons circuit registries (Vigil - Soul-side check, Decree - rea
 
 | Permission | Semantics | Audit-event |
 |---|---|---|
-| `vigil.create` | Creating a Vigil record in Postgres (`vigils`) - Soul-side check (check - address core-beacon + interval + subject coven XOR sid). | `vigil.created` |
+| `vigil.create` | Creating a Vigil record in Postgres (`vigils`) - Soul-side check (check - address core-beacon + interval + a subject: exactly one of `sid` / `incarnation` / `coven` / `trait`, [operator-api/oracle.md → Subject](operator-api/oracle.md#subject)). | `vigil.created` |
 | `vigil.list` | List Vigils in the registry (and get them by name). | — (read-only) |
 | `vigil.delete` | Deleting Vigil record (stops being heard in `VigilSnapshot`; Decrees do not cascade). | `vigil.deleted` |
-| `decree.create` | Creating a Decree record in Postgres (`decrees`) - reactor rule (on_beacon × subject × incarnation_name → named scenario; option where-CEL + cooldown). | `decree.created` |
+| `decree.create` | Creating a Decree record in Postgres (`decrees`) - reactor rule (on_beacon × subject × incarnation_name → named scenario; option where-CEL + cooldown). The subject says WHO may fire it, `incarnation_name` WHAT the reaction acts on - two different fields. | `decree.created` |
 | `decree.list` | List Decrees in the registry (and get them by name). | — (read-only) |
 | `decree.delete` | Removing Decree record (cleans cooldown-state `oracle_fires` in a cascade). | `decree.deleted` |
 
-> **Reactor-flow (`Portent` → match Decree → enqueue scenario) RBAC-permission is not controlled** - this is a machine Soul-initiated path via gRPC EventStream, not an operator operation. Protection - subject binding Decree (coven XOR sid) + membership-check + default-deny + whitelist scenario ([ADR-030(b)](../adr/0030-vigil-oracle.md)), not RBAC-permission of the Archon.
+> **Reactor-flow (`Portent` → match Decree → enqueue scenario) RBAC-permission is not controlled** - this is a machine Soul-initiated path via gRPC EventStream, not an operator operation. Protection - the Decree's subject binding (one of `sid` / `incarnation` / `coven` / `trait`) + the membership-check on `incarnation_name` + default-deny + whitelist scenario ([ADR-030(b)](../adr/0030-vigil-oracle.md)), not RBAC-permission of the Archon. ⚠ The `coven`/`trait` dimensions read the incarnation level too ([NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)), so labelling an incarnation widens which hosts may fire a rule - targeting only; an Archon's own scope is unaffected.
 
 ### Plugin Sigil (3)
 

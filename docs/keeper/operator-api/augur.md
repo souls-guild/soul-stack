@@ -34,11 +34,11 @@ Permission: `omen.delete`. MCP-tool: `keeper.augur.omen.delete`. Cascade deletes
 
 Permission: `rite.create`. MCP-tool: `keeper.augur.rite.create`.
 
-**Request `RiteCreateRequest`:** `{omen, coven?, sid?, allow, delegate?, token_ttl?, token_num_uses?}` - subject `coven` **XOR** `sid`; `allow`-object, form by `source_type` Omen (vault `{paths?,policies?}` / prometheus `{queries}` / elk `{indices}`); `token_ttl`/`token_num_uses` - vault-delegate only.
+**Request `RiteCreateRequest`:** `{omen, subject, allow, delegate?, token_ttl?, token_num_uses?}` - `subject` is a nested object carrying **exactly one** of `sid: [...]` / `incarnation: {service, name}` / `coven: [...]` / `trait: {key, value}` ([§ Subject](#subject) below); `allow`-object, form by `source_type` Omen (vault `{paths?,policies?}` / prometheus `{queries}` / elk `{indices}`); `token_ttl`/`token_num_uses` - vault-delegate only.
 
-**Response `201` `RiteView`:** `{id, omen, coven?, sid?, allow, delegate, token_ttl?, token_num_uses?, created_by_aid?, created_at}`.
+**Response `201` `RiteView`:** `{id, omen, subject, allow, delegate, token_ttl?, token_num_uses?, created_by_aid?, created_at}` - `subject` echoes back with only the populated dimension present.
 
-Errors: `400` (broken JSON), `404 not-found` (Omen does not exist), `422 validation-failed` (XOR violation / broken `allow` / token fields). Audit: `rite.created`.
+Errors: `400` (broken JSON), `404 not-found` (Omen does not exist), `422 validation-failed` (zero or two subject dimensions / half an `incarnation` or `trait` pair / broken `allow` / token fields). Audit: `rite.created`.
 
 ### `GET /v1/augur/rites` - list of Rite Omens
 
@@ -47,3 +47,20 @@ Permission: `rite.list`. MCP-tool: `keeper.augur.rite.list`. Query `omen` REQUIR
 ### `DELETE /v1/augur/rites/{id}` - remove Rite
 
 Permission: `rite.delete`. MCP-tool: `keeper.augur.rite.delete`. Response `204`; `404 not-found` - no entry; `422 validation-failed` - `id` is not a positive integer. Audit: `rite.revoked`.
+
+## Subject
+
+`subject` is the nested object shared by Rite, [Vigil and Decree](oracle.md#subject) ([NIM-280](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)). Exactly one of its four dimensions is set; zero or two → `422`. On a response only the populated one is present.
+
+| written as | grants |
+|---|---|
+| `{"sid": ["db-01.example.com"]}` | those hosts, by identity |
+| `{"incarnation": {"service": "redis", "name": "redis-prod"}}` | every host on that incarnation's roster |
+| `{"coven": ["prod"]}` | a host carrying the label, **and** every member of an incarnation carrying it |
+| `{"trait": {"key": "tier", "value": "gold"}}` | the same two-level reach, over traits |
+
+Both halves of `incarnation` (`service` + `name`) and of `trait` (`key` + `value`) are required together - half a pair is `422`. An empty array counts as **absent**, so `{"coven": []}` is a subject with zero dimensions and is refused rather than stored as a grant matching everything. The incarnation address is the pair `<service>.<name>`, never the bare name.
+
+⚠ **On a Rite this is a grant, and the label dimensions read two levels.** Putting `prod` on an incarnation widens every existing `{"coven": ["prod"]}` Rite to its members - i.e. widens who may read a secret - with no Rite edited and only an incarnation-update in the audit trail. Use `incarnation` or `sid` where that is not wanted. Symmetrically, unbinding a host revokes every Rite that reached it that way, on its next request.
+
+★ Targeting only: an Archon's RBAC scope (`soul.list on coven=prod`) is resolved from the host's own column and is never widened by an incarnation's labels ([rbac.md](../rbac.md)).

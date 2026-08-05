@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -24,24 +25,38 @@ import (
 
 // oracleFakeDB implements oracleDB. SQL routing:
 //   - Query "FROM decrees"      → set of Decree;
-//   - QueryRow "FROM souls"     → the host's OWN covens (souls.coven[]);
-//   - QueryRow inherited-labels → covens inherited from its incarnations;
+//   - Query "FROM souls"        → the subject facts ([subject.LoadHost]): the
+//     host's own labels plus one row per incarnation it belongs to;
 //   - QueryRow "incarnation_membership" → the membership EXISTS gate;
 //   - QueryRow "FROM oracle_fires" → cooldown-state (last fired);
 //   - Exec "oracle_fires"       → record fire.
 //
-// The label read and the membership read are separate on purpose: since
-// NIM-124 they are separate facts in the product, and a fake that conflated
-// them could not tell a member from a host merely tagged with an incarnation's
-// name — the case the Oracle's guard exists to refuse.
+// The label read and the membership read stay separate facts, as they are in
+// the product since NIM-124: a fake that conflated them could not tell a member
+// from a host merely tagged with an incarnation's name — the case the Oracle's
+// guard exists to refuse. What NIM-280 added is that the SAME load also returns
+// the labels an operator put on the INCARNATION, which is how a rule reaches its
+// members without any label being inherited.
 type oracleFakeDB struct {
 	decreeRows func() (pgx.Rows, error)
 	// soulCoven — labels attached to THIS host (souls.coven[]). The only place
 	// a coven comes from (NIM-281).
 	soulCoven []string
+	// soulTraits — the host's own traits JSONB (nil → no traits).
+	soulTraits []byte
 	// memberOf — incarnations the host is bound to (incarnation_membership).
-	// Drives the membership gate ALONE: belonging lends the host no label.
-	memberOf    []string
+	// Drives BOTH the membership gate and the subject's incarnation dimension.
+	memberOf []string
+	// memberService — the service half of every membership above (an incarnation
+	// name is unique only within its service). Defaults to "svc".
+	memberService string
+	// incCoven / incTraits — labels an operator attached to the INCARNATIONS the
+	// host belongs to; they reach the host as a subject without being copied onto it.
+	incCoven  []string
+	incTraits []byte
+	// hostUnknown — the SID is not in the souls registry (onboarding incomplete).
+	hostUnknown bool
+
 	soulErr     error
 	lastFired   *time.Time
 	recordedFnc func(args []any)
@@ -71,17 +86,6 @@ func (f *oracleFakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.
 
 func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
-	case strings.Contains(sql, "FROM souls"):
-		if f.soulErr != nil {
-			return oracleErrRow{err: f.soulErr}
-		}
-		// selectBySIDSQL order: sid, transport, status, coven, traits,
-		// registered_at, last_seen_at, last_seen_by_kid, created_by_aid,
-		// requested_at, note (traits NULL → empty map in scanSoul, ADR-060).
-		return oracleValRow{vals: []any{
-			"host-a.example.com", "agent", "connected", f.soulCoven,
-			nil, time.Now(), nil, nil, nil, nil, nil,
-		}}
 	case strings.Contains(sql, "incarnation_membership"):
 		// isMemberSQL: EXISTS(… incarnation_name = $1 AND sid = $2).
 		return oracleValRow{vals: []any{f.isMemberOf(args)}}
@@ -118,10 +122,40 @@ func (f *oracleFakeDB) isMemberOf(args []any) bool {
 }
 
 func (f *oracleFakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM decrees") && f.decreeRows != nil {
+	switch {
+	case strings.Contains(sql, "FROM decrees") && f.decreeRows != nil:
 		return f.decreeRows()
+	case strings.Contains(sql, "FROM souls"):
+		return f.hostRows()
 	}
 	return &oracleEmptyRows{}, nil
+}
+
+// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.name,
+// i.covens, i.traits — one row per membership, the host's own labels repeated in
+// each (the LEFT JOIN shape), and a single row with NULL incarnation columns when
+// the host belongs to nothing. No rows at all → the host is not registered.
+func (f *oracleFakeDB) hostRows() (pgx.Rows, error) {
+	if f.soulErr != nil {
+		return nil, f.soulErr
+	}
+	if f.hostUnknown {
+		return &oracleStaticRows{}, nil
+	}
+	if len(f.memberOf) == 0 {
+		return &oracleStaticRows{rows: [][]any{
+			{f.soulCoven, f.soulTraits, nil, nil, nil, nil},
+		}}, nil
+	}
+	svc := f.memberService
+	if svc == "" {
+		svc = "svc"
+	}
+	rows := make([][]any, 0, len(f.memberOf))
+	for _, inc := range f.memberOf {
+		rows = append(rows, []any{f.soulCoven, f.soulTraits, svc, inc, f.incCoven, f.incTraits})
+	}
+	return &oracleStaticRows{rows: rows}, nil
 }
 
 type oracleErrRow struct{ err error }
@@ -188,28 +222,28 @@ func oracleAssign(dest, src any) {
 }
 
 // decreeRow builds a staticRow in decreeColumns order:
-// name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name,
+// name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation,
+// subject_coven, subject_trait_key, subject_trait_value, incarnation_name,
 // action_scenario, action_input, cooldown, enabled, created_at, updated_at,
 // created_by_aid.
 func decreeRow(d *oracle.Decree) []any {
-	var whereArg, sidArg, byArg any // nil → SQL NULL in a **string target
-	if d.WhereCEL != nil {
-		whereArg = *d.WhereCEL
-	}
-	if d.SubjectSID != nil {
-		sidArg = *d.SubjectSID
-	}
-	if d.CreatedByAID != nil {
-		byArg = *d.CreatedByAID
+	// nil → SQL NULL in a **string target.
+	deref := func(p *string) any {
+		if p == nil {
+			return nil
+		}
+		return *p
 	}
 	input := d.ActionInput
 	if input == nil {
 		input = []byte("{}")
 	}
 	return []any{
-		d.Name, d.OnBeacon, whereArg, d.SubjectCoven, sidArg,
+		d.Name, d.OnBeacon, deref(d.WhereCEL),
+		d.SubjectSID, deref(d.SubjectService), deref(d.SubjectIncarnation),
+		d.SubjectCoven, deref(d.SubjectTraitKey), deref(d.SubjectTraitValue),
 		d.IncarnationName, d.ActionScenario, []byte(input), d.Cooldown, d.Enabled,
-		time.Now(), time.Now(), byArg,
+		time.Now(), time.Now(), deref(d.CreatedByAID),
 	}
 }
 
@@ -549,7 +583,7 @@ func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 		memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-host", OnBeacon: "svc-down",
-			SubjectSID: strptr("host-a.example.com"), IncarnationName: "web-app",
+			SubjectSID: []string{"host-a.example.com"}, IncarnationName: "web-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
 	}
@@ -928,7 +962,7 @@ func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
 		recordedFnc: func([]any) { fireRecorded = true },
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-host", OnBeacon: "svc-down",
-			SubjectSID: strptr("host-a.example.com"), IncarnationName: "other-app",
+			SubjectSID: []string{"host-a.example.com"}, IncarnationName: "other-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
 	}
@@ -955,7 +989,7 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 	db := &oracleVigilDB{
 		soulCoven: []string{"web"},
 		vigils: [][]any{
-			vigilRow("web-watch", []string{"web"}, "30s", "core.beacon.service_down"),
+			vigilRow("web-watch", subject.Selector{Covens: []string{"web"}}, "30s", "core.beacon.service_down"),
 		},
 	}
 	src := NewVigilSource(db)
@@ -971,39 +1005,161 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 	}
 }
 
-// oracleVigilDB — fake for VigilSource: souls (the host's covens) + vigils (set).
+// TestActiveVigilsForSID_IncarnationDimensions pins the reach of the two label
+// levels and of the incarnation dimension itself on the Vigil path (NIM-280):
+// what an operator put on the INCARNATION reaches its member hosts, while the
+// host's own label set stays exactly what the operator attached to the host.
+func TestActiveVigilsForSID_IncarnationDimensions(t *testing.T) {
+	db := &oracleVigilDB{
+		soulCoven: []string{"db"}, // the host itself carries only `db`
+		member: []subject.Incarnation{{
+			Service: "redis", Name: "redis-prod",
+			Covens: []string{"cache"},
+			Traits: map[string]any{"tier": "gold"},
+		}},
+		vigils: [][]any{
+			vigilRow("own-coven", subject.Selector{Covens: []string{"db"}}, "30s", "core.beacon.service_down"),
+			vigilRow("inc-coven", subject.Selector{Covens: []string{"cache"}}, "30s", "core.beacon.service_down"),
+			vigilRow("inc-trait", subject.Selector{TraitKey: "tier", TraitValue: "gold"}, "30s", "core.beacon.service_down"),
+			vigilRow("inc-addr", subject.Selector{Service: "redis", Incarnation: "redis-prod"}, "30s", "core.beacon.service_down"),
+			vigilRow("sid", subject.Selector{SIDs: []string{"host-a.example.com"}}, "30s", "core.beacon.service_down"),
+			// Negatives: a label nobody attached, and the same incarnation name
+			// under another service — the name is unique only within its service.
+			vigilRow("other-coven", subject.Selector{Covens: []string{"web"}}, "30s", "core.beacon.service_down"),
+			vigilRow("other-service", subject.Selector{Service: "valkey", Incarnation: "redis-prod"}, "30s", "core.beacon.service_down"),
+		},
+	}
+
+	defs, err := NewVigilSource(db).ActiveVigilsForSID(context.Background(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("ActiveVigilsForSID: %v", err)
+	}
+	got := make(map[string]bool, len(defs))
+	for _, d := range defs {
+		got[d.GetName()] = true
+	}
+	for _, want := range []string{"own-coven", "inc-coven", "inc-trait", "inc-addr", "sid"} {
+		if !got[want] {
+			t.Errorf("vigil %q should reach the host", want)
+		}
+	}
+	for _, unwanted := range []string{"other-coven", "other-service"} {
+		if got[unwanted] {
+			t.Errorf("vigil %q must NOT reach the host", unwanted)
+		}
+	}
+}
+
+// oracleVigilDB — fake for VigilSource. Answers both Queries LoadHost and
+// SelectActiveVigilsForSubject issue, and filters the Vigil set with the REAL
+// matcher over the subject rebuilt from the query arguments: a resolve that
+// drops a dimension stops matching the Vigils written on it, instead of
+// silently passing because the fake handed back everything.
 type oracleVigilDB struct {
 	soulCoven []string
+	member    []subject.Incarnation
 	vigils    [][]any
 }
 
 func (f *oracleVigilDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
-func (f *oracleVigilDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	switch {
-	case strings.Contains(sql, "FROM souls"):
-		// traits jsonb (ADR-060) — slot after coven; NULL → empty map in scanSoul.
-		return oracleValRow{vals: []any{
-			"host-a.example.com", "agent", "connected", f.soulCoven,
-			nil, time.Now(), nil, nil, nil, nil, nil,
-		}}
-	}
+func (f *oracleVigilDB) QueryRow(context.Context, string, ...any) pgx.Row {
 	return oracleErrRow{err: pgx.ErrNoRows}
 }
-func (f *oracleVigilDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM vigils") {
-		return &oracleStaticRows{rows: f.vigils}, nil
+func (f *oracleVigilDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	switch {
+	case strings.Contains(sql, "FROM souls"):
+		if len(f.member) == 0 {
+			return &oracleStaticRows{rows: [][]any{{f.soulCoven, nil, nil, nil, nil, nil}}}, nil
+		}
+		rows := make([][]any, 0, len(f.member))
+		for _, inc := range f.member {
+			traits, _ := json.Marshal(inc.Traits)
+			if len(inc.Traits) == 0 {
+				traits = nil
+			}
+			rows = append(rows, []any{f.soulCoven, nil, inc.Service, inc.Name, inc.Covens, traits})
+		}
+		return &oracleStaticRows{rows: rows}, nil
+	case strings.Contains(sql, "FROM vigils"):
+		host := oracleHostFromArgs(args)
+		kept := make([][]any, 0, len(f.vigils))
+		for _, r := range f.vigils {
+			if oracleVigilSelector(r).Matches(host) {
+				kept = append(kept, r)
+			}
+		}
+		return &oracleStaticRows{rows: kept}, nil
 	}
 	return &oracleEmptyRows{}, nil
 }
 
-// vigilRow in vigilColumns order:
-// name, coven, sid, interval_spec, check_addr, params, enabled, created_at,
-// updated_at, created_by_aid.
-func vigilRow(name string, coven []string, interval, check string) []any {
+// oracleHostFromArgs rebuilds the subject from the FLATTENED value arrays the
+// shared predicate binds, in subject.MatchSQL order:
+// sid, covens, inc services, inc names, trait pairs.
+func oracleHostFromArgs(args []any) subject.Host {
+	var h subject.Host
+	if len(args) < 5 {
+		return h
+	}
+	h.SID, _ = args[0].(string)
+	h.Covens, _ = args[1].([]string)
+	svcs, _ := args[2].([]string)
+	names, _ := args[3].([]string)
+	for i, name := range names {
+		if i < len(svcs) {
+			h.Member = append(h.Member, subject.Incarnation{Service: svcs[i], Name: name})
+		}
+	}
+	pairs, _ := args[4].([]string)
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok {
+			continue
+		}
+		if h.Traits == nil {
+			h.Traits = map[string]any{}
+		}
+		h.Traits[k] = v
+	}
+	return h
+}
+
+// oracleVigilSelector reads the subject out of a fixture row, in vigilColumns
+// order: name, sid, service, incarnation, coven, trait_key, trait_value, …
+func oracleVigilSelector(r []any) subject.Selector {
+	str := func(v any) string {
+		s, _ := v.(string)
+		return s
+	}
+	sids, _ := r[1].([]string)
+	covens, _ := r[4].([]string)
+	return subject.Selector{
+		SIDs:        sids,
+		Service:     str(r[2]),
+		Incarnation: str(r[3]),
+		Covens:      covens,
+		TraitKey:    str(r[5]),
+		TraitValue:  str(r[6]),
+	}
+}
+
+// vigilRow in vigilColumns order: name, sid, service, incarnation, coven,
+// trait_key, trait_value, interval_spec, check_addr, params, enabled,
+// created_at, updated_at, created_by_aid.
+func vigilRow(name string, sel subject.Selector, interval, check string) []any {
+	nilIfEmpty := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
 	return []any{
-		name, coven, nil, interval, check,
+		name,
+		sel.SIDs, nilIfEmpty(sel.Service), nilIfEmpty(sel.Incarnation), sel.Covens,
+		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
+		interval, check,
 		[]byte("{}"), true, time.Now(), time.Now(), nil,
 	}
 }

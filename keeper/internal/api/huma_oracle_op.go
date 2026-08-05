@@ -27,16 +27,15 @@ type vigilCreateInput struct {
 }
 
 // VigilCreateRequest — the Go shape of the POST /v1/vigils body (code-first source of the schema AND
-// validation). Mirrors the domain VigilCreateRequest: name + XOR subject
-// (coven/sid) + interval/check + params (byte-passthrough JSONB, ADR-051 category D)
-// + enabled. params — *json.RawMessage: the raw body bytes go straight to the service.
-// The XOR subject and the shape of interval/check/params are domain validation in CreateVigilTyped
-// (422). required:"true" — missing→422; additionalProperties:false → unknown→400.
+// validation). Mirrors the domain VigilCreateRequest: name + subject (exactly one of the
+// four dimensions, [Subject]) + interval/check + params (byte-passthrough JSONB, ADR-051
+// category D) + enabled. params — *json.RawMessage: the raw body bytes go straight to the
+// service. The subject and the shape of interval/check/params are domain validation in
+// CreateVigilTyped (422). required:"true" — missing→422; additionalProperties:false → unknown→400.
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec → VigilCreateRequest).
 type VigilCreateRequest struct {
 	Name     string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
-	Coven    *[]string        `json:"coven,omitempty" doc:"subject Coven tags (XOR with sid)"`
-	SID      *string          `json:"sid,omitempty" doc:"subject — single specific SID (XOR with coven)"`
+	Subject  Subject          `json:"subject" required:"true" doc:"which hosts run the check — exactly one of sid / incarnation / coven / trait"`
 	Interval string           `json:"interval" required:"true" doc:"check frequency (duration convention, e.g. '30s')"`
 	Check    string           `json:"check" required:"true" doc:"core-beacon address (e.g. 'core.beacon.file_changed')"`
 	Params   *json.RawMessage `json:"params,omitempty" doc:"check parameters; shape depends on check (passed through as-is)"`
@@ -170,15 +169,17 @@ type decreeCreateInput struct {
 
 // DecreeCreateRequest — the Go shape of the POST /v1/decrees body (code-first source of the schema
 // AND validation). Mirrors the domain DecreeCreateRequest: name + on_beacon +
-// XOR subject (coven/sid) + incarnation_name + action_scenario/action_input
-// (byte-passthrough JSONB) + where-CEL + cooldown + enabled. action_input —
-// *json.RawMessage. Subject/where-CEL/cooldown validation is domain-level (422). The struct
-// name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
+// subject (exactly one of the four dimensions, [Subject]) + incarnation_name +
+// action_scenario/action_input (byte-passthrough JSONB) + where-CEL + cooldown + enabled.
+// action_input — *json.RawMessage. Subject/where-CEL/cooldown validation is domain-level (422).
+//
+// `subject` and `incarnation_name` are opposite ends of the rule and are NOT interchangeable:
+// the first says WHO may fire it, the second WHAT the reaction acts on.
+// The struct name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
 type DecreeCreateRequest struct {
 	Name            string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
 	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name whose Portent the rule reacts to"`
-	Coven           *[]string        `json:"coven,omitempty" doc:"subject Coven tags (XOR with sid)"`
-	SID             *string          `json:"sid,omitempty" doc:"subject — single specific SID (XOR with coven)"`
+	Subject         Subject          `json:"subject" required:"true" doc:"which hosts may fire the rule — exactly one of sid / incarnation / coven / trait"`
 	IncarnationName string           `json:"incarnation_name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"target incarnation of the reaction (required)"`
 	ActionScenario  string           `json:"action_scenario" required:"true" pattern:"^[a-z][a-z0-9_]*$" doc:"named scenario (whitelist; raw command rejected)"`
 	ActionInput     *json.RawMessage `json:"action_input,omitempty" doc:"scenario input (vault-ref passed through as-is)"`

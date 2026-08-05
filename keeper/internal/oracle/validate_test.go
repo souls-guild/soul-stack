@@ -1,9 +1,11 @@
 package oracle
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/beaconaddr"
 )
 
@@ -68,31 +70,74 @@ func TestValidScenario(t *testing.T) {
 	}
 }
 
-func TestValidateSubjectXOR(t *testing.T) {
-	sid := "h1.example"
+// boolRow — a one-column row scanning into *bool, for the SELECT EXISTS behind
+// [subject.ExistsIncarnation].
+type boolRow bool
+
+func (r boolRow) Scan(dest ...any) error {
+	if len(dest) == 1 {
+		if p, ok := dest[0].(*bool); ok {
+			*p = bool(r)
+		}
+	}
+	return nil
+}
+
+// TestValidateSubject_ExactlyOneOf pins the exactly-one-of-four invariant the DB
+// CHECK `*_subject_one_of` states declaratively. Two dimensions is as invalid as
+// none, and a pair dimension half-written (an incarnation with no service, a trait
+// key with no value) is not "partially specified" — it is invalid, because the
+// missing half is part of the address and not a default.
+func TestValidateSubject_ExactlyOneOf(t *testing.T) {
+	svc := newTestService(t, &fakeDB{queryRowRow: boolRow(true)})
 	cases := []struct {
-		name  string
-		coven []string
-		sid   *string
-		ok    bool
+		name string
+		sel  subject.Selector
+		ok   bool
 	}{
-		{"coven only", []string{"web"}, nil, true},
-		{"sid only", nil, &sid, true},
-		{"both → reject", []string{"web"}, &sid, false},
-		{"neither → reject", nil, nil, false},
-		{"empty coven + nil sid → reject", []string{}, nil, false},
-		{"bad coven element", []string{"WEB"}, nil, false},
+		{"coven only", subject.Selector{Covens: []string{"web"}}, true},
+		{"sid only", subject.Selector{SIDs: []string{"h1.example"}}, true},
+		{"incarnation only", subject.Selector{Service: "redis", Incarnation: "redis-prod"}, true},
+		{"trait only", subject.Selector{TraitKey: "tier", TraitValue: "gold"}, true},
+		{"coven + sid -> reject", subject.Selector{Covens: []string{"web"}, SIDs: []string{"h1.example"}}, false},
+		{"coven + incarnation -> reject", subject.Selector{Covens: []string{"web"}, Service: "redis", Incarnation: "redis-prod"}, false},
+		{"none -> reject", subject.Selector{}, false},
+		{"empty coven slice -> reject", subject.Selector{Covens: []string{}}, false},
+		{"bad coven element", subject.Selector{Covens: []string{"WEB"}}, false},
+		{"incarnation without service -> reject", subject.Selector{Incarnation: "redis-prod"}, false},
+		{"service without incarnation -> reject", subject.Selector{Service: "redis"}, false},
+		{"trait key without value -> reject", subject.Selector{TraitKey: "tier"}, false},
+		{"trait value without key -> reject", subject.Selector{TraitValue: "gold"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := validateSubjectXOR(c.coven, c.sid)
+			err := svc.validateSubject(context.Background(), c.sel)
 			if (err == nil) != c.ok {
-				t.Errorf("validateSubjectXOR(%v, %v) err=%v, want ok=%v", c.coven, c.sid, err, c.ok)
+				t.Errorf("validateSubject(%+v) err=%v, want ok=%v", c.sel, err, c.ok)
 			}
 			if err != nil && !errors.Is(err, ErrValidation) {
 				t.Errorf("error should be marked ErrValidation: %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateSubject_IncarnationMustExist — an `incarnation=` subject that names
+// nothing is rejected on create rather than accepted as a rule that silently reaches
+// no host. A typo here is invisible at runtime: an operator sees a rule that has
+// simply not fired yet, which looks identical to one that never can.
+func TestValidateSubject_IncarnationMustExist(t *testing.T) {
+	sel := subject.Selector{Service: "redis", Incarnation: "redis-typo"}
+
+	svc := newTestService(t, &fakeDB{queryRowRow: boolRow(false)})
+	err := svc.validateSubject(context.Background(), sel)
+	if !errors.Is(err, ErrValidation) {
+		t.Errorf("unknown incarnation err = %v, want ErrValidation", err)
+	}
+
+	svc = newTestService(t, &fakeDB{queryRowRow: boolRow(true)})
+	if err := svc.validateSubject(context.Background(), sel); err != nil {
+		t.Errorf("existing incarnation must pass: %v", err)
 	}
 }
 

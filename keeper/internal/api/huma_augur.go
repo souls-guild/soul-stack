@@ -111,8 +111,7 @@ func registerHumaRiteCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		}
 		reply, err := augurH.CreateRiteTyped(ctx, claims, handlers.RiteCreateInput{
 			Omen:         in.Body.Omen,
-			Coven:        in.Body.Coven,
-			SID:          in.Body.SID,
+			Subject:      in.Body.Subject.selector(),
 			Allow:        in.Body.Allow,
 			Delegate:     in.Body.Delegate,
 			TokenTTL:     in.Body.TokenTTL,
@@ -194,18 +193,17 @@ func newOmenListReply(p handlers.OmenListPage) OmenListReply {
 }
 
 // newRiteView projects the domain handlers.RiteView into the native RiteView (create-201 /
-// element list). allow — byte-passthrough JSONB (as-is); coven/sid/token_*/
-// created_by_aid — *-optional omitempty.
+// element list). allow — byte-passthrough JSONB (as-is); subject — the nested
+// four-dimension object ([newSubject]); token_*/created_by_aid — *-optional omitempty.
 func newRiteView(v handlers.RiteView) RiteView {
 	return RiteView{
 		Allow:        v.Allow,
-		Coven:        v.Coven,
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Delegate:     v.Delegate,
 		ID:           v.ID,
 		Omen:         v.Omen,
-		SID:          v.SID,
+		Subject:      newSubject(v.Subject),
 		TokenNumUses: v.TokenNumUses,
 		TokenTTL:     v.TokenTTL,
 	}

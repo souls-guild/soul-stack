@@ -175,44 +175,50 @@ order to act in.
   an unrestricted parent, or a delta that already stated the whole ceiling — is
   not reported either.
 
-- **Coven and Trait labels are inherited by incarnation membership, and
-  visibility widens with the release rather than behind a flag**
-  ([ADR-0080](docs/adr/0080-label-inheritance-union.md)). A host's effective labels are
-  its own unioned with those of every incarnation it belongs to (each
-  contributing its `covens[]` and its name), resolved at read time. Deployed
-  roles scoped `coven=` or `trait.` therefore also see the hosts of matching
-  incarnations. That is the defect being fixed — an incarnation-level label used
-  to grant nothing on its own hosts — but it is a widening, so **re-read your
-  scoped roles against the new resolution before upgrading a cluster where the
-  coven boundary is the security boundary.**
+- **A label is never inherited, and a rule's subject now names its dimension
+  explicitly** ([ADR-008 amendment 2026-08-05](docs/adr/0008-coven-stable-tags.md),
+  [ADR-0080 reverted](docs/adr/0080-label-inheritance-union.md), migration 113).
+  A host carries exactly the covens and traits an operator attached to it;
+  belonging to an incarnation attaches nothing, at read time as much as in
+  storage. Every reader says the same thing now — the RBAC scope predicate,
+  `soulprint.self.covens` / `.traits`, `GET /v1/souls?coven=`, the bulk soul
+  selector, push routing level 2, and Oracle / Augur subjects.
 
-  **The same resolution now applies to the operator-facing filter and to the
-  bulk write boundary.** `GET /v1/souls?coven=`, the `selector.coven` of
-  `soul.coven-assign` / `soul.traits-assign`, and **scope gate (a)** of those
-  bulk calls ("target hosts ⊆ the operator's coven-scope") read effective labels
-  like the scope predicate does, from one implementation. Two consequences to
-  plan for:
+  **Measured against `v0.1.0-beta.1` this is a narrowing, because membership used
+  to BE a coven tag.** NIM-124 moved host↔incarnation membership into the
+  `incarnation_membership` relation, so anything written `coven: [<incarnation>]`
+  in beta.1 selected that incarnation's hosts and now selects only hosts an
+  operator tagged with that literal string — usually none. Two places where that
+  changes behaviour rather than just counts:
 
-  - **A filter returns more than it did.** `?coven=X` now also matches hosts
-    that carry `X` only through an incarnation, so saved queries, dashboards and
-    any automation that counts rows off that endpoint will see larger result
-    sets. Previously such a host was visible in the unfiltered list and
-    unfindable by the very label that made it visible.
-  - **A scoped role can now WRITE where it previously selected nothing.** A role
-    scoped `coven=X` may label the hosts of an incarnation carrying `X`; before,
-    those calls reported a short `matched` and changed nothing. This is a real
-    widening of an existing grant — the read boundary and the write boundary of
-    one scope are now the same set — so the re-read above covers your
-    `soul.coven-assign` / `soul.traits-assign` holders, not only your readers.
-    **Gate (b) is unchanged**: the label being attached must still lie inside
-    the operator's own coven-scope, so nobody gains the ability to hand a host
-    to a foreign role.
+  - **`push.coven_default_providers` level-2 entries fall through to the cluster
+    default**, moving the SSH perimeter with no error. Re-read your routing table
+    before upgrading.
+  - **An Augur `coven`-Rite naming an incarnation stops authorizing its members.**
+    A subject matching no Rite is default-denied, so those hosts fail the Augur
+    step mid-run rather than going quiet.
 
-  `coven=` and `incarnation=` remain different questions and neither subsumes
-  the other: `coven=` is a **label** test and matches the union (a host carrying
-  a tag spelled like an incarnation matches it — it genuinely carries that
-  label), while `incarnation=` is a **membership** test and keeps reading
-  `incarnation_membership`.
+  **The replacement is an explicit dimension, not a tag that means two things.**
+  The subject of a Vigil, a Decree and a Rite is now exactly one of `sid` /
+  `incarnation` / `coven` / `trait`, carried as one nested `subject` object on
+  REST and MCP alike (breaking wire change, below). `incarnation: {service, name}`
+  addresses a roster by membership. `coven` and `trait` read **both levels**: the
+  rule reaches a host carrying the label **and** every member of an incarnation
+  carrying it — the union happens at match time, and nothing is written onto
+  `souls`.
+
+  ⚠ **Labelling an incarnation is therefore a grant-affecting act.** Adding `prod`
+  to an incarnation widens every existing `coven: ["prod"]` subject to its members
+  with no rule edited — on a Rite, that hands out a secret; and unbinding a host
+  withdraws every rule that reached it that way, on the next request. The
+  permissions that can do it are `incarnation.traits-set` and
+  `incarnation.bind-member`, so the audit trail records an incarnation change, not
+  a grant change. ★ The widening is **targeting only** — an operator's RBAC
+  coven-scope still reads a host's own labels and is unaffected.
+
+  `coven=` and `incarnation=` remain different questions and neither subsumes the
+  other: `coven=` is a **label** test, `incarnation=` is a **membership** test and
+  keeps reading `incarnation_membership`.
 
 - **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
   assert_failed` synchronously**, where it previously always answered `202` and
@@ -336,14 +342,22 @@ order to act in.
   and the fix ships as a new plugin version, since the manifest that gates is the
   one beside the binary on the host.
 
-- **Migrations 101–107 apply automatically when the first Keeper of this version
+- **Migrations 101–113 apply automatically when the first Keeper of this version
   starts** — `apply_runs.input` (101), `rbac_roles.parent_role` (102), engine
   provenance columns (103), `console_recordings` (104), `rbac_roles.scope_mode`
-  (105), the prune of projected traits (106), `apply_runs.notices` (107). **106
-  rewrites data**: it removes from `souls.traits` the residue of the old
+  (105), the prune of projected traits (106), `apply_runs.notices` (107), the
+  removal of `incarnation.spec.hosts` (108), of `permission.update-hosts` (109),
+  of `spec.essence` (110), `state_history.run` (111), the removal of
+  `incarnation.spec` itself (112), and the four-dimension subject (113). **Three
+  rewrite data.** 106 removes from `souls.traits` the residue of the old
   materialized projection, by value equality against the host's incarnations — a
-  pair sharing only a key is host-local and stays. Effective labels are unchanged
-  by the prune, only where they are stored. Take the usual snapshot first.
+  pair sharing only a key is host-local and stays. With label inheritance gone
+  (above) that prune is a **real narrowing, not a change of storage**: a trait a
+  host held only because its incarnation held it is not restored by any read-time
+  union, which is the intended end state — an operator who wants it on the host
+  attaches it to the host. 110 and 112 strip keys out of existing `spec` jsonb,
+  and 113 reshapes the three subject-bearing registries. Take the usual snapshot
+  first.
 
 - **The shipped systemd units are `Type=notify`** with `NotifyAccess=main`,
   `WatchdogSec=60s` and an `ExecReload` that `systemctl reload` previously had
@@ -360,33 +374,18 @@ order to act in.
   so that path has been dead for everyone since `v0.1.0-beta.1`. A fleet on an
   internal mirror overrides the one map in `spec.essence`.
 
-- **Two selectors start matching again**, having quietly matched nothing since
-  NIM-124 moved host↔incarnation membership out of `souls.coven[]`: a Vigil or
-  Decree scoped `coven: [<incarnation>]`, and a `coven_default_providers` entry
-  in push Level 2 naming an incarnation. Both now resolve over inherited labels.
-  Level 2 breaks its tie **own-then-inherited**, each group alphabetical, so a
-  host that already matched on its own tag keeps the exact route it had and
-  inheritance can only fill in where the lookup used to fall through.
-
-- **Two more consumers of that same axis were on the raw column, and one of them
-  was fully dead.** Telemetry **delivery** resolved a host's incarnation with
-  `WHERE name = ANY(<the host's covens>)`, which the same migration emptied — so
-  the effective telemetry config ([ADR-072](docs/adr/0072-host-utilization.md))
-  reached **no host of any incarnation**, everything ran on soul-local defaults,
-  and nothing said so. Expect member hosts to pick up their service's declared
-  interval and collector set on their next connect: for a fleet that has been
-  running since NIM-124 this is a **change in collection cadence**, in the
-  direction the service manifest and `spec.essence` always asked for. If a host
-  belongs to several incarnations only one cadence can win — the first by name,
-  now logged at WARN with the full membership list so the choice is visible.
-
-  An Augur `coven`-Rite naming an incarnation is the second, and it failed
-  loudly rather than silently: a subject matching no Rite is default-denied, so
-  those hosts were **refused mid-apply** rather than quietly doing nothing. It
-  authorizes members again. A Rite still has no incarnation dimension, so it
-  cannot distinguish a member from a host merely *tagged* with that
-  incarnation's name — put a dedicated tag on the incarnation where that
-  distinction matters.
+- **Telemetry delivery was reading host↔incarnation membership off the raw
+  `souls.coven[]` column, and had been fully dead since NIM-124 emptied it.** It
+  resolved a host's incarnation with `FROM incarnation WHERE name = ANY(<the
+  host's covens>)`, so the effective telemetry config
+  ([ADR-072](docs/adr/0072-host-utilization.md)) reached **no host of any
+  incarnation**, everything ran on soul-local defaults, and nothing said so.
+  Expect member hosts to pick up their service's declared interval and collector
+  set on their next connect: for a fleet that has been running since NIM-124 this
+  is a **change in collection cadence**, in the direction the service manifest
+  always asked for. If a host belongs to several incarnations only one cadence can
+  win — the first by name, now logged at WARN with the full membership list so the
+  choice is visible.
 
 - **Creating an incarnation from a `name_template` no longer requires an
   unrestricted role, and a scoped role is now gated on what the request declares**
@@ -407,9 +406,10 @@ order to act in.
   **And this closes an escalation, on every create — named ones included.** The
   pre-handler gate is an OR over the declared covens: a request naming one coven you
   hold and one you do not matched on the first and was created **carrying both**.
-  Because an incarnation's covens become labels on its member hosts
-  ([ADR-0080](docs/adr/0080-label-inheritance-union.md)), that placed hosts in a coven
-  the caller cannot reach and widened their own visibility. It predates
+  Because a `coven` subject reaches every member of an incarnation carrying that
+  label, that handed the incarnation's hosts to Vigils, Decrees and Rites written
+  by the owner of a coven the caller cannot reach — an Augur Rite among them, and
+  a secret with it. It predates
   `name_template` entirely — a named create has always been able to do it.
 
   Every declared coven is now checked once the effective name is final, and the
@@ -794,20 +794,17 @@ order to act in.
   `confirm_cascade`, and the refusal names who gains, who loses and how many
   operators hold each.
 
-- **Coven and Trait are one label world, inherited by membership**
-  ([ADR-0080](docs/adr/0080-label-inheritance-union.md), migration 106). A label
-  lives only where it was attached and is never copied down. A host's effective
-  labels are its own unioned with those of every incarnation it belongs to — each
-  contributing its `covens[]` and its name — resolved at read time by both
-  readers of the layer: the RBAC scope predicate (a correlated `EXISTS`, still
-  pushed into SQL) and targeting (`soulprint.self.*`, the topology roster, the
-  push inventory, the Voyage target filter). A key held on both sides unions
-  rather than contests: `owner=dba` on the incarnation and `owner=bobik` on the
-  host yield `owner=[dba, bobik]`, and either grants. Precedence was rejected —
-  whichever way it points, it silently revokes access somebody was deliberately
-  given. The per-host trait write path is first-class again and gains the mirror
-  of coven-assign's label gate: the pair attached must lie inside the operator's
-  own trait-scope, since a host-attached trait now grants visibility permanently.
+- **Coven and Trait are one label world** ([ADR-0060](docs/adr/0060-traits.md),
+  migration 106). A label lives only where it was attached and is never copied
+  down: `souls.coven[]` / `souls.traits` label a host, `incarnation.covens` /
+  `incarnation.traits` label an incarnation, and neither reaches the other
+  (ADR-0080's read-time union was reverted before release — see Upgrade notes).
+  One layer, two readers: the RBAC scope predicate (still pushed into SQL) and
+  targeting (`soulprint.self.*`, the topology roster, the push inventory, the
+  Voyage target filter). The per-host trait write path is first-class again and
+  gains the mirror of coven-assign's label gate: the pair attached must lie inside
+  the operator's own trait-scope, since a host-attached trait grants visibility
+  permanently.
 
 - **Operators can bind an onboarded Soul to an incarnation**
   ([ADR-008 amendment](docs/adr/0008-coven-stable-tags.md)). Until now the only
@@ -1033,6 +1030,42 @@ order to act in.
   module}`. Alert on it.
 
 ### Changed
+
+- **BREAKING wire change — a Vigil, Decree or Rite subject is one nested
+  `subject` object with four dimensions** (migration 113,
+  [ADR-008 amendment 2026-08-05](docs/adr/0008-coven-stable-tags.md)). The
+  top-level `coven` / `sid` pair is replaced on all three registries, on REST and
+  MCP alike, by
+
+  ```
+  subject: { sid: [...] | incarnation: {service, name} | coven: [...] | trait: {key, value} }
+  ```
+
+  with exactly one dimension set — zero, two, or half a pair is `422
+  validation-failed`. `sid` and `coven` keep their old meaning, `incarnation`
+  addresses a roster through `incarnation_membership`, and `trait` selects on a
+  key/value pair. The reasons the pair moved: a subject had no way to say
+  "the members of this incarnation" other than a tag spelled like its name — the
+  escalation ADR-008's 2026-08-05 amendment closed — and the address is the pair
+  `service.incarnation`, so that incarnation names may stop being globally unique
+  without every rule becoming ambiguous.
+
+  **Every request body and every response changes shape.** Migration 113 rewrites
+  the three tables in place: `sid` becomes `TEXT[]` everywhere and `rites.coven`
+  joins it (it was the lone scalar), four columns are added per table, and each
+  `*_subject_xor` check becomes `*_subject_one_of` alongside pair and format
+  checks; the `sid` and `rites.coven` indexes are rebuilt as GIN. Existing rows
+  keep the dimension they were written with. One deliberate loosening:
+  `rites_coven_format` is dropped rather than ported — a per-element CHECK over
+  `text[]` needs a trigger to express, which is the call migration 041 already
+  made for `vigils`/`decrees`, so label form is enforced at the service layer for
+  all three. The audit payload renders the subject as a string — `sid=…` /
+  `incarnation=<service>.<name>` / `coven=…` / `trait.<k>=<v>` — where it
+  previously carried `coven=<v>` or `sid=<v>` only, so a consumer parsing that
+  field needs the two new spellings.
+
+  See the Upgrade notes above for what a `coven` or `trait` subject now reaches,
+  and why labelling an incarnation became a grant-affecting act.
 
 - **`make pkg` now builds the packages a release actually ships.** It used to
   drive `nfpm` against a separate set of configs under `deploy/nfpm/`, a second
@@ -1504,20 +1537,12 @@ order to act in.
 - **Vigils and Decrees scoped `coven: [<incarnation>]` had silently matched
   nothing** since host↔incarnation membership moved out of `souls.coven[]`. The
   roster, the bulk soul selector, the Choir check and form-prep were converted at
-  the time; the Oracle was not. Its reactor subject now resolves over the same
-  inherited-label union everything else reads, and the membership gate is the
-  membership relation — never the union, or a host merely carrying a tag spelled
+  the time; the Oracle was not. A subject now names what it means: an
+  `incarnation: {service, name}` dimension resolving through
+  `incarnation_membership`, or a `coven` / `trait` label reaching a tagged host
+  and the members of a tagged incarnation. A Decree's membership gate is still the
+  membership relation and never a label, or a host merely carrying a tag spelled
   like an incarnation would escalate into it.
-
-- **Push Level 2 stopped honouring a per-coven provider default named after an
-  incarnation**, for the same reason, so `coven_default_providers: {redis-prod:
-  bastion-eu}` had quietly become a no-op and those hosts fell through to the
-  cluster default. Level 2 now resolves a host's effective coven labels through
-  the shared resolver rather than a fourth mechanism. Because a route is exactly
-  one provider, an order is unavoidable where access-by-any-match needs none: the
-  tiebreak is own-then-inherited, each group alphabetical — the only order that
-  is purely additive, since one flat alphabetical sort would re-route live hosts
-  onto a different bastion the day their incarnation gained a label.
 
 - **The effective telemetry config had been reaching no host at all.** Delivery
   asked which incarnation a host belonged to with `FROM incarnation WHERE name =
@@ -1528,20 +1553,17 @@ order to act in.
   The **reading** half of telemetry had been converted at the time and kept
   showing operators a healthy per-incarnation aggregate over member hosts, none
   of which had ever been handed a config. Delivery now reads the membership
-  relation, while the coven overlays of that config's essence read the inherited
-  union — membership decides *which* config a host is owed, labels decide *how
-  much* of it applies, and a tag spelled like an incarnation's name grants
-  neither.
+  relation — membership decides which config a host is owed, and a tag spelled
+  like an incarnation's name grants nothing.
 
 - **An Augur `coven`-Rite naming an incarnation stopped authorizing its own
-  members**, for the same root cause as the Vigil and push cases, but this one
-  denied instead of going quiet: a subject that matches no Rite is default-denied,
-  so affected hosts failed the Augur step during a run. Rite subjects resolve over
-  the same inherited-label union as every other reader. No membership gate is
-  added here and none is implied: a Rite's subject is `coven` XOR `sid` with no
-  incarnation dimension to gate on, so an incarnation-scoped Rite cannot tell a
-  member from a host carrying a same-named tag — consistent with labels deciding
-  visibility, but worth knowing when writing one.
+  members**, for the same root cause as the Vigil case, but this one denied
+  instead of going quiet: a subject that matches no Rite is default-denied, so
+  affected hosts failed the Augur step during a run. A Rite subject now carries an
+  explicit `incarnation: {service, name}` dimension, and a `coven` / `trait`
+  subject reaches the members of an incarnation carrying that label. Nothing is
+  inferred from a name: an incarnation is reached by the membership dimension, not
+  by a tag spelled like it.
 
 - **A slow operator's console socket stopped writing and went quiet.** Two
   defects stacked. The write budget was a second, stricter liveness rule than

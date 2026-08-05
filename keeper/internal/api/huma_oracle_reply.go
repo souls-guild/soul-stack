@@ -35,39 +35,38 @@ import (
 
 // === top-level reply-DTO (shape 1:1 with the former legacy generator) ===
 
-// VigilView — native projection of a vigils registry record (shape 1:1 with the former VigilView).
-// coven/created_by_aid/sid — `*[]string`/`*string` WITH omitempty (nil → key omitted);
-// params — json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at —
-// nanosecond time-wire.
+// VigilView — native projection of a vigils registry record. subject — the nested
+// four-dimension object ([Subject], NIM-280); created_by_aid — *string WITH omitempty
+// (nil → key omitted); params — json.RawMessage WITHOUT omitempty (nil → `null`);
+// created_at/updated_at — nanosecond time-wire.
 type VigilView struct {
 	Check        string          `json:"check"`
-	Coven        *[]string       `json:"coven,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	CreatedByAID *string         `json:"created_by_aid,omitempty"`
 	Enabled      bool            `json:"enabled"`
 	Interval     string          `json:"interval"`
 	Name         string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern
 	Params       json.RawMessage `json:"params"`
-	SID          *string         `json:"sid,omitempty"`
+	Subject      Subject         `json:"subject"`
 	UpdatedAt    time.Time       `json:"updated_at"`
 }
 
-// DecreeView — native projection of a decrees registry record (shape 1:1 with the former DecreeView).
-// coven/created_by_aid/sid/where — WITH omitempty (nil → key omitted); action_input —
-// json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at — nanosecond
-// time-wire.
+// DecreeView — native projection of a decrees registry record. subject — WHO may fire the
+// rule (the nested four-dimension object, [Subject]); incarnation_name — the opposite end,
+// WHAT the reaction acts on. created_by_aid/where — WITH omitempty (nil → key omitted);
+// action_input — json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at —
+// nanosecond time-wire.
 type DecreeView struct {
 	ActionInput     json.RawMessage `json:"action_input"`
 	ActionScenario  string          `json:"action_scenario"`
 	Cooldown        string          `json:"cooldown"`
-	Coven           *[]string       `json:"coven,omitempty"`
 	CreatedAt       time.Time       `json:"created_at"`
 	CreatedByAID    *string         `json:"created_by_aid,omitempty"`
 	Enabled         bool            `json:"enabled"`
 	IncarnationName string          `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← oracle.IncarnationPattern
 	Name            string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"`                     // ← oracle.NamePattern
 	OnBeacon        string          `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"`                // ← oracle.NamePattern (FK to a Vigil name)
-	SID             *string         `json:"sid,omitempty"`
+	Subject         Subject         `json:"subject"`
 	UpdatedAt       time.Time       `json:"updated_at"`
 	Where           *string         `json:"where,omitempty"`
 }
@@ -97,14 +96,13 @@ type DecreeListReply struct {
 func newVigilView(v handlers.VigilView) VigilView {
 	return VigilView{
 		Check:        v.Check,
-		Coven:        v.Coven,
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Enabled:      v.Enabled,
 		Interval:     v.Interval,
 		Name:         v.Name,
 		Params:       v.Params,
-		SID:          v.SID,
+		Subject:      newSubject(v.Subject),
 		UpdatedAt:    v.UpdatedAt,
 	}
 }
@@ -115,14 +113,13 @@ func newDecreeView(d handlers.DecreeView) DecreeView {
 		ActionInput:     d.ActionInput,
 		ActionScenario:  d.ActionScenario,
 		Cooldown:        d.Cooldown,
-		Coven:           d.Coven,
 		CreatedAt:       d.CreatedAt,
 		CreatedByAID:    d.CreatedByAID,
 		Enabled:         d.Enabled,
 		IncarnationName: d.IncarnationName,
 		Name:            d.Name,
 		OnBeacon:        d.OnBeacon,
-		SID:             d.SID,
+		Subject:         newSubject(d.Subject),
 		UpdatedAt:       d.UpdatedAt,
 		Where:           d.Where,
 	}

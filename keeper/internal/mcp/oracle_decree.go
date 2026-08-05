@@ -17,8 +17,7 @@ type decreeView struct {
 	Name            string          `json:"name"`
 	OnBeacon        string          `json:"on_beacon"`
 	WhereCEL        *string         `json:"where,omitempty"`
-	Coven           []string        `json:"coven,omitempty"`
-	SID             *string         `json:"sid,omitempty"`
+	Subject         subjectPayload  `json:"subject"`
 	IncarnationName string          `json:"incarnation_name"`
 	ActionScenario  string          `json:"action_scenario"`
 	ActionInput     json.RawMessage `json:"action_input"`
@@ -38,8 +37,7 @@ func toDecreeView(d *oracle.Decree) decreeView {
 		Name:            d.Name,
 		OnBeacon:        d.OnBeacon,
 		WhereCEL:        d.WhereCEL,
-		Coven:           d.SubjectCoven,
-		SID:             d.SubjectSID,
+		Subject:         toSubjectPayload(d.Subject()),
 		IncarnationName: d.IncarnationName,
 		ActionScenario:  d.ActionScenario,
 		ActionInput:     input,
@@ -51,15 +49,14 @@ func toDecreeView(d *oracle.Decree) decreeView {
 	}
 }
 
-// decreeCreateArgs — arguments for keeper.oracle.decree.create. subject is
-// XOR coven/sid; where is an optional CEL predicate (compile-checked in
-// Service); enabled is optional (omitted → true).
+// decreeCreateArgs — arguments for keeper.oracle.decree.create. subject carries
+// exactly one of the four dimensions ([subjectPayload]); where is an optional CEL
+// predicate (compile-checked in Service); enabled is optional (omitted → true).
 type decreeCreateArgs struct {
 	Name            string          `json:"name"`
 	OnBeacon        string          `json:"on_beacon"`
 	WhereCEL        *string         `json:"where"`
-	Coven           []string        `json:"coven"`
-	SID             *string         `json:"sid"`
+	Subject         subjectPayload  `json:"subject"`
 	IncarnationName string          `json:"incarnation_name"`
 	ActionScenario  string          `json:"action_scenario"`
 	ActionInput     json.RawMessage `json:"action_input"`
@@ -109,8 +106,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 		Name:            a.Name,
 		OnBeacon:        a.OnBeacon,
 		WhereCEL:        a.WhereCEL,
-		Coven:           a.Coven,
-		SID:             a.SID,
+		Subject:         a.Subject.selector(),
 		IncarnationName: a.IncarnationName,
 		ActionScenario:  a.ActionScenario,
 		ActionInput:     a.ActionInput,
@@ -135,7 +131,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 		"on_beacon":       d.OnBeacon,
 		"incarnation":     d.IncarnationName,
 		"action_scenario": d.ActionScenario,
-		"subject":         decreeSubjectView(d),
+		"subject":         d.Subject().String(),
 		"created_by_aid":  callerAID,
 	})
 
@@ -249,29 +245,4 @@ func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims
 
 	// REST returns 204 No Content; MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
-}
-
-// decreeSubjectView — human-readable form of a Decree's subject for the
-// audit payload (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
-func decreeSubjectView(d *oracle.Decree) string {
-	return oracleSubjectLabel(d.SubjectCoven, d.SubjectSID)
-}
-
-// oracleSubjectLabel — shared subject formatter (coven-list XOR sid) for the
-// Vigil / Decree audit payload (parallels REST handlers.subjectLabel).
-func oracleSubjectLabel(coven []string, sid *string) string {
-	if len(coven) > 0 {
-		s := "coven="
-		for i, c := range coven {
-			if i > 0 {
-				s += ","
-			}
-			s += c
-		}
-		return s
-	}
-	if sid != nil && *sid != "" {
-		return "sid=" + *sid
-	}
-	return ""
 }

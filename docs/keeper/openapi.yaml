@@ -803,11 +803,6 @@ components:
         cooldown:
           description: minimum interval between triggers per-(decree, subject)
           type: string
-        coven:
-          description: subject Coven tags (XOR with sid)
-          items:
-            type: string
-          type: array
         enabled:
           description: whether the rule is active (default true)
           type: boolean
@@ -823,15 +818,16 @@ components:
           description: Vigil name whose Portent the rule reacts to
           pattern: ^[a-z0-9-]{1,63}$
           type: string
-        sid:
-          description: subject — single specific SID (XOR with coven)
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: which hosts may fire the rule — exactly one of sid / incarnation / coven / trait
         where:
           description: opt. CEL predicate over event.data; compile-checked
           type: string
       required:
         - name
         - on_beacon
+        - subject
         - incarnation_name
         - action_scenario
       type: object
@@ -867,10 +863,6 @@ components:
           type: string
         cooldown:
           type: string
-        coven:
-          items:
-            type: string
-          type: array
         created_at:
           format: date-time
           type: string
@@ -887,8 +879,8 @@ components:
         on_beacon:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
-        sid:
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
         updated_at:
           format: date-time
           type: string
@@ -903,6 +895,7 @@ components:
         - incarnation_name
         - name
         - on_beacon
+        - subject
         - updated_at
       type: object
     DeprecationEntry:
@@ -3095,18 +3088,15 @@ components:
       properties:
         allow:
           description: allow-list; shape depends on Omen source_type (passed through as-is)
-        coven:
-          description: grant subject by Coven label (XOR with sid)
-          type: string
         delegate:
           description: false - broker (MVP-1); true - delegation (MVP-2)
           type: boolean
         omen:
           description: Omen the grant belongs to
           type: string
-        sid:
-          description: grant subject by specific SID (XOR with coven)
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: which hosts the grant covers — exactly one of sid / incarnation / coven / trait
         token_num_uses:
           description: token use-count limit; vault-delegate only
           format: int64
@@ -3116,6 +3106,7 @@ components:
           type: string
       required:
         - omen
+        - subject
         - allow
       type: object
     RiteListReply:
@@ -3134,8 +3125,6 @@ components:
       additionalProperties: false
       properties:
         allow: {}
-        coven:
-          type: string
         created_at:
           format: date-time
           type: string
@@ -3149,8 +3138,8 @@ components:
         omen:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
-        sid:
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
         token_num_uses:
           format: int64
           type: integer
@@ -3162,6 +3151,7 @@ components:
         - delegate
         - id
         - omen
+        - subject
       type: object
     RoleCreateRequest:
       additionalProperties: false
@@ -4762,6 +4752,59 @@ components:
         - path
         - to
       type: object
+    Subject:
+      additionalProperties: false
+      properties:
+        coven:
+          description: Coven labels — reaches a host carrying one of them, and every member of an incarnation carrying one
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        incarnation:
+          $ref: "#/components/schemas/SubjectIncarnation"
+          description: service+name pair — reaches every host that is a member of that incarnation
+        sid:
+          description: exact SIDs — reaches those hosts and nothing else
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        trait:
+          $ref: "#/components/schemas/SubjectTrait"
+          description: trait key/value — the same two-level reach as coven, on the traits map
+      type: object
+    SubjectIncarnation:
+      additionalProperties: false
+      properties:
+        name:
+          description: incarnation name (unique within the service)
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
+        service:
+          description: service the incarnation belongs to
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
+      required:
+        - name
+        - service
+      type: object
+    SubjectTrait:
+      additionalProperties: false
+      properties:
+        key:
+          description: trait key
+          pattern: ^[a-z][a-z0-9_.-]*$
+          type: string
+        value:
+          description: trait value; a scalar trait matches by text, a list trait by membership
+          type: string
+      required:
+        - key
+        - value
+      type: object
     SynodCreateRequest:
       additionalProperties: false
       properties:
@@ -5186,11 +5229,6 @@ components:
         check:
           description: core-beacon address (e.g. 'core.beacon.file_changed')
           type: string
-        coven:
-          description: subject Coven tags (XOR with sid)
-          items:
-            type: string
-          type: array
         enabled:
           description: whether the check is active (default true)
           type: boolean
@@ -5203,11 +5241,12 @@ components:
           type: string
         params:
           description: check parameters; shape depends on check (passed through as-is)
-        sid:
-          description: subject — single specific SID (XOR with coven)
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
+          description: which hosts run the check — exactly one of sid / incarnation / coven / trait
       required:
         - name
+        - subject
         - interval
         - check
       type: object
@@ -5240,10 +5279,6 @@ components:
       properties:
         check:
           type: string
-        coven:
-          items:
-            type: string
-          type: array
         created_at:
           format: date-time
           type: string
@@ -5257,8 +5292,8 @@ components:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
         params: {}
-        sid:
-          type: string
+        subject:
+          $ref: "#/components/schemas/Subject"
         updated_at:
           format: date-time
           type: string
@@ -5269,6 +5304,7 @@ components:
         - interval
         - name
         - params
+        - subject
         - updated_at
       type: object
     Voice:

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // --- fakes for Resolve reader interfaces ------------------------------
@@ -28,35 +30,38 @@ func (f fakeOmens) OmenByName(_ context.Context, name string) (*Omen, error) {
 type fakeRites struct {
 	rites []*Rite
 	err   error
-	// gotCovens captures covens passed to RitesBySubject (verification that
-	// covens came from registry, not from payload).
-	gotCovens []string
-	gotSID    string
+	// gotHost captures the subject handed to RitesBySubject — the check that the
+	// grant lookup runs against the AUTHORITATIVE host facts (registry), not
+	// against anything the caller sent.
+	gotHost subject.Host
 }
 
-func (f *fakeRites) RitesBySubject(_ context.Context, sid string, covens []string) ([]*Rite, error) {
-	f.gotSID = sid
-	f.gotCovens = covens
+func (f *fakeRites) RitesBySubject(_ context.Context, host subject.Host) ([]*Rite, error) {
+	f.gotHost = host
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.rites, nil
 }
 
-type fakeCovens struct {
-	bySID map[string][]string
-	err   error
+// fakeHosts stands in for the souls registry. Covens are the common case, so
+// they keep the terse literal; memberBySID is only set by the tests that care
+// about incarnation membership (NIM-280's fourth dimension).
+type fakeHosts struct {
+	bySID       map[string][]string
+	memberBySID map[string][]subject.Incarnation
+	err         error
 }
 
-func (f fakeCovens) CovensBySID(_ context.Context, sid string) ([]string, error) {
+func (f fakeHosts) HostBySID(_ context.Context, sid string) (subject.Host, error) {
 	if f.err != nil {
-		return nil, f.err
+		return subject.Host{}, f.err
 	}
 	covens, ok := f.bySID[sid]
 	if !ok {
-		return nil, ErrSubjectUnknown
+		return subject.Host{}, ErrSubjectUnknown
 	}
-	return covens, nil
+	return subject.Host{SID: sid, Covens: covens, Member: f.memberBySID[sid]}, nil
 }
 
 func vaultOmen(name string) *Omen {
@@ -87,11 +92,11 @@ func allowIndices(indices ...string) json.RawMessage {
 }
 
 func covenRite(omen, coven string, paths ...string) *Rite {
-	return &Rite{ID: 1, Omen: omen, Coven: ptr(coven), Allow: allowPaths(paths...)}
+	return &Rite{ID: 1, Omen: omen, Coven: []string{coven}, Allow: allowPaths(paths...)}
 }
 
 func sidRite(omen, sid string, paths ...string) *Rite {
-	return &Rite{ID: 2, Omen: omen, SID: ptr(sid), Allow: allowPaths(paths...)}
+	return &Rite{ID: 2, Omen: omen, SID: []string{sid}, Allow: allowPaths(paths...)}
 }
 
 // --- tests ------------------------------------------------------------
@@ -100,7 +105,7 @@ func TestResolve_OmenNotFound_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{}},
 		&fakeRites{},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "no-such", "secret/keeper/x",
 	)
 	if err != nil {
@@ -115,7 +120,7 @@ func TestResolve_NoRite_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		&fakeRites{rites: nil}, // no rites at all
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/x",
 	)
 	if err != nil {
@@ -131,7 +136,7 @@ func TestResolve_AllowExactMatch_Pass(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -153,7 +158,7 @@ func TestResolve_QueryNotInAllow_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/other",
 	)
 	if err != nil {
@@ -174,7 +179,7 @@ func TestResolve_DoubleSlashNormalized_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret//keeper/other",
 	)
 	if err != nil {
@@ -194,7 +199,7 @@ func TestResolve_DoubleSlashMatchesAfterNormalize(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret//keeper/db",
 	)
 	if err != nil {
@@ -215,7 +220,7 @@ func TestResolve_DotDotSegment_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/../other/db",
 	)
 	if err != nil {
@@ -226,16 +231,23 @@ func TestResolve_DotDotSegment_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_CovensFromRegistryNotPayload verifies that covens used to search for Rites
-// come from CovenReader (registry), not from the request. We check that
-// RitesBySubject received exactly the registry-covens.
-func TestResolve_CovensFromRegistryNotPayload(t *testing.T) {
+// TestResolve_SubjectFromRegistryNotPayload verifies that the subject facts the
+// grant lookup runs against come from [HostReader] (the registry), not from the
+// request. Since NIM-280 that is the WHOLE host — covens and incarnation
+// membership alike — because a Rite may be written on any of four dimensions:
+// handing the reader a partial host would silently deny grants written on the
+// dimension that was dropped.
+func TestResolve_SubjectFromRegistryNotPayload(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-prod", "prod", "secret/keeper/db")}}
 	registryCovens := []string{"prod", "eu-west"}
+	registryMember := []subject.Incarnation{{Service: "redis", Name: "redis-prod"}}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": registryCovens}},
+		fakeHosts{
+			bySID:       map[string][]string{"host.example.com": registryCovens},
+			memberBySID: map[string][]subject.Incarnation{"host.example.com": registryMember},
+		},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -244,11 +256,15 @@ func TestResolve_CovensFromRegistryNotPayload(t *testing.T) {
 	if !dec.Allowed {
 		t.Fatalf("expected allowed, got denied: %s", dec.Reason)
 	}
-	if rites.gotSID != "host.example.com" {
-		t.Errorf("RitesBySubject sid = %q, want host.example.com", rites.gotSID)
+	got := rites.gotHost
+	if got.SID != "host.example.com" {
+		t.Errorf("RitesBySubject sid = %q, want host.example.com", got.SID)
 	}
-	if len(rites.gotCovens) != 2 || rites.gotCovens[0] != "prod" || rites.gotCovens[1] != "eu-west" {
-		t.Errorf("RitesBySubject covens = %v, want registry %v", rites.gotCovens, registryCovens)
+	if len(got.Covens) != 2 || got.Covens[0] != "prod" || got.Covens[1] != "eu-west" {
+		t.Errorf("RitesBySubject covens = %v, want registry %v", got.Covens, registryCovens)
+	}
+	if len(got.Member) != 1 || got.Member[0].Service != "redis" || got.Member[0].Name != "redis-prod" {
+		t.Errorf("RitesBySubject membership = %v, want registry %v", got.Member, registryMember)
 	}
 }
 
@@ -256,7 +272,7 @@ func TestResolve_SubjectUnknown_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		&fakeRites{},
-		fakeCovens{bySID: map[string][]string{}}, // SID not in registry
+		fakeHosts{bySID: map[string][]string{}}, // SID not in registry
 		"unknown.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -270,11 +286,11 @@ func TestResolve_SubjectUnknown_Denied(t *testing.T) {
 // TestResolve_Prometheus_AllowExactMatch_Pass verifies that promQL ∈ allow.queries (exact)
 // → allowed; Query carries raw promQL (without vault normalization).
 func TestResolve_Prometheus_AllowExactMatch_Pass(t *testing.T) {
-	r := &Rite{ID: 10, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up", "rate(http_requests_total[5m])")}
+	r := &Rite{ID: 10, Omen: "prom-main", Coven: []string{"prod"}, Allow: allowQueries("up", "rate(http_requests_total[5m])")}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"prom-main": promOmen("prom-main")}},
 		&fakeRites{rites: []*Rite{r}},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "prom-main", "up",
 	)
 	if err != nil {
@@ -293,11 +309,11 @@ func TestResolve_Prometheus_AllowExactMatch_Pass(t *testing.T) {
 
 // TestResolve_Prometheus_NotInAllow_Denied verifies that promQL outside allow.queries → denied.
 func TestResolve_Prometheus_NotInAllow_Denied(t *testing.T) {
-	r := &Rite{ID: 11, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up")}
+	r := &Rite{ID: 11, Omen: "prom-main", Coven: []string{"prod"}, Allow: allowQueries("up")}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"prom-main": promOmen("prom-main")}},
 		&fakeRites{rites: []*Rite{r}},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "prom-main", "node_load1",
 	)
 	if err != nil {
@@ -310,11 +326,11 @@ func TestResolve_Prometheus_NotInAllow_Denied(t *testing.T) {
 
 // TestResolve_ELK_AllowExactMatch_Pass verifies that index ∈ allow.indices (exact) → allowed.
 func TestResolve_ELK_AllowExactMatch_Pass(t *testing.T) {
-	r := &Rite{ID: 20, Omen: "elk-logs", Coven: ptr("prod"), Allow: allowIndices("logs-app", "logs-audit")}
+	r := &Rite{ID: 20, Omen: "elk-logs", Coven: []string{"prod"}, Allow: allowIndices("logs-app", "logs-audit")}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"elk-logs": elkOmen("elk-logs")}},
 		&fakeRites{rites: []*Rite{r}},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "elk-logs", "logs-app",
 	)
 	if err != nil {
@@ -330,11 +346,11 @@ func TestResolve_ELK_AllowExactMatch_Pass(t *testing.T) {
 
 // TestResolve_ELK_NotInAllow_Denied verifies that index outside allow.indices → denied.
 func TestResolve_ELK_NotInAllow_Denied(t *testing.T) {
-	r := &Rite{ID: 21, Omen: "elk-logs", Coven: ptr("prod"), Allow: allowIndices("logs-app")}
+	r := &Rite{ID: 21, Omen: "elk-logs", Coven: []string{"prod"}, Allow: allowIndices("logs-app")}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"elk-logs": elkOmen("elk-logs")}},
 		&fakeRites{rites: []*Rite{r}},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "elk-logs", "secret-index",
 	)
 	if err != nil {
@@ -347,11 +363,11 @@ func TestResolve_ELK_NotInAllow_Denied(t *testing.T) {
 
 // TestResolve_Prometheus_EmptyQuery_Denied verifies that empty promQL is rejected.
 func TestResolve_Prometheus_EmptyQuery_Denied(t *testing.T) {
-	r := &Rite{ID: 12, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up")}
+	r := &Rite{ID: 12, Omen: "prom-main", Coven: []string{"prod"}, Allow: allowQueries("up")}
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"prom-main": promOmen("prom-main")}},
 		&fakeRites{rites: []*Rite{r}},
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "prom-main", "",
 	)
 	if err != nil {
@@ -369,7 +385,7 @@ func TestResolve_DelegateTrue_Skipped_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -385,7 +401,7 @@ func TestResolve_SIDRiteMatch_Pass(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": nil}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": nil}},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -404,7 +420,7 @@ func TestResolve_RiteForOtherOmen_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		rites,
-		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
+		fakeHosts{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -420,7 +436,7 @@ func TestResolve_ReaderError_Propagated(t *testing.T) {
 	_, err := Resolve(context.Background(),
 		fakeOmens{err: boom},
 		&fakeRites{},
-		fakeCovens{bySID: map[string][]string{}},
+		fakeHosts{bySID: map[string][]string{}},
 		"host.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if !errors.Is(err, boom) {

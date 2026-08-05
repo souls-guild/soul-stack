@@ -21,8 +21,7 @@ const oracleNotConfigured = "oracle registry is not configured"
 // 1:1 with REST vigilResponse / [oracle.Vigil].
 type vigilView struct {
 	Name         string          `json:"name"`
-	Coven        []string        `json:"coven,omitempty"`
-	SID          *string         `json:"sid,omitempty"`
+	Subject      subjectPayload  `json:"subject"`
 	Interval     string          `json:"interval"`
 	Check        string          `json:"check"`
 	Params       json.RawMessage `json:"params"`
@@ -39,8 +38,7 @@ func toVigilView(v *oracle.Vigil) vigilView {
 	}
 	return vigilView{
 		Name:         v.Name,
-		Coven:        v.Coven,
-		SID:          v.SID,
+		Subject:      toSubjectPayload(v.Subject()),
 		Interval:     v.IntervalSpec,
 		Check:        v.CheckAddr,
 		Params:       params,
@@ -52,11 +50,11 @@ func toVigilView(v *oracle.Vigil) vigilView {
 }
 
 // vigilCreateArgs — arguments for the keeper.oracle.vigil.create tool.
-// subject is XOR coven/sid; enabled is optional (omitted → true).
+// subject carries exactly one of the four dimensions ([subjectPayload]);
+// enabled is optional (omitted → true).
 type vigilCreateArgs struct {
 	Name     string          `json:"name"`
-	Coven    []string        `json:"coven"`
-	SID      *string         `json:"sid"`
+	Subject  subjectPayload  `json:"subject"`
 	Interval string          `json:"interval"`
 	Check    string          `json:"check"`
 	Params   json.RawMessage `json:"params"`
@@ -102,8 +100,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 	callerAID := claims.Subject
 	v, err := h.deps.OracleSvc.CreateVigil(ctx, oracle.CreateVigilInput{
 		Name:      a.Name,
-		Coven:     a.Coven,
-		SID:       a.SID,
+		Subject:   a.Subject.selector(),
 		Interval:  a.Interval,
 		Check:     a.Check,
 		Params:    a.Params,
@@ -125,7 +122,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 		"name":           v.Name,
 		"check":          v.CheckAddr,
 		"interval":       v.IntervalSpec,
-		"subject":        vigilSubjectView(v),
+		"subject":        v.Subject().String(),
 		"created_by_aid": callerAID,
 	})
 
@@ -238,7 +235,3 @@ func (h *Handler) callOracleVigilDelete(ctx context.Context, claims *jwt.Claims,
 	// REST returns 204 No Content; the MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }
-
-// vigilSubjectView — human-readable form of a Vigil's subject for the audit
-// payload (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
-func vigilSubjectView(v *oracle.Vigil) string { return oracleSubjectLabel(v.Coven, v.SID) }

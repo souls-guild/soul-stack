@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // The Augur registry's management Service (operator-facing CRUD for
@@ -132,14 +134,13 @@ func (s *Service) DeleteOmen(ctx context.Context, name string) error {
 
 // --- Rite -------------------------------------------------------------
 
-// CreateRiteInput — CreateRite's parameters. Subject is XOR Coven/SID.
-// allow is raw JSONB (its shape is checked against the Omen's source_type).
-// TokenTTL / TokenNumUses only make sense for a vault-Omen with
-// Delegate=true.
+// CreateRiteInput — CreateRite's parameters. Subject carries exactly one of the
+// four dimensions ([subject.Selector]). allow is raw JSONB (its shape is checked
+// against the Omen's source_type). TokenTTL / TokenNumUses only make sense for a
+// vault-Omen with Delegate=true.
 type CreateRiteInput struct {
 	Omen         string
-	Coven        *string
-	SID          *string
+	Subject      subject.Selector
 	Allow        json.RawMessage
 	Delegate     bool
 	TokenTTL     *string
@@ -147,10 +148,15 @@ type CreateRiteInput struct {
 	CallerAID    *string
 }
 
-// CreateRite validates the subject (XOR) BEFORE the round trip, then
-// inserts. The allow shape by source_type and the token fields are further
-// validated by [InsertRite] (it needs to resolve the Omen on the same db)
-// — its errors are also wrapped into [ErrValidation].
+// CreateRite validates the subject BEFORE the round trip, then inserts. The
+// allow shape by source_type and the token fields are further validated by
+// [InsertRite] (it needs to resolve the Omen on the same db) — its errors are
+// also wrapped into [ErrValidation].
+//
+// An `incarnation=` subject must name an incarnation that EXISTS. On a grant
+// that matters more than elsewhere: a mistyped pair produces a Rite that grants
+// nothing, and an operator who believes access is in place has no way to tell
+// the difference from a Rite that simply has not fired yet.
 //
 // Returns:
 //   - [ErrValidation] (wrapped) — bad subject / allow / token fields (422);
@@ -159,19 +165,28 @@ type CreateRiteInput struct {
 func (s *Service) CreateRite(ctx context.Context, in CreateRiteInput) (*Rite, error) {
 	r := &Rite{
 		Omen:         in.Omen,
-		Coven:        in.Coven,
-		SID:          in.SID,
 		Allow:        in.Allow,
 		Delegate:     in.Delegate,
 		TokenTTL:     in.TokenTTL,
 		TokenNumUses: in.TokenNumUses,
 		CreatedByAID: in.CallerAID,
 	}
+	r.SetSubject(in.Subject)
 	if r.Omen == "" {
 		return nil, fmt.Errorf("%w: omen is empty", ErrValidation)
 	}
-	if err := ValidateSubjectXOR(r); err != nil {
+	if err := ValidateSubject(r); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, err.Error())
+	}
+	if in.Subject.Dimension() == subject.DimIncarnation {
+		ok, err := subject.ExistsIncarnation(ctx, s.pool, in.Subject.Service, in.Subject.Incarnation)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("%w: subject incarnation %s.%s does not exist",
+				ErrValidation, in.Subject.Service, in.Subject.Incarnation)
+		}
 	}
 	if len(r.Allow) == 0 {
 		return nil, fmt.Errorf("%w: allow is empty", ErrValidation)

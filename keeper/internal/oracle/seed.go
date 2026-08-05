@@ -21,22 +21,23 @@ var (
 //
 // Return:
 //   - [ErrVigilAlreadyExists] on a UNIQUE violation on the PK (name);
-//   - a wrapped fmt.Errorf on a CHECK violation (subject_xor / name_format) and
-//     an FK violation (created_by_aid).
+//   - a wrapped fmt.Errorf on a CHECK violation (subject_one_of / name_format)
+//     and an FK violation (created_by_aid).
 func InsertVigil(ctx context.Context, db ExecQueryRower, v *Vigil) error {
 	if v == nil {
 		return fmt.Errorf("oracle: nil vigil")
 	}
 	const sql = `
-INSERT INTO vigils (name, coven, sid, interval_spec, check_addr, params, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, COALESCE($6, '{}'::jsonb), $7, $8)
+INSERT INTO vigils (name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_by_aid)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, '{}'::jsonb), $11, $12)
 RETURNING created_at, updated_at`
 	var paramsArg any
 	if len(v.Params) > 0 {
 		paramsArg = []byte(v.Params)
 	}
 	row := db.QueryRow(ctx, sql,
-		v.Name, v.Coven, v.SID, v.IntervalSpec, v.CheckAddr,
+		v.Name, v.SID, v.Service, v.Incarnation, v.Coven, v.TraitKey, v.TraitValue,
+		v.IntervalSpec, v.CheckAddr,
 		paramsArg, v.Enabled, v.CreatedByAID,
 	)
 	if err := row.Scan(&v.CreatedAt, &v.UpdatedAt); err != nil {
@@ -54,7 +55,7 @@ RETURNING created_at, updated_at`
 //
 // Return:
 //   - [ErrDecreeAlreadyExists] on a UNIQUE violation on the PK (name);
-//   - a wrapped fmt.Errorf on a CHECK violation (subject_xor / name_format /
+//   - a wrapped fmt.Errorf on a CHECK violation (subject_one_of / name_format /
 //     scenario_format) and an FK violation (created_by_aid).
 func InsertDecree(ctx context.Context, db ExecQueryRower, d *Decree) error {
 	if d == nil {
@@ -65,15 +66,17 @@ func InsertDecree(ctx context.Context, db ExecQueryRower, d *Decree) error {
 		cooldown = "0s"
 	}
 	const sql = `
-INSERT INTO decrees (name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, '{}'::jsonb), $9, $10, $11)
+INSERT INTO decrees (name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, '{}'::jsonb), $13, $14, $15)
 RETURNING cooldown, created_at, updated_at`
 	var inputArg any
 	if len(d.ActionInput) > 0 {
 		inputArg = []byte(d.ActionInput)
 	}
 	row := db.QueryRow(ctx, sql,
-		d.Name, d.OnBeacon, d.WhereCEL, d.SubjectCoven, d.SubjectSID,
+		d.Name, d.OnBeacon, d.WhereCEL,
+		d.SubjectSID, d.SubjectService, d.SubjectIncarnation, d.SubjectCoven,
+		d.SubjectTraitKey, d.SubjectTraitValue,
 		d.IncarnationName, d.ActionScenario, inputArg, cooldown, d.Enabled, d.CreatedByAID,
 	)
 	if err := row.Scan(&d.Cooldown, &d.CreatedAt, &d.UpdatedAt); err != nil {

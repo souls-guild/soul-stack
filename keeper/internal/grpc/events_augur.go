@@ -14,6 +14,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -23,7 +24,7 @@ import (
 // Vault KV read + sending the AugurReply back on the same stream.
 //
 // All fields are required:
-//   - DB — omens/rites + souls registry (resolves Omen / Rite / covens by SID);
+//   - DB — omens/rites + souls registry (resolves Omen / Rite / subject by SID);
 //   - Vault — Keeper-side ReadKV (vault broker + reads prom/elk credentials via
 //     Omen.AuthRef);
 //   - Egress — SSRF-guarded HTTP client for prom/elk brokers (outbound HTTP to
@@ -48,8 +49,9 @@ type AugurDeps struct {
 }
 
 // augurDB — the combined PG surface the resolve needs: omens/rites CRUD readers
-// (augur.ExecQueryRower) + a souls reader (soul.ExecQueryRower) for resolving covens
-// by SID from the authoritative registry. *pgxpool.Pool satisfies both.
+// (augur.ExecQueryRower) + a souls reader (soul.ExecQueryRower) for resolving the
+// subject facts by SID from the authoritative registries. *pgxpool.Pool satisfies
+// both.
 type augurDB interface {
 	augur.ExecQueryRower
 	soul.ExecQueryRower
@@ -74,10 +76,10 @@ func (d *AugurDeps) validate() error {
 	return nil
 }
 
-// augurOmenReader / augurRiteReader / augurCovenReader — registry adapters for
+// augurOmenReader / augurRiteReader / augurHostReader — registry adapters for
 // the narrow reader interfaces of [augur.Resolve]. They isolate enforcement from
-// a concrete pool and keep covens resolution on the authoritative registry
-// labels (NOT from the payload).
+// a concrete pool and keep subject resolution on the authoritative registries
+// (NOT on the payload).
 type augurOmenReader struct{ db augur.ExecQueryRower }
 
 func (r augurOmenReader) OmenByName(ctx context.Context, name string) (*augur.Omen, error) {
@@ -86,32 +88,25 @@ func (r augurOmenReader) OmenByName(ctx context.Context, name string) (*augur.Om
 
 type augurRiteReader struct{ db augur.ExecQueryRower }
 
-func (r augurRiteReader) RitesBySubject(ctx context.Context, sid string, covens []string) ([]*augur.Rite, error) {
-	return augur.SelectRitesBySubject(ctx, r.db, sid, covens)
+func (r augurRiteReader) RitesBySubject(ctx context.Context, host subject.Host) ([]*augur.Rite, error) {
+	return augur.SelectRitesBySubject(ctx, r.db, host)
 }
 
-type augurCovenReader struct{ db soul.ExecQueryRower }
+type augurHostReader struct{ db subject.Querier }
 
-// CovensBySID resolves the covens a Rite's subject is matched against: the
-// host's own `souls.coven[]` and nothing else.
+// HostBySID resolves the facts a Rite's subject is matched against: the host's
+// own covens and traits plus the incarnations it belongs to, with their labels.
 //
-// A coven tag exists only where an operator attached it (NIM-281). Belonging to
-// an incarnation is not a label and grants no Rite: a Rite whose subject is
-// `coven: <incarnation-name>` authorizes the hosts an operator tagged that way,
-// not the members of the incarnation that happens to share the name. Membership
-// is `incarnation_membership` and is reached through the membership relation,
-// never through the coven axis.
+// A label exists only where an operator attached it (NIM-281). An incarnation's
+// label reaches its members (NIM-280) because an operator put it on the
+// incarnation — but membership itself is read from `incarnation_membership`, never
+// inferred from a matching label: a Rite whose subject is `coven:
+// <incarnation-name>` still authorizes the hosts an operator tagged that way, not
+// the members of the incarnation that happens to share the name.
 //
 // An unregistered host is [augur.ErrSubjectUnknown] → denied.
-func (r augurCovenReader) CovensBySID(ctx context.Context, sid string) ([]string, error) {
-	s, err := soul.SelectBySID(ctx, r.db, sid)
-	if err != nil {
-		if errors.Is(err, soul.ErrSoulNotFound) {
-			return nil, augur.ErrSubjectUnknown
-		}
-		return nil, err
-	}
-	return s.Coven, nil
+func (r augurHostReader) HostBySID(ctx context.Context, sid string) (subject.Host, error) {
+	return subject.LoadHost(ctx, r.db, sid)
 }
 
 // handleAugurRequest — handler for the [keeperv1.AugurRequest] payload (ADR-025).
@@ -132,8 +127,8 @@ func (r augurCovenReader) CovensBySID(ctx context.Context, sid string) ([]string
 // on every outcome.
 //
 // Flow (broker, delegate=false):
-//  1. augur.Resolve (enforcement) — covens from the registry, a Rite on the
-//     Omen, query ∈ allow via EXACT match on the source_type's shape.
+//  1. augur.Resolve (enforcement) — the subject from the registries, a Rite on
+//     the Omen, query ∈ allow via EXACT match on the source_type's shape.
 //  2. denied → AugurReply{DENIED} + audit `augur.access_denied`.
 //  3. allowed → broker dispatch by source_type (vault ReadKV / prom HTTP / elk HTTP) →
 //     inline_data Struct.
@@ -227,7 +222,7 @@ func (h *eventStreamHandler) processAugurRequest(ctx context.Context, sid, sessi
 	decision, err := augur.Resolve(ctx,
 		augurOmenReader{db: deps.DB},
 		augurRiteReader{db: deps.DB},
-		augurCovenReader{db: deps.DB},
+		augurHostReader{db: deps.DB},
 		sid, omenName, query,
 	)
 	if err != nil {

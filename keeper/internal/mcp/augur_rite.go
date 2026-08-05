@@ -16,8 +16,7 @@ import (
 type riteView struct {
 	ID           int64           `json:"id"`
 	Omen         string          `json:"omen"`
-	Coven        *string         `json:"coven,omitempty"`
-	SID          *string         `json:"sid,omitempty"`
+	Subject      subjectPayload  `json:"subject"`
 	Allow        json.RawMessage `json:"allow"`
 	Delegate     bool            `json:"delegate"`
 	TokenTTL     *string         `json:"token_ttl,omitempty"`
@@ -30,8 +29,7 @@ func toRiteView(r *augur.Rite) riteView {
 	return riteView{
 		ID:           r.ID,
 		Omen:         r.Omen,
-		Coven:        r.Coven,
-		SID:          r.SID,
+		Subject:      toSubjectPayload(r.Subject()),
 		Allow:        r.Allow,
 		Delegate:     r.Delegate,
 		TokenTTL:     r.TokenTTL,
@@ -41,12 +39,12 @@ func toRiteView(r *augur.Rite) riteView {
 	}
 }
 
-// riteCreateArgs — arguments for keeper.augur.rite.create. subject is XOR
-// coven/sid; allow is raw JSONB (shape depends on the Omen's source_type).
+// riteCreateArgs — arguments for keeper.augur.rite.create. subject carries exactly
+// one of the four dimensions ([subjectPayload]); allow is raw JSONB (shape depends on
+// the Omen's source_type).
 type riteCreateArgs struct {
 	Omen         string          `json:"omen"`
-	Coven        *string         `json:"coven"`
-	SID          *string         `json:"sid"`
+	Subject      subjectPayload  `json:"subject"`
 	Allow        json.RawMessage `json:"allow"`
 	Delegate     bool            `json:"delegate"`
 	TokenTTL     *string         `json:"token_ttl"`
@@ -54,8 +52,8 @@ type riteCreateArgs struct {
 }
 
 // callAugurRiteCreate — mutating tool keeper.augur.rite.create. A transport
-// over [augur.Service.CreateRite]: all validation (XOR subject, allow shape
-// by source_type, token fields) lives in Service; the tool maps sentinels
+// over [augur.Service.CreateRite]: all validation (the exactly-one-of subject, allow
+// shape by source_type, token fields) lives in Service; the tool maps sentinels
 // to MCP codes and writes the rite.created audit event.
 //
 // RBAC — rite.create with no selector (rbac.md §Augur: NoSelector).
@@ -87,8 +85,7 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 	callerAID := claims.Subject
 	rite, err := h.deps.AugurSvc.CreateRite(ctx, augur.CreateRiteInput{
 		Omen:         a.Omen,
-		Coven:        a.Coven,
-		SID:          a.SID,
+		Subject:      a.Subject.selector(),
 		Allow:        a.Allow,
 		Delegate:     a.Delegate,
 		TokenTTL:     a.TokenTTL,
@@ -109,7 +106,7 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 	h.writeAudit(audit.EventRiteCreated, callerAID, map[string]any{
 		"id":             rite.ID,
 		"omen":           rite.Omen,
-		"subject":        riteSubjectView(rite),
+		"subject":        rite.Subject().String(),
 		"delegate":       rite.Delegate,
 		"created_by_aid": callerAID,
 	})
@@ -217,16 +214,4 @@ func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, r
 	})
 
 	return h.toolResult(req.ID, struct{}{})
-}
-
-// riteSubjectView — human-readable form of a Rite's subject for the audit
-// payload (`coven=<v>` / `sid=<v>`). XOR is guaranteed by validation.
-func riteSubjectView(r *augur.Rite) string {
-	if r.Coven != nil && *r.Coven != "" {
-		return "coven=" + *r.Coven
-	}
-	if r.SID != nil && *r.SID != "" {
-		return "sid=" + *r.SID
-	}
-	return ""
 }

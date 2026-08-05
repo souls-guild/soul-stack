@@ -19,6 +19,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
 
@@ -188,7 +189,7 @@ func TestIntegration_Rite_RoundTrip_VaultDelegate(t *testing.T) {
 	aid := "archon-alice"
 	r := &Rite{
 		Omen:         "vault-prod",
-		Coven:        ptr("web"),
+		Coven:        []string{"web"},
 		Allow:        json.RawMessage(`{"paths":["secret/app/db"],"policies":["read-db"]}`),
 		Delegate:     true,
 		TokenTTL:     ptr("5m"),
@@ -224,7 +225,7 @@ func TestIntegration_Rite_OmenCascadeDelete(t *testing.T) {
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	r := &Rite{Omen: "vault-prod", Coven: ptr("web"), Allow: json.RawMessage(`{"paths":["x"]}`)}
+	r := &Rite{Omen: "vault-prod", Coven: []string{"web"}, Allow: json.RawMessage(`{"paths":["x"]}`)}
 	if err := InsertRite(ctx, integrationPool, r); err != nil {
 		t.Fatalf("InsertRite: %v", err)
 	}
@@ -241,24 +242,59 @@ func TestIntegration_Rite_OmenCascadeDelete(t *testing.T) {
 	}
 }
 
-func TestIntegration_Rite_SubjectXORCHECK(t *testing.T) {
+// TestIntegration_Rite_SubjectOneOfCHECK — direct INSERTs, bypassing Go
+// validation, against `rites_subject_one_of` (NIM-280, migration 113). A Rite is
+// the grant that lets a host read a secret, so "which hosts" must have exactly
+// one answer: two dimensions is an ambiguous grant, none at all is a grant to
+// the whole fleet.
+//
+// Every literal below is a real array (`ARRAY['web']`), not `'web'`. A bare
+// string against a text[] column is refused by the type system BEFORE any CHECK
+// runs, which would leave this test green while proving nothing about the
+// constraint it names.
+func TestIntegration_Rite_SubjectOneOfCHECK(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	// Direct INSERT bypassing Go validation: both subjects → CHECK rites_subject_xor.
-	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO rites (omen, coven, sid, allow) VALUES ('vault-prod', 'web', 'host', '{"paths":["x"]}')`)
-	if err == nil {
-		t.Fatal("expected XOR CHECK violation for both coven and sid")
+
+	cases := []struct {
+		name    string
+		columns string
+		values  string
+	}{
+		{"coven+sid", "coven, sid", "ARRAY['web'], ARRAY['host']"},
+		{"coven+incarnation", "coven, service, incarnation", "ARRAY['web'], 'redis', 'redis-prod'"},
+		{"sid+trait", "sid, trait_key, trait_value", "ARRAY['host'], 'tier', 'gold'"},
+		{"service-without-incarnation", "service", "'redis'"},
+		{"trait-key-without-value", "trait_key", "'tier'"},
+		{"none", "", ""},
+		// An empty array is not a dimension — `array_length(…, 1)` is NULL, so the
+		// CHECK counts it as absent rather than as a grant with no restriction.
+		{"empty-coven-array", "coven", "ARRAY[]::TEXT[]"},
 	}
-	// No subject → CHECK also rejects.
-	_, err = integrationPool.Exec(ctx,
-		`INSERT INTO rites (omen, allow) VALUES ('vault-prod', '{"paths":["x"]}')`)
-	if err == nil {
-		t.Fatal("expected XOR CHECK violation for no subject")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cols, vals := "omen, allow", `'vault-prod', '{"paths":["x"]}'`
+			if c.columns != "" {
+				cols, vals = cols+", "+c.columns, vals+", "+c.values
+			}
+			_, err := integrationPool.Exec(ctx, `INSERT INTO rites (`+cols+`) VALUES (`+vals+`)`)
+			if err == nil {
+				t.Fatal("expected a CHECK violation: the subject must be exactly one dimension")
+			}
+		})
+	}
+
+	// The control: one dimension, spelled correctly, is accepted. Without it every
+	// assertion above would also pass against a column list that simply does not
+	// exist.
+	if _, err := integrationPool.Exec(ctx,
+		`INSERT INTO rites (omen, service, incarnation, allow)
+		 VALUES ('vault-prod', 'redis', 'redis-prod', '{"paths":["x"]}')`); err != nil {
+		t.Fatalf("a single-dimension subject must be accepted: %v", err)
 	}
 }
 
@@ -272,7 +308,7 @@ func TestIntegration_Rite_TokenFieldsCHECK(t *testing.T) {
 	// Direct INSERT: token_ttl with delegate=false → CHECK rites_token_fields_vault_only.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO rites (omen, coven, allow, delegate, token_ttl)
-		 VALUES ('vault-prod', 'web', '{"paths":["x"]}', false, '5m')`)
+		 VALUES ('vault-prod', ARRAY['web'], '{"paths":["x"]}', false, '5m')`)
 	if err == nil {
 		t.Fatal("expected CHECK violation for token_ttl with delegate=false")
 	}
@@ -286,8 +322,8 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 		t.Fatalf("InsertOmen: %v", err)
 	}
 	// coven-Rite + sid-Rite on one Omen.
-	covenRite := &Rite{Omen: "vault-prod", Coven: ptr("web"), Allow: json.RawMessage(`{"paths":["c"]}`)}
-	sidRite := &Rite{Omen: "vault-prod", SID: ptr("host.example.com"), Allow: json.RawMessage(`{"paths":["s"]}`)}
+	covenRite := &Rite{Omen: "vault-prod", Coven: []string{"web"}, Allow: json.RawMessage(`{"paths":["c"]}`)}
+	sidRite := &Rite{Omen: "vault-prod", SID: []string{"host.example.com"}, Allow: json.RawMessage(`{"paths":["s"]}`)}
 	if err := InsertRite(ctx, integrationPool, covenRite); err != nil {
 		t.Fatalf("InsertRite coven: %v", err)
 	}
@@ -296,7 +332,8 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 	}
 
 	// Subject host.example.com with covens [web] → should match both Rites.
-	got, err := SelectRitesBySubject(ctx, integrationPool, "host.example.com", []string{"web"})
+	host := subject.Host{SID: "host.example.com", Covens: []string{"web"}}
+	got, err := SelectRitesBySubject(ctx, integrationPool, host)
 	if err != nil {
 		t.Fatalf("SelectRitesBySubject: %v", err)
 	}
@@ -305,12 +342,78 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 	}
 
 	// Subject with no matching coven or sid → empty.
-	none, err := SelectRitesBySubject(ctx, integrationPool, "other.host", []string{"db"})
+	other := subject.Host{SID: "other.host", Covens: []string{"db"}}
+	none, err := SelectRitesBySubject(ctx, integrationPool, other)
 	if err != nil {
 		t.Fatalf("SelectRitesBySubject none: %v", err)
 	}
 	if len(none) != 0 {
 		t.Errorf("len = %d, want 0", len(none))
+	}
+}
+
+// TestIntegration_Rite_BySubject_EveryDimension — one Rite per dimension on one
+// Omen, and one host that satisfies all four. The prefilter is a single
+// predicate over four OR-arms (subject.MatchSQL): an arm that binds the wrong
+// argument or names the wrong column drops its Rite silently, and the caller
+// sees a shorter grant list rather than an error.
+func TestIntegration_Rite_BySubject_EveryDimension(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
+		t.Fatalf("InsertOmen: %v", err)
+	}
+
+	svc, inc := "redis", "redis-prod"
+	key, value := "tier", "gold"
+	rites := map[string]*Rite{
+		"sid":         {Omen: "vault-prod", SID: []string{"host.example.com"}, Allow: json.RawMessage(`{"paths":["s"]}`)},
+		"incarnation": {Omen: "vault-prod", Service: &svc, Incarnation: &inc, Allow: json.RawMessage(`{"paths":["i"]}`)},
+		"coven":       {Omen: "vault-prod", Coven: []string{"web"}, Allow: json.RawMessage(`{"paths":["c"]}`)},
+		"trait":       {Omen: "vault-prod", TraitKey: &key, TraitValue: &value, Allow: json.RawMessage(`{"paths":["t"]}`)},
+	}
+	byID := map[int64]string{}
+	for dim, r := range rites {
+		if err := InsertRite(ctx, integrationPool, r); err != nil {
+			t.Fatalf("InsertRite(%s): %v", dim, err)
+		}
+		byID[r.ID] = dim
+	}
+
+	// A host that satisfies all four at once: its own SID and label, plus an
+	// incarnation whose roster it is on, carrying the trait.
+	host := subject.Host{
+		SID:    "host.example.com",
+		Covens: []string{"web"},
+		Member: []subject.Incarnation{{
+			Service: svc, Name: inc,
+			Traits: map[string]any{key: value},
+		}},
+	}
+	got, err := SelectRitesBySubject(ctx, integrationPool, host)
+	if err != nil {
+		t.Fatalf("SelectRitesBySubject: %v", err)
+	}
+	matched := map[string]bool{}
+	for _, r := range got {
+		matched[byID[r.ID]] = true
+	}
+	for dim := range rites {
+		if !matched[dim] {
+			t.Errorf("the %s dimension did not reach the host: matched %v", dim, matched)
+		}
+	}
+
+	// A host sharing nothing with any of the four matches none of them: the arms
+	// are selective, not a predicate that happens to be true.
+	stranger := subject.Host{SID: "stranger.example.com", Covens: []string{"db"}}
+	none, err := SelectRitesBySubject(ctx, integrationPool, stranger)
+	if err != nil {
+		t.Fatalf("SelectRitesBySubject(stranger): %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("an unrelated host matched %d rites, want 0 (default-deny)", len(none))
 	}
 }
 
@@ -321,7 +424,7 @@ func TestIntegration_DeleteRite(t *testing.T) {
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	r := &Rite{Omen: "vault-prod", Coven: ptr("web"), Allow: json.RawMessage(`{"paths":["x"]}`)}
+	r := &Rite{Omen: "vault-prod", Coven: []string{"web"}, Allow: json.RawMessage(`{"paths":["x"]}`)}
 	if err := InsertRite(ctx, integrationPool, r); err != nil {
 		t.Fatalf("InsertRite: %v", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 func TestValidName(t *testing.T) {
@@ -136,30 +138,56 @@ func TestValidateTokenFields(t *testing.T) {
 	}
 }
 
-func TestValidateSubjectXOR(t *testing.T) {
-	p := func(s string) *string { return &s }
-	// coven only — ok.
-	if err := ValidateSubjectXOR(&Rite{Coven: p("web")}); err != nil {
-		t.Errorf("coven-only: %v", err)
+// TestValidateSubject_ExactlyOneOf pins the exactly-one-of-four invariant on the
+// Rite half (CHECK rites_subject_one_of). A Rite is a GRANT, so an over-specified
+// subject must be rejected rather than resolved by precedence: silently honouring
+// one dimension and dropping the other would hand out access an operator did not
+// write.
+func TestValidateSubject_ExactlyOneOf(t *testing.T) {
+	cases := []struct {
+		name string
+		sel  subject.Selector
+		ok   bool
+	}{
+		{"coven only", subject.Selector{Covens: []string{"web"}}, true},
+		{"sid only", subject.Selector{SIDs: []string{"host.example.com"}}, true},
+		{"incarnation only", subject.Selector{Service: "redis", Incarnation: "redis-prod"}, true},
+		{"trait only", subject.Selector{TraitKey: "owner", TraitValue: "dba"}, true},
+		{"coven + sid -> reject", subject.Selector{Covens: []string{"web"}, SIDs: []string{"h"}}, false},
+		{"none -> reject", subject.Selector{}, false},
+		{"empty coven slice -> reject", subject.Selector{Covens: []string{}}, false},
+		{"bad coven format", subject.Selector{Covens: []string{"-bad"}}, false},
+		{"bad sid format", subject.Selector{SIDs: []string{"NOT A SID"}}, false},
+		{"incarnation without service -> reject", subject.Selector{Incarnation: "redis-prod"}, false},
+		{"trait key without value -> reject", subject.Selector{TraitKey: "owner"}, false},
+		{"trait value without key -> reject", subject.Selector{TraitValue: "dba"}, false},
 	}
-	// sid only — ok.
-	if err := ValidateSubjectXOR(&Rite{SID: p("host.example.com")}); err != nil {
-		t.Errorf("sid-only: %v", err)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := &Rite{}
+			r.SetSubject(c.sel)
+			if err := ValidateSubject(r); (err == nil) != c.ok {
+				t.Errorf("ValidateSubject(%s) err=%v, want ok=%v", c.sel, err, c.ok)
+			}
+		})
 	}
-	// both — fail.
-	if err := ValidateSubjectXOR(&Rite{Coven: p("web"), SID: p("h")}); err == nil {
-		t.Error("both subjects accepted")
+}
+
+// TestRiteSubjectRoundTrip — SetSubject writes every unset dimension back to NULL.
+// A stale column left behind by a rewrite would widen the grant through a dimension
+// nobody wrote, and the SQL predicate reads the columns, not the selector.
+func TestRiteSubjectRoundTrip(t *testing.T) {
+	r := &Rite{}
+	r.SetSubject(subject.Selector{Covens: []string{"web", "prod"}})
+	if got := r.Subject(); got.String() != "coven=web,prod" {
+		t.Errorf("subject = %s", got)
 	}
-	// none — fail.
-	if err := ValidateSubjectXOR(&Rite{}); err == nil {
-		t.Error("no subject accepted")
+
+	r.SetSubject(subject.Selector{Service: "redis", Incarnation: "redis-prod"})
+	if r.Coven != nil || r.SID != nil || r.TraitKey != nil || r.TraitValue != nil {
+		t.Errorf("rewriting the subject must clear every other dimension: %+v", r)
 	}
-	// empty-string coven counts as absent.
-	if err := ValidateSubjectXOR(&Rite{Coven: p("")}); err == nil {
-		t.Error("empty coven accepted as present")
-	}
-	// bad coven format — fail.
-	if err := ValidateSubjectXOR(&Rite{Coven: p("-bad")}); err == nil {
-		t.Error("bad coven format accepted")
+	if got := r.Subject(); got.String() != "incarnation=redis.redis-prod" {
+		t.Errorf("subject = %s", got)
 	}
 }

@@ -74,15 +74,54 @@ incarnation's name is its identity, answered by the `incarnation=` dimension, no
 relation the roster comes from. `coven=` asks a label question and answers it from labels; neither dimension stands in for the other.
 
 **Consequence, stated plainly:** an incarnation's tag reaches its hosts nowhere. Labelling the incarnation `prod` does not make its members visible to a
-`coven=prod` role, does not route them behind that coven's bastion, and does not match a Vigil subject scoped to it. To give a host a tag, attach the
+`coven=prod` role and does not route them behind that coven's bastion. To give a host a tag, attach the
 tag to the host (`POST /v1/souls/coven`, `POST /v1/souls/traits`). The write paths are unchanged, as are both of coven-assign's gates.
+
+> The single exception, added the same day by
+> [NIM-280](#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only): a rule's **subject** does read both levels, so
+> labelling the incarnation `prod` does now match a Vigil, Decree or Rite scoped to `coven: ["prod"]`. That is a targeting decision resolved at match
+> time; the host still carries nothing, and no authorization path changed.
 
 An incarnation's own labels keep the one job that was always theirs: selecting overlays of **its own** config, through a `foreach:` over
 `incarnation.covens` in `vars/_stack.yaml` ([ADR-0082](0082-service-vars.md)). That is the incarnation's config, resolved once per run — not a label on
 any host.
 
-**Known narrowing.** A Vigil/Decree or an Augur Rite takes a subject of `sid` XOR `coven`, so with inheritance gone there is no way to bind one to "every
-member of incarnation X" without tagging those hosts by hand. The missing membership dimension in the Rite/Decree grammar is **NIM-280**.
+**Known narrowing. CLOSED the same day by [NIM-280](#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only) (below).** A Vigil/Decree or an Augur Rite took a subject of `sid` XOR `coven`, so with inheritance gone there was no way to bind one to "every
+member of incarnation X" without tagging those hosts by hand. The missing membership dimension in the Rite/Decree grammar was **NIM-280**.
+
+## Amendment (2026-08-05, NIM-280): a rule's SUBJECT reads both levels — targeting only
+
+**This does not weaken the amendment above. A host still carries exactly `souls.coven[]` / `souls.traits`, and nothing is ever written to `souls`.**
+What changed is one read, in one place: when a Vigil, Decree or Augur Rite asks *which hosts do I reach*, the answer is computed over the host's own
+labels **unioned with the labels of every incarnation it is a member of** — for the duration of that one match, and nowhere else.
+
+A rule's subject is now EXACTLY ONE of four dimensions ([ADR-030](0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-monitoring-beacons--reactor),
+[ADR-025](0025-augur.md#adr-025-augur--keeper-side-broker-for-soul-external-access)), named after the RBAC scope vocabulary:
+
+| dimension | reaches | levels read |
+|---|---|---|
+| `sid: [<sid>, …]` | those hosts, by identity | host |
+| `incarnation: {service, name}` | every host on that incarnation's roster | the relation `incarnation_membership` |
+| `coven: [<label>, …]` | a host carrying one of the labels, **and** every member of an incarnation carrying one | host + incarnation |
+| `trait: {key, value}` | the same, on the traits map | host + incarnation |
+
+**Why this is not the inheritance NIM-281 removed.** Inheritance made the HOST CARRY the incarnation's label, so *every* consumer saw it — RBAC scope
+predicates, `soulprint.self.covens` in CEL, the souls list filter, the bulk selector, push provider routing — including consumers that never asked
+about incarnations, and including ones that make authorization decisions. Here the union is local to one selector match: the column is unchanged, the
+CEL projection is unchanged, the scope predicate is unchanged. Unbinding a host takes the reach away again with nothing to un-write.
+
+**★ The boundary (normative).** Targeting expands; operator authorization never does. `rbac.CovenScopeSQL` stays `souls.coven && $N::text[]` — the row's
+OWN column, no join to `incarnation` — and the two resolvers must never be wired together. A subject decides which hosts a rule REACHES; a scope decides
+what an Archon MAY DO. Tagging an incarnation `prod` must never grant a `coven=prod` role permanent visibility of its roster.
+
+**⚠ The label namespace is shared, so labelling an incarnation is now a rule-affecting act.** `prod` on an incarnation widens every existing
+`coven: ["prod"]` **subject** to its members with no rule edited — the audit trail records an incarnation update, not a rule change. On the Augur side
+the widened thing is access to a secret. That is the declared meaning of a label subject; where it is not wanted, address the roster explicitly
+(`incarnation`) or name the hosts (`sid`). Symmetrically, **unbinding a host withdraws every rule that reached it through its incarnation** — membership
+changes are monitoring- and grant-affecting.
+
+An incarnation's **name** is still not one of its labels. `coven: ["<incarnation-name>"]` keeps reaching only hosts somebody tagged with that string;
+the roster is addressed by the `incarnation` dimension, which reads the relation.
 
 ## Amendment (2026-07-28, NIM-209): membership has an operator path — bind / unbind / read
 

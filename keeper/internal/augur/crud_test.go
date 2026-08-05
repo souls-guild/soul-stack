@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
 // fakeDB is an ExecQueryRower stub. queryRowFunc receives SQL and call ordinal number.
@@ -96,6 +99,15 @@ func assign(dest, src any) {
 			*d = nil
 		} else {
 			*d = src.([]byte)
+		}
+	case *[]string:
+		// The array-valued subject dimensions (sid, coven). A SQL NULL and an empty
+		// array both arrive as a nil slice, which is what the domain reads as
+		// "this dimension was not written".
+		if src == nil {
+			*d = nil
+		} else {
+			*d = src.([]string)
 		}
 	case **string:
 		if src == nil {
@@ -329,7 +341,7 @@ func TestDeleteOmen_NotFound(t *testing.T) {
 func vaultRite() *Rite {
 	return &Rite{
 		Omen:         "vault-prod",
-		Coven:        ptr("web"),
+		Coven:        []string{"web"},
 		Allow:        json.RawMessage(`{"paths":["secret/app/db"]}`),
 		Delegate:     true,
 		TokenTTL:     ptr("5m"),
@@ -370,34 +382,34 @@ func TestInsertRite_OmenNotFound(t *testing.T) {
 	}
 }
 
-func TestInsertRite_RejectsSubjectXOR(t *testing.T) {
+func TestInsertRite_RejectsSubjectNotExactlyOne(t *testing.T) {
 	f := &fakeDB{}
-	// both subjects specified
+	// two dimensions specified
 	r := vaultRite()
-	r.SID = ptr("host.example.com")
+	r.SID = []string{"host.example.com"}
 	if err := InsertRite(context.Background(), f, r); err == nil ||
-		!strings.Contains(err.Error(), "XOR") {
-		t.Fatalf("both-subject err = %v, want XOR", err)
+		!strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("two-dimension err = %v, want exactly-one-of", err)
 	}
-	// no subjects
+	// no subject
 	r2 := vaultRite()
 	r2.Coven = nil
 	if err := InsertRite(context.Background(), f, r2); err == nil ||
-		!strings.Contains(err.Error(), "XOR") {
-		t.Fatalf("no-subject err = %v, want XOR", err)
+		!strings.Contains(err.Error(), "exactly one of") {
+		t.Fatalf("no-subject err = %v, want exactly-one-of", err)
 	}
 	if f.queryRowCalls != 0 {
-		t.Errorf("queryRowCalls = %d on XOR-fail; want 0 (no omen lookup)", f.queryRowCalls)
+		t.Errorf("queryRowCalls = %d on subject-fail; want 0 (no omen lookup)", f.queryRowCalls)
 	}
 }
 
 func TestInsertRite_RejectsBadCovenFormat(t *testing.T) {
 	f := &fakeDB{}
 	r := vaultRite()
-	r.Coven = ptr("-bad-start")
+	r.Coven = []string{"-bad-start"}
 	if err := InsertRite(context.Background(), f, r); err == nil ||
-		!strings.Contains(err.Error(), "invalid coven") {
-		t.Fatalf("err = %v, want invalid coven", err)
+		!strings.Contains(err.Error(), "invalid subject coven") {
+		t.Fatalf("err = %v, want invalid subject coven", err)
 	}
 }
 
@@ -406,7 +418,7 @@ func TestInsertRite_TokenFieldsRequireVault(t *testing.T) {
 	f := insertRiteFake("prometheus")
 	r := &Rite{
 		Omen:     "vault-prod",
-		Coven:    ptr("web"),
+		Coven:    []string{"web"},
 		Allow:    json.RawMessage(`{"queries":["up"]}`),
 		Delegate: true,
 		TokenTTL: ptr("5m"),
@@ -421,7 +433,7 @@ func TestInsertRite_TokenFieldsRequireDelegate(t *testing.T) {
 	f := insertRiteFake("vault")
 	r := &Rite{
 		Omen:     "vault-prod",
-		Coven:    ptr("web"),
+		Coven:    []string{"web"},
 		Allow:    json.RawMessage(`{"paths":["secret/x"]}`),
 		Delegate: false,
 		TokenTTL: ptr("5m"),
@@ -447,7 +459,7 @@ func TestInsertRite_RejectsAllowShapeMismatch(t *testing.T) {
 	f := insertRiteFake("vault")
 	r := &Rite{
 		Omen:  "vault-prod",
-		Coven: ptr("web"),
+		Coven: []string{"web"},
 		Allow: json.RawMessage(`{"queries":["up"]}`),
 	}
 	if err := InsertRite(context.Background(), f, r); err == nil ||
@@ -460,31 +472,55 @@ func TestInsertRite_SIDSubject(t *testing.T) {
 	f := insertRiteFake("elk")
 	r := &Rite{
 		Omen:  "vault-prod",
-		SID:   ptr("host.example.com"),
+		SID:   []string{"host.example.com"},
 		Allow: json.RawMessage(`{"indices":["logs-*"]}`),
 	}
 	if err := InsertRite(context.Background(), f, r); err != nil {
 		t.Fatalf("InsertRite (sid/elk): %v", err)
 	}
-	// args: omen, coven(nil), sid, allow, delegate, ttl(nil), uses(nil), aid(nil)
-	if f.queryRowArgs[1] != nil {
-		t.Errorf("coven arg = %v, want nil", f.queryRowArgs[1])
+	// args: omen, sid, service, incarnation, coven, trait_key, trait_value, allow, …
+	// Every dimension the Rite was NOT written with must go to the DB as NULL: a
+	// leftover value would widen the grant through a dimension nobody wrote.
+	if sids, ok := f.queryRowArgs[1].([]string); !ok || len(sids) != 1 || sids[0] != "host.example.com" {
+		t.Errorf("sid arg = %v", f.queryRowArgs[1])
 	}
-	if f.queryRowArgs[2] != "host.example.com" {
-		t.Errorf("sid arg = %v", f.queryRowArgs[2])
+	for i, name := range []string{"service", "incarnation", "coven", "trait_key", "trait_value"} {
+		if v := f.queryRowArgs[2+i]; v != nil && !isNilPtr(v) {
+			t.Errorf("%s arg = %v, want NULL", name, v)
+		}
+	}
+}
+
+// isNilPtr — a typed nil pointer (*string) still reads as non-nil through `any`;
+// pgx sends it as NULL, so the assertion above must see it the same way.
+func isNilPtr(v any) bool {
+	switch t := v.(type) {
+	case *string:
+		return t == nil
+	case []string:
+		return t == nil
+	default:
+		return false
 	}
 }
 
 // --- SelectRitesByOmen / BySubject / DeleteRite ----------------------
 
+// riteRow builds one row in riteColumns order:
+// id, omen, sid, service, incarnation, coven, trait_key, trait_value,
+// allow, delegate, token_ttl, token_num_uses, created_by_aid, created_at.
 func riteRow(id int64, omen string, coven, sid any, allow []byte, delegate bool) []any {
-	return []any{id, omen, coven, sid, allow, delegate, any(nil), any(nil), any(nil), testNow}
+	return []any{
+		id, omen,
+		sid, any(nil), any(nil), coven, any(nil), any(nil),
+		allow, delegate, any(nil), any(nil), any(nil), testNow,
+	}
 }
 
 func TestSelectRitesByOmen(t *testing.T) {
 	f := &fakeDB{queryFunc: func(_ string) (pgx.Rows, error) {
 		return &fakeRows{rows: []staticRow{
-			{values: riteRow(1, "vault-prod", any("web"), any(nil), []byte(`{"paths":["x"]}`), false)},
+			{values: riteRow(1, "vault-prod", any([]string{"web"}), any(nil), []byte(`{"paths":["x"]}`), false)},
 		}}, nil
 	}}
 	out, err := SelectRitesByOmen(context.Background(), f, "vault-prod")
@@ -494,7 +530,7 @@ func TestSelectRitesByOmen(t *testing.T) {
 	if len(out) != 1 || out[0].ID != 1 {
 		t.Fatalf("got %+v", out)
 	}
-	if out[0].Coven == nil || *out[0].Coven != "web" {
+	if len(out[0].Coven) != 1 || out[0].Coven[0] != "web" {
 		t.Errorf("coven = %v", out[0].Coven)
 	}
 	if string(out[0].Allow) != `{"paths":["x"]}` {
@@ -508,22 +544,37 @@ func TestSelectRitesByOmen(t *testing.T) {
 func TestSelectRitesBySubject(t *testing.T) {
 	f := &fakeDB{queryFunc: func(_ string) (pgx.Rows, error) {
 		return &fakeRows{rows: []staticRow{
-			{values: riteRow(2, "vault-prod", any(nil), any("host.example.com"), []byte(`{"paths":["x"]}`), true)},
+			{values: riteRow(2, "vault-prod", any(nil), any([]string{"host.example.com"}), []byte(`{"paths":["x"]}`), true)},
 		}}, nil
 	}}
-	covens := []string{"web", "db"}
-	out, err := SelectRitesBySubject(context.Background(), f, "host.example.com", covens)
+	host := subject.Host{
+		SID:    "host.example.com",
+		Covens: []string{"web", "db"},
+		Traits: map[string]any{"tier": "gold"},
+		Member: []subject.Incarnation{{Service: "redis", Name: "redis-prod", Covens: []string{"prod"}}},
+	}
+	out, err := SelectRitesBySubject(context.Background(), f, host)
 	if err != nil {
 		t.Fatalf("SelectRitesBySubject: %v", err)
 	}
-	if len(out) != 1 || out[0].SID == nil || *out[0].SID != "host.example.com" {
+	if len(out) != 1 || len(out[0].SID) != 1 || out[0].SID[0] != "host.example.com" {
 		t.Fatalf("got %+v", out)
 	}
-	if f.queryArgs[0] != "host.example.com" {
+	// The predicate consumes the ALREADY-RESOLVED host as flat value arrays — no
+	// joins — which is what keeps the SQL prefilter and the Go matcher from
+	// drifting apart. The host's own covens and its incarnations' covens arrive
+	// in one array: the two levels are unioned before the query, not inside it.
+	if sid, ok := f.queryArgs[0].(string); !ok || sid != "host.example.com" {
 		t.Errorf("sid arg = %v", f.queryArgs[0])
 	}
-	if cs, ok := f.queryArgs[1].([]string); !ok || len(cs) != 2 {
-		t.Errorf("covens arg = %v", f.queryArgs[1])
+	covens, ok := f.queryArgs[1].([]string)
+	if !ok {
+		t.Fatalf("coven arg is %T, want []string", f.queryArgs[1])
+	}
+	for _, want := range []string{"web", "db", "prod"} {
+		if !slices.Contains(covens, want) {
+			t.Errorf("coven arg %v is missing %q (both levels must be unioned)", covens, want)
+		}
 	}
 }
 

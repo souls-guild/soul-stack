@@ -1,10 +1,12 @@
 package oracle
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	"github.com/souls-guild/soul-stack/shared/beaconaddr"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -20,22 +22,19 @@ var ErrValidation = errors.New("oracle: validation failed")
 // before the round-trip — better diagnostics, no wasted call on bad input).
 //
 //   - NamePattern        — vigils_name_format / decrees_name_format (kebab 1..63).
-//   - CovenPattern       — the format of one coven label element of the
-//     subject (kebab; a per-element CHECK for text[] can't be expressed
-//     declaratively without a trigger — migration 041).
-//   - IncarnationPattern — decrees_incarnation_name_format (= incarnation.name,
-//     the root Coven label, ADR-008).
+//   - IncarnationPattern — decrees_incarnation_name_format (= incarnation.name).
 //   - ScenarioPattern    — decrees_scenario_format (snake_case named scenario).
+//
+// The SUBJECT's own forms are not restated here — they belong to
+// [subject.Validate], the one validator all three registries share.
 const (
 	NamePattern        = `^[a-z0-9-]{1,63}$`
-	CovenPattern       = `^[a-z0-9][a-z0-9-]*$`
 	IncarnationPattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 	ScenarioPattern    = `^[a-z][a-z0-9_]*$`
 )
 
 var (
 	nameRe        = regexp.MustCompile(NamePattern)
-	covenRe       = regexp.MustCompile(CovenPattern)
 	incarnationRe = regexp.MustCompile(IncarnationPattern)
 	scenarioRe    = regexp.MustCompile(ScenarioPattern)
 )
@@ -43,11 +42,13 @@ var (
 // ValidName checks a Vigil / Decree name against the canonical form (kebab 1..63).
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// ValidCoven checks a single subject Coven label.
-func ValidCoven(coven string) bool { return covenRe.MatchString(coven) }
+// ValidCoven checks a single Coven label. Kept as the package's spelling of
+// [subject.ValidCoven] for callers that check one label outside a selector.
+func ValidCoven(coven string) bool { return subject.ValidCoven(coven) }
 
-// ValidIncarnationName checks a Decree's target incarnation (the
-// incarnation.name format).
+// ValidIncarnationName checks a Decree's TARGET incarnation — the one the
+// reaction acts on, not the subject (the subject's incarnation is a
+// service+name pair, checked by [subject.Validate]).
 func ValidIncarnationName(name string) bool { return incarnationRe.MatchString(name) }
 
 // ValidScenario checks a named scenario's name (a Decree's action_scenario).
@@ -80,32 +81,31 @@ func ValidCheckAddr(addr string) bool {
 	return ok
 }
 
-// validateCovenList checks the per-element format of the subject's coven
-// labels. An empty list is fine at the caller (the XOR check decides
-// whether a subject is set); here it's only the format of non-empty
-// elements.
-func validateCovenList(coven []string) error {
-	for _, c := range coven {
-		if !ValidCoven(c) {
-			return fmt.Errorf("%w: invalid coven %q (must match %s)", ErrValidation, c, CovenPattern)
-		}
+// validateSubject checks the subject's exactly-one-of-four invariant and the
+// form of every populated element, through the validator all three registries
+// share ([subject.Validate]). Symmetric with the vigils_subject_one_of /
+// decrees_subject_one_of CHECKs (defence in depth).
+//
+// An `incarnation=` subject additionally has to name an incarnation that
+// EXISTS. There is no FK on those columns on purpose, so nothing else would
+// catch a typo: the rule would just never match, silently, forever.
+//
+// Wrapped in [ErrValidation] so the management service keeps mapping it to 422
+// by errors.Is — the diagnostic text from [subject.Validate] is already public
+// (identifiers and operator-set labels, no SQL and no stack).
+func (s *Service) validateSubject(ctx context.Context, sel subject.Selector) error {
+	if err := subject.Validate(sel, "oracle:"); err != nil {
+		return fmt.Errorf("%w: %s", ErrValidation, err)
 	}
-	return nil
-}
-
-// validateSubjectXOR checks the subject's XOR invariant (coven-list XOR
-// sid): exactly one of a non-empty coven list / a non-empty sid is set.
-// Symmetric with the vigils_subject_xor / decrees_subject_xor CHECKs
-// (defence in depth) and [augur.ValidateSubjectXOR]. SID format isn't
-// normalized at this layer (FQDN semantics are the registry's side).
-func validateSubjectXOR(coven []string, sid *string) error {
-	hasCoven := len(coven) > 0
-	hasSID := sid != nil && *sid != ""
-	if hasCoven == hasSID {
-		return fmt.Errorf("%w: subject must be exactly one of coven / sid (XOR)", ErrValidation)
+	if sel.Dimension() != subject.DimIncarnation {
+		return nil
 	}
-	if hasCoven {
-		return validateCovenList(coven)
+	ok, err := subject.ExistsIncarnation(ctx, s.pool, sel.Service, sel.Incarnation)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%w: subject incarnation %s.%s does not exist", ErrValidation, sel.Service, sel.Incarnation)
 	}
 	return nil
 }

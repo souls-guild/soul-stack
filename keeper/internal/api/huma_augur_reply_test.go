@@ -5,10 +5,14 @@
 //
 //   - category A (date-time): created_at → RFC3339Nano bytes;
 //   - category B ([]-vs-null): items without omitempty (nil → null, [] → []) — both envelope branches;
-//   - category C (omitempty): created_by_aid/coven/sid/token_* — key omitted when nil;
+//   - category C (omitempty): created_by_aid/token_* and every subject arm — key omitted when unset;
 //   - category D (byte-passthrough): RiteView.allow — json.RawMessage as-is;
 //   - FIELD-ORDER: key order matching the former oapi byte-order (auth_ref/created_at/… for
-//     OmenView, allow/coven/created_at/… for RiteView — lexicographic by json tag).
+//     OmenView, allow/created_at/…/subject/token_* for RiteView — lexicographic by json tag).
+//
+// `subject` is a nested object WITHOUT omitempty, so it is always present: an empty
+// selector serializes as `{}` rather than vanishing. That is the shape a client parses
+// against, so it is pinned here in both the populated and the empty branch.
 //
 // Mutating the native-struct shape (drop omitempty / change json tag / change field type /
 // reorder a field) turns this red.
@@ -35,8 +39,6 @@ func goldenAugur(t *testing.T, name string, native any, want string) {
 func TestGoldenWire_AugurReply(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 34, 56, 789012345, time.UTC)
 	aid := "archon-alice"
-	coven := "prod"
-	sid := "web1.example.com"
 	ttl := "30m"
 	nuses := 5
 	allow := json.RawMessage(`{"metrics":["up","node_load1"]}`)
@@ -57,18 +59,28 @@ func TestGoldenWire_AugurReply(t *testing.T) {
 		OmenListReply{Items: nil, Limit: 50, Offset: 10, Total: 0},
 		`{"items":null,"limit":50,"offset":10,"total":0}`)
 
-	// --- RiteView: allow byte-passthrough + coven/sid/token_* omitempty (both branches) ---
-	goldenAugur(t, "RiteView/full",
-		RiteView{Allow: allow, Coven: &coven, CreatedAt: ts, CreatedByAID: &aid, Delegate: true, ID: 42, Omen: "prom-eu", SID: nil, TokenNumUses: &nuses, TokenTTL: &ttl},
-		`{"allow":{"metrics":["up","node_load1"]},"coven":"prod","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","delegate":true,"id":42,"omen":"prom-eu","token_num_uses":5,"token_ttl":"30m"}`)
+	// --- RiteView: allow byte-passthrough + token_* omitempty + all four subject arms ---
+	goldenAugur(t, "RiteView/coven_subject",
+		RiteView{Allow: allow, CreatedAt: ts, CreatedByAID: &aid, Delegate: true, ID: 42, Omen: "prom-eu",
+			Subject: Subject{Coven: []string{"prod", "eu"}}, TokenNumUses: &nuses, TokenTTL: &ttl},
+		`{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","delegate":true,"id":42,"omen":"prom-eu","subject":{"coven":["prod","eu"]},"token_num_uses":5,"token_ttl":"30m"}`)
 	goldenAugur(t, "RiteView/sid_subject_nil_optionals",
-		RiteView{Allow: allow, Coven: nil, CreatedAt: ts, CreatedByAID: nil, Delegate: false, ID: 7, Omen: "prom-eu", SID: &sid, TokenNumUses: nil, TokenTTL: nil},
-		`{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":7,"omen":"prom-eu","sid":"web1.example.com"}`)
+		RiteView{Allow: allow, CreatedAt: ts, CreatedByAID: nil, Delegate: false, ID: 7, Omen: "prom-eu",
+			Subject: Subject{SID: []string{"web1.example.com"}}, TokenNumUses: nil, TokenTTL: nil},
+		`{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":7,"omen":"prom-eu","subject":{"sid":["web1.example.com"]}}`)
+	goldenAugur(t, "RiteView/incarnation_subject",
+		RiteView{Allow: allow, CreatedAt: ts, Delegate: false, ID: 8, Omen: "prom-eu",
+			Subject: Subject{Incarnation: &SubjectIncarnation{Name: "redis-prod", Service: "redis"}}},
+		`{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":8,"omen":"prom-eu","subject":{"incarnation":{"name":"redis-prod","service":"redis"}}}`)
+	goldenAugur(t, "RiteView/trait_subject",
+		RiteView{Allow: allow, CreatedAt: ts, Delegate: false, ID: 9, Omen: "prom-eu",
+			Subject: Subject{Trait: &SubjectTrait{Key: "tier", Value: "gold"}}},
+		`{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":9,"omen":"prom-eu","subject":{"trait":{"key":"tier","value":"gold"}}}`)
 
 	// --- RiteListReply: items non-nil / nil ---
 	goldenAugur(t, "RiteListReply/full",
 		RiteListReply{Items: []RiteView{{Allow: allow, ID: 1, Omen: "prom-eu", CreatedAt: ts}}},
-		`{"items":[{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":1,"omen":"prom-eu"}]}`)
+		`{"items":[{"allow":{"metrics":["up","node_load1"]},"created_at":"2026-06-14T12:34:56.789012345Z","delegate":false,"id":1,"omen":"prom-eu","subject":{}}]}`)
 	goldenAugur(t, "RiteListReply/nil_items",
 		RiteListReply{Items: nil},
 		`{"items":null}`)
