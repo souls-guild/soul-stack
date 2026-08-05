@@ -91,7 +91,7 @@ fixtures:
 # Simple typed operator input. memory_mb + persistence + policy + one
 # ACL-user with a full ACL string + passthrough redis_settings with a CONFLICTING
 # key (timeout).
-    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either
     # set is empty (a silent fail-open is not acceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -205,7 +205,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # redis.conf: the RESULT of merge(). This is where the main translation guard lives. Disambiguator
     # from users.acl — register-anchor redis_conf + path.
@@ -261,7 +260,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # redis-server: enabled-at-boot. Disambiguator from the sentinel daemon
     # (core.service.running redis-sentinel — sentinel.yml is also active in

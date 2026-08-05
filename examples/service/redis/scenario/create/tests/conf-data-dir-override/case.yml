@@ -65,7 +65,7 @@ fixtures:
     conf_dir: /opt/redis
     data_dir: /srv/redis-data
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) breaks render if either
     # set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -149,7 +149,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # users.acl under the conf_dir override. Disambiguator from redis.conf — path.
     - module: core.file.rendered
@@ -208,7 +207,7 @@ assert:
     modules: [bloom, json, search, timeseries]
     # ★ conf_dir/data_dir moved out of state into service vars (v11→v12, Variant A): the override
     # no longer persists into state (not present in state_changes — fields not in
-    # state_schema). The host-layout override lives in the service vars of the incarnation;
+    # state_schema). The host-layout override lives in the service vars;
     # add_node reads it from there (default(vars.conf_dir/data_dir, ...)). The destiny
     # tasks above already verify that the override reached the redis.conf/data-dir paths on
     # THIS create run.

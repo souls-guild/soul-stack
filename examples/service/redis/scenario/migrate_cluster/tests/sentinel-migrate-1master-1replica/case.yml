@@ -181,7 +181,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # -- deploy body: IN-cluster REPLICAOF (community.redis.replica) --------------
     # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379

@@ -1,5 +1,6 @@
 # Baseline service vars of the dragonfly service (author substrate, role-defaults concept). Operator
-# overrides in incarnation spec; on the L0 run key values are duplicated in fixtures
+# A fleet that needs different values forks this repo and edits this file (ADR-0082); on the L0 run
+# key values are duplicated in fixtures
 # of the case.
 #
 # This is a TRANSLATION LAYER of simple operator input: data tables (memory_reserve_percent) and
@@ -50,7 +51,7 @@ provision_join_wait_timeout: "10m"
 node_exporter_version: "1.8.2"
 node_exporter_listen:  ":9100"
 # Root for downloading node_exporter releases — an internal Nexus raw-proxy (mirrors the github path 1:1).
-# An operator with direct GitHub access overrides in the service vars (or removes the key — default destiny = GitHub).
+# A fleet with direct GitHub access forks this repo and edits it here (or removes the key — default destiny = GitHub).
 node_exporter_base_url: "https://nexus.example.com/repository/raw-proxy-github/prometheus/node_exporter/releases/download"
 # SSRF-guard opt-out: base_url above is an internal Nexus, resolves to a private IP. Public mirror — false.
 node_exporter_allow_private: true
@@ -89,7 +90,7 @@ vector_log_sources:  ["/var/log/dragonfly/*.log", "/var/log/redis/*.log"]
 # installation (when install_method=binary).
 #
 # ★ Real DragonFly upstream: github.com/dragonflydb/dragonfly/releases/download/v<ver>
-# (asset dragonfly-x86_64.tar.gz / dragonfly-aarch64.tar.gz). base_url is set by the operator.
+# (asset dragonfly-x86_64.tar.gz / dragonfly-aarch64.tar.gz). base_url is set by forking this repo.
 binary_base_url: ""
 binary_version:  ""
 

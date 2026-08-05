@@ -15,8 +15,8 @@ host -> cross-host barrier -> commit state to Postgres.
 ```
 hello-world/
 ├── service.yml                       # manifest: state_schema_version=1, state_schema with the greeting_file field
-├── service vars/
-│   └── _default.yaml                 # baseline service vars: greeting (fallback)
+├── vars/
+│   └── 00-base.yaml                 # baseline service vars: greeting (fallback)
 └── scenario/
     └── create/
         └── main.yml                  # input.greeting -> core.file.present -> state_changes.sets.greeting_file

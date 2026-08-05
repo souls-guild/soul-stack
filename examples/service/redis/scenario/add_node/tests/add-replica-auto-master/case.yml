@@ -107,7 +107,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # health-gate on the new node: PING a live Redis before adding it to the cluster.
     # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.

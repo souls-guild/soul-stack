@@ -9,7 +9,7 @@ description: >-
   redis_sentinel are NOT touched (write-model stays as is).
 
   ★ BEST-EFFORT (to be honest): the migration is a pure function of the old state (ADR-019:
-  service vars/input/vault are FORBIDDEN in migration-CEL). So the intent
+  service vars / input/vault are FORBIDDEN in migration-CEL). So the intent
   fields are filled in like this:
 
     DERIVABLE from redis_config (reverse-folding the computed result):

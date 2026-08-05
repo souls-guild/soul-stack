@@ -115,7 +115,7 @@ a system account's name (a service-vars top-up would silently overwrite it).
 
 **No** persistence preset (deferred), **no** cluster directives (sentinel-only), **no**
 `maxmemory_policy` (DF has no such flag - `absl` FATALs on an unknown one). The merge base and
-data tables are in [`service vars/_default.yaml`](service vars/_default.yaml).
+data tables are in [`vars/00-base.yaml`](vars/00-base.yaml).
 
 ## Host-tuning extras
 
@@ -124,14 +124,14 @@ disabling Transparent Huge Pages (drop-in `disable-thp.service`), logrotate
 (`/var/log/dragonfly/*.log`), sysctl (`core.sysctl.applied` -> `/etc/sysctl.d/30-dragonfly.conf`).
 The sysctl parameter set is reused from the `redis` service (same in-memory-store recommendations:
 overcommit/swappiness/network buffers/backlogs), data table -
-[`service vars/_default.yaml → sysctl_settings`](service vars/_default.yaml).
+[`vars/00-base.yaml → sysctl_settings`](vars/00-base.yaml).
 
 ## System ACL users
 
 Besides operator-extra accounts (`input.users`), the service **always** tops up system ACL users:
 `default_admin` (full permissions `~* &* +@all`), `replica` (PSYNC replication), `monitoring`
 (metrics), `sentinel` (AUTH sentinel↔df), `haproxy` (health-check). perms live in
-[`service vars/_default.yaml`](service vars/_default.yaml) as two sets -> **two** aclfiles: `users.acl`
+[`vars/00-base.yaml`](vars/00-base.yaml) as two sets -> **two** aclfiles: `users.acl`
 (DragonFly, `system_acl_users`) and `sentinel-users.acl` (sentinel daemon, `system_acl_users_sentinel`).
 
 **★ `default_admin` redesign** (symmetry with redis). `requirepass` was removed from the

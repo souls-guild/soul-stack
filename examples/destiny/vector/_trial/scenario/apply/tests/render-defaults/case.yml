@@ -133,7 +133,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # systemd-unit. render_context.vars carries file-vars (bin_path/config_path) + sink_token
     # (the collector's resolved secret — empty in this case, sink has no auth). input — all
@@ -175,7 +174,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     - module: core.service.running
       params_subset:

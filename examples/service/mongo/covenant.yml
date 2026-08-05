@@ -85,7 +85,7 @@ input:
     additional_properties: true
 
 # ── Declarative input invariants (validate:, INPUT-ONLY) ────────────────────
-# validate: — cross-field preconditions on INPUT (only input.*; service vars/soulprint are
+# validate: — cross-field preconditions on INPUT (only input.*; service vars, soulprint are
 # unavailable — a structural CEL barrier). First failure → 422 validation_failed BEFORE
 # incarnation commit.
 validate:
@@ -99,7 +99,7 @@ validate:
     message: "the MongoDB username 'default_admin' is reserved for the system admin user: pick another name — default_admin is created automatically from service vars"
 
 # ── Computed scenario-vars (compute:) ──────────────────────────────────────
-# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input/service vars/
+# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input / service vars /
 # incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible as
 # compute.<name> in tasks/apply.input AND in state_changes. Removes duplication of the
 # merge() translation: declared HERE ONCE, both the body and state reference

@@ -177,7 +177,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # running + restart — by the node_exporter unit name (catches a name regression).
     # There is NO daemon-reload step: core.service reloads on its own when the unit
@@ -265,7 +264,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # The only core.service.enabled in the plan.
     - module: core.service.enabled

@@ -147,7 +147,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # -- REPLICAOF for replicas (community.redis.replica) --------------------
     # addr=127.0.0.1:6379 (per-host local invariant), master_addr — master election

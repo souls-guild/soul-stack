@@ -90,7 +90,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # HOT-RELOAD ACL OVER TLS: addr on the tls port, tls=true, tls_ca = PEM CA.
     # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).

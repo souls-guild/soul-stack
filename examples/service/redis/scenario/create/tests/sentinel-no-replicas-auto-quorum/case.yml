@@ -56,7 +56,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) aborts render if either
     # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).

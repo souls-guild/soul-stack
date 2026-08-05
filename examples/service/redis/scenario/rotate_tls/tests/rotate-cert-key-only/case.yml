@@ -166,7 +166,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 1c. GUARD replica→master AUTH: config-map carries masteruser/masterauth (see rotate-cert-key-ca).
     - module: core.file.rendered
@@ -207,7 +206,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) —
     #    onchanges-gate anchor (id disambiguator).

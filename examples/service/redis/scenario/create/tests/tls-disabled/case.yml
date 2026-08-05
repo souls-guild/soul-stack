@@ -53,7 +53,7 @@ fixtures:
       timeout:          300
     # tls_enable NOT set → default false. tls_*_ref not needed (vault not called).
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE REQUIRED: guard create/sentinel.yml (assert 1b) aborts render if either
     # set is empty (silent fail-open is not acceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -136,7 +136,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # PING: tls=false (plain, no tls_ca), addr on 6379 (plain open). cluster/sentinel
     # PING — placeholder-skip; disambiguator addr/args.

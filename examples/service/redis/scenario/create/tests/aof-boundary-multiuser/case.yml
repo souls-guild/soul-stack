@@ -67,7 +67,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) fails the render if
     # either set is empty (a silent fail-open is not acceptable - without them
     # replication/sentinel<->redis AUTH would break).
@@ -172,7 +172,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # redis.conf: the RESULT of merge() - the main guard of this case.
     - module: core.file.rendered
@@ -223,7 +222,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   state_changes:
     redis_type: sentinel

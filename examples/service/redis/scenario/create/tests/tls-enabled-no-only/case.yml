@@ -64,7 +64,7 @@ fixtures:
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) breaks render if either
     # set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -152,7 +152,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # PING health-gate: ★ PROOF of anti-downgrade. tls=true (NOT false!), addr on
     # tls_port 7379 (NOT plain 6379), tls_ca = CA-PEM. Under the previous gate (tls_only)

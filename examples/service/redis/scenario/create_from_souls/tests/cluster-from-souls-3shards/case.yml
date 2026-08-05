@@ -160,7 +160,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.

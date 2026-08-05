@@ -127,7 +127,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) — onchanges gate
     #    anchor (id-disambiguator). Without it onchanges:[tls_certs] would not resolve.

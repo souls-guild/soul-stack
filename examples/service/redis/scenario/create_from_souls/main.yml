@@ -286,7 +286,7 @@ tasks:
   # vault()-read) is pinned by the guard test redis_create_from_souls_secrets_passage_test.go
   # (order entirely on the vault axis).
   #
-  # targets are COMPUTED from the SAME service vars/input as the read-tasks (drift "what we generate
+  # targets are COMPUTED from the SAME service vars / input as the read-tasks (drift "what we generate
   # ≡ what we read" = a bug): the main secret/redis/<inc>#password + per-user
   # union(system_acl_users, system_acl_users_sentinel) WITHOUT default + operator-extra
   # input.users. policy alphanumeric/32.

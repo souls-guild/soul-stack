@@ -268,7 +268,7 @@
 #    issued by detach_source/sentinel.yml AFTER REPLICAOF NO ONE (the new master is again
 #    autonomous).
 #    ★ GATE MECHANICS (compute → task-var → static-when): flow-control `when` does NOT see
-#    compute.* directly (its CEL env only declares input/vars/service vars/incarnation/self/
+#    compute.* directly (its CEL env only declares input/vars/vars/incarnation/self/
 #    register), so the contract flag is proxied through a task-level `vars:` —
 #    sentinel_monitor_now: "${ compute.sentinel_monitor_now }" (a CEL task-var DOES see compute).
 #    Then `when: vars.sentinel_monitor_now` is STATIC (register-/soulprint-independent) →

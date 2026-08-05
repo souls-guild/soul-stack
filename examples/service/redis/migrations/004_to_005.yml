@@ -7,7 +7,7 @@ description: >-
   symmetric with the richer-state 002_to_003. Only for sentinel incarnations (redis_sentinel
   non-empty); for cluster (redis_sentinel == {}) - no-op (no sentinel facts).
 
-  star BEST-EFFORT (honestly): the migration is a pure function of the old state (ADR-019: service vars/
+  star BEST-EFFORT (honestly): the migration is a pure function of the old state (ADR-019: service vars,
   input/vault are FORBIDDEN in migration-CEL). Timings were not present in v4-state -> we set
   role defaults:
     - down_after_ms       <- 5000  (role/Redis default sentinel down-after-milliseconds);

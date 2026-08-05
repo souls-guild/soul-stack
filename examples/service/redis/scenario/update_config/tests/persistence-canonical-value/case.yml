@@ -99,7 +99,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     - module: community.redis.config
       params_subset:

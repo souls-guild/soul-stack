@@ -71,7 +71,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server (1:1 from service vars/_default.yaml). REQUIRED:
+    # System ACL users of redis-server (1:1 from vars/00-base.yaml). REQUIRED:
     # the create/cluster.yml guard (assert 1b) breaks the render on empty
     # system_acl_users (a silent fail-open is unacceptable - replication/health
     # checks would break without them).
@@ -157,7 +157,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   state_changes:
     redis_type: cluster

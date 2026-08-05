@@ -285,7 +285,7 @@ validate:
 
 # ── Computed scenario vars (compute:) ──────────────────────────────────────
 # compute: resolved KEEPER-SIDE ONCE per run in the run-level context (input/
-# service vars/incarnation — WITHOUT soulprint, the host-invariance barrier) and visible as compute.<name>
+# vars/incarnation — WITHOUT soulprint, the host-invariance barrier) and visible as compute.<name>
 # in both the body's apply.input AND state_changes. Removes duplication of the merge() translation:
 # declared HERE once, the body and state reference ${ compute.df_config }.
 #
@@ -410,7 +410,7 @@ state_changes:
   # monitoring: read-model of the FACT that node_exporter was deployed (Slice II, ADR-024; symmetric
   # with the install/tls read-model). Version/port — from vars.node_exporter_* (the same values
   # that go into apply.input for the node-exporter destiny). ★ node-exporter-ONLY (DragonFly exposes
-  # metrics natively) — there are no redis_exporter fields here. Defaults duplicate service vars/migration 004_to_005.
+  # metrics natively) — there are no redis_exporter fields here. Defaults duplicate the service vars / migration 004_to_005.
   - set: monitoring
     value: >-
       ${ {
@@ -420,7 +420,7 @@ state_changes:
   # logging: read-model of the FACT that log shipping was deployed (Slice V-I, ADR-067; symmetric with monitoring).
   # Version/sink_type/endpoint/log_sources — from vars.vector_* (the same values that go into
   # apply.input for the vector destiny). ★ vector_sink_auth_ref is NOT written HERE — it's a secret (in Vault, like
-  # tls.*_ref). Defaults duplicate service vars/migration 005_to_006 (console — a safe default).
+  # tls.*_ref). Defaults duplicate the service vars / migration 005_to_006 (console — a safe default).
   - set: logging
     value: >-
       ${ {
@@ -503,7 +503,7 @@ tasks:
   # EARLIER passage. The step — `on: keeper` WITHOUT a roster dependency → Stratify keeps it in
   # passage 0; the deploy's read tasks read the roster (soulprint.hosts/soulprint.self) → passage > 0.
   #
-  # targets are COMPUTED from the SAME service vars/input as the read tasks (drift "what we generate ≡ what we
+  # targets are COMPUTED from the SAME service vars / input as the read tasks (drift "what we generate ≡ what we
   # read" = a bug, the user list is NOT hardcoded): union of keys system_acl_users ∪
   # system_acl_users_sentinel (default_admin is in BOTH) + operator-extra input.users. policy
   # alphanumeric/32 (ACL-safe). ★ WITHOUT the former main secret/dragonfly/<inc>#password — requirepass

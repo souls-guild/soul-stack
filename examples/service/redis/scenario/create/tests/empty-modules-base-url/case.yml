@@ -67,7 +67,7 @@ fixtures:
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
-    # * SOURCE OF THE DEFECT: modules_base_url is EMPTY (default from service vars/_default.yaml). This
+    # * SOURCE OF THE DEFECT: modules_base_url is EMPTY (default from vars/00-base.yaml). This
     # is a vanilla signal: no modules at all. Without the base_url gate, Redis 7 would get
     # loadmodule without downloaded .so files → abort at startup.
     modules_base_url: ""
@@ -162,7 +162,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   task_absent:
     # ── modules-dir is NOT created (include modules.yml group-drop with empty base_url) ──

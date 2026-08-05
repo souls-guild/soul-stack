@@ -66,7 +66,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl to the live instance through a LOCAL UNIX socket.
     #    AUTH as default_admin (requirepass removed).

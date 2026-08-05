@@ -88,7 +88,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
     - module: community.redis.acl

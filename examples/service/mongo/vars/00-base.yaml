@@ -1,5 +1,6 @@
 # Baseline service vars for the mongo service (author substrate, role-defaults concept). The operator
-# overrides it in the incarnation spec; on the L0 run key values are duplicated in the case's
+# A fleet that needs different values forks this repo and edits this file (ADR-0082); on the L0 run
+# key values are duplicated in the case's
 # fixtures.
 #
 # This is a TRANSLATION LAYER for simple operator input: data tables (memory_reserve_percent) and
@@ -8,18 +9,18 @@
 # rendering mongod.conf at-create (source of truth).
 
 # -- MongoDB install method: FIXED in service vars, NOT operator-input --------------------
-# install_method is author-context (the a fleet forks this repo and edits it here). Default is binary
+# install_method is author-context (a fleet forks this repo and edits it here). Default is binary
 # (the standard way: a standalone mongod binary from Nexus, symmetric with redis). compute.install reads
 # default(vars.install_method, 'binary'). The package branch installs the mongodb-org distro package
-# with a =version pin (an internal operator overrides install_method: package).
+# with a =version pin (a fleet on an internal mirror forks this repo and sets install_method: package).
 install_method: binary
 
 # -- binary install method: mongod binary source from Nexus (symmetric with redis) ----
 # install_method=binary (DEFAULT) pulls the mongod binary of this version from Nexus. base_url is
-# author-context (the a fleet forks this repo and edits it here for their own mirror). destiny/scenario
+# author-context (a fleet forks this repo and edits it here for their own mirror). destiny/scenario
 # builds the per-host path from binary_base_url + soulprint.self.os (arch, distro version) + version.
 # * Real MongoDB upstream: fastdl.mongodb.org/linux/mongodb-linux-<arch>-<distro>-<ver>.tgz
-# (asset - a tarball with bin/mongod). base_url is set by the operator (internal Nexus mirror).
+# (asset - a tarball with bin/mongod). base_url is set by forking this repo (internal Nexus mirror).
 binary_base_url: "https://nexus.example.com/repository/raw/devops/dba/prod/mongodb"
 binary_version:  ""
 
@@ -31,7 +32,7 @@ binary_version:  ""
 binary_allow_private: true
 
 # -- Host layout: base MongoDB config and data directories --------------------------
-# conf_dir/data_dir are author-context (the a fleet forks this repo and edits the layout here for
+# conf_dir/data_dir are author-context (a fleet forks this repo and edits the layout here for
 # their own storage layout). compute reads them from here and forwards them to render. NOT persisted
 # in state - day-2 reads the layout from vars.conf_dir/data_dir (has()-safe default). Default = the
 # official MongoDB layout (mongod.conf in /etc, data in /var/lib/mongodb).

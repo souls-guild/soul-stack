@@ -11,8 +11,8 @@ or custom modules.
 ```
 noop/
 ├── service.yml                       # manifest: state_schema_version=1, empty state_schema
-├── service vars/
-│   └── _default.yaml                 # baseline service vars: one demo field `greeting`
+├── vars/
+│   └── 00-base.yaml                 # baseline service vars: one demo field `greeting`
 └── scenario/
     └── create/
         └── main.yml                  # task: core.exec.run "echo hello"

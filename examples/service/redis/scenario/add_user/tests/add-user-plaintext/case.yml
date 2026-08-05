@@ -97,7 +97,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl to the live plain instance. ACL LOAD —
     #    connection params only (addr/password/tls), no args.

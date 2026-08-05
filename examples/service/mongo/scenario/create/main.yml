@@ -76,7 +76,7 @@ tasks:
   # `on: keeper` WITHOUT a roster dependency → Stratify keeps it in passage 0; plugin tasks
   # reading roster (soulprint.self) → passage > 0.
   #
-  # targets are COMPUTED from the SAME service vars/input as the read-tasks (drift "what we
+  # targets are COMPUTED from the SAME service vars / input as the read-tasks (drift "what we
   # generate ≡ what we read" = a bug, the user list is NOT hardcoded): system users
   # (vars.system_users keys — default_admin) + operator-extra input.users. policy
   # alphanumeric/32 (mongo-password-safe).

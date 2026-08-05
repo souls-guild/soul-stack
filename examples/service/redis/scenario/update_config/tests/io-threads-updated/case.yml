@@ -100,7 +100,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. HOT-RELOAD: rewrite=false (the file is the step-1 render). config carries io-threads:"2" -
     #    the plugin will skip it on the live one (startup-only denylist), the value takes effect on restart.

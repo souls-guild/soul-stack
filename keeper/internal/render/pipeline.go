@@ -546,7 +546,22 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 			available := mergeVars(in.ServiceVars, fileVarsForHost(in, h))
 			fileVars := referencedFileVars(available, fileVarKeys)
 			if wholeVars {
-				fileVars = available
+				// A whole-map read (`index .vars "x"`, `range … := .vars`,
+				// `toYaml .vars`) names no key the AST can see, so the
+				// statically-referenced filter cannot be applied to the SERVICE
+				// layer — holding it back is what made such a template render an
+				// empty section into a config file and restart the service onto it.
+				//
+				// The FILE layer is deliberately not widened with it. In a destiny
+				// pass ServiceVars is nil by construction (destiny.go), so
+				// `available` there is the destiny's entire vars.yml — every
+				// internal plumbing var it uses to build paths and versions. Passing
+				// that whole set would put it in render_context, which crosses the
+				// wire to the host, and would buy nothing: a destiny's own vars.yml
+				// is already fully in reach through the same filter for every key
+				// the template names, and the keys a dynamic index reaches for are
+				// the ones the task put there.
+				fileVars = mergeVars(in.ServiceVars, fileVars)
 			}
 			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
 				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)

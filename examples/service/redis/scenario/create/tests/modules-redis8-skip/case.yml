@@ -79,7 +79,7 @@ fixtures:
       timeout:          300
 
     # System ACL users for redis-server + the sentinel daemon (1:1 from
-    # service vars/_default.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
+    # vars/00-base.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
     # (assert 1b) aborts the render if either set is empty (a silent fail-open is not
     # acceptable — without them replication/sentinel↔redis AUTH would break).
     system_acl_users:
@@ -156,7 +156,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # standalone-PING: cluster/sentinel branches — placeholder-skip; disambiguator
     # addr/args.

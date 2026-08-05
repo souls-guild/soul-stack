@@ -247,7 +247,7 @@ tasks:
   # STRICTLY BEFORE any vault()-read) is pinned by the guard test
   # keeper/internal/render/redis_create_secrets_passage_test.go.
   #
-  # targets are COMPUTED from the SAME service vars/input as the read-tasks (drift between "what we
+  # targets are COMPUTED from the SAME service vars / input as the read-tasks (drift between "what we
   # generate" and "what we read" = a bug, so the user list is NOT hardcoded): the main
   # secret/redis/<inc> #password + per-user union(system_acl_users, system_acl_users_sentinel)
   # WITHOUT default (sentinel default → the main secret) + operator-extra input.users. policy

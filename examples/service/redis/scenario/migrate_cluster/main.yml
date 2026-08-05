@@ -180,7 +180,7 @@ input:
           guarantee). Defaults to false (compare).
 
 # ── Declarative input invariants: migrate_cluster DELTA on top of covenant.validate ──
-# INPUT-ONLY (service vars/soulprint are unavailable — a structural CEL barrier). The create
+# INPUT-ONLY (service vars, soulprint are unavailable — a structural CEL barrier). The create
 # invariant (operator-extra ACL name is not a reserved one) — in covenant. Here —
 # source.hosts + the cluster_topology reject. ★ ADD-ONLY on top of covenant.validate:
 # validate sections ACCUMULATE (mergeValidateSections — append, predicate rules, not map

@@ -126,7 +126,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 3. vector is deployed (apply:destiny vector → binary install). Marker of presence of
     #    the log-shipping sub-destiny (Slice V-I): the single core.file.present with the

@@ -338,7 +338,7 @@ right side overrides the left by top-level key):
 3. computed `maxmemory` + `maxmemory-policy` - derived from `memory_mb` / input;
 4. `input.redis_settings` - operator passthrough (overrides everything).
 
-The translation data tables live in [`service vars/_default.yaml`](service vars/_default.yaml):
+The translation data tables live in [`vars/00-base.yaml`](vars/00-base.yaml):
 `persistence_presets`, `memory_reserve_percent`, the `redis_config` merge base layer.
 
 Translation walked through one field at a time:
@@ -377,7 +377,7 @@ choice): there are no operator flags, the tasks are **always** rendered.
   parameters are a **fixed Redis-tuning set**
   (memory/fork overcommit, swappiness, network buffers, backlogs, the TCP stack); the
   source of the values is the data table
-  [`service vars/_default.yaml → sysctl_settings`](service vars/_default.yaml) (not in operator
+  [`vars/00-base.yaml → sysctl_settings`](vars/00-base.yaml) (not in operator
   input - this is Redis-specific tuning, not an operational choice). The former
   `sysctl_enable` opt-out flag no longer **exists**. The role's `tcp_bbr` block was
   **not** ported (depends on the `tcp_bbr` kernel module, not loaded by default on
@@ -391,7 +391,7 @@ Besides operator-extra (`input.users`), the service **always merges in** a set o
 **system** ACL users into `users.acl`, without which the cluster won't work: `replica`
 (`PSYNC` replication), `monitoring` (metrics exporter), `sentinel` (AUTH
 sentinel↔redis), `haproxy` (load balancer health-check). Each one's perms are a fixed
-set and live in [`service vars/_default.yaml`](service vars/_default.yaml) (`system_acl_users` - for
+set and live in [`vars/00-base.yaml`](vars/00-base.yaml) (`system_acl_users` - for
 `redis-server`; `system_acl_users_sentinel` - for the sentinel daemon). The operator
 does **not set** and does **not see** them in the input form - this is author-context
 vars.
@@ -742,7 +742,7 @@ from a different version) fails the run at render time (**422 `assert_failed`**)
 **BEFORE applying**, with a clear message - rather than a late `redis-server` failure
 on the host.
 
-- **The catalog - `vars.redis_directives`** ([`service vars/_default.yaml`](service vars/_default.yaml)).
+- **The catalog - `vars.redis_directives`** ([`vars/00-base.yaml`](vars/00-base.yaml)).
   ★ The name `redis_directives` is a working name (proposed in this epic). Structure:
   key = Redis `major.minor` series, value = a flat list of valid directive names for
   that series. **Six** series are covered: `6.2` / `7.0` / `7.2` / `7.4` / `8.0` / `8.2`.

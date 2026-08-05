@@ -129,7 +129,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   # Both users passed the pattern in input validation and ended up in write-model state.
   # redis_users is an ARRAY of AclUser [{name,perms,state}] WITHOUT password (keeper-side vault).

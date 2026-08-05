@@ -58,7 +58,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # HOT-RELOAD ACL: community.redis.acl over a LOCAL UNIX socket (ACL LOAD brings the instance
     # to an empty operator set). AUTH as default_admin (requirepass removed).

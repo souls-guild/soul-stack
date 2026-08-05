@@ -2,6 +2,8 @@ package render
 
 import (
 	"context"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -425,5 +427,46 @@ func TestSecretInputNames_VaultScope(t *testing.T) {
 	}
 	if got["c"] {
 		t.Errorf("non-secret c ended up in the set: %v", got)
+	}
+}
+
+// TestRenderContext_RootKeySetIsClosed — the root of `render_context` is exactly
+// {vars, self, role}, plus `input` only when the template reads it (ADR-0082 §7,
+// ADR-010 amendment 2026-06-26).
+//
+// A closed set, asserted by name, because this root is a wire contract in a
+// shape the proto cannot police: it travels as a Struct inside
+// RenderedTask.params, so a key added, removed or renamed here moves nothing the
+// only-add rule can see. NIM-410 removed `essence` from it — and the fixture
+// migration renamed the key in 68 expected blocks instead of deleting it,
+// producing `service vars: {}`, a YAML key with a space that no renderer can
+// ever emit. Every one of those was an unsatisfiable assertion, and the whole
+// example corpus went red; nothing above the corpus noticed, because a case that
+// asserts an impossible value still LOADS.
+//
+// This test is the cheap version of that discovery: it fails the moment the root
+// gains or loses a name, without running a single example.
+func TestRenderContext_RootKeySetIsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		injectInput bool
+		want        []string
+	}{
+		{"template does not read .input", false, []string{"role", "self", "vars"}},
+		{"template reads .input", true, []string{"input", "role", "self", "vars"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := buildRenderContext(RenderInput{}, &topology.HostFacts{}, nil, nil, tc.injectInput)
+			got := make([]string, 0, len(rc))
+			for k := range rc {
+				got = append(got, k)
+			}
+			sort.Strings(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("render_context root keys = %v, want %v — this root is a wire "+
+					"contract the proto cannot police; changing it needs an ADR amendment "+
+					"and a sweep of every expected block in examples/", got, tc.want)
+			}
+		})
 	}
 }

@@ -123,7 +123,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # hot-reload ACL LOAD - plain instance. * default_admin REDESIGN: AUTH uses default_admin.
     - module: community.redis.acl

@@ -6,7 +6,7 @@
 # renders normally. Paired with redis-settings-directive-unknown (there an
 # unknown name breaks the render).
 #
-# The catalog in the fixture is a SUBSET (not the full service vars/_default.yaml):
+# The catalog in the fixture is a SUBSET (not the full vars/00-base.yaml):
 # the assert checks key membership, for a positive case it's enough that the
 # passed name IS in the series set.
 name: redis_settings with a valid directive name for the chosen version passes the catalog assert

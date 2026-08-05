@@ -127,7 +127,7 @@ func TestExamples_NoRetiredVarsKey(t *testing.T) {
 			return nil
 		}
 		switch filepath.Ext(path) {
-		case ".yml", ".yaml", ".tmpl":
+		case ".yml", ".yaml", ".tmpl", ".md", ".hcl":
 		default:
 			return nil
 		}
@@ -138,9 +138,12 @@ func TestExamples_NoRetiredVarsKey(t *testing.T) {
 		}
 		scanned++
 		for i, line := range strings.Split(string(data), "\n") {
-			if strings.Contains(line, retiredVarsRoot) {
-				t.Errorf("examples/%s:%d references the retired root: %s",
-					relTo(root, path), i+1, strings.TrimSpace(line))
+			for _, retired := range retiredVarsRoots {
+				if strings.Contains(line, retired) {
+					t.Errorf("examples/%s:%d references the retired layer: %s",
+						relTo(root, path), i+1, strings.TrimSpace(line))
+					break
+				}
 			}
 		}
 		return nil
@@ -153,12 +156,17 @@ func TestExamples_NoRetiredVarsKey(t *testing.T) {
 	}
 }
 
-// retiredVarsDir / retiredVarsRoot — the pre-ADR-0082 names. A tree still carrying
-// either one was migrated halfway.
-const (
-	retiredVarsDir  = "essence"
-	retiredVarsRoot = "essence."
-)
+// retiredVarsDir / retiredVarsRoots — the pre-ADR-0082 names. A tree still
+// carrying any of them was migrated halfway.
+//
+// Both spellings are checked, not just `essence.`. The dotted one is the CEL
+// read; the bare `essence:` is the fixture key, which strict decode catches in an
+// L0 case but NOT in an L1 or L2 one — those are recognised by soft pre-parse and
+// never decoded, so five of the shipped cases were invisible to the load test.
+// This scan opens every file regardless of level.
+const retiredVarsDir = "essence"
+
+var retiredVarsRoots = []string{"essence.", "essence:"}
 
 func relTo(root, path string) string {
 	rel, err := filepath.Rel(root, path)

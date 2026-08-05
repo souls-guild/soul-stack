@@ -60,7 +60,7 @@ input:
   #
   # ★ The conf_dir/data_dir layout is also NOT operator input (#2): the defaults moved
   # to service vars (conf_dir/data_dir), compute reads them from there. Override is in the
-  # incarnation's the service vars, not the Run form. conf_dir/data_dir are NOT persisted
+  # the service vars, not the Run form. conf_dir/data_dir are NOT persisted
   # in state (state_changes doesn't write them, see below) - layout lives in service vars,
   # day-2 add_node reads vars.conf_dir/data_dir (has()-safe default). The only
   # place to change it is vars.
@@ -350,7 +350,7 @@ input:
 # validate: — cross-field preconditions on the INPUT that can't be expressed by a
 # single schema key and aren't covered by required_when (presence) or
 # enum/min/max (a single field). The rule context is INPUT-ONLY (only input.*;
-# service vars/soulprint/roster are unavailable - a structural CEL barrier). The first
+# service vars, soulprint/roster are unavailable - a structural CEL barrier). The first
 # failure -> 422 validation_failed BEFORE the incarnation commit and BEFORE
 # applying (like required_when), with the rule's message to the operator.
 #
@@ -401,7 +401,7 @@ validate:
   # (author-context, default ""), and the validate context is INPUT-ONLY - service vars is
   # unavailable there (a structural CEL barrier). Checking whether
   # vars.modules_base_url is filled in can't be done here. The service vars substrate
-  # supplies a default source, the a fleet forks this repo and edits it here; an empty
+  # supplies a default source, a fleet forks this repo and edits it here; an empty
   # source on Redis < 8 will surface at destiny render time (the .so URL), not at
   # input validation.
 
@@ -498,7 +498,7 @@ compute:
          : ['bloom', 'json', 'search', 'timeseries'] }
   # ── Source of the Redis modules' .so files (service vars placeholder, 2026-06-25) ─────────────
   # modules_base_url moved from operator-input into vars.modules_base_url
-  # (author-context, default ""; the a fleet forks this repo and edits it here). Declared
+  # (author-context, default ""; a fleet forks this repo and edits it here). Declared
   # as ONE compute var so that the branches (apply.input.modules_base_url) and
   # state_changes read the same value. default() catches a missing key on an
   # existing service vars map; default "" mirrors the former
@@ -583,7 +583,7 @@ compute:
          : default(vars.install_package, {'method': 'package'}) }
   # ── Effective host layout: conf_dir/data_dir from service vars (#2) ───────────────
   # ★ #2 (2026-06-26): conf_dir/data_dir are NO LONGER operator input - the defaults
-  # moved into service vars (conf_dir/data_dir; the a fleet forks this repo and edits it here).
+  # moved into service vars (conf_dir/data_dir; a fleet forks this repo and edits it here).
   # Declared as SEPARATE compute vars so that redis_config (TLS paths below), the branches
   # (apply.input.conf_dir/data_dir), and state_changes all read ONE resolved value.
   # default(vars.<x>, …) - the author-context default = the current path (back-compat). host
@@ -748,7 +748,7 @@ state_changes:
   # read-model). Versions/ports - from vars.node_exporter_*/redis_exporter_* (the same values
   # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
   # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
-  # duplicate service vars/migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
+  # duplicate the service vars / migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
   - set: monitoring
     value: >-
       ${ {
@@ -761,7 +761,7 @@ state_changes:
   # monitoring). Version/sink_type/endpoint/log_sources - from vars.vector_* (the same values
   # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
   # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
-  # monitoring password). The defaults duplicate service vars/migration 013_to_014 (console - a safe default with no
+  # monitoring password). The defaults duplicate the service vars / migration 013_to_014 (console - a safe default with no
   # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
   - set: logging
     value: >-

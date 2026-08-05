@@ -177,7 +177,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # ── JOIN: community.redis.cluster action:join-external ───────────────────────
     # nodes-MAP is deterministic (key=SID, addr=primary_ip+":6379"), shards_dest=2,

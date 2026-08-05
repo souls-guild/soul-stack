@@ -72,7 +72,7 @@ fixtures:
       vm.swappiness:        "1"
       net.core.somaxconn:   "65535"
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 with service vars/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 with vars/00-base.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if
     # either set is empty (silent fail-open is unacceptable - without them replication/sentinel<->redis
     # AUTH would break).

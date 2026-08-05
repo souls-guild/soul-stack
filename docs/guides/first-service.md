@@ -32,7 +32,7 @@ Layout of our `hello-world` (minimum - only `service.yml` and at least one scrip
 hello-world/
 ├── service.yml                     # manifest: name, state-schema version, structure incarnation.state
 ├── vars/
-│   └── _default.yaml               # baseline parameters for all incarnations (background)
+│   └── 00-base.yaml               # baseline parameters for all incarnations (background)
 └── scenario/
     ├── create/
     │   ├── main.yml                # "create" operation: input + state_changes + tasks

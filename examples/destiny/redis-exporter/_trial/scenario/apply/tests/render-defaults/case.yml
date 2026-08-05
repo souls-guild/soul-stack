@@ -86,7 +86,6 @@ assert:
             covens: [apply]
             role: ""
           role: ""
-          service vars: {}
 
     - module: core.service.running
       params_subset:

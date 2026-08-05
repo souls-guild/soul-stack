@@ -80,7 +80,7 @@ fixtures:
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE MANDATORY: the guard in create/sentinel.yml (assert 1b) aborts render if
     # either set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -211,7 +211,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # PING health-gate: under tls_only the plugin goes over TLS (tls=true, addr on tls_port,
     # tls_ca = CA-PEM from vault). Proves "the plugin MUST use TLS". cluster/sentinel

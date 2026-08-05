@@ -71,7 +71,7 @@ fixtures:
     # version=8.0.3 (major 8 -> redis8) -> version-guard suppresses modules (built into Redis 8).
     binary_base_url: "https://downloads.example.com/redis"
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from vars/00-base.yaml).
     # BOTH ARE REQUIRED: the guard in create/sentinel.yml (assert 1b) breaks rendering if
     # either set is empty (a silent fail-open is unacceptable - without them replication/
     # sentinel<->redis AUTH would break).
@@ -179,7 +179,6 @@ assert:
               arch: amd64
               version: "12"
           role: ""
-          service vars: {}
 
     # standalone-PING: cluster/sentinel branches - placeholder-skip; disambiguator addr/args.
     - module: community.redis.command

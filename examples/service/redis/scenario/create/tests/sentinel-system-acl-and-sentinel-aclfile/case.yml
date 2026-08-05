@@ -129,7 +129,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # sentinel-users.acl (sentinel daemon, SECOND aclfile): system sentinel users (4, WITH
     # default_admin). ★ default_admin REDESIGN: all system users (incl. default_admin) go through
@@ -173,7 +172,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   state_changes:
     redis_type: sentinel

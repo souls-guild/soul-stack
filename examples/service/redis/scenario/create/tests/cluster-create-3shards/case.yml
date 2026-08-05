@@ -107,7 +107,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server (1:1 from service vars/_default.yaml). REQUIRED:
+    # System ACL users of redis-server (1:1 from vars/00-base.yaml). REQUIRED:
     # the create/cluster.yml guard (assert 1b) breaks the render if system_acl_users is empty
     # (silent fail-open is unacceptable — without them replication/health-check would break).
     # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system user
@@ -204,7 +204,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.

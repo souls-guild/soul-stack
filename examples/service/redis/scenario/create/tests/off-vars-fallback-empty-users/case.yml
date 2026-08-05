@@ -41,7 +41,7 @@ fixtures:
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
-    # System ACL users (1:1 from service vars/_default.yaml) are REQUIRED: the
+    # System ACL users (1:1 from vars/00-base.yaml) are REQUIRED: the
     # create/sentinel.yml guard (assert 1b) breaks the render if any set is empty.
     # operator-extra (input.users) is empty, so users.acl gets ONLY these system users.
     system_acl_users:
@@ -153,7 +153,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # redis.conf: maxmemory/policy come ENTIRELY from service vars (computed layer is empty).
     - module: core.file.rendered
@@ -203,7 +202,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
   state_changes:
     redis_type: sentinel

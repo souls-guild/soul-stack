@@ -67,7 +67,7 @@ fixtures:
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # System ACL users of redis-server (1:1 from service vars/_default.yaml). MANDATORY:
+    # System ACL users of redis-server (1:1 from vars/00-base.yaml). MANDATORY:
     # the create/cluster.yml guard (assert 1b) breaks the render on an empty system_acl_users
     # (a silent fail-open is unacceptable — replication/health-check would break without them).
     # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of full access
@@ -154,7 +154,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # cluster-build: nodes MAP on tls_port (7379), tls=true + tls_ca (plugin over TLS) +
     # mTLS client-cert (tls_cert/tls_key for the mutual cluster bus, tls-cluster yes).

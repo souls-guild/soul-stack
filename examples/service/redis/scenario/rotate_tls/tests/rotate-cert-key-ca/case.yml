@@ -202,7 +202,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 1c. ★ GUARD for replica→master AUTH: rotate_tls re-renders the ENTIRE destiny
     #     redis brick (incl. redis.conf), so the config map MUST carry
@@ -252,7 +251,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: a terminal core.noop.run(register=tls_certs):
     #    the onchanges-gate anchor (id disambiguator; register∪id, see

@@ -117,7 +117,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. HOT-RELOAD: community.redis.config to the live plain instance. addr 6379 (plain),
     #    tls=false, rewrite=false (NIM-53: the file is the render from step 1), config = recomputed

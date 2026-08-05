@@ -3,7 +3,7 @@
 # Render-only, hermetic.
 #
 # ★ Invariant (convention §7a, ADR-057 amendment): the TLS discriminator is read from
-# the NAMED incarnation.state.tls (state_schema v3), NOT from service vars/redis_config.
+# the NAMED incarnation.state.tls (state_schema v3), NOT from the service vars.
 # When state.tls.enable=true, the hot-reload step (community.redis.config) must connect
 # over TLS: addr on state.tls.port, tls=true, tls_ca = PEM CA from vault(state.tls.ca_ref)
 # (current after rotate_tls, NOT the service vars default). Otherwise a plaintext connect to a TLS-only
@@ -123,7 +123,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # 2. HOT-RELOAD OVER TLS: community.redis.config, addr on the tls port (7379), tls=true,
     #    tls_ca = PEM CA, rewrite=false (NIM-53: step 1's redis.conf is the file's source of truth).

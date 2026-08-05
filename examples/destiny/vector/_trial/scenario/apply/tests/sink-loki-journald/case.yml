@@ -76,7 +76,6 @@ assert:
             os:
               arch: arm64
           role: ""
-          service vars: {}
 
     # unit: render_context.vars.sink_token is the resolved collector secret (passed into
     # Environment=VECTOR_SINK_TOKEN). journald=true → the template adds SupplementaryGroups
@@ -120,7 +119,6 @@ assert:
             os:
               arch: arm64
           role: ""
-          service vars: {}
 
     - module: core.service.running
       params_subset:

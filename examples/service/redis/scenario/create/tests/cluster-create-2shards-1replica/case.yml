@@ -68,7 +68,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server (1:1 from service vars/_default.yaml). MANDATORY:
+    # System ACL users of redis-server (1:1 from vars/00-base.yaml). MANDATORY:
     # guard create/cluster.yml (assert 1b) aborts rendering when system_acl_users is empty
     # (silent fail-open is unacceptable — without them replication/health-checks would break).
     # * default_admin REDESIGN (2026-06-30): default_admin — the full-access system user
@@ -153,7 +153,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # cluster-build: nodes-MAP of all 4 hosts (deterministic by SID). plugin param
     # replicas_per_shard=1 (from input.replicas_per_master) goes into the plugin. The only

@@ -148,7 +148,6 @@ assert:
             os:
               arch: amd64
           role: ""
-          service vars: {}
 
     # -- modules-dir is created (include modules.yml active) --
     # Disambiguator from systemd-dropin-dir (same core.directory.present) - path.
