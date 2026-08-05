@@ -1056,7 +1056,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `redis.*` | — | yes | Connection-strings + password. |
 | `vault.addr` | — | yes | Open Vault-client connection. |
 | `vault.auth.*` | — | yes | Re-auth only at the start. |
-| `vault.pki_mount` | yes | — | Read per-request. |
+| `vault.pki_mount` / `vault.pki_role` | partly | partly | Live only where the value is pulled through a `store.Get()` closure: `core.cert.issued` and the Reaper cert-rotator. The onboarding paths capture both at startup — Bootstrap-RPC (`BootstrapDeps`) and seed rotation (`SeedRotationDeps`) — so after a reload new SoulSeeds are still issued from the old mount/role. Treat a PKI move as restart-required. |
 | `auth.jwt.signing_key_ref` | — | yes | The Signing key is loaded into memory at start. |
 | `auth.jwt.issuer` / `ttl_default` / `exchange_ttl` | — | yes | Read once at startup: `issuer` is baked into the JWT verifier/issuer, the TTLs are captured by the operator service and the `/auth/token` handler when they are constructed. A reload swaps the config snapshot, but tokens keep being issued with the old `iss` and the old lifetime. Already issued JWTs are valid until their own `exp` in any case. |
 | `auth.jwt.ttl_bootstrap` | — | — | Not used by the daemon at all: it is read by the `keeper init` subcommand, which parses the file at each invocation. |
@@ -1064,7 +1064,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `otel.*` | — | yes | Re-init exporter/connection; `SetupOTel` is called once per process ([ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). |
 | `logging.level` | yes | — | In-memory variable. |
 | `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init log writer / file handles. |
-| `plugins.*` | yes | — | Cache reload artifact-store. |
+| `plugins.*` | — | yes | Read once by the startup phases: the git resolver is built with `cache_root` / `work_root` / `fetch_timeout` and both size ceilings baked in, and the `cloud_drivers[]` / `ssh_providers[]` catalog is resolved into slots there. Nothing re-runs those phases, so a driver added to the catalog appears only after a restart. |
 | `reaper.enabled` / `dry_run` / `batch_size` / `rules.*` | yes | — | In-memory loop, next iteration sees new things. |
 | `reaper.interval` | yes | — | Next iteration with a new interval. |
 | `reaper.lock_ttl` | — | yes | Redis-lease TTL is set upon acquire. |
