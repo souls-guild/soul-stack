@@ -159,9 +159,14 @@ type incHistoryInput struct {
 	// they carry state_before == state_after and never gain an outcome, so in a
 	// feed of state changes they read as a run that happened and changed nothing,
 	// which is also what a failed run looks like. Opt in to see them.
-	IncludeTransitions bool  `query:"include_transitions" default:"false" doc:"opt. include the rerun-transition markers (excluded by default)"`
-	Offset             int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
-	Limit              int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+	IncludeTransitions bool `query:"include_transitions" default:"false" doc:"opt. include the rerun-transition markers (excluded by default)"`
+	// IncludeArchived — the retention sweep (ADR-Q19) archives a snapshot after
+	// 365 days; archived rows are excluded by default. Without this the exclusion
+	// was unconditional, so an operator investigating an old incarnation saw
+	// "no history" rather than "history past the horizon".
+	IncludeArchived bool  `query:"include_archived" default:"false" doc:"opt. include soft-deleted (archived) snapshots (excluded by default)"`
+	Offset          int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit           int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // incHistoryOutput — huma-output GET /v1/incarnations/{name}/history (FULL-TYPED). Body

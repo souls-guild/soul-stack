@@ -1170,7 +1170,12 @@ type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 // HistoryTyped — extracted domain function GET /v1/incarnations/{name}/history
 // (READ, typed query). existence-probe (404) + scope gate (out of scope → 404, parity
 // Get) via the passed inScope predicate. CheckPageBounds → 400; bad apply_id → 400.
-func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID string, includeTransitions bool, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
+// HistoryTyped takes the filter as a struct rather than as a tail of positional
+// flags. Two bools in a row (include_transitions, include_archived) are a
+// transposition a compiler cannot see: swap them at one call site and both
+// endpoints keep building, both return rows, and the only symptom is the wrong
+// rows. The struct makes each one named at every call site.
+func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name string, filter incarnation.HistoryFilter, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
 	var zero IncarnationHistoryReply
 
 	if !incarnation.ValidName(name) {
@@ -1180,16 +1185,9 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 		return zero, incProblem(problem.TypeMalformedRequest, err.Error())
 	}
 
-	var filter incarnation.HistoryFilter
-	if applyID != "" {
-		if !audit.IsValidULID(applyID) {
-			return zero, incProblem(problem.TypeMalformedRequest,
-				"query 'apply_id' must be a Crockford-base32 ULID (26 chars)")
-		}
-		filter.ApplyID = applyID
-	}
-	if includeTransitions {
-		filter.IncludeTransitions = true
+	if filter.ApplyID != "" && !audit.IsValidULID(filter.ApplyID) {
+		return zero, incProblem(problem.TypeMalformedRequest,
+			"query 'apply_id' must be a Crockford-base32 ULID (26 chars)")
 	}
 
 	inc, err := incarnation.SelectByName(ctx, h.db, name)

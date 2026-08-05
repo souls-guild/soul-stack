@@ -8463,6 +8463,14 @@ paths:
             default: false
             description: opt. include the rerun-transition markers (excluded by default)
             type: boolean
+        - description: opt. include soft-deleted (archived) snapshots (excluded by default)
+          explode: false
+          in: query
+          name: include_archived
+          schema:
+            default: false
+            description: opt. include soft-deleted (archived) snapshots (excluded by default)
+            type: boolean
         - description: offset from start of set, ≥0 (out-of-range → 400)
           explode: false
           in: query

@@ -25,6 +25,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
@@ -152,7 +153,11 @@ func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	if v := q.Get("limit"); v != "" {
 		limit, _ = strconv.Atoi(v)
 	}
-	reply, err := h.HistoryTyped(r.Context(), name, q.Get("apply_id"), q.Get("include_transitions") == "true", offset, limit, h.GetInScopeFor(claims, "history"))
+	reply, err := h.HistoryTyped(r.Context(), name, incarnation.HistoryFilter{
+		ApplyID:            q.Get("apply_id"),
+		IncludeTransitions: q.Get("include_transitions") == "true",
+		IncludeArchived:    q.Get("include_archived") == "true",
+	}, offset, limit, h.GetInScopeFor(claims, "history"))
 	if err != nil {
 		renderProblem(rec, err)
 		return rec

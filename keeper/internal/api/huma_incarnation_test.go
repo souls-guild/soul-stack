@@ -1379,3 +1379,64 @@ func TestHumaIncarnation_History_IncludeTransitions(t *testing.T) {
 		})
 	}
 }
+
+// TestHumaIncarnation_History_IncludeArchived — the second opt-in, at the layer
+// where it can fail to arrive.
+//
+// Same shape and same reason as the transitions one above, and the same defect:
+// HistoryFilter.IncludeArchived was read by the query builder and set by nothing
+// at all, so the exclusion of archived snapshots was unconditional and the option
+// existed only in a signature. Retention (ADR-Q19) archives a snapshot after 365
+// days, so an operator investigating an old incarnation got "no history" rather
+// than "history past the horizon" — with no way to ask for it.
+//
+// Asserted on the SQL again, not the body: the fake returns the same rows either
+// way, so a body check passes with the parameter going nowhere. The two flags are
+// exercised together as well, because they are adjacent booleans on the same
+// filter and a transposition is exactly what the struct-valued signature exists
+// to make impossible.
+func TestHumaIncarnation_History_IncludeArchived(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		query        string
+		wantArchived bool // `archived_at IS NULL` predicate present
+		wantMarkers  bool // `scenario <>` predicate present
+	}{
+		{"default excludes both", "", true, true},
+		{"archived opt-in only", "?include_archived=true", false, true},
+		{"transitions opt-in only", "?include_transitions=true", true, false},
+		{"both opt in", "?include_archived=true&include_transitions=true", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &incTestDB{selectByName: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{},
+				&incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+				incTestScoper{unrestricted: true}, nil)
+			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v1/incarnations/redis-prod/history"+tc.query, http.NoBody))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+
+			var sawHistorySQL bool
+			for _, sql := range db.seenSQL {
+				if !strings.Contains(sql, "FROM state_history") {
+					continue
+				}
+				sawHistorySQL = true
+				if got := strings.Contains(sql, "archived_at IS NULL"); got != tc.wantArchived {
+					t.Errorf("archived_at predicate present = %v, want %v; SQL=%q", got, tc.wantArchived, sql)
+				}
+				if got := strings.Contains(sql, "scenario <>"); got != tc.wantMarkers {
+					t.Errorf("scenario <> predicate present = %v, want %v; SQL=%q", got, tc.wantMarkers, sql)
+				}
+			}
+			if !sawHistorySQL {
+				t.Fatal("no state_history query was issued — the assertion above proved nothing")
+			}
+		})
+	}
+}

@@ -1428,6 +1428,7 @@ var (
 "name":{"type":"string"},
 "apply_id":{"type":"string"},
 "include_transitions":{"type":"boolean"},
+"include_archived":{"type":"boolean"},
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"maximum":1000}}}`)
 

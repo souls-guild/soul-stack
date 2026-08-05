@@ -17,6 +17,7 @@ package api
 
 import (
 	"context"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -300,7 +301,11 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	}
 	huma.Register(humaAPI, incHistoryOperation(), func(ctx context.Context, in *incHistoryInput) (*incHistoryOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.HistoryTyped(ctx, in.Name, in.ApplyID, in.IncludeTransitions, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
+		reply, err := incH.HistoryTyped(ctx, in.Name, incarnation.HistoryFilter{
+			ApplyID:            in.ApplyID,
+			IncludeTransitions: in.IncludeTransitions,
+			IncludeArchived:    in.IncludeArchived,
+		}, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
 		if err != nil {
 			return nil, incProblem(err)
 		}

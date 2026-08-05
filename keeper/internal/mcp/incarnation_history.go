@@ -20,9 +20,11 @@ type incarnationHistoryArgs struct {
 	ApplyID string `json:"apply_id"`
 	Offset  *int   `json:"offset"`
 	Limit   *int   `json:"limit"`
-	// IncludeTransitions — parity with the REST query param of the same name:
-	// the rerun-transition markers are excluded by default.
+	// IncludeTransitions / IncludeArchived — parity with the REST query params of
+	// the same names: the rerun-transition markers and the archived snapshots are
+	// both excluded by default.
 	IncludeTransitions bool `json:"include_transitions"`
+	IncludeArchived    bool `json:"include_archived"`
 }
 
 // incarnationHistoryEntry — one element of the history output. Mirrors the
@@ -96,6 +98,7 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 		}
 		filter.ApplyID = a.ApplyID
 	}
+	filter.IncludeArchived = a.IncludeArchived
 	if a.IncludeTransitions {
 		filter.IncludeTransitions = true
 	}
