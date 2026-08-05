@@ -168,7 +168,7 @@ assert:
             # mirrors the production roster `WHERE $1 = ANY(coven)`. This is harness
             # behavior from the start (see fixtureHosts), not an artifact of the
             # multi-host enabler.
-            covens: [create]
+            covens: []
             choirs: []
             # traits — operator-set key-value labels (ADR-060), a registry projection
             # like covens/choirs; no traits on the host → empty object.
@@ -256,7 +256,7 @@ assert:
           self:
             sid: trial-host
             # see node_exporter unit above: covens carries the incarnation.name label.
-            covens: [create]
+            covens: []
             choirs: []
             # traits — registry projection (ADR-060), empty object without labels.
             traits: {}

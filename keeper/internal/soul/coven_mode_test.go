@@ -101,15 +101,15 @@ func TestBuildBulkWhere_EmptySelector(t *testing.T) {
 
 // GUARD (NIM-250): All by itself adds no clause; scope gate (a) adds the coven
 // predicate, and it must be the SAME predicate the RBAC pushdown renders — the
-// hosts a bulk call may touch are the hosts the operator can see. Matching the
-// raw column here while the list resolved inherited labels made bulk silently
-// skip hosts the operator was looking at.
+// hosts a bulk call may touch are the hosts the operator can see. Rendering a
+// different shape here than the list does makes bulk silently skip hosts the
+// operator is looking at, with no error anywhere.
 func TestBuildBulkWhere_AllWithScope(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{All: true}, BulkScope{Covens: []string{"dev"}})
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	want := " WHERE " + rbac.CovenScopeSQL("souls.coven", "souls.sid", "$1")
+	want := " WHERE " + rbac.CovenScopeSQL("souls.coven", "$1")
 	if where != want {
 		t.Errorf("where = %q, want %q (the RBAC coven predicate verbatim)", where, want)
 	}
@@ -259,18 +259,18 @@ func TestBulkSelector_IncarnationPlusStatus(t *testing.T) {
 }
 
 // Incarnation+Coven: two predicates asking DIFFERENT questions, AND-combined.
-// GUARD (NIM-250 / ADR-080): Coven is a LABEL question and resolves effective
-// labels (the RBAC coven predicate verbatim); Incarnation is a MEMBERSHIP
-// question and stays the plain relation subquery. Answering membership from the
-// label union would let a host-attached tag spelled like an incarnation pass for
-// belonging to it.
+// GUARD (NIM-250 / NIM-281): Coven is a LABEL question and matches the host's own
+// `souls.coven` (the RBAC coven predicate verbatim); Incarnation is a MEMBERSHIP
+// question and stays the plain relation subquery. Neither may answer the other:
+// a label an operator attached says nothing about belonging, and belonging
+// attaches no label.
 func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Coven: "stage", Incarnation: "redis"},
 		BulkScope{Unrestricted: true})
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	want := " WHERE " + rbac.CovenScopeSQL("souls.coven", "souls.sid", "$1") +
+	want := " WHERE " + rbac.CovenScopeSQL("souls.coven", "$1") +
 		" AND sid IN (SELECT sid FROM incarnation_membership WHERE incarnation_name = $2)"
 	if where != want {
 		t.Errorf("where = %q, want %q", where, want)

@@ -110,16 +110,16 @@ func (d *OracleDeps) validate() error {
 }
 
 // vigilSource — implements [VigilSource] over the vigils + souls registry
-// (connect-time broadcast VigilSnapshot, ADR-030). Resolves the host's
-// effective covens ([subjectCovens]), then the active Vigil set by
-// sid ∪ covens, and projects it into transport [keeperv1.VigilDef]. Wired up
-// in the daemon with the same pool as OracleDeps.DB.
+// (connect-time broadcast VigilSnapshot, ADR-030). Resolves the host's covens
+// ([subjectCovens]), then the active Vigil set by sid ∪ covens, and projects it
+// into transport [keeperv1.VigilDef]. Wired up in the daemon with the same pool
+// as OracleDeps.DB.
 //
-// It reads the same label union as the Decree side deliberately: a Vigil and
-// the Decree reacting to its Portents are written against one subject
-// expression, so a rule scoped to an incarnation must reach the host on both
-// halves or the chain is broken at the quieter end — the check never ships,
-// and no Portent is ever emitted to match against.
+// It reads the covens exactly as the Decree side does — the host's own tags
+// (NIM-281) — and that agreement is deliberate: a Vigil and the Decree reacting
+// to its Portents are written against one subject expression, so a rule must
+// reach the host on both halves or the chain breaks at the quieter end — the
+// check never ships, and no Portent is ever emitted to match against.
 type vigilSource struct {
 	db oracleDB
 }
@@ -170,8 +170,8 @@ func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*ke
 // Flow (default-deny):
 //  1. SelectDecreesByBeacon(beacon_name) — enabled Decrees on this Vigil.
 //     Empty → nothing (no rule → no action).
-//  2. Effective subject covens from the registry, own ∪ inherited (NOT from
-//     the payload).
+//  2. Subject covens from the registry — the host's own tags (NOT from the
+//     payload).
 //  3. For each Decree: SubjectMatches (sid/coven) — no → skip; membership in
 //     the target incarnation (the relation, not the labels) — no → skip;
 //     where-CEL (if set) over event.data — false → skip.
@@ -224,7 +224,7 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 	}
 
 	// Subject covens from the authoritative registry (NOT from the payload):
-	// own labels ∪ those inherited from the host's incarnations (ADR-080).
+	// the tags an operator attached to this host (NIM-281).
 	covens, err := subjectCovens(ctx, deps.DB, sid)
 	if err != nil {
 		h.logger.Warn("eventstream: oracle subject covens resolve failed",
@@ -243,37 +243,26 @@ func (h *eventStreamHandler) handlePortentEvent(ctx context.Context, sid, sessio
 	}
 }
 
-// subjectCovens resolves the EFFECTIVE covens of a Vigil/Decree subject by
-// authoritative SID: the host's own `souls.coven[]` unioned with the covens it
-// inherits from every incarnation it belongs to — each incarnation's `covens[]`
-// plus its name (label inheritance, ADR-080).
+// subjectCovens resolves the covens of a Vigil/Decree subject by authoritative
+// SID: the host's own `souls.coven[]` and nothing else.
 //
-// ★ The union is what makes an incarnation-scoped rule work at all. Before
-// NIM-124 the incarnation's name was physically injected into `souls.coven[]`,
-// so `subject_coven: [<incName>]` matched its hosts as a side effect of the
-// copy. NIM-124 removed the copy (membership became `incarnation_membership`)
-// and ADR-080 replaced it with a read-time union — but the Oracle was not
-// converted along with the other readers, so an incarnation-scoped Vigil or
-// Decree silently stopped matching anything (NIM-224). Reading the union here
-// puts the reactor back in step with RBAC visibility and targeting, which
-// resolve the same labels the same way.
-//
-// The union itself is [soul.EffectiveCovens], shared with the other readers of
-// the axis; what stays here is the Oracle's policy for an absent host.
+// A coven tag exists only where an operator attached it (NIM-281). Belonging to
+// an incarnation is not a label, so `subject_coven: [<incarnation-name>]` does
+// NOT reach that incarnation's members — it reaches the hosts an operator tagged
+// that way. A rule that means "the members of X" belongs on the membership
+// relation, not on the coven axis.
 //
 // ErrSoulNotFound → empty covens (the host isn't registered yet; a sid-rule can
-// still match by SID, a coven-rule cannot). Inheritance needs no separate
-// absence case: `incarnation_membership` carries an FK on `souls`, so an
-// unregistered host has no memberships to inherit from.
+// still match by SID, a coven-rule cannot).
 func subjectCovens(ctx context.Context, db oracleDB, sid string) ([]string, error) {
-	covens, err := soul.EffectiveCovens(ctx, db, sid)
+	s, err := soul.SelectBySID(ctx, db, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return covens, nil
+	return s.Coven, nil
 }
 
 // evaluateDecree applies one Decree to a Portent: subject match → where-CEL →
@@ -301,12 +290,11 @@ func (h *eventStreamHandler) evaluateDecree(
 	// cross-incarnation escalation, ADR-030(b)).
 	//
 	// ★ Read from `incarnation_membership`, NEVER from the covens resolved
-	// above. Membership stopped being derivable from the label layer twice
-	// over: NIM-124 moved it into its own relation, and ADR-080 then made the
-	// effective coven set a UNION that deliberately includes host-attached
-	// tags. Under that union `incName ∈ covens` also holds for a host merely
-	// tagged with the incarnation's name — a non-member handed the right to run
-	// that incarnation's scenarios, which is precisely what this gate refuses.
+	// above. NIM-124 moved membership into its own relation, and a coven tag is
+	// a label anyone with `soul.coven-assign` may attach: `incName ∈ covens`
+	// holds for any host merely tagged with the incarnation's name, which would
+	// hand a non-member the right to run that incarnation's scenarios — precisely
+	// what this gate refuses.
 	//
 	// A resolve failure is fail-closed (skip, like every other uncertainty in
 	// this handler): the guard is the last barrier before enqueueing a scenario

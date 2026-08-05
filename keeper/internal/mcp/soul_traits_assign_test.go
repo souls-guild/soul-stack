@@ -26,7 +26,7 @@ func traitsAssignAdminCfg() *rbactest.Config {
 
 // traitsAssignDevScopedCfg — operator restricted to coven=dev: may only change
 // traits on dev hosts (gate a). The second permission carries the trait-scope
-// that gate (b) checks (ADR-080), so the pair `x=y` these tests write is
+// that gate (b) checks (NIM-230), so the pair `x=y` these tests write is
 // admitted and gate (a) is what they exercise.
 func traitsAssignDevScopedCfg() *rbactest.Config {
 	return &rbactest.Config{

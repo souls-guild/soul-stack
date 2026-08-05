@@ -7,21 +7,22 @@
 // possible — the column still exists, the query still succeeds, the match set
 // is simply empty.
 //
-// The two of them need OPPOSITE fixes, which is the thing these tests are here
-// to keep straight:
+// The two of them ask DIFFERENT questions, which is the thing these tests are
+// here to keep straight:
 //
 //   - telemetry asks "which incarnation is this host owed a config from" — that
-//     is MEMBERSHIP, and it must be read from the relation, because the label
-//     union deliberately admits a host-attached tag spelled like an
-//     incarnation's name;
-//   - Augur asks "may this Rite see this host" — that is LABELS, and it must be
-//     read as the effective union, so a Rite scoped to an incarnation reaches
-//     its members.
+//     is MEMBERSHIP, and it must be read from the relation, because a coven tag
+//     is a label anyone may attach, a host tagged with an incarnation's name
+//     included;
+//   - Augur asks "may this Rite see this host" — that is LABELS, and it reads
+//     `souls.coven[]`, the tags an operator attached to the host (NIM-281). An
+//     incarnation's own labels describe the incarnation; they reach no host.
 //
-// The label half of the TELEMETRY axis is expressed differently since ADR-0082:
-// a service's vars have no hard-wired coven dimension, so the claim is proved
-// over a `vars/_stack.yaml` foreach step — the mechanism that replaced the
-// deleted hard-wired `coven/<label>.yaml` overlay.
+// The label half of the TELEMETRY axis is a different thing again, and worth not
+// confusing with either: since ADR-0082 a service's vars have no hard-wired
+// coven dimension, so the overlay claim is proved over a `vars/_stack.yaml`
+// foreach step reading `incarnation.covens` — the incarnation's own tags
+// selecting overlays of the incarnation's own config, never a label on a host.
 //
 // Live PG rather than the unit fakes: the defect was in which relation the SQL
 // touched, and every fixture below turns on hosts that differ ONLY by a
@@ -67,11 +68,11 @@ func resetCovenAxis(t *testing.T) {
 // hosts: a plain one (bound by the caller) and an OUTSIDER already tagged with
 // the incarnation's own name.
 //
-// That outsider is the whole point of the fixture. Under ADR-080 it has the
-// same effective covens as a member — the union cannot tell a tag from a
-// membership — so any consumer that answers a membership question from labels
-// serves it, and any consumer that answers a visibility question from the
-// relation stops serving real members. One fixture, both mistakes.
+// That outsider is the whole point of the fixture: it holds the incarnation's
+// name as an ordinary host tag and no membership row, so any consumer that
+// answers a membership question from labels serves it — and, read the other way
+// round, any consumer that answers a label question from the relation serves the
+// member instead. One fixture, both mistakes.
 func seedCovenAxis(t *testing.T, ctx context.Context, incCovens []string) {
 	t.Helper()
 	resetCovenAxis(t)
@@ -116,7 +117,7 @@ func bindCovenAxisMember(t *testing.T, ctx context.Context, sid string) {
 // newCovenAxisTelemetry assembles a live-PG telemetry source over a service
 // snapshot in a temp dir: manifest cadence 45s, plus an optional coven overlay
 // (declared by a `vars/_stack.yaml` foreach step, ADR-0082) that drops it to 15s
-// so an inherited label is observable in the result.
+// so the overlay's effect is observable in the result.
 func newCovenAxisTelemetry(t *testing.T, covenOverlay string) TelemetrySource {
 	t.Helper()
 	dir := t.TempDir()
@@ -202,13 +203,15 @@ func TestIntegration_TelemetryStopsWhenMemberUnbound(t *testing.T) {
 	}
 }
 
-// TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars — the other
-// half of the split. Membership decides WHICH service config the host is owed;
-// the incarnation's labels decide which overlays of that config apply. The tag
-// lives on the incarnation and on no host, so a delivery reading only
-// `souls.coven[]` — or one that dropped the incarnation's covens on the way to
-// the resolver — would serve the manifest's 45s instead of the overlay's 15s.
-func TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars(t *testing.T) {
+// TestIntegration_TelemetryIncarnationCovenSelectsServiceVarsOverlay — the other
+// half of the split, and the one most easily misread as inheritance. Membership
+// decides WHICH incarnation's config the host is owed; the incarnation's own
+// labels decide which overlays of THAT config apply. Nothing is projected onto
+// the host: the tag lives on the incarnation, the overlay is chosen while
+// resolving the incarnation's vars, and the host is merely served the result. A
+// delivery that dropped `incarnation.covens` on the way to the resolver would
+// serve the manifest's 45s instead of the overlay's 15s.
+func TestIntegration_TelemetryIncarnationCovenSelectsServiceVarsOverlay(t *testing.T) {
 	ctx := context.Background()
 	seedCovenAxis(t, ctx, []string{"cache"})
 	bindCovenAxisMember(t, ctx, covenAxisMember)
@@ -259,55 +262,79 @@ func augurStatusFor(t *testing.T, ctx context.Context, sid string) keeperv1.Augu
 	return recvReply(t, outCh).GetStatus()
 }
 
-// TestIntegration_AugurCovenRiteAuthorizesIncarnationMembers — a Rite scoped to
-// an incarnation's name authorizes its members. This one regressed loudly:
-// a subject matching no Rite is default-denied, so hosts started failing the
-// Augur step mid-apply rather than quietly doing nothing.
+// TestIntegration_AugurCovenRiteMatchesTagsNotMembership — a Rite's subject is a
+// LABEL selector, `coven` XOR `sid`, and under NIM-281 a label is only ever
+// where an operator put it. Binding a host to an incarnation attaches nothing,
+// so `coven: redis-prod` reaches the host TAGGED `redis-prod` and not the host
+// BOUND to the incarnation of that name — the fixture's two hosts differ in
+// exactly that, and the assertions run in exactly opposite directions.
 //
-// The tagged outsider is authorized here too, and that is correct rather than a
-// hole: a Rite's subject is a LABEL selector, `coven` XOR `sid`, with no
-// incarnation dimension to gate on, and host tags are operator-assigned. That
-// an incarnation-scoped Rite cannot tell members from same-named-tag holders is
-// a real if narrow gap in the Rite grammar, filed separately (NIM-280) rather
-// than papered over here with a membership check the model does not have.
-func TestIntegration_AugurCovenRiteAuthorizesIncarnationMembers(t *testing.T) {
+// The reading to resist is that the denial below is the NIM-249 defect
+// returning. It is not: NIM-249 was the subject resolving from a relation that
+// no longer carried tags, and it denied everyone. Here the tag holder is served,
+// which is what tells the two apart.
+//
+// What genuinely has no spelling now is "every member of incarnation X" as an
+// Augur subject — the Rite grammar has no incarnation dimension, and NIM-281
+// removed the tag projection that used to stand in for one. That gap is filed
+// separately (NIM-280) rather than papered over here with a membership check the
+// subject model does not have.
+func TestIntegration_AugurCovenRiteMatchesTagsNotMembership(t *testing.T) {
 	ctx := context.Background()
 	seedCovenAxis(t, ctx, nil)
 	seedCovenAxisRite(t, ctx, covenAxisInc)
 	bindCovenAxisMember(t, ctx, covenAxisMember)
 
-	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_OK {
-		t.Errorf("status = %v, want OK — a member must match a Rite scoped to its incarnation", got)
+	if got := augurStatusFor(t, ctx, covenAxisOutsider); got != keeperv1.AugurStatus_AUGUR_STATUS_OK {
+		t.Errorf("status = %v, want OK — the host an operator tagged %q must match a Rite scoped to it",
+			got, covenAxisInc)
+	}
+	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
+		t.Errorf("status = %v, want DENIED — a bind must not hand the host its incarnation's name as a tag", got)
 	}
 }
 
-// TestIntegration_AugurCovenRiteDeniesUnboundHost — the same Rite and the same
-// host without the membership row: nothing to inherit, no match, default-deny.
-func TestIntegration_AugurCovenRiteDeniesUnboundHost(t *testing.T) {
+// TestIntegration_AugurCovenRiteDeniesUntaggedHost — the same Rite and a host
+// carrying neither the tag nor the membership row: no match, default-deny.
+// Paired with the test above it pins that the tag alone does the work, with
+// membership neither helping nor being required.
+func TestIntegration_AugurCovenRiteDeniesUntaggedHost(t *testing.T) {
 	ctx := context.Background()
 	seedCovenAxis(t, ctx, nil)
 	seedCovenAxisRite(t, ctx, covenAxisInc)
 
 	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
-		t.Errorf("status = %v, want DENIED — no membership and no tag must not authorize", got)
+		t.Errorf("status = %v, want DENIED — no tag must not authorize", got)
 	}
 }
 
-// TestIntegration_AugurIncarnationTagReachesMembers — a tag put on the
-// incarnation, on no host at all, authorizes its members: `coven: cache` covers
-// every host of every incarnation tagged `cache`. This is the widening ADR-080
-// declared, and the reason the subject side must read the union rather than the
-// relation.
-func TestIntegration_AugurIncarnationTagReachesMembers(t *testing.T) {
+// TestIntegration_AugurIncarnationTagReachesNoHost — a tag put on the
+// incarnation and on no host reaches nobody, member or not. This is the
+// widening NIM-281 removed: `coven: cache` used to cover every host of every
+// incarnation tagged `cache`, an authorization an operator never granted on any
+// host and could not see by looking at one.
+//
+// The last leg tags the member itself and expects OK, so a green run cannot be
+// explained by a broken fixture — the same host, same Rite, one operator-made
+// tag apart.
+func TestIntegration_AugurIncarnationTagReachesNoHost(t *testing.T) {
 	ctx := context.Background()
 	seedCovenAxis(t, ctx, []string{"cache"})
 	seedCovenAxisRite(t, ctx, "cache")
 	bindCovenAxisMember(t, ctx, covenAxisMember)
 
-	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_OK {
-		t.Errorf("status = %v, want OK — an incarnation's tag is inherited by its members", got)
+	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
+		t.Errorf("status = %v, want DENIED — an incarnation's tag must not reach its members", got)
 	}
 	if got := augurStatusFor(t, ctx, covenAxisOutsider); got != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
-		t.Errorf("status = %v, want DENIED — a non-member inherits nothing from the incarnation", got)
+		t.Errorf("status = %v, want DENIED — an incarnation's tag must not reach a non-member either", got)
+	}
+
+	if _, err := integrationPool.Exec(ctx,
+		`UPDATE souls SET coven = ARRAY['linux', 'cache'] WHERE sid = $1`, covenAxisMember); err != nil {
+		t.Fatalf("tag member with cache: %v", err)
+	}
+	if got := augurStatusFor(t, ctx, covenAxisMember); got != keeperv1.AugurStatus_AUGUR_STATUS_OK {
+		t.Errorf("status = %v, want OK — the operator tagged this host %q by hand", got, "cache")
 	}
 }

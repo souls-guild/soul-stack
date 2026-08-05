@@ -64,9 +64,10 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 			"synod.revoke-role",
 			"synod.update",
 		},
-		// incarnation.bind-member / unbind-member are the R5 additions: under
-		// ADR-080 a bind hands the host its incarnation's labels, so it moves
-		// the host into the scope of every role scoped to them.
+		// incarnation.bind-member / unbind-member are the R5 additions: a bind
+		// attaches no label to the host (NIM-281), but it decides which
+		// incarnation's config the host is served and which membership-gated
+		// Decrees reach it — privilege worth naming in the roster on its own.
 		"incarnation": {
 			"incarnation.bind-member",
 			"incarnation.check-drift",

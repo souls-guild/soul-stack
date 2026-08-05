@@ -278,7 +278,7 @@ func (h *SoulHandler) AuthorizeReadScope(ctx context.Context, claims *jwt.Claims
 		h.logger.Error("soul.telemetry: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !h.inScopeWithInherited(ctx, claims, s) {
+	if !h.inScope(claims, s) {
 		return &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	return nil
@@ -308,11 +308,10 @@ func (h *SoulHandler) SIDsInIncarnationInScope(ctx context.Context, claims *jwt.
 	}
 	out := make([]string, 0, len(items))
 	for _, s := range items {
-		// Effective labels (ADR-080): every member inherits this incarnation's
-		// labels, and possibly another's — so the union is per host, not one
-		// lookup for the roster. Unrestricted short-circuits inside the gate,
-		// which is the case that would otherwise pay for it on every host.
-		if h.inScopeWithInherited(ctx, claims, s) {
+		// Judged on each host's own labels (NIM-281): membership of this
+		// incarnation attaches none, so being a member grants no visibility that
+		// the operator's scope does not already give.
+		if h.inScope(claims, s) {
 			out = append(out, s.SID)
 		}
 	}

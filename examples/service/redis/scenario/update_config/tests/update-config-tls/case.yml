@@ -113,7 +113,7 @@ assert:
               masterauth: default-admin-secret-pass
           self:
             sid: trial-host
-            covens: [update_config]
+            covens: []
             choirs: []
             # traits — registry projection (ADR-060), an empty object with no labels.
             traits: {}

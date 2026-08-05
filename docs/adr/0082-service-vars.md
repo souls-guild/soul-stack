@@ -187,12 +187,15 @@ a nested directory is only reachable through an explicit step, and one left unre
 raises the soul-lint diagnostic `vars_dir_nested` rather than vanishing quietly.
 
 **The capability the `coven/` layer provided survives; only its expression moves.**
-[ADR-0080](0080-label-inheritance-union.md) states that an incarnation's label reaches its
-members, and the live guard for it on this axis
-(`TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars`, NIM-248) proves the claim
-through a coven overlay. That guard is **retargeted onto a `foreach:` step, not deleted** —
-what it protects is still true, and a `_stack.yaml` that fans out over the incarnation's own
-labels is the new way to write it:
+The axis is **`incarnation.covens` — the labels of the incarnation itself**, selecting which
+layers of its OWN config get stacked. It never read a host label, and the live guard for it
+(`TestIntegration_IncarnationCovenSelectsServiceVarsOverlay`, NIM-248) proves exactly that.
+This is why [NIM-281](0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)
+— which removed label inheritance from the system entirely — leaves the mechanism untouched:
+what it deleted was the read-time union that put an incarnation's labels onto its member hosts,
+and this overlay was never on that path. The guard is **retargeted onto a `foreach:` step, not
+deleted** — what it protects is still true, and a `_stack.yaml` that fans out over the
+incarnation's own labels is the way to write it:
 
 ```yaml
 # vars/_stack.yaml

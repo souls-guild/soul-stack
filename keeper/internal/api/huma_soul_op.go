@@ -103,8 +103,8 @@ type SoulCovenAssignRequest struct {
 type SoulCovenAssignSelector struct {
 	All         bool     `json:"all,omitempty" doc:"no host filter (entire registry ∩ scope)"`
 	Sids        []string `json:"sids,omitempty" doc:"point list of hosts (SID = FQDN)"`
-	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts carrying this Coven tag, own or inherited from an incarnation they belong to, that incarnation's name included (ADR-080)"`
-	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the label union above (ADR-008 amendment NIM-124)"`
+	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts carrying this Coven tag on themselves; belonging to an incarnation attaches no tag (NIM-281)"`
+	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the tags above (ADR-008 amendment NIM-124)"`
 	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"Soul status in registry"`
 }
 
@@ -169,10 +169,10 @@ func soulTraitsAssignOperation() huma.Operation {
 		Method:      http.MethodPost,
 		Path:        "/traits",
 		Summary:     "Bulk assignment of trait-tags to hosts",
-		// First-class again (ADR-080): a host-attached label is stored on the host
-		// and nothing projects over it, so this is the per-host counterpart of
-		// PUT /v1/incarnations/{name}/traits rather than a deprecated leftover.
-		Description:   "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector \u2229 coven-scope. A host's effective traits are these unioned with the traits of every incarnation it belongs to (ADR-080): labelling the incarnation covers hosts that join later, labelling the host covers exactly one. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial.",
+		// The ONLY way a host acquires a trait (NIM-281): a label lives where an
+		// operator attached it, so labelling an incarnation never reaches its
+		// hosts and this endpoint has no incarnation-side shortcut.
+		Description:   "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector \u2229 coven-scope. These are a host's whole set of traits: belonging to an incarnation attaches nothing (NIM-281), so a host carries exactly the pairs an operator put on it. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -279,7 +279,7 @@ type soulListInput struct {
 	// incarnation declares (NIM-371), and one label per request would make it union
 	// pages client-side over totals that each mean something else. One value behaves
 	// exactly as the single-valued parameter did.
-	Coven      []string `query:"coven" doc:"filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope"`
+	Coven      []string `query:"coven" doc:"filter by Coven label the host carries itself; belonging to an incarnation attaches no label (NIM-281); repeatable — matches ANY of the labels; AND within scope"`
 	Status     string   `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"filter by status; outside enum -> 422"`
 	Transport  string   `query:"transport" enum:"agent,ssh" doc:"filter by transport; outside enum -> 422"`
 	Unassigned bool     `query:"unassigned" doc:"only hosts belonging to NO incarnation (incarnation_membership, NIM-124) — the free souls a create scenario can be rolled onto"`

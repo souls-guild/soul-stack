@@ -13,7 +13,6 @@ package incarnation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -73,11 +72,6 @@ func ScreenBindCandidates(ctx context.Context, db ExecQueryRower, sids []string,
 		bySID[s.SID] = s
 	}
 
-	inherited, err := loadInheritedForScope(ctx, db, scope, sids)
-	if err != nil {
-		return nil, err
-	}
-
 	rej := &BindRejection{}
 	for _, sid := range sids {
 		s, known := bySID[sid]
@@ -85,7 +79,7 @@ func ScreenBindCandidates(ctx context.Context, db ExecQueryRower, sids []string,
 			rej.UnknownSIDs = append(rej.UnknownSIDs, sid)
 			continue
 		}
-		if !effectiveInScope(scope, s, inherited[sid]) {
+		if !hostInScope(scope, s) {
 			rej.OutOfScope = append(rej.OutOfScope, sid)
 			continue
 		}
@@ -116,78 +110,17 @@ func HostInScope(ctx context.Context, db ExecQueryRower, sid string, scope soulp
 		}
 		return false, false, err
 	}
-	var labels soul.InheritedLabels
-	if scopeNeedsLabels(scope) {
-		if labels, err = soul.LoadInheritedLabels(ctx, db, sid); err != nil {
-			return false, false, err
-		}
-	}
-	return effectiveInScope(scope, s, labels), true, nil
+	return hostInScope(scope, s), true, nil
 }
 
-// effectiveInScope judges ONE host on its EFFECTIVE labels — its own unioned with
-// what it inherits from the incarnations it belongs to ([ADR-080]). Judging by
-// `souls.coven` alone would make this gate stricter than every other reader of the
-// coven axis (the souls read, the roster resolver, the RBAC pushdown), so an
-// operator scoped to `coven=prod` could list a host that is prod only by
-// inheritance and yet be refused the bind — the disagreement ADR-080 exists to
-// prevent.
+// hostInScope judges ONE host on the labels it carries ITSELF — `souls.coven` and
+// `souls.traits`, nothing else (NIM-281). This is the same answer the souls list
+// pushes down in SQL and the same one the single-object read gate gives, so an
+// operator cannot be shown a host in the list and refused the bind on it.
 //
-// The inherited half is what the host has ALREADY, before this call writes
-// anything. A bind adds the target incarnation's tags to it, which is exactly why
-// the screening runs first: otherwise binding would mint the label that authorizes
-// the bind.
-//
-// [ADR-080]: ../../../docs/adr/0080-label-inheritance-union.md
-func effectiveInScope(scope soulpurview.Scope, s *soul.Soul, inherited soul.InheritedLabels) bool {
-	return soulpurview.InScope(scope, s.SID,
-		soul.UnionCovens(s.Coven, inherited.Covens),
-		soulpurview.TraitsInput(soul.UnionTraits(s.Traits, inherited.Traits)))
-}
-
-// scopeNeedsLabels reports whether the answer can depend on labels at all. An
-// unrestricted operator passes everything and an empty purview passes nothing, so
-// in both cases the lookup is skipped — the common admin bind costs no extra
-// query.
-func scopeNeedsLabels(scope soulpurview.Scope) bool {
-	return !scope.Unrestricted() && !scope.Empty()
-}
-
-// loadInheritedForScope batches the inherited-label lookup for a whole bind
-// request: one query for up to MaxBindMembersPerRequest hosts rather than one per
-// host. Returns nil when the scope makes labels irrelevant.
-func loadInheritedForScope(ctx context.Context, db ExecQueryRower, scope soulpurview.Scope, sids []string) (map[string]soul.InheritedLabels, error) {
-	if !scopeNeedsLabels(scope) || len(sids) == 0 {
-		return nil, nil
-	}
-	sql := `SELECT /* ` + soul.InheritedLabelsQueryMarker + ` */ s.sid, ` +
-		soul.InheritedLabelsSelectSQL("s.sid") + `
-FROM souls s
-WHERE s.sid = ANY($1)`
-	rows, err := db.Query(ctx, sql, sids)
-	if err != nil {
-		return nil, fmt.Errorf("incarnation: load inherited labels: %w", err)
-	}
-	defer rows.Close()
-
-	out := make(map[string]soul.InheritedLabels, len(sids))
-	for rows.Next() {
-		var (
-			sid        string
-			covens     []string
-			traitsJSON []byte
-		)
-		if err := rows.Scan(&sid, &covens, &traitsJSON); err != nil {
-			return nil, fmt.Errorf("incarnation: scan inherited labels: %w", err)
-		}
-		labels, err := soul.ParseInheritedLabels(covens, traitsJSON)
-		if err != nil {
-			return nil, err
-		}
-		out[sid] = labels
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("incarnation: iter inherited labels: %w", err)
-	}
-	return out, nil
+// A bind attaches no label to the host: membership is a relation, not a tag. That
+// is what makes the screening safe to run before the write — there is no way for
+// binding to mint the label that would authorize the bind.
+func hostInScope(scope soulpurview.Scope, s *soul.Soul) bool {
+	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits))
 }

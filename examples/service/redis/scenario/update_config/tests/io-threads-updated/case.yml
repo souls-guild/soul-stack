@@ -91,7 +91,7 @@ assert:
               masterauth: default-admin-secret-pass
           self:
             sid: trial-host
-            covens: [update_config]
+            covens: []
             choirs: []
             traits: {}
             role: ""

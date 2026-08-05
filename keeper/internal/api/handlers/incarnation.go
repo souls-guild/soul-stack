@@ -549,7 +549,8 @@ func incarnationScopeContexts(name, service string, covens []string) []map[strin
 // over an EXISTING incarnation (get / history / run / unlock / upgrade / destroy):
 // reads the incarnation row by path-`{name}` via reader and lands it into the RBAC
 // context `incarnation=<name>`, `service=<inc.service>` and multi-value `coven=`
-// (covens ∪ {name}) — closing the docs↔code drift where roles
+// (the DECLARED covens only — the name is an identity, reachable through the
+// `incarnation=` dimension, never as a coven) — closing the docs↔code drift where roles
 // `incarnation.* on coven=…` / `on service=…` silently did NOT match
 // (ADR-008 amendment a).
 //
@@ -581,8 +582,9 @@ func IncarnationScopeSelector(reader IncarnationContextReader) middleware.MultiS
 
 // IncarnationCreateScopeSelector — [middleware.MultiSelectorExtractor] for
 // `POST /v1/incarnations` (the incarnation doesn't exist yet): scope from the
-// request BODY — `service=<body.service>` + multi-value `coven=` from declared
-// `body.covens` ∪ `{body.name}`. Prevents a coven-scoped operator from creating an
+// request BODY — `service=<body.service>` + `incarnation=<body.name>` +
+// multi-value `coven=` from declared `body.covens` alone (the name is an identity,
+// not a label). Prevents a coven-scoped operator from creating an
 // incarnation tagged outside their scope (least-privilege; otherwise create =
 // privilege escalation).
 //

@@ -32,12 +32,12 @@ fixtures:
   # Order deliberately unsorted (2, 1) — the harness and master-election sort by SID.
   hosts:
     - sid: vm-2.example.com
-      covens: [redis-prod, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: vm-1.example.com
-      covens: [redis-prod, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }

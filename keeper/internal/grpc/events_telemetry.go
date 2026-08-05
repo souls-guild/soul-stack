@@ -63,10 +63,11 @@ func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceReso
 // (NIM-248). Delivery reads the relation now, the same way the reading half
 // (`api/handlers/telemetry.go`) has since NIM-124.
 //
-// Membership must NOT be answered from the label union of ADR-080: a host
-// tagged with a string that happens to spell an incarnation's name would start
-// receiving that incarnation's service config, which is not what the operator
-// bound (ADR-030 amendment 2026-07-28).
+// Membership must NOT be answered from `souls.coven[]`: a host tagged with a
+// string that happens to spell an incarnation's name would start receiving that
+// incarnation's service config, which is not what the operator bound (ADR-030
+// amendment 2026-07-28). The reverse substitution is dead too — a bind attaches
+// no label (NIM-281), so the relation is the only place this answer lives.
 const selectIncarnationsForSIDSQL = `
 SELECT i.name, i.service, i.service_version, i.covens, i.traits
 FROM incarnation_membership m
@@ -96,10 +97,9 @@ ORDER BY i.name
 func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error) {
 	// Registry gate: a host that is not in `souls` at all must be told nothing
 	// rather than resolved against somebody's incarnation. A plain existence
-	// lookup — the label-union query this used to call (soul.EffectiveCovens,
-	// souls ∪ every incarnation's tags) answered a question nothing on this path
-	// asks any more, and a failure of the inheritance join would have failed the
-	// telemetry resolve for no reason.
+	// lookup — the label query this used to call answered a question nothing on
+	// this path asks any more, and its failure would have failed the telemetry
+	// resolve for no reason.
 	if _, err := soul.SelectBySID(ctx, s.db, sid); err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, nil // host not yet in the registry - no config

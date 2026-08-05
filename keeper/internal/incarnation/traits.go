@@ -11,12 +11,13 @@ import (
 )
 
 // Operator-set trait labels of an incarnation (`incarnation.traits`, ADR-060).
-// They stay HERE: nothing projects them onto member hosts (ADR-080 removed the
-// materialized `SyncTraitsToHosts` hook). A host reaches them by inheritance at
-// read time — its effective traits are its own `souls.traits` unioned with those
-// of every incarnation it belongs to (soul.UnionTraits) — which is what lets an
-// incarnation label cover hosts that join later without overwriting a label
-// attached directly to a host.
+// They describe the INCARNATION and stay there: nothing projects them onto
+// member hosts, neither materialized nor unioned at read time (NIM-281). A
+// host's traits are the ones an operator attached to that host.
+//
+// A trait condition therefore never reaches a host through its membership. To
+// address an incarnation's members, ask the membership question —
+// `incarnation=<name>`, answered from `incarnation_membership`.
 
 // ValidateCreateTraits checks the operator-set traits of a create request and
 // returns them in the form the `incarnation.traits` column takes (ADR-060 amend
@@ -57,9 +58,10 @@ type UpdateTraitsResult struct {
 // [Unlock]: single tx SELECT … FOR UPDATE (serialization with concurrent
 // Unlock/Upgrade/Destroy/scenario-runner) → UPDATE traits/updated_at → commit.
 //
-// The write ends here — no member host is touched (ADR-080). Hosts see the new
-// set on their next read through inheritance, so a removed key stops granting at
-// once instead of lingering until some projection catches up.
+// The write ends here — no member host is touched, and none ever will be: these
+// labels sit on the incarnation and reach nothing else (NIM-281). A rule that
+// wants a HOST to carry the pair must be pointed at the host's own traits, which
+// only [soul.AssignTraits] writes.
 //
 // traits validated by caller ([soul.ValidateTraitDelta]); empty/nil map —
 // "clear labels" (column → `{}`). Returns [ErrIncarnationNotFound] (404) if

@@ -83,12 +83,13 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 	}
 }
 
-// TestTraitAxes_OpenAPI — gate for Trait being an axis on BOTH levels (ADR-080):
-// (1) POST /v1/incarnations carries a top-level `traits` field; (2) PUT
+// TestTraitAxes_OpenAPI — gate for Trait being an axis on BOTH levels, which are
+// independent places an operator attaches a pair and neither reaches the other
+// (NIM-281): (1) POST /v1/incarnations carries a top-level `traits` field; (2) PUT
 // /v1/incarnations/{name}/traits is mounted (operationId setIncarnationTraits);
-// (3) per-soul POST /v1/souls/traits is present and NOT deprecated — the host is a
-// first-class place to attach a label, not a leftover of the ADR-060 relocation.
-// Losing either surface, or re-deprecating the per-soul one, reddens it.
+// (3) per-soul POST /v1/souls/traits is present and NOT deprecated — the host is the
+// ONLY place a host's own labels are written, not a leftover of the ADR-060
+// relocation. Losing either surface, or re-deprecating the per-soul one, reddens it.
 func TestTraitAxes_OpenAPI(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -140,7 +141,7 @@ func TestTraitAxes_OpenAPI(t *testing.T) {
 		t.Fatalf("decode soul.traits POST: %v", err)
 	}
 	if op.Deprecated {
-		t.Error("POST /v1/souls/traits marked deprecated:true -- a host is a first-class place to attach a trait (ADR-080)")
+		t.Error("POST /v1/souls/traits marked deprecated:true -- it is the only way a host gets a trait (NIM-281)")
 	}
 }
 

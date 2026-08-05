@@ -57,7 +57,7 @@ assert:
                 password: alice-user-secret-pass
           self:
             sid: trial-host
-            covens: [update_users]
+            covens: []
             choirs: []
             traits: {}
             role: ""

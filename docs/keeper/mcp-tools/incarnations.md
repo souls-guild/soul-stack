@@ -15,7 +15,7 @@ Creating an instance - launching the selected starting script (or a bare incarna
 | `name` | `string` (kebab-case) | yes | Name of the new instance. |
 | `service` | `string` | yes | Service name. |
 | `covens` | `array<string>` | optional | Declared env-Coven-tags ([ADR-008](../../adr/0008-coven-stable-tags.md) amendment a). |
-| `traits` | `object` | optional | Operator-set trait incarnation marks (key → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Placed in `incarnation.traits` + projection in `souls.traits` member hosts. Day-2 replacement - `keeper.incarnation.traits-set`. |
+| `traits` | `object` | optional | Operator-set trait incarnation marks (key → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Placed in `incarnation.traits` and nowhere else - member hosts are not touched ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Day-2 replacement - `keeper.incarnation.traits-set`. |
 | `create_scenario` | `string` | conditional | The name of the starting script (scenario with `create: true`). Required, if the service offers ≥1 create script (empty → `validation-failed` with a list of valid ones); value out of set → `validation-failed`. A service without create scripts → gives a bare incarnation. Details - [operator-api/incarnations.md → Selecting a starting script](../operator-api/incarnations.md). |
 | `input` | `object` | optional | Input of the selected startup script (validated against its `input:` schema). |
 
@@ -202,9 +202,9 @@ Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/i
 
 #### `keeper.incarnation.traits-set`
 
-Complete replacement of operator-set trait incarnation marks. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{name}/traits`](../operator-api/incarnations.md). Async: **no** (sync - replace + projection to `souls.traits`, compact summary response).
+Complete replacement of operator-set trait incarnation marks. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{name}/traits`](../operator-api/incarnations.md). Async: **no** (sync - one UPDATE on the incarnation row, compact summary response).
 
-Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060-traits.md) R1 slice a) whole: empty/omitted `traits` = clear labels. One tx `FOR UPDATE`; member hosts inherit the set at read time ([ADR-080](../../adr/0080-label-inheritance-union.md)), nothing is written to a host row. RBAC - body-scoped OR-Check by coven/service-scope incarnation (`covens ∪ {name}`, REST mirror). Per-host counterpart - [`keeper.soul.traits-assign`](souls.md) (first-class). Audit event - `incarnation.traits_changed` (trait-**KEYS** only, not values).
+Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060-traits.md) R1 slice a) whole: empty/omitted `traits` = clear labels. One tx `FOR UPDATE`; nothing is written to a host row and no member host inherits the set ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). RBAC - body-scoped OR-Check by coven/service-scope incarnation (a coven-scope matches the declared `covens` only; the incarnation's own name is the `incarnation=` dimension, not a coven - REST mirror). Per-host counterpart - [`keeper.soul.traits-assign`](souls.md) (first-class). Audit event - `incarnation.traits_changed` (trait-**KEYS** only, not values).
 
 **Input:**
 

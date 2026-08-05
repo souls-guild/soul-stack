@@ -1,9 +1,43 @@
 # ADR-080. Coven and Trait — one label world: inheritance by membership, union at read
 
-- **Status.** Active. Supersedes the R1 relocation amendment of
-  [ADR-060](0060-traits.md) (Trait per-soul → per-incarnation with a materialized
-  projection) and extends [ADR-008](0008-coven-stable-tags.md) with the same rule
-  for the Coven axis. Landed by NIM-121.
+> ## ⛔ REVERTED (2026-08-05, NIM-281) — inheritance does not exist
+>
+> **A host's labels are exactly the ones an operator attached to that host** —
+> `souls.coven[]` and `souls.traits`. Belonging to an incarnation attaches
+> nothing: no copy, no read-time union, no projection, and never the
+> incarnation's name. The rule this ADR decided was built (NIM-121) and is now
+> removed in full, on both axes and in every reader.
+>
+> The replacement is the
+> [NIM-281 amendment of ADR-008](0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited),
+> which is the live text. In short: `coven=` is a label question answered from
+> `souls.coven` alone; reaching an incarnation's hosts is a MEMBERSHIP question,
+> spelled `incarnation=<name>` and answered from `incarnation_membership`. The
+> incarnation-side predicate lost its `name = ANY($x)` arm for the same reason —
+> a name is an identity, not a label.
+>
+> The one thing that survives is **not** inheritance and never was: an
+> incarnation's own covens select overlays of the incarnation's OWN config, via a
+> `foreach:` over `incarnation.covens` in `vars/_stack.yaml`
+> ([ADR-0082](0082-service-vars.md)). Membership decides which incarnation's
+> config a host is owed; the incarnation's labels decide which overlays of that
+> config apply. No host label is involved on either step.
+>
+> Known narrowing left open: a Vigil/Decree or Augur Rite subject is `sid` XOR
+> `coven`, so nothing can now bind one to "every member of incarnation X" without
+> tagging those hosts by hand — **NIM-280**.
+>
+> **Everything below is kept as the record of a decision that was made, built and
+> withdrawn. Do not implement from it.**
+
+- **Status.** Superseded (2026-08-05, NIM-281 — reverted in full). Superseded the
+  R1 relocation amendment of [ADR-060](0060-traits.md) (Trait per-soul →
+  per-incarnation with a materialized projection) and extended
+  [ADR-008](0008-coven-stable-tags.md) with the same rule for the Coven axis.
+  Landed by NIM-121. Note that the ADR-060 R1 projection is **not** restored by
+  the revert: `SyncTraitsToHosts` stays deleted and migration
+  [106](../../keeper/migrations/106_prune_projected_soul_traits.up.sql) stays
+  applied — copying a label onto a host is exactly what NIM-281 forbids.
 
 - **Context.** An operator label — a Coven tag or a Trait key-value pair — can be
   meaningfully attached at two levels: to one **host** (this VM is Bobik's) and to

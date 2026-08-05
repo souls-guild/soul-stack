@@ -331,8 +331,8 @@ func (e *Enforcer) CovenScope(aid, resource, action string) (covens []string, un
 //
 // It backs gate (b) of the per-soul trait write (`POST /v1/souls/traits`), the
 // mirror of "the assigned coven label ∈ the operator's coven scope". That gate
-// exists because a trait pair on a host GRANTS visibility (ADR-080 made a
-// host-attached label permanent, and NIM-128 made `trait.<key>=v` a scope
+// exists because a trait pair on a host GRANTS visibility (NIM-281 made the
+// host's own labels its whole set, and NIM-128 made `trait.<key>=v` a scope
 // dimension): without it, any holder of `soul.traits-assign` could hand a host to
 // a foreign role by stamping its pair.
 func (e *Enforcer) TraitScope(aid, resource, action string) (pairs map[string][]string, unrestricted bool) {

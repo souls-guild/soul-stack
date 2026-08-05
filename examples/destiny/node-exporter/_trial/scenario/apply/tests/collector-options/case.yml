@@ -70,7 +70,7 @@ assert:
           self:
             choirs: []
             traits: {}
-            covens: [apply]
+            covens: []
             network:
               primary_ip: "10.0.0.5"
             os:

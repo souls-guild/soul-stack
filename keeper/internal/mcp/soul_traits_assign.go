@@ -66,9 +66,9 @@ type soulTraitsAssignOutput struct {
 func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.traits-assign"
 
-	// First-class again (ADR-080): a host-attached label is no longer overwritten
-	// by a projection, so this tool is the per-host counterpart of
-	// keeper.incarnation.traits-set rather than a deprecated leftover.
+	// The ONLY way a host acquires a trait (NIM-281): nothing projects onto a
+	// host row, so keeper.incarnation.traits-set labels the incarnation object
+	// alone and this tool is not a deprecated leftover but the whole write path.
 
 	if h.deps.SoulDB == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "soul DB is not configured")
@@ -177,7 +177,7 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
-	// Gate (b), ADR-080 (parity with REST): the attached pairs must lie inside
+	// Gate (b), NIM-281 (parity with REST): the attached pairs must lie inside
 	// the operator's own trait-scope. Checked before any DB access, including
 	// dry_run — otherwise dry_run would report a `matched` for a write that
 	// cannot happen.
@@ -261,7 +261,7 @@ type covenScoper interface {
 
 // traitScoper is the trait-projection surface of the RBAC resolver
 // ([rbac.Enforcer.TraitScope]), asserted for gate (b) of the per-soul trait
-// write (ADR-080). Mirrors [covenScoper].
+// write (NIM-281). Mirrors [covenScoper].
 type traitScoper interface {
 	TraitScope(aid, resource, action string) (map[string][]string, bool)
 }

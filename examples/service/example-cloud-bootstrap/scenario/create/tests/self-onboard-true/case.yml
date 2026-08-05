@@ -11,12 +11,12 @@ name: self-onboard true emits cloud-create with name+self_onboard and skips deli
 fixtures:
   hosts:
     - sid: redis-0.ns.vm.example
-      covens: [self-onboard-inc]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
     - sid: redis-1.ns.vm.example
-      covens: [self-onboard-inc]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
@@ -50,8 +50,8 @@ assert:
         self_onboard: true
         generate_userdata: false
 
-    # (3) core.soul.registered: SID of created VMs + await_online barrier. coven -
-    # root incarnation.name (self-onboard-inc).
+    # (3) core.soul.registered: SID of created VMs + await_online barrier. The hosts
+    # carry no coven - joining an incarnation attaches no label (NIM-281).
     - module: core.soul.registered
       params_subset:
         sid: [redis-0.ns.vm.example, redis-1.ns.vm.example]

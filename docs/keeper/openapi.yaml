@@ -4148,11 +4148,11 @@ components:
           description: no host filter (entire registry ∩ scope)
           type: boolean
         coven:
-          description: hosts carrying this Coven tag, own or inherited from an incarnation they belong to, that incarnation's name included (ADR-080)
+          description: hosts carrying this Coven tag on themselves; belonging to an incarnation attaches no tag (NIM-281)
           maxLength: 63
           type: string
         incarnation:
-          description: members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the label union above (ADR-008 amendment NIM-124)
+          description: members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the tags above (ADR-008 amendment NIM-124)
           maxLength: 63
           type: string
         sids:
@@ -9257,7 +9257,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/traits:
     put:
-      description: Wholesale replacement of incarnation.traits (ADR-060) - source of truth, projected onto souls.traits of member hosts. Permission incarnation.traits-set.
+      description: "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set."
       operationId: setIncarnationTraits
       parameters:
         - description: incarnation name
@@ -12432,12 +12432,12 @@ paths:
       description: Registry of souls with scoped visibility (ADR-047) and coven/status/transport filters. offset-fast-path or keyset (mode chosen server-side from Purview). Permission soul.list. Read-only, no audit.
       operationId: listSouls
       parameters:
-        - description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope
+        - description: filter by Coven label the host carries itself; belonging to an incarnation attaches no label (NIM-281); repeatable — matches ANY of the labels; AND within scope
           explode: false
           in: query
           name: coven
           schema:
-            description: filter by Coven label, own or inherited from an incarnation the host belongs to, that incarnation's name included (ADR-080); repeatable — matches ANY of the labels; AND within scope
+            description: filter by Coven label the host carries itself; belonging to an incarnation attaches no label (NIM-281); repeatable — matches ANY of the labels; AND within scope
             items:
               type: string
             type:
@@ -12670,7 +12670,7 @@ paths:
         - soul
   /v1/souls/traits:
     post:
-      description: "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector ∩ coven-scope. A host's effective traits are these unioned with the traits of every incarnation it belongs to (ADR-080): labelling the incarnation covers hosts that join later, labelling the host covers exactly one. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial."
+      description: "Bulk merge/replace/remove of operator-set trait-tags attached to HOSTS (souls.traits jsonb) on hosts under selector ∩ coven-scope. These are a host's whole set of traits: belonging to an incarnation attaches nothing (NIM-281), so a host carries exactly the pairs an operator put on it. Permission soul.traits-assign; merge/replace additionally require every pair to lie inside the operator's own trait-scope (gate b). partial -> 200 status:partial."
       operationId: assignSoulTraits
       parameters:
         - description: count matched without UPDATE (OR with body.dry_run)

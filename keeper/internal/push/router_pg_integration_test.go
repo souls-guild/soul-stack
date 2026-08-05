@@ -1,12 +1,15 @@
 //go:build integration
 
 // Integration test for the Level 2 read of the provider router against a REAL
-// Postgres (NIM-251, ADR-080 label inheritance).
+// Postgres (NIM-251, NIM-281).
 //
-// A live PG rather than a fake reader: the defect was in WHICH relation the
-// reader consulted — `souls.coven[]` alone instead of that column unioned with
-// the labels of `incarnation_membership ⋈ incarnation` — and a fake answering
-// both questions from one field cannot fail the way production did.
+// The router resolves a provider from a host's coven labels, and under NIM-281
+// those are `souls.coven[]` and nothing else: a bind to an incarnation attaches
+// no label, so an incarnation's tags and its name route none of its hosts.
+//
+// A live PG rather than a fake reader: the question is WHICH relation the reader
+// consults, and a fake answering every question from one field can neither fail
+// the way NIM-251 did nor widen the way NIM-281 forbids.
 //
 // Run:
 //
@@ -103,22 +106,23 @@ func seedRouterIncarnation(t *testing.T, pool *pgxpool.Pool, name string, covens
 	}
 }
 
-// TestIntegration_Router_IncarnationLabelRoutesItsHosts — GUARD (NIM-251): the
-// acceptance case. A host of an incarnation for which a per-coven provider is
-// configured routes onto that provider, not onto the cluster default. The host
-// carries NO such tag of its own — the label is on the incarnation, which is the
-// recommended shape (ADR-080: "prefer labelling the incarnation").
+// TestIntegration_Router_IncarnationLabelDoesNotRouteItsHosts — GUARD (NIM-281):
+// an incarnation's labels route none of its members, neither through its
+// `covens[]` nor through its NAME. Both hosts below are bound to an incarnation
+// whose label has a provider configured, and both must fall through to the
+// cluster default, because neither host carries that label itself.
 //
-// The label reaches the router both ways ADR-080 defines inheritance: through
-// the incarnation's `covens[]` and through its NAME.
-func TestIntegration_Router_IncarnationLabelRoutesItsHosts(t *testing.T) {
+// The last leg tags one of them by hand and expects the bastion, so a green run
+// cannot be read as "the per-coven config was never live": same host, same
+// router, one operator-made tag apart.
+func TestIntegration_Router_IncarnationLabelDoesNotRouteItsHosts(t *testing.T) {
 	pool := newRouterPGPool(t)
 	ctx := context.Background()
 
 	seedRouterSoul(t, pool, "by-tag.example.com", []string{"db"})
 	seedRouterSoul(t, pool, "by-name.example.com", []string{"db"})
 	seedRouterIncarnation(t, pool, "redis-eu", []string{"eu-bastioned"}, "by-tag.example.com")
-	// No covens of its own — this host inherits purely through the NAME.
+	// No covens of its own — the routable string here is the incarnation's NAME.
 	seedRouterIncarnation(t, pool, "redis-prod", []string{}, "by-name.example.com")
 
 	router, err := NewPGRouter(NewPGRouterReader(pool), NewStaticRouterConfigSource(RouterConfig{
@@ -133,33 +137,44 @@ func TestIntegration_Router_IncarnationLabelRoutesItsHosts(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		sid, want string
+		sid, why string
 	}{
-		{"by-tag.example.com", "bastion-eu"},    // incarnation.covens[]
-		{"by-name.example.com", "bastion-prod"}, // incarnation.name
+		{"by-tag.example.com", "the label is on the incarnation, not on this host"},
+		{"by-name.example.com", "an incarnation's name is an identity, not a host tag"},
 	} {
 		name, src, err := router.RouteFor(ctx, tc.sid)
 		if err != nil {
 			t.Fatalf("RouteFor(%s): %v", tc.sid, err)
 		}
-		if name != tc.want || src != SourceCoven {
-			t.Errorf("RouteFor(%s) = (%q, %v), want (%q, SourceCoven) — inherited label must reach Level 2",
-				tc.sid, name, src, tc.want)
+		if name != "static-fallback" || src != SourceCluster {
+			t.Errorf("RouteFor(%s) = (%q, %v), want (static-fallback, SourceCluster) — %s",
+				tc.sid, name, src, tc.why)
 		}
+	}
+
+	if _, err := pool.Exec(ctx,
+		`UPDATE souls SET coven = ARRAY['db', 'eu-bastioned'] WHERE sid = 'by-tag.example.com'`); err != nil {
+		t.Fatalf("tag host with eu-bastioned: %v", err)
+	}
+	name, src, err := router.RouteFor(ctx, "by-tag.example.com")
+	if err != nil {
+		t.Fatalf("RouteFor(by-tag, tagged): %v", err)
+	}
+	if name != "bastion-eu" || src != SourceCoven {
+		t.Errorf("tagged host = (%q, %v), want (bastion-eu, SourceCoven) — an operator attached this tag by hand",
+			name, src)
 	}
 }
 
-// TestIntegration_Router_NonMemberKeepsClusterDefault — GUARD (NIM-251): the
-// widening is bounded by MEMBERSHIP, not by a tag that merely looks like one.
-// A host outside every incarnation still falls through to the cluster default,
-// so inheritance cannot hand an unrelated host a bastion it was never bound to.
-func TestIntegration_Router_NonMemberKeepsClusterDefault(t *testing.T) {
+// TestIntegration_Router_UnconfiguredTagKeepsClusterDefault — GUARD (NIM-251):
+// the Level 2 miss. A host whose own tags have no per-coven provider configured
+// falls through to the cluster default rather than to an error or an empty
+// provider name.
+func TestIntegration_Router_UnconfiguredTagKeepsClusterDefault(t *testing.T) {
 	pool := newRouterPGPool(t)
 	ctx := context.Background()
 
-	seedRouterSoul(t, pool, "member.example.com", []string{"db"})
 	seedRouterSoul(t, pool, "outsider.example.com", []string{"db"})
-	seedRouterIncarnation(t, pool, "redis-prod", []string{"eu-bastioned"}, "member.example.com")
 
 	router, err := NewPGRouter(NewPGRouterReader(pool), NewStaticRouterConfigSource(RouterConfig{
 		CovenDefaultProviders:  map[string]string{"eu-bastioned": "bastion-eu"},
@@ -178,12 +193,12 @@ func TestIntegration_Router_NonMemberKeepsClusterDefault(t *testing.T) {
 	}
 }
 
-// TestIntegration_Router_OwnTagStillWins — GUARD (NIM-251): inheritance is
-// purely additive on live data. The host's own tag and its inherited one are
-// both configured, and the own one wins even though the inherited sorts first —
-// so an existing fleet does not silently move to another bastion the day an
-// incarnation gains a label.
-func TestIntegration_Router_OwnTagStillWins(t *testing.T) {
+// TestIntegration_Router_OwnTagRoutesPastIncarnationLabel — GUARD (NIM-281): the
+// two labels are both configured and only the host's own one is reachable, so
+// the incarnation's cannot even tie-break. It sorts FIRST alphabetically, which
+// is what makes the result diagnostic: a reader that still unioned the two would
+// return `a-provider` here.
+func TestIntegration_Router_OwnTagRoutesPastIncarnationLabel(t *testing.T) {
 	pool := newRouterPGPool(t)
 	ctx := context.Background()
 
@@ -202,6 +217,6 @@ func TestIntegration_Router_OwnTagStillWins(t *testing.T) {
 		t.Fatalf("RouteFor: %v", err)
 	}
 	if name != "z-provider" || src != SourceCoven {
-		t.Errorf("got (%q, %v), want (z-provider, SourceCoven) — own tag outranks inherited", name, src)
+		t.Errorf("got (%q, %v), want (z-provider, SourceCoven) — only the host's own tag routes it", name, src)
 	}
 }

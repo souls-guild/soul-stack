@@ -49,7 +49,7 @@ assert:
             users: {}
           self:
             sid: trial-host
-            covens: [update_users]
+            covens: []
             choirs: []
             traits: {}
             role: ""

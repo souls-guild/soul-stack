@@ -71,8 +71,9 @@ type ResolveInput struct {
 // evaluated BEFORE the render, and it carries `covens` — which the scenario
 // context does not, and which is how a step reaches the labels an operator put
 // on the incarnation now that the hard-wired `coven/<label>.yaml` overlay
-// is gone (ADR-0080 / ADR-0082). It carries no `host_count` and no `state`
-// snapshot: neither exists yet at this point in a run.
+// is gone (ADR-0082). The labels are the incarnation's own and select overlays of
+// its own vars — they say nothing about its member hosts (NIM-281). It carries no
+// `host_count` and no `state` snapshot: neither exists yet at this point in a run.
 type IncarnationContext struct {
 	Name           string
 	Service        string

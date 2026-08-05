@@ -360,7 +360,7 @@ input:
       source: { roster: true }
 ```
 
-> **The catalog narrows by `connected` and nothing else.** That much is an invariant — the keeper binds no other status. It deliberately does NOT filter by the incarnation's declared covens (a host inherits those only once it belongs to it, [ADR-080](adr/0080-label-inheritance-union.md) — a candidate cannot carry them yet) nor by "belongs to no incarnation" (membership is M:N: a host legitimately serves several). What keeps other operators' hosts out of the list is the RBAC scope of `soul.list`.
+> **The catalog narrows by `connected` and nothing else.** That much is an invariant — the keeper binds no other status. It deliberately does NOT filter by the incarnation's declared covens (binding a host attaches no label at all, [NIM-281](adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited) — the filter would hide every candidate nobody had hand-tagged) nor by "belongs to no incarnation" (membership is M:N: a host legitimately serves several). What keeps other operators' hosts out of the list is the RBAC scope of `soul.list`.
 >
 > **`roster` is more than a catalog — it is a declaration.** It marks the field whose value **is the composition** of the incarnation: on `POST /v1/incarnations` Keeper binds those SIDs into `incarnation_membership` after inserting the row and **before** starting the bootstrap run. That order is load-bearing — a run resolves its roster from that relation at start and aborts `no_hosts` on an empty one, which is why a scenario cannot bind its own hosts from the inside.
 >

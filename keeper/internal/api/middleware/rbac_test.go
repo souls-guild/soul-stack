@@ -140,30 +140,50 @@ func TestRequirePermission_SelectorPassesContext(t *testing.T) {
 // --- RequirePermissionMulti (ADR-008 amendment a, per-Coven incarnation scope) ---
 
 // incCovenContexts replicates the expansion of an incarnation's coven scope into a set of
-// per-candidate contexts (covens ∪ {name}), as the handler extractor does. Duplicated here
+// per-candidate contexts, as the handler extractor does. Duplicated here
 // deliberately — the middleware test checks EXACTLY the OR-Check decision over a set of
 // contexts, without importing handlers (a circular dependency); context construction is
 // tested in handlers/incarnation_test.go.
+//
+// The set is the DECLARED covens and nothing else. It used to be `covens ∪ {name}` —
+// the copy kept adding the name long after handlers.incarnationScopeContexts stopped
+// (NIM-124: a name is an identity, reached through the `incarnation=` dimension), which
+// is the whole hazard of a duplicated fixture: it went on answering for a production
+// rule that no longer existed. Keep the two in step.
 func incCovenContexts(name, service string, covens []string) []map[string]string {
 	seen := map[string]struct{}{}
 	cand := []string{}
-	add := func(c string) {
+	for _, c := range covens {
 		if c == "" {
-			return
+			continue
 		}
 		if _, ok := seen[c]; ok {
-			return
+			continue
 		}
 		seen[c] = struct{}{}
 		cand = append(cand, c)
 	}
-	for _, c := range covens {
-		add(c)
+	base := func() map[string]string {
+		ctx := map[string]string{}
+		if name != "" {
+			ctx["incarnation"] = name
+		}
+		if service != "" {
+			ctx["service"] = service
+		}
+		return ctx
 	}
-	add(name)
+	if len(cand) == 0 {
+		if len(base()) == 0 {
+			return nil
+		}
+		return []map[string]string{base()}
+	}
 	out := make([]map[string]string, 0, len(cand))
 	for _, c := range cand {
-		out = append(out, map[string]string{"incarnation": name, "service": service, "coven": c})
+		ctx := base()
+		ctx["coven"] = c
+		out = append(out, ctx)
 	}
 	return out
 }
@@ -226,15 +246,33 @@ func TestRequirePermissionMulti_ServiceScope_Match(t *testing.T) {
 	}
 }
 
-func TestRequirePermissionMulti_NameAsCoven_Match(t *testing.T) {
+// A `coven=<label>` scope does NOT reach an incarnation that merely bears that name.
+// The inverse of this test used to pass because the fixture above manufactured the
+// name as a coven candidate; production stopped doing that at NIM-124 and NIM-281
+// settled the principle — a label is what an operator attached, and nobody attached
+// this one. To scope on a specific incarnation, write `incarnation=redis-prod`.
+func TestRequirePermissionMulti_NameIsNotACoven(t *testing.T) {
 	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "named", Operators: []string{"archon-n"}, Permissions: []string{"incarnation.* on coven=redis-prod"}},
 	}})
-	// covens is empty — but the incarnation name = redis-prod is the root Coven label.
+	// covens is empty, so no coven candidate exists at all.
+	allowed, code := runMulti(t, e, "archon-n", "incarnation", "upgrade",
+		incCovenContexts("redis-prod", "redis", nil))
+	if allowed || code != http.StatusForbidden {
+		t.Errorf("coven=<name> must NOT match an incarnation that only bears that name; allowed=%v code=%d", allowed, code)
+	}
+}
+
+// …while the `incarnation=` dimension does reach it — the replacement spelling, so the
+// negative above is a narrowing of the SPELLING, not a loss of reach.
+func TestRequirePermissionMulti_IncarnationDimensionMatchesByName(t *testing.T) {
+	e := newRBAC(t, &rbactest.Config{Roles: []rbactest.Role{
+		{Name: "named", Operators: []string{"archon-n"}, Permissions: []string{"incarnation.* on incarnation=redis-prod"}},
+	}})
 	allowed, code := runMulti(t, e, "archon-n", "incarnation", "upgrade",
 		incCovenContexts("redis-prod", "redis", nil))
 	if !allowed || code != http.StatusOK {
-		t.Errorf("coven=<name> should match the incarnation with that name; allowed=%v code=%d", allowed, code)
+		t.Errorf("incarnation=<name> should match the incarnation with that name; allowed=%v code=%d", allowed, code)
 	}
 }
 

@@ -118,7 +118,7 @@ assert:
               masterauth: dfadmin-rotate-tls-pass
           self:
             sid: trial-host
-            covens: [rotate_tls]
+            covens: []
             choirs: []
             traits: {}
             role: ""

@@ -89,12 +89,12 @@ type Resolver interface {
 // "coven narrowing":
 //   - Coven - exact any-of by ONE label (`$n = ANY(covens)`); previous
 //     Run/Cadence late-binding path.
-//   - Covens - multi-coven any-of IN coven union {name} MODE (ADR-008 amendment
-//     a): label matches both `covens[] && ARRAY[Covens]` and
-//     `name = ANY(Covens)` (incarnation name = root Coven label). Added
-//     additively for S3b-3 RBAC-scope resolution: scope-coven `redis-prod` must
-//     match incarnation both with covens containing redis-prod and with
-//     name=redis-prod. Empty means do not filter.
+//   - Covens - multi-coven any-of over the operator-attached tags alone:
+//     `covens[] && ARRAY[Covens]`. The incarnation's NAME is deliberately not
+//     matched (NIM-124, re-affirmed by NIM-281) — scope-coven `redis-prod`
+//     reaches an incarnation tagged `redis-prod`, not one merely NAMED that;
+//     for identity there is the `incarnation=` dimension. Added additively for
+//     S3b-3 RBAC-scope resolution. Empty means do not filter.
 //
 // Both fields are additive; when both are set, adapter AND-combines them (in
 // practice consumer uses one). Old single path (Coven) is untouched.

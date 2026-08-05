@@ -146,8 +146,9 @@ type InputSource struct {
 	// what it can be asked at: they resolve against an incarnation that already
 	// exists, and a create form has none, so the catalog here is "onboarded, online
 	// souls the caller may see" — narrowed by nothing else. Occupancy is not a filter
-	// (membership is M:N) and neither are the incarnation's declared covens (a host
-	// inherits those only once it belongs to it, ADR-080).
+	// (membership is M:N) and neither are the incarnation's declared covens (those sit
+	// on the incarnation and are never projected onto a host, NIM-281 — filtering by
+	// them would hide every candidate an operator has not hand-tagged).
 	//
 	// The key does double duty deliberately. For the UI it is where the SID list
 	// comes from. For the keeper it is the DECLARATION that this input carries the

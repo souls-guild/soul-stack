@@ -98,7 +98,7 @@ func TestIntegration_PrefixAndCovenFilters_CannotWidenScope(t *testing.T) {
 // TestIntegration_Unassigned_IsMembershipNotLabels — `unassigned` asks about
 // `incarnation_membership`, deliberately not about labels.
 //
-// An incarnation's name is also a coven label carried by inheritance (ADR-080), so a
+// Nothing stops an operator from tagging a host with an incarnation's name, so a
 // label-based implementation would call a host with a stray self-attached tag
 // "occupied" while a genuine member whose tags say nothing would look free. The
 // picker would then offer a host that already runs a service — two services stacked

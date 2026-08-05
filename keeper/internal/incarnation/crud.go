@@ -229,10 +229,10 @@ type ListFilter struct {
 // I can access"): an incarnation is visible if it's in a scope coven, OR its
 // state satisfies a scope state-predicate, OR its traits match a scope pair.
 //
-//   - Covens — coven∪{name} matcher (ADR-008 amendment a): matches both
-//     `covens[] && ARRAY[Covens]` and `name = ANY(Covens)` (incarnation name
-//     is the root Coven label) — broader than [ListFilter.Coven], which only
-//     matches covens[].
+//   - Covens — `covens[] && ARRAY[Covens]`, the operator-attached tags and
+//     nothing else. The incarnation's NAME is not among them (NIM-124,
+//     re-affirmed by NIM-281): scope by an incarnation's own identity is the
+//     `incarnation=<name>` dimension, never `coven=<name>`.
 //   - StateNames — names of incarnations whose state already satisfied the
 //     scope's state-CEL predicates (StateExprs, ADR-047 S2c), resolved before
 //     SQL via keeper/internal/statepredicate (no duplicate CEL engine), then
@@ -597,14 +597,16 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 
 // appendScopeClause adds RBAC scope predicate (`GET /v1/incarnations`,
 // ADR-047 S3b-3 + trait amendment) as single AND-clause to user filter.
-// Within scope, dimensions (coven∪{name} ∪ state-names ∪ traits) combined
+// Within scope, dimensions (covens ∪ state-names ∪ traits) combined
 // with OR — single parenthesized block to avoid leaking through neighboring
 // filter AND-clauses:
 //
-//		((covens && ARRAY[$c] OR name = ANY($c)) OR name = ANY($s) OR traits->>$tk = $tv)
+//		(covens && ARRAY[$c] OR name = ANY($s) OR traits->>$tk = $tv)
 //
-//	  - coven∪{name}: scope-coven matches incarnation by both covens[]-intersection
-//	    and name equality (ADR-008: incarnation name is root Coven label).
+//	  - covens: scope-coven matches the incarnation by covens[]-intersection
+//	    ONLY. Name equality is deliberately absent (NIM-124/NIM-281): a name is
+//	    an identity, not a label, and `incarnation=<name>` is the dimension that
+//	    asks for it.
 //	  - state-names: pre-resolved names of incarnations whose state satisfied
 //	    state-CEL scope (StateExprs) — come as set, matched via `name = ANY`.
 //	  - traits: each scope pair (`key:value`, ADR-060 §7 slice 1) — separate
@@ -647,8 +649,8 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	if len(scope.Covens) > 0 {
 		args = append(args, scope.Covens)
 		pos := len(args)
-		// coven∪{name}: intersection of covens[] OR name ∈ scope-covens.
-		dims = append(dims, fmt.Sprintf("(covens && $%d OR name = ANY($%d))", pos, pos))
+		// Intersection of covens[] alone — the name is not a coven (NIM-281).
+		dims = append(dims, fmt.Sprintf("covens && $%d", pos))
 	}
 	if len(scope.StateNames) > 0 {
 		args = append(args, scope.StateNames)

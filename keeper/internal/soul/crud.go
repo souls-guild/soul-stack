@@ -1225,17 +1225,16 @@ func buildBulkWhereWithCursor(sel BulkSelector, scope BulkScope, cursor string) 
 // no clause by itself (it means "no host filter").
 //
 // Coven and Incarnation stay DISTINCT predicates asking DIFFERENT questions
-// (ADR-008 amendment 2026-07-17/NIM-124, sharpened by ADR-080):
+// (ADR-008 amendment 2026-07-17/NIM-124, sharpened by NIM-281):
 //
-//   - Coven is a LABEL question, resolved over the host's EFFECTIVE covens —
-//     its own tags plus those of every incarnation it belongs to, that
-//     incarnation's name included ([covenMatchSQL]). A host merely carrying a
-//     tag spelled like an incarnation matches too: it genuinely carries the
-//     label.
+//   - Coven is a LABEL question, resolved over the host's OWN `coven[]` and
+//     nothing else ([covenMatchSQL]). A host carrying a tag spelled like an
+//     incarnation matches, because it genuinely carries the label; a host merely
+//     BOUND to that incarnation does not, because belonging attaches nothing.
 //   - Incarnation is a MEMBERSHIP question, and is answered from
-//     `incarnation_membership` alone. It must never be answered from the union
-//     above — a host-attached tag spelled like an incarnation would otherwise
-//     pass for belonging to it.
+//     `incarnation_membership` alone. Neither predicate can stand in for the
+//     other: one names what an operator put on the host, the other what the host
+//     is bound to.
 func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 	var (
 		clauses []string
@@ -1261,31 +1260,28 @@ func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 }
 
 // covenMatchSQL renders "the host carries any of the coven labels held by $pos",
-// over its EFFECTIVE labels (ADR-080): own `souls.coven` OR the labels of an
-// incarnation it belongs to, that incarnation's name included.
+// over the host's OWN `souls.coven` and nothing else.
+//
+// There is no label inheritance (NIM-281): a coven tag exists only where an
+// operator attached it, keeper never mints one, and belonging to an incarnation
+// attaches nothing. Reaching an incarnation's hosts is a membership question,
+// spelled `incarnation=<name>` — see the `Incarnation` arm above, which joins
+// `incarnation_membership` explicitly.
 //
 // One implementation for all three coven readers of this package — the list
 // filter, the bulk selector and the bulk scope gate — and it is literally the
 // predicate [rbac.PurviewSQL] pushes down for the `coven` dimension. That is the
 // point: the set an operator can find, the set a bulk call selects, and the set
-// authorizing that call are answers to the same question, and a union applied to
+// authorizing that call are answers to the same question, and a rule applied to
 // some of them and not others shows up as a filter matching nothing, with no
 // error anywhere.
 //
-// This is the SET-based half of the ADR-080 resolution; [EffectiveCovens] is the
-// per-host half. They are one policy at two layers, not two policies. A reader
-// here cannot use the Go helper: these queries page with exact offset/total and
-// the bulk paths iterate by keyset, so resolving per host in Go would be an N+1
-// and would break both. Conversely a caller holding a single SID should use
-// [EffectiveCovens] rather than build a query around this.
-//
-// Columns are table-qualified because the subquery aliases
-// `incarnation_membership m` — a bare `sid` would bind there and correlate every
-// host to itself. Every query using this selects `FROM souls` unaliased (the
-// list, the bulk COUNT, and the keyset `chunk` CTE of the bulk UPDATEs), so
-// `souls.*` resolves in all of them.
+// The column is table-qualified so the predicate can be ANDed into any of them;
+// every query using it selects `FROM souls` unaliased (the list, the bulk COUNT,
+// and the keyset `chunk` CTE of the bulk UPDATEs), so `souls.coven` resolves in
+// all of them.
 func covenMatchSQL(pos int) string {
-	return rbac.CovenScopeSQL("souls.coven", "souls.sid", fmt.Sprintf("$%d", pos))
+	return rbac.CovenScopeSQL("souls.coven", fmt.Sprintf("$%d", pos))
 }
 
 // appendScopeClause adds scope predicate (a): target hosts ⊆ operator scope.
@@ -1294,12 +1290,12 @@ func covenMatchSQL(pos int) string {
 // all), which is correct — an empty array overlaps nothing and `ANY` of it holds
 // for no name.
 //
-// The gate resolves the same effective labels the operator's read scope does
-// (NIM-250). Matching the raw column here while the list resolved the union
-// meant a bulk call silently skipped hosts the operator was looking at — Matched
-// came back short with nothing to explain it. Widening the write boundary to the
-// read boundary is what ADR-080 asks for; gate (b) is untouched, so the operator
-// still cannot attach a label outside its own scope.
+// The gate renders the SAME coven predicate the operator's read scope does
+// (NIM-250), which is the invariant to keep whatever that predicate is: while
+// the two disagreed, a bulk call silently skipped hosts the operator was looking
+// at — Matched came back short with nothing to explain it. Both sides now match
+// the host's own labels and nothing else (NIM-281). Gate (b) is untouched, so
+// the operator still cannot attach a label outside its own scope.
 func appendScopeClause(clauses []string, args []any, scope BulkScope) ([]string, []any) {
 	if scope.Unrestricted {
 		return clauses, args
@@ -1337,8 +1333,8 @@ func covenInScope(label string, scope []string) bool {
 type ListFilter struct {
 	Status    Status
 	Transport Transport
-	// Covens matches a host carrying ANY of these labels, own or inherited from an
-	// incarnation it belongs to (ADR-080 effective labels). Empty = no filter. A
+	// Covens matches a host carrying ANY of these labels on ITSELF — belonging to an
+	// incarnation attaches none (NIM-281). Empty = no filter. A
 	// single-element slice is the one-label case; the plural exists because a create
 	// form declares a SET of covens and asks for hosts in any of them (NIM-371) —
 	// with one label per query the caller would have to union pages client-side and
@@ -1349,10 +1345,10 @@ type ListFilter struct {
 	// form's roster picker (NIM-371): offering a host that already runs another
 	// service invites the operator to stack two services on it.
 	//
-	// It is a MEMBERSHIP question, deliberately not a label one: an incarnation's
-	// name is also a coven label carried by inheritance, so filtering by labels
-	// would leave a host that was unbound (or whose incarnation is gone) looking
-	// occupied, and vice versa.
+	// It is a MEMBERSHIP question, deliberately not a label one: a host may carry a
+	// tag spelled like an incarnation without being bound to it, so filtering by
+	// labels would leave a free host looking occupied — and would miss a genuine
+	// member that nobody bothered to tag.
 	Unassigned bool
 	// SIDPrefix narrows to SIDs starting with this string (autocomplete). Empty = no
 	// filter. Matched as a literal prefix, LIKE metacharacters included — a `%` here

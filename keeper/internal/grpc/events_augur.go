@@ -92,33 +92,26 @@ func (r augurRiteReader) RitesBySubject(ctx context.Context, sid string, covens 
 
 type augurCovenReader struct{ db soul.ExecQueryRower }
 
-// CovensBySID resolves the EFFECTIVE covens a Rite's subject is matched against:
-// the host's own `souls.coven[]` unioned with the ones it inherits from every
-// incarnation it belongs to ([soul.EffectiveCovens], ADR-080).
+// CovensBySID resolves the covens a Rite's subject is matched against: the
+// host's own `souls.coven[]` and nothing else.
 //
-// ★ Reading the bare column here is what broke `coven: <incarnation>` Rites
-// (NIM-249). ADR-025 writes a Rite's subject the same way ADR-030 writes a
-// Decree's, and until NIM-124 both worked because the incarnation's name was
-// physically copied into `souls.coven[]`. NIM-124 removed the copy; the Oracle
-// was reconnected to the union by NIM-224 and Augur was not, so an
-// incarnation-scoped Rite stopped authorizing its own members. Unlike the
-// Oracle's, this failure is loud: the Soul gets a DENIED mid-apply, because a
-// subject that matches no Rite is default-denied.
+// A coven tag exists only where an operator attached it (NIM-281). Belonging to
+// an incarnation is not a label and grants no Rite: a Rite whose subject is
+// `coven: <incarnation-name>` authorizes the hosts an operator tagged that way,
+// not the members of the incarnation that happens to share the name. Membership
+// is `incarnation_membership` and is reached through the membership relation,
+// never through the coven axis.
 //
-// A Rite carries no incarnation dimension of its own (subject is `coven` XOR
-// `sid`), so there is no membership gate to keep on the relation here — the
-// union is the whole answer, and a host-attached tag spelled like an
-// incarnation's name authorizes by design (ADR-080: labels decide what a rule
-// may see). An unregistered host is [augur.ErrSubjectUnknown] → denied.
+// An unregistered host is [augur.ErrSubjectUnknown] → denied.
 func (r augurCovenReader) CovensBySID(ctx context.Context, sid string) ([]string, error) {
-	covens, err := soul.EffectiveCovens(ctx, r.db, sid)
+	s, err := soul.SelectBySID(ctx, r.db, sid)
 	if err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, augur.ErrSubjectUnknown
 		}
 		return nil, err
 	}
-	return covens, nil
+	return s.Coven, nil
 }
 
 // handleAugurRequest — handler for the [keeperv1.AugurRequest] payload (ADR-025).

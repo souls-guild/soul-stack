@@ -170,8 +170,9 @@ func serviceVarsInput(serviceDir string, inc *incarnation.Incarnation) serviceva
 // incarnationStackVars builds the `incarnation.*` step context a
 // `vars/_stack.yaml` evaluates against. Deliberately the ROW's own fields —
 // `covens` in particular, which is how a step reaches the labels an operator put
-// on the incarnation (ADR-0080) now that the hard-wired `coven/<label>.yaml`
-// overlay is gone.
+// on the incarnation now that the hard-wired `coven/<label>.yaml` overlay is gone
+// (ADR-0082). These are the INCARNATION's labels selecting overlays of its own
+// vars; they are not, and never become, labels on its member hosts (NIM-281).
 func incarnationStackVars(inc *incarnation.Incarnation) servicevars.IncarnationContext {
 	if inc == nil {
 		return servicevars.IncarnationContext{}

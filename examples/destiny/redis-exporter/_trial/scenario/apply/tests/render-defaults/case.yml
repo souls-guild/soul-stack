@@ -83,7 +83,7 @@ assert:
             traits: {}
             # covens carries the incarnation.name label (scenario name = apply) —
             # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
-            covens: [apply]
+            covens: []
             role: ""
           role: ""
 

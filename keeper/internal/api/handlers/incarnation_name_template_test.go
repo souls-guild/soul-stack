@@ -431,8 +431,10 @@ func TestIncarnation_Create_Templated_NoCheckerRefuses(t *testing.T) {
 // A NAMED create goes through gate (b) too, and this is the escalation it closes
 // (NIM-338): gate (a) ORs over the declared covens, so a request naming one coven
 // the caller holds and one it does not matched on the first and was created carrying
-// BOTH. An incarnation's covens become labels on its member hosts (ADR-0080), so the
-// caller placed hosts in a coven they cannot reach. Never specific to templating.
+// BOTH. A declared coven is a label on the incarnation itself: every role scoped to
+// it now reads and runs that incarnation, and its service vars resolve through that
+// overlay (ADR-0082), so the caller wrote into a scope it does not hold. Never
+// specific to templating.
 func TestIncarnation_Create_Named_MixedCovensRefusedWhole(t *testing.T) {
 	db := &fakeIncDB{}
 	// A create scenario with no required input, so the request reaches the gate

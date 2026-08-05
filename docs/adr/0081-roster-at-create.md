@@ -123,11 +123,11 @@ the roster there would read plausible and bind nothing.
 keeper refuses to bind anything else, so offering it would be offering a 422. Two
 tighter filters were built first and are both wrong:
 
-- **by the incarnation's declared covens.** A host inherits an incarnation's labels only
-  once it BELONGS to it (ADR-0080), and a candidate for an incarnation that does not
-  exist yet belongs to nothing. Filtering by them demands the label that being picked
-  would grant. The covens an operator declares describe the incarnation, not a
-  requirement on its future hosts.
+- **by the incarnation's declared covens.** A host never gets those labels at all — binding
+  it attaches nothing ([NIM-281](0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)),
+  and only an operator tagging it by hand ever will. Filtering by them would hide every
+  candidate nobody had hand-tagged, which on a fresh fleet is all of them. The covens an
+  operator declares describe the incarnation, not a requirement on its future hosts.
 - **by "unassigned".** Membership is M:N (NIM-124): a host legitimately serves several
   incarnations, so serving one is no reason to hide it from another. On a six-host fleet
   with three already in use the picker offered three, with nothing on screen to say where

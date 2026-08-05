@@ -44,12 +44,12 @@ fixtures:
   # Order deliberately unsorted (2, 1) - the harness and master-election sort by SID.
   hosts:
     - sid: node-2.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-1.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
@@ -172,7 +172,7 @@ assert:
               appendonly:       "no"
           self:
             sid: node-1.example.com
-            covens: [migrate_cluster, redis]
+            covens: [redis]
             choirs: []
             traits: {}
             role: ""

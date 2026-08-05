@@ -34,7 +34,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-solo.example.com
-      covens: [create]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         # os.version is needed for the binary-URL (.../Debian/<distro_ver>/...) - Debian 12.

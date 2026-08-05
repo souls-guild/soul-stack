@@ -60,7 +60,7 @@ A concretization of slice S3 for **read visibility** (separate from the S4 targe
 1. **S3b-0 (pilot, this slice) — souls-list, coven dimension only.** SQL-pushdown `souls.coven && ARRAY[purview.Covens]` (reuses `appendScopeClause`, shared with bulk coven-assign — a single fail-closed semantics for the souls layer). offset/total are correct without drift (coven-pushdown is complete), no keyset needed. Wiring: `SoulHandler.List` resolves `ResolvePurview(aid, "soul", "list")` → `soulpurview.Resolve` → `soul.ListScope` → `soul.SelectAll`. The previous `CovenScoper` (S0 `(covens, unrestricted)`) is **generalized** into `PurviewResolver` (`ResolvePurview`) — one resolver for list visibility AND bulk coven-assign (the latter unpacks the coven dimension of Purview into `BulkScope`).
 2. **S3b-1** — souls single-get (`GET /v1/souls/{sid}`): the same Purview, a single-host membership check.
 3. **S3b-2** — regex/soulprint dimensions for souls: a **page-by-page CEL post-filter** on top of the coven-narrowed set + a **keyset cursor** (offset pagination over a Go post-filter drifts — a keyset is needed). Closes the "perf of the CEL scope filter on souls-list" gotcha (ADR-047 §Gotchas): coven → SQL-pushdown now, soulprint/regex → page-CEL+keyset.
-4. **S3b-3** — incarnations list+get: reuse `statepredicate.ResolveIncarnations`; incarnation-scope = `coven ∪ {incarnation.name}` (the incarnation's name is the root Coven label, [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only)).
+4. **S3b-3** — incarnations list+get: reuse `statepredicate.ResolveIncarnations`; incarnation-scope = `coven ∪ {incarnation.name}` (the incarnation's name was then the root Coven label, [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only)). **The `∪ {incarnation.name}` arm is REVOKED 2026-08-05 by [NIM-281](0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited):** a name is an identity, so a `coven=` scope matches an incarnation by its declared `covens` alone, and reaching it by name is the `incarnation=` dimension. See the NIM-281 amendment below.
 
 **Fail-closed (security invariant, OPPOSITE of presence fail-safe).** On scope ambiguity, the result is an EMPTY list, NOT all Souls:
 - an empty Purview (`Purview{}`: no dimension at all, not `Unrestricted`) → empty;
@@ -142,16 +142,25 @@ A plain role's parent side is the unrestricted top, so the formula collapses to 
 
 The consequence worth stating: since the boolean grammar has no `NOT`, conjunction can only ever narrow, so **attenuation of scope is structural** rather than a rule that has to be enforced. The permission side is bounded by an intersection over the same containment predicate the least-privilege subset check already uses (`own_perms ∩ parent's effective`), so "a child never exceeds its parent" holds on every snapshot build, not only at write time. The least-privilege floor of `subset.go` is preserved on top and unchanged: a derived role must satisfy `child ⊆ parent` **AND** caller-holds-parent.
 
-**Amendment (2026-07-27, NIM-121 — the `coven` and `trait` dimensions resolve over INHERITED labels too, [ADR-080](0080-label-inheritance-union.md)).**
-When the resource being scoped is a **host**, the `coven` and `trait` conditions now match the host's own columns **OR** the labels of the incarnations
-it belongs to (`incarnation_membership`), the incarnation's name included on the coven axis. Rendered as a correlated `EXISTS` alongside the existing
-column predicate, so the whole purview still pushes down to SQL in one pass — offset pagination and totals stay exact, and the single-object gate
-(`soulpurview.InScope`) is fed the same union. Incarnations are unaffected: they carry their labels directly, and their predicate stays a plain column
-comparison (the correlation is opt-in per resource, via `ScopeColumns.MembershipSID`).
+**Amendment (2026-07-27, NIM-121 — the `coven` and `trait` dimensions resolve over INHERITED labels too, [ADR-080](0080-label-inheritance-union.md)).
+REVOKED 2026-08-05 by the NIM-281 amendment below.** It rendered a correlated `EXISTS` over `incarnation_membership` alongside the column predicate, so a
+host matched `coven=`/`trait.` on the labels of the incarnations it belonged to as well as its own.
 
-This **widens** what a deployed role scoped `coven=<x>` or `trait.<k>=<v>` can read: the hosts of a matching incarnation become visible where before only
-the incarnation itself was. That is the defect being fixed — an incarnation-level label that granted nothing on its own hosts — but it lands with the
-release, not behind a flag. Role resolution, attenuation and the subset check are untouched; only the rendering of a resolved purview changed.
+## Amendment (2026-08-05, NIM-281 — the `coven` and `trait` dimensions read COLUMNS, nothing else)
+
+The correlated `EXISTS` is removed. When the resource being scoped is a **host**, `coven` and `trait` match `souls.coven` / `souls.traits` and nothing
+else — the labels an operator attached to that host. Membership grants no label
+([ADR-008 / NIM-281](0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)), so there is nothing to correlate and
+`ScopeColumns.MembershipSID` is gone. The whole purview still pushes down to SQL in one pass, and the single-object gate (`soulpurview.InScope`) reads the
+same predicate as the list.
+
+The incarnation side is narrowed in the same move: a `coven=` condition on an incarnation matches `incarnation.covens &&` alone. The `name = ANY($x)` arm
+is removed — an incarnation's name is answered by the `incarnation=` dimension, and having it double as a label is what let a coven scope silently reach a
+whole instance.
+
+This **narrows** what a deployed role scoped `coven=<x>` or `trait.<k>=<v>` can read, back to the hosts carrying the label themselves. To reach an
+incarnation's hosts, scope by `incarnation=<name>` — the dimension that asks the membership question and resolves it from `incarnation_membership`. Role
+resolution, attenuation and the subset check are untouched; only the rendering of a resolved purview changed.
 
 ## Amendment (2026-07-28, NIM-219 — `default_scope` is inherited at the GATE, not only in the resolver)
 

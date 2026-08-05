@@ -72,7 +72,7 @@ assert:
                 password: bob-user-secret-pass
           self:
             sid: trial-host
-            covens: [add_user]
+            covens: []
             choirs: []
             traits: {}
             role: ""

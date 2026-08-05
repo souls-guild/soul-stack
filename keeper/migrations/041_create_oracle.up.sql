@@ -82,9 +82,13 @@ COMMENT ON TABLE vigils IS
 -- incarnation_name - the target incarnation of the reaction (DECISION #1, variant b):
 -- the scenario's ServiceRef is resolved FROM it at enqueue time (incarnation.service ->
 -- service registry), instead of being duplicated in the Decree. Same format as
--- incarnation.name (migration 005, CHECK incarnation_name_format) - it's also
--- the root Coven label (ADR-008): the subject membership check at enqueue time
--- boils down to incarnation_name being a member of the sender's covens. WITHOUT an FK to incarnation -
+-- incarnation.name (migration 005, CHECK incarnation_name_format). When this
+-- migration landed the name was also the root Coven label, so the subject
+-- membership check at enqueue time boiled down to incarnation_name being a
+-- member of the sender's covens. It no longer does: NIM-124 made membership
+-- the relation `incarnation_membership` (which is what the check reads today)
+-- and NIM-281 removed label inheritance outright, so a host's covens say
+-- nothing about which incarnation it serves. WITHOUT an FK to incarnation -
 -- Decree is a managed registry that can outlive incarnation recreation; existence
 -- is checked at enqueue fail-closed (incarnation not found -> skip + warn).
 -- No index needed: the hot path goes by on_beacon, incarnation_name is only read

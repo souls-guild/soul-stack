@@ -15,13 +15,13 @@ import (
 // keeper.incarnation.traits-set — parity with REST PUT
 // /v1/incarnations/{name}/traits (IncarnationHandler.SetTraitsTyped, ADR-060).
 // Wholesale REPLACES the incarnation's operator-set trait labels in one FOR
-// UPDATE tx. The write ends there: member hosts inherit the new set at read
-// time (ADR-080), so nothing is projected onto a host row and a label attached
-// directly to a host is never overwritten. The per-host counterpart is
-// keeper.soul.traits-assign.
+// UPDATE tx. The write ends there, in both senses: nothing is projected onto a
+// host row, and no member host reads these labels either (NIM-281). A host
+// carries only what keeper.soul.traits-assign put on it.
 //
 // SECURITY. RBAC — body-scoped OR-Check over the incarnation's coven/service
-// scope (covens ∪ {name}, mirrors REST IncarnationScopeSelector + permission
+// scope (its declared covens, with the name as the `incarnation=` dimension —
+// mirrors REST IncarnationScopeSelector + permission
 // incarnation.traits-set). Without it MCP would bypass REST protection (MCP
 // has no chi middleware). scope is resolved via a separate probe-SelectByName
 // (same cold RBAC round-trip as REST). No gate on trait keys here — this route
@@ -96,8 +96,8 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update incarnation traits failed")
 	}
 
-	// No projection (ADR-080, parity with REST): the replace lands on
-	// incarnation.traits alone; member hosts inherit the new set on the next read.
+	// No projection (NIM-281, parity with REST): the replace lands on
+	// incarnation.traits alone, and no member host reads it.
 
 	// audit: EventIncarnationTraitsChanged {name, old_keys, new_keys},
 	// source=mcp (writeAudit). trait VALUES are not included — parity with

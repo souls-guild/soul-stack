@@ -149,9 +149,9 @@
     all-or-nothing, no silent trim, the shape [ADR-049(f)](0049-synod.md)-adjacent
     bulk gates settled on. That matters because gate (a) is an OR: a request naming
     one coven the caller holds and one it does not matches on the first. It also
-    measures the composed name, which is derived from operator `input` and becomes a
-    label in the coven plane of member hosts ([ADR-0080](0080-label-inheritance-union.md)),
-    against the caller's ceiling rather than trusting it. Both gates read the same
+    measures the composed name — derived from operator `input`, and the identity every
+    `incarnation=` scope is written against — against the caller's ceiling rather than
+    trusting it. Both gates read the same
     predicate over contexts from one builder, so there is no second notion of scope
     ([NIM-219](0047-purview.md)); fail-closed when no checker is wired.
 
@@ -162,9 +162,10 @@
 
     **Gate (b) runs on every create, named ones included.** Gate (a)'s OR admits a
     superset: a request declaring one coven the caller holds and one it does not
-    matched on the first and was created carrying both, placing hosts in a coven the
-    caller cannot reach ([ADR-0080](0080-label-inheritance-union.md)) and widening
-    their own visibility. That is an escalation, it predates templating, and a named
+    matched on the first and was created carrying both — minting an object inside a
+    scope the caller does not hold, readable and runnable by every role scoped to that
+    coven, with its service vars resolved through that coven's overlay
+    ([ADR-0082](0082-service-vars.md)). That is an escalation, it predates templating, and a named
     create has always been able to do it. Closing it tightens named create too — a
     deliberate decision taken with the templated fix rather than after it, since the
     two are one gate.

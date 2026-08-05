@@ -48,8 +48,8 @@ var _ statepredicate.IncarnationStateLister = (*StateLister)(nil)
 func (l *StateLister) ListStatePages(ctx context.Context, base statepredicate.BaseFilter, yield func(page []statepredicate.Stated) error) error {
 	lf := ListFilter{Service: base.Service, Coven: base.Coven}
 
-	// base.Covens (multi-coven, ADDITIVE) → coven∪{name} scope ([ListScope]):
-	// label matches both covens[] and name (ADR-008). Empty Covens → Unrestricted
+	// base.Covens (multi-coven, ADDITIVE) → coven scope ([ListScope]): the label
+	// matches covens[] alone, never the name (NIM-281). Empty Covens → Unrestricted
 	// scope (state-CEL resolves over entire service-narrowed set; coven
 	// narrowing then unnecessary — typical S3b-3 List path where coven and state —
 	// independent OR dimensions, combined in outer-SelectAll).

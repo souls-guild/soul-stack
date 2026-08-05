@@ -6,7 +6,7 @@ name: mongo create standalone via distribution package (mongodb-org)
 fixtures:
   hosts:
     - sid: node-solo.example.com
-      covens: [create, mongo]
+      covens: [mongo]
       soulprint:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }

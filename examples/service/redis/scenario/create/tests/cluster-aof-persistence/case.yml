@@ -16,17 +16,17 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-b.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-c.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
     - sid: node-a.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
@@ -147,7 +147,7 @@ assert:
               cluster-node-timeout: "5000"
           self:
             sid: node-a.example.com
-            covens: [create, redis]
+            covens: [redis]
             choirs: []
             # traits - registry projection (ADR-060), empty object with no labels.
             traits: {}

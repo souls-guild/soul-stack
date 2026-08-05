@@ -196,19 +196,18 @@ func TestIntegration_Membership_ListAndScreen(t *testing.T) {
 	}
 }
 
-// TestIntegration_Membership_ScreenJudgesEffectiveCovens pins the bind gate to the
-// EFFECTIVE coven set (ADR-080), not to `souls.coven` alone.
+// TestIntegration_Membership_ScreenJudgesOwnCovens pins the bind gate to
+// `souls.coven` — the host's own tags, and nothing borrowed from an incarnation
+// it happens to belong to (NIM-281).
 //
-// A host may be visible purely by inheritance: it carries no tags of its own, but
-// belongs to an incarnation that carries `prod`. Every other reader of the coven
-// axis — the souls read, the roster resolver, the RBAC pushdown — already sees it
-// as prod. If this gate judged the raw column it would refuse a bind the operator
-// is plainly entitled to, and the "a where: and a scope check cannot disagree
-// about one host" invariant would hold everywhere except here.
-//
-// The second half is the boundary that must survive: an unlabelled host that
-// belongs to nothing inherits nothing, and stays invisible.
-func TestIntegration_Membership_ScreenJudgesEffectiveCovens(t *testing.T) {
+// The reason this has to be tested rather than assumed: a membership row is
+// exactly what a widened gate would read, and this gate is handed one. A host
+// that belongs to an incarnation tagged `prod` but carries no tag of its own is
+// out of an operator's `coven=prod` reach — the same answer the souls read, the
+// roster resolver and the RBAC pushdown give, so a `where:` and a scope check
+// still cannot disagree about one host. Tagging the host is the operator's own
+// act, and it is what makes the bind possible.
+func TestIntegration_Membership_ScreenJudgesOwnCovens(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
@@ -226,12 +225,13 @@ func TestIntegration_Membership_ScreenJudgesEffectiveCovens(t *testing.T) {
 	}
 	seedMembershipIncarnation(t, "redis-staging")
 
-	// Neither host carries a coven of its own.
-	seedMembershipSoul(t, "inherits.example.com")
+	// Neither host carries a coven of its own; one of them is a member of the
+	// `prod`-tagged incarnation.
+	seedMembershipSoul(t, "member.example.com")
 	seedMembershipSoul(t, "orphan.example.com")
 
 	aid := "archon-alice"
-	if err := AddMembers(ctx, integrationPool, "redis-prod", []string{"inherits.example.com"}, &aid); err != nil {
+	if err := AddMembers(ctx, integrationPool, "redis-prod", []string{"member.example.com"}, &aid); err != nil {
 		t.Fatalf("AddMembers: %v", err)
 	}
 
@@ -241,16 +241,16 @@ func TestIntegration_Membership_ScreenJudgesEffectiveCovens(t *testing.T) {
 	}
 	prodOnly := soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{expr}})
 
-	// Inherited `prod` from redis-prod makes the host bindable elsewhere.
-	rej, err := ScreenBindCandidates(ctx, integrationPool, []string{"inherits.example.com"}, prodOnly)
+	// Membership in a `prod` incarnation lends the host no `prod` tag.
+	rej, err := ScreenBindCandidates(ctx, integrationPool, []string{"member.example.com"}, prodOnly)
 	if err != nil {
-		t.Fatalf("ScreenBindCandidates (inherited): %v", err)
+		t.Fatalf("ScreenBindCandidates (member): %v", err)
 	}
-	if !rej.Empty() {
-		t.Fatalf("host visible only by inheritance was rejected: %+v — the gate is judging souls.coven, not the ADR-080 union", rej)
+	if rej == nil || len(rej.OutOfScope) != 1 || rej.OutOfScope[0] != "member.example.com" {
+		t.Fatalf("out-of-scope bucket = %+v, want [member.example.com] — membership must not widen the gate", rej)
 	}
 
-	// A host that inherits nothing is still out of scope.
+	// Neither does belonging to nothing.
 	rej, err = ScreenBindCandidates(ctx, integrationPool, []string{"orphan.example.com"}, prodOnly)
 	if err != nil {
 		t.Fatalf("ScreenBindCandidates (orphan): %v", err)
@@ -259,8 +259,21 @@ func TestIntegration_Membership_ScreenJudgesEffectiveCovens(t *testing.T) {
 		t.Fatalf("out-of-scope bucket = %+v, want [orphan.example.com]", rej)
 	}
 
-	// HostInScope (the unbind path) must agree with the screening.
-	inScope, known, err := HostInScope(ctx, integrationPool, "inherits.example.com", prodOnly)
+	// The operator's own act — tagging the host — is what opens the gate.
+	if _, err := integrationPool.Exec(ctx,
+		`UPDATE souls SET coven = ARRAY['prod'] WHERE sid = 'member.example.com'`); err != nil {
+		t.Fatalf("tag the host: %v", err)
+	}
+	rej, err = ScreenBindCandidates(ctx, integrationPool, []string{"member.example.com"}, prodOnly)
+	if err != nil {
+		t.Fatalf("ScreenBindCandidates (tagged): %v", err)
+	}
+	if !rej.Empty() {
+		t.Fatalf("a host tagged `prod` was rejected under coven=prod: %+v", rej)
+	}
+
+	// HostInScope (the unbind path) must agree with the screening on both.
+	inScope, known, err := HostInScope(ctx, integrationPool, "member.example.com", prodOnly)
 	if err != nil {
 		t.Fatalf("HostInScope: %v", err)
 	}

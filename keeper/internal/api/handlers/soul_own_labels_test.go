@@ -2,65 +2,96 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// Guard tests for the label model of ADR-080 at the handler boundary: a label
-// attached to an incarnation reaches its hosts, a label attached to a host is
-// nobody else's to overwrite, and attaching one is gated by what the operator
-// already holds.
+// Guard tests for the label model at the handler boundary (NIM-281): a label
+// lives only where an operator attached it. A host reaches its own labels and
+// nothing else — belonging to an incarnation lends it none — and attaching one
+// is gated by what the operator already holds.
 
-// A trait set on the INCARNATION must expose its member hosts. This is the whole
-// point of preferring the incarnation as the place to label: it covers hosts that
-// join later, without any per-host stamping.
-func TestGetSoul_InheritedTrait_GrantsVisibility(t *testing.T) {
+// The single-object gate reads the row's own columns. It must not widen them by
+// joining membership: a host visible through GET must be a host the list would
+// have shown, and the list predicate is `souls.coven && $1` over the row alone.
+func TestGetSoul_ReadPath_NeverJoinsMembership(t *testing.T) {
+	pool := &fakeReadPool{
+		soul: &soul.Soul{
+			SID:          "db-01.example.com",
+			Transport:    soul.TransportAgent,
+			Status:       soul.StatusConnected,
+			Coven:        []string{"db"},
+			RegisteredAt: time.Now().UTC().Truncate(time.Second),
+		},
+	}
+	h := NewSoulHandler(pool, fakeScoper{covens: []string{"db"}}, nil, nil)
+
+	rec := doGetSoulScoped(t, h, "db-01.example.com", "archon-dba")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — the host carries the operator's own tag; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(pool.seenSQL) == 0 {
+		t.Fatal("no SQL recorded — the fake stopped seeing the read path, the guard below proves nothing")
+	}
+	for _, sql := range pool.seenSQL {
+		if strings.Contains(sql, "incarnation_membership") || strings.Contains(sql, "incarnation_traits") {
+			t.Errorf("read path consults membership to decide visibility:\n%s", sql)
+		}
+	}
+}
+
+// A trait attached to the INCARNATION is the incarnation's, not its hosts'. A
+// member carrying no `owner` pair of its own stays hidden from `trait.owner=dba`
+// — 404, not 403: we do not leak existence.
+func TestGetSoul_IncarnationTrait_DoesNotReachMembers(t *testing.T) {
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
 			SID:          "db-01.example.com",
 			Transport:    soul.TransportAgent,
 			Status:       soul.StatusConnected,
 			RegisteredAt: time.Now().UTC().Truncate(time.Second),
-			// No labels of its own — everything comes from the incarnation.
+			// Member of an incarnation labeled `owner=dba`, and labeled with
+			// nothing of its own.
 		},
-		inheritedTraits: []byte(`[{"owner":"dba"}]`),
 	}
 	h := NewSoulHandler(pool, fakeScoper{exprs: []string{"trait.owner=dba"}}, nil, nil)
 
 	rec := doGetSoulScoped(t, h, "db-01.example.com", "archon-dba")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 — a trait on the incarnation must expose its hosts; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 — a trait on the incarnation must not expose its hosts; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-// The same for the Coven axis, and specifically for the incarnation's NAME: the
-// incarnation-side resolver already treats the name as a coven tag, so host
-// visibility has to agree or `coven=<incarnation>` would show the incarnation
-// while hiding everything in it.
-func TestGetSoul_InheritedIncarnationName_GrantsVisibility(t *testing.T) {
+// The same on the Coven axis, and specifically for the incarnation's NAME: the
+// name is a membership fact, spelled `incarnation=<name>`, and reaches hosts
+// only through `incarnation_membership`. It is not a tag on them, so a scope of
+// `coven=redis-prod` shows exactly the hosts an operator tagged `redis-prod`.
+func TestGetSoul_IncarnationName_IsNotAHostTag(t *testing.T) {
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
 			SID:          "db-01.example.com",
 			Transport:    soul.TransportAgent,
 			Status:       soul.StatusConnected,
+			Coven:        []string{"db"}, // member of redis-prod, tagged only `db`
 			RegisteredAt: time.Now().UTC().Truncate(time.Second),
 		},
-		inheritedCovens: []string{"redis-prod"},
 	}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"redis-prod"}}, nil, nil)
 
 	rec := doGetSoulScoped(t, h, "db-01.example.com", "archon-dba")
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 — the incarnation name must reach its hosts; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 — the incarnation name is not a tag on its members; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
-// Inheritance widens, never narrows: a host still reaches its own labels when it
-// belongs to no incarnation at all.
+// A host reaches its own labels with no incarnation in the picture at all — the
+// grant is the pair on the row, and it needs no membership to work.
 func TestGetSoul_OwnTrait_GrantsWithoutMembership(t *testing.T) {
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
@@ -81,54 +112,24 @@ func TestGetSoul_OwnTrait_GrantsWithoutMembership(t *testing.T) {
 	}
 }
 
-// The key held on BOTH sides: `owner=dba` on the incarnation, `owner=bobik` on
-// the host. Neither wins — both grant, so both operators see the host. A
-// precedence rule would silently revoke one of them.
-func TestGetSoul_KeyOnBothSides_EitherValueGrants(t *testing.T) {
-	newPool := func() *fakeReadPool {
-		return &fakeReadPool{
-			soul: &soul.Soul{
-				SID:          "db-01.example.com",
-				Transport:    soul.TransportAgent,
-				Status:       soul.StatusConnected,
-				Traits:       map[string]any{"owner": "bobik"},
-				RegisteredAt: time.Now().UTC().Truncate(time.Second),
-			},
-			inheritedTraits: []byte(`[{"owner":"dba"}]`),
-		}
-	}
-
-	for _, tc := range []struct{ aid, scope string }{
-		{"archon-dba", "trait.owner=dba"},
-		{"archon-bobik", "trait.owner=bobik"},
-	} {
-		h := NewSoulHandler(newPool(), fakeScoper{exprs: []string{tc.scope}}, nil, nil)
-		rec := doGetSoulScoped(t, h, "db-01.example.com", tc.aid)
-		if rec.Code != http.StatusOK {
-			t.Errorf("scope %q: status = %d, want 200 — both values of a contested key must grant; body=%s",
-				tc.scope, rec.Code, rec.Body.String())
-		}
-	}
-}
-
-// Inheritance must not become a blanket grant: an unrelated pair still hides the
-// host (fail-closed, and 404 rather than 403 — we do not leak existence).
+// An own pair grants that pair and nothing around it: a different value under
+// the same key still hides the host (fail-closed).
 func TestGetSoul_UnrelatedTrait_StillHidden(t *testing.T) {
 	pool := &fakeReadPool{
 		soul: &soul.Soul{
 			SID:          "db-01.example.com",
 			Transport:    soul.TransportAgent,
 			Status:       soul.StatusConnected,
+			Traits:       map[string]any{"owner": "dba"},
 			RegisteredAt: time.Now().UTC().Truncate(time.Second),
 		},
-		inheritedTraits: []byte(`[{"owner":"dba"}]`),
 	}
 	h := NewSoulHandler(pool, fakeScoper{exprs: []string{"trait.owner=someone-else"}}, nil, nil)
 
 	rec := doGetSoulScoped(t, h, "db-01.example.com", "archon-eve")
 
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 — inheritance must not grant an unrelated pair; body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 404 — an unrelated pair must not grant; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

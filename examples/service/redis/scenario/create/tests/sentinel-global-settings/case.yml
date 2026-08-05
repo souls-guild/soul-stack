@@ -11,7 +11,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-solo.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }

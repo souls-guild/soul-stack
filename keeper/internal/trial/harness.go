@@ -185,7 +185,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures)}, // NIM-58
-		Hosts:       fixtureHosts(scn.Name, c.Fixtures),
+		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
 		// State — fixtures.state as pre-run snapshot of incarnation.state: available in
@@ -411,21 +411,22 @@ func incarnationName(scenarioName string, f Fixtures) string {
 // Multi-host (fixtures.hosts set): roster of N hosts in deterministic
 // order by SID (soulprint.hosts projection of render engine goes in order of
 // in.Hosts, does not sort itself — we ensure determinism here). Mirror
-// of run topology: covens/role/choirs/soulprint taken from host entry as-is;
-// correctness of incarnation.name tag in covens — on case author (without it
-// the host drops from the target). The fixture states the EFFECTIVE label set
-// directly: prod derives the same name from `incarnation_membership` by
-// inheritance (NIM-124, ADR-080) rather than reading it off `souls.coven`.
+// of run topology: covens/role/choirs/soulprint taken from host entry as-is.
+// A fixture's covens are the host's OWN tags, exactly as prod reads them off
+// `souls.coven` (NIM-281) — an `on:` naming a tag the fixture does not declare
+// drops the host, and belonging to the incarnation adds nothing back. The
+// incarnation's NAME is not among them: membership lives in
+// `incarnation_membership` (NIM-124) and the roster is already scoped to it, so
+// "every member" is `on:` omitted, not `on: [<incarnation-name>]`.
 //
-// Single-host (fixtures.soulprint, multi not set): previous behavior
-// BIT-FOR-BIT — one synthetic host trial-host with root incarnation tag
-// (incarnationName == RenderInput.Incarnation.Name), per-host variability —
-// dispatch layer (L3, outside pilot).
-func fixtureHosts(incarnationName string, f Fixtures) []*topology.HostFacts {
+// Single-host (fixtures.soulprint, multi not set): one synthetic host trial-host
+// with NO covens, for the same reason — the sugar must not hand a host a label
+// prod would never give it, or a case would pass here and target nothing live.
+// Per-host variability — dispatch layer (L3, outside pilot).
+func fixtureHosts(f Fixtures) []*topology.HostFacts {
 	if len(f.Hosts) == 0 {
 		return []*topology.HostFacts{{
 			SID:       trialHostSID,
-			Coven:     []string{incarnationName},
 			Soulprint: orEmptyMap(f.Soulprint),
 		}}
 	}

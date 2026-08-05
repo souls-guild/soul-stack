@@ -6,7 +6,10 @@
 -- `{incarnation: name}` into the context, without coven/service (docs<->code drift,
 -- rbac.md declared the source, the code didn't land it). The column carries stable
 -- env labels (prod/dev/dc1/...), set by the operator at create time; the RBAC context
--- of incarnation routes = `covens ∪ {name}` (the name is the root Coven label per ADR-008).
+-- of incarnation routes was `covens ∪ {name}` (the name being the root Coven label
+-- per ADR-008). The `∪ {name}` arm is GONE - NIM-124 dropped it from the context
+-- builder and NIM-281 dropped its mirror from the SQL scope predicate: a coven-scope
+-- matches the DECLARED covens only, and the name is the `incarnation=` dimension.
 --
 -- The format of each label is CovenPattern (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`),
 -- symmetric with souls.coven[]. Format checking lives in the API layer (ValidCoven),

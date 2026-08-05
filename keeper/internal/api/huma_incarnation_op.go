@@ -557,7 +557,7 @@ func incSetTraitsOperation() huma.Operation {
 		Method:        http.MethodPut,
 		Path:          "/{name}/traits",
 		Summary:       "Replace operator-set trait labels of an incarnation",
-		Description:   "Wholesale replacement of incarnation.traits (ADR-060) - source of truth, projected onto souls.traits of member hosts. Permission incarnation.traits-set.",
+		Description:   "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

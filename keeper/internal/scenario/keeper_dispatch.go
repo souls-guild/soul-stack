@@ -108,9 +108,10 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		// Authoritative: a membership write failure fails the run (a
 		// registered-but-not-a-member host would be invisible to the roster).
 		//
-		// Membership is now the ONLY thing the bind does about labels: the host
-		// inherits its incarnation's covens and traits through this row (ADR-080),
-		// so there is no trait projection to run afterwards.
+		// The bind writes the relation and NOTHING else: it attaches no coven and
+		// no trait to the host (NIM-281), so there is no label projection to run
+		// afterwards — and a host that should carry one needs an explicit
+		// soul.coven-assign / soul.traits-assign from the operator.
 		if berr := r.bindMembershipOnRegistered(ctx, spec, rt, output); berr != nil {
 			summary := composeKeeperFailure(rt, berr.Error())
 			r.recordKeeperFailure(ctx, spec.ApplyID, passage, rt, summary, log)

@@ -8,7 +8,7 @@ name: mongo create standalone (binary install + mongod.conf + bootstrap default_
 fixtures:
   hosts:
     - sid: node-solo.example.com
-      covens: [create, mongo]
+      covens: [mongo]
       soulprint:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }

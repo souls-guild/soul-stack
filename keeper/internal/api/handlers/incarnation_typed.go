@@ -186,11 +186,11 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	//
 	// Gate (a) is an OR over the declared covens, so a request naming one coven the
 	// caller holds and one it does not matches on the first and used to be created
-	// carrying BOTH. Since an incarnation's covens become labels on its member hosts
-	// (ADR-0080), that placed hosts in a coven the caller cannot reach and widened
-	// their own visibility — an escalation, not a cosmetic gap, and it predates
-	// templating. Here every declared coven must be covered, all-or-nothing, with no
-	// silent trim to the part they may have.
+	// carrying BOTH. That hands the new incarnation to every role scoped to the
+	// coven the caller may not use — reading it, running it, and resolving its vars
+	// through that coven's overlay (ADR-0082) — an escalation, not a cosmetic gap,
+	// and it predates templating. Here every declared coven must be covered,
+	// all-or-nothing, with no silent trim to the part they may have.
 	if err := ScreenIncarnationCreateScope(h.permChecker, claims.Subject,
 		name, req.Service, req.Covens); err != nil {
 		return zero, incProblem(problem.TypeForbidden, createScopeDetail(name, composedName, req.Covens))
@@ -258,10 +258,10 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		return zero, incProblem(problem.TypeInternalError, "insert incarnation failed")
 	}
 
-	// No projection onto member hosts (ADR-080): incarnation.traits stays where the
-	// operator put it and reaches hosts by inheritance at read time, so it covers
-	// hosts that join later without any re-stamping — and cannot overwrite a label
-	// attached directly to a host.
+	// No projection onto member hosts (NIM-281): incarnation.traits describes the
+	// incarnation and stays where the operator put it. A member host carries only
+	// what an operator attached to the host itself, so nothing here can widen who
+	// sees that host or overwrite a label already on it.
 
 	// Roster bind (NIM-371) — AFTER the insert (FK `incarnation_membership.
 	// incarnation_name`) and BEFORE the bootstrap run below. Both halves of that
@@ -993,9 +993,9 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 // SetTraitsTyped — extracted domain function PUT /v1/incarnations/{name}/traits
 // (SELF-AUDIT: the handler writes incarnation.traits_changed ITSELF — old/new keys payload
 // after UpdateTraits). Replaces incarnation.traits entirely → persist (one tx FOR
-// UPDATE) → 200 + a full IncarnationGetView. Member hosts are NOT touched: they
-// inherit the new set at read time (ADR-080), which is what lets a removed key stop
-// granting at once and a host's own label survive. traits arrives as an argument
+// UPDATE) → 200 + a full IncarnationGetView. Member hosts are NOT touched, now or
+// later: these labels describe the incarnation and reach no host (NIM-281), so a
+// host's visibility is unchanged by this call. traits arrives as an argument
 // (native, bound on the huma layer). An invalid set (key/value format, nested) → 422
 // BEFORE writing. An empty/nil map = clear the labels.
 func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Claims, name string, traits map[string]any) (IncarnationGetView, error) {
@@ -1018,9 +1018,9 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		return zero, incProblem(problem.TypeInternalError, "update incarnation traits failed")
 	}
 
-	// No projection (ADR-080): the replace lands on incarnation.traits alone.
-	// Member hosts pick the new set up by inheritance on the next read, and a
-	// removed key stops granting immediately — nothing to un-copy.
+	// No projection (NIM-281): the replace lands on incarnation.traits alone, and
+	// no host reads it. Nothing to re-stamp on members, and nothing to un-copy from
+	// them for the keys this call removed.
 
 	if h.auditW != nil {
 		_ = h.auditW.Write(ctx, &audit.Event{

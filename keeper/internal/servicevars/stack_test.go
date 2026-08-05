@@ -88,9 +88,11 @@ func TestStack_WhenGatesAStep(t *testing.T) {
 }
 
 // TestStack_ForeachOverIncarnationCovens — the replacement for the deleted
-// hard-wired `coven/<label>.yaml` overlay, and the guard for the claim of
-// ADR-0080 on this axis: a label put on the INCARNATION reaches the service
-// parameters of its members. The step iterates the incarnation's own covens.
+// hard-wired `coven/<label>.yaml` overlay. The axis is the INCARNATION's own
+// labels selecting overlays of ITS OWN config (ADR-0082): the step iterates
+// `incarnation.covens`, and nothing here reads a host's `souls.coven` — a member
+// is served this config because it belongs, not because it carries the label
+// (NIM-281).
 func TestStack_ForeachOverIncarnationCovens(t *testing.T) {
 	dir := writeLayers(t, map[string]string{
 		"00-base.yaml":     "tier: base\ninterval: 45s\n",

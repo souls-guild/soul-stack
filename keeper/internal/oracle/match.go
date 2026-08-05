@@ -12,18 +12,17 @@ import (
 //   - SubjectCoven is set → match if there's an intersection of SubjectCoven ∩ covens.
 //
 // subjectSID is the authoritative host SID (from the mTLS peer cert, NOT PortentEvent.sid).
-// covens are the host's EFFECTIVE covens from the registry (authoritative, NOT
-// from the payload): its own `souls.coven[]` unioned with those inherited from
-// the incarnations it belongs to, each contributing its `covens[]` plus its name
-// (ADR-080; resolved by the caller, grpc.subjectCovens). So `subject_coven:
-// [<incarnation>]` binds a rule to that incarnation's members without the
-// incarnation's name ever being written into a host's column (NIM-124).
+// covens are the host's covens from the registry (authoritative, NOT from the
+// payload): `souls.coven[]`, the tags an operator attached to that host and
+// nothing else (NIM-281). Belonging to an incarnation lends the host no tag, so
+// `subject_coven: [<incarnation>]` binds only hosts actually tagged with that
+// string — to bind a rule to an incarnation's members, tag them.
+//
 // The subject binding is a defense layer: it restricts which hosts can even
 // trigger the rule (untrusted input, ADR-030(b)). It answers "may this rule see
 // the host" — NOT "does the host belong to the Decree's incarnation", which is a
-// separate gate over `incarnation_membership` (incarnation.IsMember): the union
-// above intentionally admits host-attached tags and so cannot carry a
-// membership decision.
+// separate gate over `incarnation_membership` (incarnation.IsMember): a coven is
+// a label anyone may attach and so cannot carry a membership decision.
 func SubjectMatches(d *Decree, subjectSID string, covens []string) bool {
 	if d.SubjectSID != nil {
 		return *d.SubjectSID == subjectSID

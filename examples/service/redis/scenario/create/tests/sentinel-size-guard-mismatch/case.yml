@@ -22,12 +22,12 @@ fixtures:
   # The order is deliberately not sorted: size-guard operates on size(), not position.
   hosts:
     - sid: node-2.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-1.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }

@@ -10,7 +10,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-solo.example.com
-      covens: [create]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
@@ -146,7 +146,7 @@ assert:
               appendonly: "yes"
           self:
             sid: node-solo.example.com
-            covens: [create]
+            covens: []
             choirs: []
             # traits is a registry projection (ADR-060), an empty object with no labels.
             traits: {}

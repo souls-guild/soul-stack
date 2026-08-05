@@ -119,9 +119,6 @@ type telemetryFakeDB struct {
 	// `incarnation_membership` join returns them ({name, service,
 	// service_version, specBytes}, ordered by name).
 	memberRows [][]any
-	// incarnationCoven — extra tags those incarnations carry; the host inherits
-	// them along with each incarnation's name (ADR-080).
-	incarnationCoven []string
 	// covenNamedRows — incarnations whose NAME merely matches one of the host's
 	// tags. Nothing in production may read these: the field exists so that a
 	// revert to the pre-NIM-248 `FROM incarnation WHERE name = ANY(<covens>)`
@@ -133,30 +130,12 @@ type telemetryFakeDB struct {
 	hitCovenNamed bool
 }
 
-// memberNames — the names of the incarnations the host is bound to, which are
-// inherited labels in their own right.
-func (f *telemetryFakeDB) memberNames() []string {
-	out := make([]string, 0, len(f.memberRows))
-	for _, r := range f.memberRows {
-		name, _ := r[0].(string)
-		out = append(out, name)
-	}
-	return out
-}
-
 func (f *telemetryFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }
 
 func (f *telemetryFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	switch {
-	// Must precede any `incarnation_membership` route: the inherited-labels
-	// statement reads that table too, and only the marker tells them apart.
-	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
-		return oracleValRow{vals: []any{
-			append(f.memberNames(), f.incarnationCoven...),
-			[]byte("[]"),
-		}}
 	case strings.Contains(sql, "soulprint_facts"):
 		// SelectSoulprint: facts NULL → ErrSoulprintNotReceived (osFamily "").
 		return oracleValRow{vals: []any{"host-a.example.com", nil, nil, nil}}

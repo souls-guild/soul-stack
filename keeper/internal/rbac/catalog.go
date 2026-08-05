@@ -129,10 +129,10 @@ var AllowedPermissions = map[string]struct{}{
 	"incarnation.check-drift": {},
 	// incarnation.traits-set — a wholesale replacement of an incarnation's
 	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060) via
-	// `PUT /v1/incarnations/{name}/traits`. The labels stay on the
-	// incarnation; member hosts inherit them at read time (ADR-080), so this
-	// is the per-INSTANCE counterpart of the per-HOST `soul.traits-assign`
-	// and neither overwrites the other. Action is
+	// `PUT /v1/incarnations/{name}/traits`. The labels describe the
+	// incarnation and reach no member host (NIM-281), so this permission and
+	// the per-HOST `soul.traits-assign` govern disjoint sets of labels —
+	// neither can produce or overwrite the other's. Action is
 	// hyphenated (`traits-set`) since the permission grammar is exactly
 	// `<resource>.<action>` (pattern: soul.traits-assign). Same scope
 	// selector incarnation/coven/service by path-{name} as the other
@@ -186,10 +186,11 @@ var AllowedPermissions = map[string]struct{}{
 	// soul.coven-assign (`coven=` / `host=` / bare), and both of its gates:
 	// target hosts ⊆ the operator's coven-scope (gate a), plus — for
 	// merge/replace — every pair attached ⊆ its own trait-scope (gate b,
-	// ADR-080). Gate (b) is what stops a holder from handing a host to a
-	// foreign role by stamping its pair, now that a host-attached trait
-	// grants visibility permanently and `trait.<key>=v` is a scope
-	// dimension (NIM-128); `remove` is ungated on the pair, as with coven.
+	// NIM-281). Gate (b) is what stops a holder from handing a host to a
+	// foreign role by stamping its pair: a host-attached trait is the only
+	// kind there is and it grants visibility, while `trait.<key>=v` is a
+	// scope dimension (NIM-128). `remove` is ungated on the pair, as with
+	// coven.
 	"soul.traits-assign": {},
 	// soul.ssh-target-update — changes per-host SSH credentials for the
 	// push flow (ADR-032 amendment 2026-05-26, S7-1). Action is hyphenated

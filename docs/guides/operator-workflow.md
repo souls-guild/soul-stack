@@ -112,10 +112,12 @@ The difference between the positions of the `where:` step key and the `soulprint
 
 ### Where to attach a label: on the host, or on the incarnation
 
-Both Coven tags and Traits can be attached at **two** levels, and a host sees the **union** of the two ([ADR-080](../adr/0080-label-inheritance-union.md)). Nothing is copied between them — the union is resolved when a label is read, whether by targeting or by an RBAC scope check.
+Both Coven tags and Traits can be attached at **two** levels, and the two levels are **independent** — a label lives where you attached it and reaches nothing else ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Nothing is copied between them and nothing is unioned at read time.
 
-- **On the incarnation** — `covens` / `traits` of the instance. Every host that belongs to it inherits them, **including hosts that join later**, with no re-stamping. This is the default choice.
-- **On one host** — `POST /v1/souls/coven` / `POST /v1/souls/traits`. Use it for something true of that VM alone (`rack=b12`).
+- **On one host** — `POST /v1/souls/coven` / `POST /v1/souls/traits`. **This is the only way a host gets a label**, and therefore the only thing `where:` predicates and `coven=` / `trait.<key>=` RBAC scopes ever see.
+- **On the incarnation** — `covens` / `traits` of the instance. These describe the instance itself: they are what an `incarnation`-side `coven=` / `trait.<key>=` scope matches, and what the service-vars overlay stage selects on ([ADR-0082](../adr/0082-service-vars.md)). They do **not** reach its hosts — not the ones already bound, not the ones that join later.
+
+> **Targeting a whole incarnation's hosts.** Belonging to an incarnation is not a label, so `where: "'redis-prod' in soulprint.self.covens"` finds nothing unless somebody tagged those hosts. Inside a scenario you do not need a tag at all — a run is already scoped to its incarnation, so `on:` omitted means every member. Outside one, tag the hosts.
 
 A **Trait** is a key-value attribute (`owner=dba`, `product=aboba`, `namespace=dba-ns`), as opposed to a Coven, which is a flat tag ([ADR-060](../adr/0060-traits.md)). Traits target the same way covens do:
 

@@ -745,7 +745,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 //
 // Single-incarnation tools (get/history/run/upgrade/destroy) do NOT use this
 // helper for the final check: they mirror REST coven/service-scope via
-// [Handler.checkIncarnationScope] (OR-Check over covens ∪ {name}). The helper
+// [Handler.checkIncarnationScope] (OR-Check over the declared covens, with the
+// name carried as the `incarnation=` dimension). The helper
 // remains for list semantics (nil context).
 func incarnationRBACContext(name string) map[string]string {
 	if name == "" {

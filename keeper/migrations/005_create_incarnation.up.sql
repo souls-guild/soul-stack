@@ -6,7 +6,10 @@
 -- after runs) + status (a narrow MVP enum: ready/applying/error_locked/
 -- migration_failed; provisioning/drift/destroying are post-MVP).
 --
--- PK = `name` (kebab-case, also the root Coven label per ADR-008).
+-- PK = `name` (kebab-case). It was also the root Coven label when this migration
+-- landed; it is not one any more - NIM-124 made membership the relation
+-- `incarnation_membership`, and NIM-281 settled that no label is ever inherited.
+-- The name is an identity, reached through the RBAC `incarnation=` dimension.
 -- service_version is the git ref (tag/branch) of the Service repo per ADR-007.
 -- state_schema_version is the version of the `state` structure for migrations per ADR-019.
 --

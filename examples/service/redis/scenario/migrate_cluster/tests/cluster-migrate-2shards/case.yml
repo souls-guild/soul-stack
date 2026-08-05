@@ -47,12 +47,12 @@ fixtures:
   # the harness and nodes-MAP must sort by SID (node-1 = bootstrap for run_once).
   hosts:
     - sid: node-2.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-1.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
@@ -168,7 +168,7 @@ assert:
               cluster-node-timeout: "5000"
           self:
             sid: node-1.example.com
-            covens: [migrate_cluster, redis]
+            covens: [redis]
             choirs: []
             traits: {}
             role: ""

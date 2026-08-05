@@ -10,7 +10,6 @@ import (
 	"context"
 	"log"
 	"os"
-	"slices"
 	"testing"
 	"time"
 
@@ -228,12 +227,13 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoadIncarnationHosts_InheritedLabels — the roster reports
-// EFFECTIVE labels (ADR-080): a host's own plus those of the incarnations it
-// belongs to. `soulprint.self.traits` / `.covens` are built from these, and they
-// must agree with the RBAC scope predicate, which resolves the same union in
-// SQL — otherwise a `where:` and a scope check would disagree about one host.
-func TestIntegration_LoadIncarnationHosts_InheritedLabels(t *testing.T) {
+// TestIntegration_LoadIncarnationHosts_OwnLabelsOnly — the roster reports the
+// host's OWN labels and nothing else (NIM-281). `soulprint.self.traits` /
+// `.covens` are built from these, and they must agree with the RBAC scope
+// predicate, which reads the same two columns in SQL — otherwise a `where:` and a
+// scope check would disagree about one host. Labelling the incarnation describes
+// the incarnation; it does not stamp its members.
+func TestIntegration_LoadIncarnationHosts_OwnLabelsOnly(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
@@ -244,7 +244,8 @@ func TestIntegration_LoadIncarnationHosts_InheritedLabels(t *testing.T) {
 		t.Fatalf("label the incarnation: %v", err)
 	}
 
-	// The host carries `owner` too, with a different value — the contested key.
+	// The host carries `owner` too, with a different value — the key that used to
+	// be contested between the two sides.
 	s := &soul.Soul{
 		SID:    "a.example.com",
 		Status: soul.StatusConnected,
@@ -266,20 +267,18 @@ func TestIntegration_LoadIncarnationHosts_InheritedLabels(t *testing.T) {
 	}
 	h := hosts[0]
 
-	// Inherited-only key arrives.
-	if h.Traits["team"] != "dba" {
-		t.Errorf("traits[team] = %v, want dba (inherited from the incarnation)", h.Traits["team"])
+	// A key held only by the incarnation does not appear on the host.
+	if _, leaked := h.Traits["team"]; leaked {
+		t.Errorf("traits[team] = %v — the incarnation's trait must not reach its member", h.Traits["team"])
 	}
-	// Contested key carries BOTH values, own first.
-	owner, ok := h.Traits["owner"].([]any)
-	if !ok || len(owner) != 2 || owner[0] != "bobik" || owner[1] != "dba" {
-		t.Errorf("traits[owner] = %#v, want [bobik dba] — neither side may win", h.Traits["owner"])
+	// The host's own value stands alone, as the scalar it was written as.
+	if h.Traits["owner"] != "bobik" {
+		t.Errorf("traits[owner] = %#v, want the scalar \"bobik\" — the host's own pair, unmixed", h.Traits["owner"])
 	}
-	// Coven: own tag, the incarnation's tag, and the incarnation NAME.
-	for _, want := range []string{"dc1", "dba", "redis-prod"} {
-		if !slices.Contains(h.Coven, want) {
-			t.Errorf("coven = %v, missing %q", h.Coven, want)
-		}
+	// Coven: the host's own tag, and nothing from the incarnation — neither its
+	// tag nor its NAME, which is a membership fact, not a label.
+	if len(h.Coven) != 1 || h.Coven[0] != "dc1" {
+		t.Errorf("coven = %v, want [dc1] only", h.Coven)
 	}
 }
 

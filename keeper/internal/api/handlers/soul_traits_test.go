@@ -271,7 +271,7 @@ func TestAssignTraits_EmptySelector_422(t *testing.T) {
 // carries keys but NOT trait values; source=api; scope_applied reflects the scope.
 func TestAssignTraits_AuditPayload_NoValues(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 1, bulkScanned: 1, bulkChanged: 1}
-	// The operator is scoped on the very pair it writes, so gate (b) (ADR-080)
+	// The operator is scoped on the very pair it writes, so gate (b) (NIM-230)
 	// admits it and the assertion under test stays the audit payload.
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}, exprs: []string{"trait.namespace=secret-value"}}, nil, nil)
 

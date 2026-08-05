@@ -1,25 +1,25 @@
 //go:build integration
 
-// Integration guard for the label model of ADR-080: incarnation.traits round
-// trip, plus inheritance by membership — a host reads the labels of the
-// incarnations it belongs to WITHOUT anything being written to its own row, a
-// host in two incarnations inherits from both, a key held on both sides yields
-// both values, and an incarnation write never reaches a host row.
+// Integration guard for the label model (NIM-281): incarnation.traits round
+// trip, plus the boundary that model draws — an incarnation's labels are the
+// incarnation's, they never reach the hosts that belong to it, neither by being
+// written to their rows nor by being read back into them.
 
 package incarnation
 
 import (
 	"context"
-	"slices"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
 // seedSoul inserts a minimal souls row with the given stable-tag coven (ADR-008).
 // NIM-124: incarnation membership is NO longer coven == incarnation name — it is
 // the `incarnation_membership` relation, seeded via seedMembership. traits starts
-// empty; a host only carries what an operator attaches to it directly (ADR-080).
+// empty; a host only carries what an operator attaches to it directly (NIM-281).
 func seedSoul(t *testing.T, sid string, coven []string) {
 	t.Helper()
 	// souls.coven is NOT NULL; pgx maps a nil slice to NULL.
@@ -35,9 +35,9 @@ func seedSoul(t *testing.T, sid string, coven []string) {
 	}
 }
 
-// seedIncarnationRow / seedMembership: inheritance resolves through
-// `incarnation_membership` (NIM-124), so member hosts must be bound in that table
-// and the incarnation must exist (FK).
+// seedIncarnationRow / seedMembership: membership is the `incarnation_membership`
+// relation (NIM-124), so member hosts must be bound in that table and the
+// incarnation must exist (FK).
 func seedIncarnationRow(t *testing.T, name string) {
 	t.Helper()
 	inc := &Incarnation{
@@ -66,7 +66,7 @@ func soulTraits(t *testing.T, sid string) map[string]any {
 }
 
 // setIncarnationLabels sets an incarnation's coven tags and traits directly —
-// the labels hosts will inherit from it.
+// the labels that describe the incarnation itself.
 func setIncarnationLabels(t *testing.T, name string, covens []string, traitsJSON string) {
 	t.Helper()
 	if covens == nil {
@@ -144,12 +144,14 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_InheritedLabels_FromMembership — a host picks up the labels of
-// the incarnation it belongs to WITHOUT anything having been written to its own
-// row: nothing is copied down, the union is resolved on read (ADR-080). The
-// incarnation's NAME comes along on the coven axis, mirroring the
-// incarnation-side resolver.
-func TestIntegration_InheritedLabels_FromMembership(t *testing.T) {
+// TestIntegration_IncarnationLabels_DoNotReachMembers — the labels an operator
+// attaches to an incarnation describe the incarnation. A host that belongs to it
+// carries exactly what was attached to the host, before and after: the
+// incarnation's traits are not readable from its row, its coven tag is not on the
+// row, and neither is its NAME. Membership is answered from
+// `incarnation_membership`, and asking for the members is spelled
+// `incarnation=<name>` — never `coven=<name>` (NIM-281).
+func TestIntegration_IncarnationLabels_DoNotReachMembers(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)
 	ctx := context.Background()
@@ -157,94 +159,50 @@ func TestIntegration_InheritedLabels_FromMembership(t *testing.T) {
 	seedIncarnationRow(t, "redis-prod")
 	setIncarnationLabels(t, "redis-prod", []string{"dba"}, `{"team":"dba","env":"prod"}`)
 	seedSoul(t, "host-a.example.com", []string{"dc1"})
-	seedSoul(t, "outsider.example.com", []string{"other-inc"})
 	seedMembership(t, "redis-prod", "host-a.example.com")
 
-	got, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
+	got, err := soul.SelectBySID(ctx, integrationPool, "host-a.example.com")
 	if err != nil {
-		t.Fatalf("LoadInheritedLabels: %v", err)
+		t.Fatalf("SelectBySID: %v", err)
 	}
-	if got.Traits["team"] != "dba" || got.Traits["env"] != "prod" {
-		t.Errorf("inherited traits = %v, want team=dba env=prod", got.Traits)
+	if len(got.Traits) != 0 {
+		t.Errorf("souls.traits = %v, want empty — an incarnation's traits are not its hosts'", got.Traits)
 	}
-	if !slices.Contains(got.Covens, "dba") {
-		t.Errorf("inherited covens = %v, want the incarnation's tag 'dba'", got.Covens)
+	if len(got.Coven) != 1 || got.Coven[0] != "dc1" {
+		t.Errorf("souls.coven = %v, want [dc1] — neither the incarnation's tag nor its name belongs here", got.Coven)
 	}
-	if !slices.Contains(got.Covens, "redis-prod") {
-		t.Errorf("inherited covens = %v, want the incarnation NAME as a coven tag", got.Covens)
-	}
-	// The host's own row was never written to.
-	if own := soulTraits(t, "host-a.example.com"); len(own) != 0 {
-		t.Errorf("souls.traits = %v, want empty — inheritance must not write to the host", own)
-	}
-	// A non-member inherits nothing.
-	outsider, err := soul.LoadInheritedLabels(ctx, integrationPool, "outsider.example.com")
-	if err != nil {
-		t.Fatalf("LoadInheritedLabels(outsider): %v", err)
-	}
-	if len(outsider.Traits) != 0 || len(outsider.Covens) != 0 {
-		t.Errorf("outsider inherited %v / %v, want nothing", outsider.Covens, outsider.Traits)
+
+	// The same on the list path, which is where a widened label would have shown
+	// up as access: a scope on the incarnation's tag, and one on its name, reach
+	// no host — only the host's own `dc1` does.
+	for _, tc := range []struct {
+		scope string
+		want  int
+	}{
+		{"coven=dba", 0},        // the incarnation's tag
+		{"coven=redis-prod", 0}, // the incarnation's name
+		{"coven=dc1", 1},        // the host's own tag
+		{"trait.team=dba", 0},   // the incarnation's trait
+	} {
+		expr, err := rbac.ParseScopeExpr(tc.scope)
+		if err != nil {
+			t.Fatalf("ParseScopeExpr(%q): %v", tc.scope, err)
+		}
+		scope := soulpurview.Resolve(rbac.Purview{Exprs: []*rbac.ScopeExpr{expr}})
+		_, total, err := soul.SelectAll(ctx, integrationPool, soul.ListFilter{}, scope, 0, 50)
+		if err != nil {
+			t.Fatalf("SelectAll(%s): %v", tc.scope, err)
+		}
+		if total != tc.want {
+			t.Errorf("SelectAll(%s) = %d hosts, want %d", tc.scope, total, tc.want)
+		}
 	}
 }
 
-// TestIntegration_InheritedLabels_TwoIncarnations — membership is M:N (migration
-// 099), and a host in two incarnations inherits from BOTH. This is what the
-// removed projection could not express: it replaced souls.traits wholesale per
-// incarnation, so syncing one erased what the other had projected.
-func TestIntegration_InheritedLabels_TwoIncarnations(t *testing.T) {
-	resetAll(t)
-	resetSouls(t)
-	ctx := context.Background()
-
-	seedIncarnationRow(t, "redis-prod")
-	seedIncarnationRow(t, "metrics-prod")
-	setIncarnationLabels(t, "redis-prod", nil, `{"team":"dba"}`)
-	setIncarnationLabels(t, "metrics-prod", nil, `{"tier":"gold"}`)
-	seedSoul(t, "host-a.example.com", nil)
-	seedMembership(t, "redis-prod", "host-a.example.com")
-	seedMembership(t, "metrics-prod", "host-a.example.com")
-
-	got, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
-	if err != nil {
-		t.Fatalf("LoadInheritedLabels: %v", err)
-	}
-	if got.Traits["team"] != "dba" || got.Traits["tier"] != "gold" {
-		t.Fatalf("inherited traits = %v, want BOTH incarnations (team=dba, tier=gold)", got.Traits)
-	}
-}
-
-// TestIntegration_InheritedLabels_ContestedKey_Unions — the same key on the host
-// and on its incarnation yields both values, in no order of precedence: either
-// one grants, so neither may be dropped.
-func TestIntegration_InheritedLabels_ContestedKey_Unions(t *testing.T) {
-	resetAll(t)
-	resetSouls(t)
-	ctx := context.Background()
-
-	seedIncarnationRow(t, "redis-prod")
-	setIncarnationLabels(t, "redis-prod", nil, `{"owner":"dba"}`)
-	seedSoul(t, "host-a.example.com", nil)
-	seedMembership(t, "redis-prod", "host-a.example.com")
-	setSoulTraits(t, "host-a.example.com", `{"owner":"bobik"}`)
-
-	inherited, err := soul.LoadInheritedLabels(ctx, integrationPool, "host-a.example.com")
-	if err != nil {
-		t.Fatalf("LoadInheritedLabels: %v", err)
-	}
-	effective := soul.UnionTraits(soulTraits(t, "host-a.example.com"), inherited.Traits)
-
-	values, ok := effective["owner"].([]any)
-	if !ok || len(values) != 2 {
-		t.Fatalf("effective owner = %#v, want both values", effective["owner"])
-	}
-	if values[0] != "bobik" || values[1] != "dba" {
-		t.Errorf("effective owner = %v, want [bobik dba] (own first, neither dropped)", values)
-	}
-}
-
-// TestIntegration_UpdateTraits_LeavesHostRowAlone — the guard against the failure
-// mode ADR-080 removes: replacing an incarnation's traits must not write to any
-// host, so a label an operator attached to a host is still there afterwards.
+// TestIntegration_UpdateTraits_LeavesHostRowAlone — an incarnation write must not
+// write to any host, so a label an operator attached to a host is still there
+// afterwards. (Guard against the removed projection, which replaced souls.traits
+// wholesale per incarnation.)
 func TestIntegration_UpdateTraits_LeavesHostRowAlone(t *testing.T) {
 	resetAll(t)
 	resetSouls(t)

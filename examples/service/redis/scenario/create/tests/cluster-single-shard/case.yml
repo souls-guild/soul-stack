@@ -12,7 +12,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-solo.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
@@ -118,7 +118,7 @@ assert:
               cluster-node-timeout: "5000"
           self:
             sid: node-solo.example.com
-            covens: [create, redis]
+            covens: [redis]
             choirs: []
             # traits — registry projection (ADR-060), an empty object with no labels.
             traits: {}

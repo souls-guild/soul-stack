@@ -128,7 +128,7 @@ func renderCreateReadSet(t *testing.T, caseFile string) (readSet, generatedSet m
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: scn.Name},
-		Hosts:       fixtureHosts(scn.Name, c.Fixtures),
+		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
 		State:       c.Fixtures.State,

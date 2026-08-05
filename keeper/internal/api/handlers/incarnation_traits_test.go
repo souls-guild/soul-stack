@@ -2,8 +2,9 @@ package handlers
 
 // Guard tests for the Trait relocation per-soul → per-incarnation at the handler layer (ADR-060
 // amend R1):
-//   - create with top-level `traits` → spec.traits → INSERT (the source of truth that the
-//     sync hook projects into souls.traits);
+//   - create with top-level `traits` → the `incarnation.traits` column (its source of truth;
+//     the projection hook it once fed is gone - NIM-121, and NIM-281 removed the read-time
+//     union that replaced it, so this set never reaches a host);
 //   - PUT .../traits (SetTraitsTyped) → wholesale replacement of incarnation.traits;
 //   - domain validation of trait values (422 on nested) and name (422).
 

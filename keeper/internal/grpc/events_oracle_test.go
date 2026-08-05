@@ -14,7 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
-	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -31,24 +30,21 @@ import (
 //   - QueryRow "FROM oracle_fires" → cooldown-state (last fired);
 //   - Exec "oracle_fires"       → record fire.
 //
-// The label reads and the membership read are separate on purpose: since
-// NIM-124/ADR-080 they are separate facts in the product, and a fake that
-// conflated them could not tell a member from a host merely tagged with an
-// incarnation's name — the case the Oracle's guard exists to refuse.
+// The label read and the membership read are separate on purpose: since
+// NIM-124 they are separate facts in the product, and a fake that conflated
+// them could not tell a member from a host merely tagged with an incarnation's
+// name — the case the Oracle's guard exists to refuse.
 type oracleFakeDB struct {
 	decreeRows func() (pgx.Rows, error)
-	// soulCoven — labels attached to THIS host (souls.coven[]).
+	// soulCoven — labels attached to THIS host (souls.coven[]). The only place
+	// a coven comes from (NIM-281).
 	soulCoven []string
 	// memberOf — incarnations the host is bound to (incarnation_membership).
-	// Drives both the membership gate and, since an incarnation always
-	// contributes its own name on the coven axis, the inherited label set.
-	memberOf []string
-	// incarnationCoven — extra tags carried by those incarnations
-	// (incarnation.covens[]), inherited on top of their names.
-	incarnationCoven []string
-	soulErr          error
-	lastFired        *time.Time
-	recordedFnc      func(args []any)
+	// Drives the membership gate ALONE: belonging lends the host no label.
+	memberOf    []string
+	soulErr     error
+	lastFired   *time.Time
+	recordedFnc func(args []any)
 
 	// circuit-breaker (ADR-030(a), S4). bumpReturns — the fire_count that
 	// BumpCircuit (RETURNING) will return. bumpCalled — records that BumpCircuit
@@ -85,13 +81,6 @@ func (f *oracleFakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
-		}}
-	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
-		// Each incarnation contributes its name plus its own tags (ADR-080);
-		// no traits in these fixtures.
-		return oracleValRow{vals: []any{
-			append(append([]string{}, f.memberOf...), f.incarnationCoven...),
-			[]byte("[]"),
 		}}
 	case strings.Contains(sql, "incarnation_membership"):
 		// isMemberSQL: EXISTS(… incarnation_name = $1 AND sid = $2).
@@ -469,16 +458,19 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 	}
 }
 
-// TestPortent_IncarnationScopedDecreeMatchesMember — the NIM-224 regression at
-// unit level: a Decree scoped `subject_coven: [<incarnation name>]` matches a
-// member that carries NO coven of its own. The name reaches the host only
-// through the inherited half of the label union (ADR-080) — reading
-// `souls.coven[]` alone, as the handler did before, yields an empty
-// intersection and the rule silently never fires.
-func TestPortent_IncarnationScopedDecreeMatchesMember(t *testing.T) {
+// TestPortent_MembershipAloneDoesNotMatchCovenSubject — GUARD (NIM-281): a
+// Decree scoped `subject_coven: [web-app]` does NOT reach a member of `web-app`
+// that carries no such tag. Membership is not a label, so the subject
+// intersection is empty and the rule does not fire.
+//
+// A Decree fires a scenario, so this direction is the safe one: were the
+// subject ever resolved through membership again, binding a host to an
+// incarnation would silently enroll it in every rule scoped to that
+// incarnation's name. To bind a rule to an incarnation's members, tag them.
+func TestPortent_MembershipAloneDoesNotMatchCovenSubject(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	db := &oracleFakeDB{
-		memberOf: []string{"web-app"},
+		memberOf: []string{"web-app"}, // member, but untagged
 		decreeRows: decreesRows(&oracle.Decree{
 			Name: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web-app"}, IncarnationName: "web-app",
@@ -489,17 +481,40 @@ func TestPortent_IncarnationScopedDecreeMatchesMember(t *testing.T) {
 
 	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
 
-	if len(enq.snapshot()) != 1 {
-		t.Fatalf("incarnation-scoped Decree should match its member, got %d enqueues", len(enq.snapshot()))
+	if n := len(enq.snapshot()); n != 0 {
+		t.Fatalf("got %d enqueues, want 0 — belonging to an incarnation is not a tag", n)
 	}
 }
 
-// TestPortent_CovenTagIsNotMembership — the guard that keeps the widening
-// above from becoming an escalation. The host carries a HOST-ATTACHED tag
-// spelled exactly like the Decree's incarnation, so the subject match passes
-// on the label union, but it holds no membership row. The gate must refuse:
-// resolving membership from the union would let a coven tag hand a host the
-// right to run a foreign incarnation's scenarios (ADR-030(b)).
+// TestPortent_TaggedMemberMatchesCovenSubject — the positive pair: the same
+// Decree, the same membership, and now the tag actually on the host. Both
+// halves must hold — the subject match on `souls.coven[]` AND the membership
+// row — so a break in either one is visible.
+func TestPortent_TaggedMemberMatchesCovenSubject(t *testing.T) {
+	enq := &fakeEnqueuer{}
+	db := &oracleFakeDB{
+		soulCoven: []string{"web-app"},
+		memberOf:  []string{"web-app"},
+		decreeRows: decreesRows(&oracle.Decree{
+			Name: "restart-web", OnBeacon: "svc-down",
+			SubjectCoven: []string{"web-app"}, IncarnationName: "web-app",
+			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
+		}),
+	}
+	h := newOracleHandler(t, db, enq, &recordingAudit{})
+
+	h.handlePortentEvent(context.Background(), "host-a.example.com", "sess", portent("svc-down", nil))
+
+	if n := len(enq.snapshot()); n != 1 {
+		t.Fatalf("got %d enqueues, want 1 — a tagged member must fire", n)
+	}
+}
+
+// TestPortent_CovenTagIsNotMembership — the other half of the pair above: the
+// host carries the tag but holds NO membership row. The subject match passes
+// and the gate must still refuse — resolving membership from a label would let
+// a coven tag, which anyone may attach, hand a host the right to run a foreign
+// incarnation's scenarios (ADR-030(b)).
 func TestPortent_CovenTagIsNotMembership(t *testing.T) {
 	enq := &fakeEnqueuer{}
 	aw := &recordingAudit{}
@@ -956,16 +971,10 @@ func TestActiveVigilsForSID_ConvertsToVigilDef(t *testing.T) {
 	}
 }
 
-// oracleVigilDB — fake for VigilSource: souls (own covens) + the inherited
-// labels of the host's incarnations + vigils (set).
+// oracleVigilDB — fake for VigilSource: souls (the host's covens) + vigils (set).
 type oracleVigilDB struct {
 	soulCoven []string
-	// memberOf / incarnationCoven — same split as [oracleFakeDB]: the
-	// incarnations the host is bound to (each contributing its name) and the
-	// extra tags those incarnations carry.
-	memberOf         []string
-	incarnationCoven []string
-	vigils           [][]any
+	vigils    [][]any
 }
 
 func (f *oracleVigilDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -978,11 +987,6 @@ func (f *oracleVigilDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Ro
 		return oracleValRow{vals: []any{
 			"host-a.example.com", "agent", "connected", f.soulCoven,
 			nil, time.Now(), nil, nil, nil, nil, nil,
-		}}
-	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
-		return oracleValRow{vals: []any{
-			append(append([]string{}, f.memberOf...), f.incarnationCoven...),
-			[]byte("[]"),
 		}}
 	}
 	return oracleErrRow{err: pgx.ErrNoRows}

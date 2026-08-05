@@ -8,12 +8,14 @@ Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes) - in the root [
 
 ## What `coven` matches on a subject
 
-The `coven` field of a Vigil or a Decree is matched against a host's **effective** labels: the tags on the host itself (`souls.coven[]`) **plus** everything it inherits from the incarnations it belongs to — each incarnation's own tags and its **name** ([ADR-080](../../adr/0080-label-inheritance-union.md)). Two consequences worth knowing before writing a rule:
+The `coven` field of a Vigil or a Decree is matched against the tags on the host itself (`souls.coven[]`) and nothing else. Belonging to an incarnation attaches no tag ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Two consequences worth knowing before writing a rule:
 
-- `coven: ["<incarnation-name>"]` scopes a rule to that incarnation's hosts, and keeps covering hosts bound to it later. Nothing is stamped on any host — binding a member is enough.
-- A tag put on the incarnation (`incarnation.covens[]`) reaches its members too, so `coven: ["cache"]` reaches the hosts of every incarnation tagged `cache`.
+- `coven: ["<incarnation-name>"]` does **not** scope a rule to that incarnation's hosts. It matches whatever hosts somebody happened to tag with that string — an ordinary tag that reads like an incarnation. To watch a set of hosts, tag them (`POST /v1/souls/coven`) and bind the rule to that tag; a host bound later must be tagged too.
+- A tag put on the incarnation (`incarnation.covens[]`) describes the incarnation and reaches no host.
 
-Matching a subject only decides **which hosts may trigger the rule**. A Decree additionally checks that the sending host is a **member** of its `incarnation_name`, and that check reads the membership relation, not the labels above — a host merely tagged with an incarnation's name is refused (fail-closed, no fire and no `oracle.fired` audit). Bind the host to the incarnation; a coven tag is not a substitute.
+There is no "members of incarnation X" subject at all — a Vigil/Decree subject is `coven` XOR `sid`, with no membership dimension (tracked as NIM-280). Note the quiet half: a host that is not matched by any Vigil never runs the check, so it raises no Portent and the Decree side is never consulted. The failure mode is silence, not an error.
+
+A Decree additionally checks that the sending host is a **member** of its `incarnation_name`, and that check reads the membership relation, never the tags above — wrong in both directions otherwise: a host merely tagged with an incarnation's name would pass, and a genuine member nobody tagged would fail (fail-closed, no fire and no `oracle.fired` audit). Bind the host to the incarnation; a coven tag is not a substitute.
 
 ### `POST /v1/vigils` - create Vigil
 

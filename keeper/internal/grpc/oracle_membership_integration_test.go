@@ -1,26 +1,24 @@
 //go:build integration
 
-// Oracle subject resolution over the membership relation (NIM-224), on live
-// PG. These assert the seam NIM-124 left behind: it moved host↔incarnation
-// membership out of `souls.coven[]` into `incarnation_membership` and
-// converted the roster, the bulk soul selector, the Choir check and form-prep
-// — but not the Oracle. A Decree scoped to an incarnation therefore matched
-// nothing, silently: the column still existed, the query still succeeded, the
-// intersection was simply always empty.
-//
-// The fix has two halves that must not be confused, and each half has its own
+// Oracle subject resolution against live PG (NIM-224, narrowed by NIM-281).
+// Two questions run in sequence here and must not be confused; each has its own
 // tests below:
 //
-//   - the SUBJECT match reads the effective label union (own ∪ inherited,
-//     ADR-080), so `subject_coven: [<incarnation>]` reaches that
-//     incarnation's members;
-//   - the MEMBERSHIP gate reads `incarnation_membership` directly, because
-//     the union deliberately admits host-attached tags and so cannot decide
-//     who belongs where.
+//   - the SUBJECT match reads `souls.coven[]` — the tags an operator attached
+//     to the host, and nothing else. A Decree is bound to the hosts an operator
+//     labelled for it; membership lends a host no tag, so
+//     `subject_coven: [<incarnation>]` reaches only hosts actually tagged with
+//     that string.
+//   - the MEMBERSHIP gate reads `incarnation_membership` directly, because a
+//     coven tag is a label anyone holding `soul.coven-assign` may attach and so
+//     cannot decide who belongs where.
 //
-// Live PG rather than the fake: the defect was in which relation was read,
-// and a fake that answers both questions from one field cannot fail the way
-// production did.
+// Together they mean a Decree fires on a host only if the operator both tagged
+// it and bound it — two acts, in two places, neither derivable from the other.
+//
+// Live PG rather than the fake: the questions are answered from two different
+// relations, and a fake that answers both from one field cannot fail the way
+// production did at NIM-124.
 
 package grpc
 
@@ -46,14 +44,15 @@ const (
 )
 
 // seedMembershipFixture seeds operator + two hosts + an incarnation + a
-// Vigil/Decree scoped to the INCARNATION NAME on the coven axis — the shape
-// an operator writes for "react on the hosts of this incarnation", and the
-// shape NIM-124 broke. Neither host carries the name in `souls.coven[]`;
-// membership is bound separately by each test.
+// Vigil/Decree scoped on the coven axis. Membership is bound separately by each
+// test, so the two acts an operator performs — tagging a host and binding it —
+// stay independently controllable, which is the point of every test here.
 //
-// incarnationCovens are the tags carried by the incarnation itself, inherited
-// by its members on top of its name (ADR-080).
-func seedMembershipFixture(t *testing.T, ctx context.Context, subjectCoven []string, incarnationCovens []string) *eventStreamHandler {
+// memberCovens are the tags an operator attached to membershipMember, on top of
+// the `linux` both hosts carry. incarnationCovens are the tags carried by the
+// incarnation itself; under NIM-281 they describe the incarnation and reach no
+// host, and the tests pass them only to prove exactly that.
+func seedMembershipFixture(t *testing.T, ctx context.Context, subjectCoven, memberCovens, incarnationCovens []string) *eventStreamHandler {
 	t.Helper()
 	resetOracleCrossSide(t)
 
@@ -64,9 +63,13 @@ func seedMembershipFixture(t *testing.T, ctx context.Context, subjectCoven []str
 	}
 	creator := membershipAID
 	for _, sid := range []string{membershipMember, membershipOutside} {
+		covens := []string{"linux"}
+		if sid == membershipMember {
+			covens = append(covens, memberCovens...)
+		}
 		if err := soul.Insert(ctx, integrationPool, &soul.Soul{
 			SID: sid, Transport: soul.TransportAgent, Status: soul.StatusConnected,
-			Coven: []string{"linux"}, CreatedByAID: &creator,
+			Coven: covens, CreatedByAID: &creator,
 		}); err != nil {
 			t.Fatalf("soul.Insert(%s): %v", sid, err)
 		}
@@ -126,58 +129,58 @@ func emit(t *testing.T, ctx context.Context, h *eventStreamHandler, sid string) 
 		soulSchedulerPortent(t, membershipBeacon, sid, nil))
 }
 
-// TestIntegration_OracleSubject_HitsExactlyIncarnationMembers — a Decree
-// scoped `subject_coven: [<incarnation name>]` fires for a host bound to that
-// incarnation and for no other. Both hosts are otherwise identical (same own
-// coven `linux`, same registry status), so the only thing separating them is
-// the membership row. This is the case that regressed at NIM-124: before the
-// fix NEITHER host matched, because the name lives in no host's column any
-// more.
-func TestIntegration_OracleSubject_HitsExactlyIncarnationMembers(t *testing.T) {
+// TestIntegration_OracleSubject_HitsExactlyTaggedHosts — a Decree scoped
+// `subject_coven: [cache]` fires for the host an operator tagged `cache` and
+// bound to the target incarnation, and for no other. Both hosts are otherwise
+// identical (same `linux` tag, same registry status), so the only thing
+// separating them is the tag the operator attached.
+func TestIntegration_OracleSubject_HitsExactlyTaggedHosts(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil)
+	h := seedMembershipFixture(t, ctx, []string{"cache"}, []string{"cache"}, nil)
 	bindMember(t, ctx, membershipMember)
+	bindMember(t, ctx, membershipOutside)
 
 	emit(t, ctx, h, membershipMember)
 	emit(t, ctx, h, membershipOutside)
 
 	if !firedFor(t, ctx, membershipMember) {
-		t.Error("member of the target incarnation must match a subject_coven scoped to its name")
+		t.Error("a host tagged `cache` and bound to the incarnation must match subject_coven: [cache]")
 	}
 	if firedFor(t, ctx, membershipOutside) {
-		t.Error("a host outside the incarnation must not match")
+		t.Error("an untagged host must not match — membership is not a tag")
 	}
 }
 
-// TestIntegration_OracleSubject_InheritsIncarnationCovens — the union is not
-// only the incarnation's NAME: a tag carried by the incarnation itself
-// (`incarnation.covens[]`) reaches its members too, so a Decree scoped
-// `subject_coven: [cache]` fires on the hosts of an incarnation tagged
-// `cache` without that tag being stamped onto any host.
-func TestIntegration_OracleSubject_InheritsIncarnationCovens(t *testing.T) {
+// TestIntegration_OracleSubject_IncarnationLabelsDoNotBind — the NIM-281 guard on
+// the reactor, in both spellings an operator might reach for. A Decree scoped to
+// the incarnation's NAME, on an incarnation that also carries the tag `cache`,
+// fires on nobody: the member is bound, but it is tagged neither `redis-prod`
+// nor `cache`, and belonging lends it neither. Binding a rule to an
+// incarnation's hosts means tagging those hosts.
+func TestIntegration_OracleSubject_IncarnationLabelsDoNotBind(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{"cache"}, []string{"cache"})
+	h := seedMembershipFixture(t, ctx, []string{membershipInc, "cache"}, nil, []string{"cache"})
 	bindMember(t, ctx, membershipMember)
 
 	emit(t, ctx, h, membershipMember)
 	emit(t, ctx, h, membershipOutside)
 
-	if !firedFor(t, ctx, membershipMember) {
-		t.Error("a tag on the incarnation must reach its members (ADR-080 union)")
+	if firedFor(t, ctx, membershipMember) {
+		t.Error("a member matched a subject spelled like its incarnation — neither the name nor the incarnation's tag is a label on its hosts")
 	}
 	if firedFor(t, ctx, membershipOutside) {
-		t.Error("a non-member inherits nothing from the incarnation")
+		t.Error("a non-member matched an incarnation-spelled subject")
 	}
 }
 
-// TestIntegration_OracleSubject_UnboundHostStopsMatching — membership is read
-// live, not captured when the Decree was written: unbinding a host stops it
-// matching a rule that already exists. The cooldown row from the first fire
-// is cleared so the second emit is judged on its own (a live cooldown would
-// suppress it for an unrelated reason).
+// TestIntegration_OracleSubject_UnboundHostStopsMatching — the membership gate is
+// read live, not captured when the Decree was written: unbinding a host stops it
+// matching a rule that already exists, even though its tag is untouched. The
+// cooldown row from the first fire is cleared so the second emit is judged on its
+// own (a live cooldown would suppress it for an unrelated reason).
 func TestIntegration_OracleSubject_UnboundHostStopsMatching(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil)
+	h := seedMembershipFixture(t, ctx, []string{"cache"}, []string{"cache"}, nil)
 	bindMember(t, ctx, membershipMember)
 
 	emit(t, ctx, h, membershipMember)
@@ -199,13 +202,12 @@ func TestIntegration_OracleSubject_UnboundHostStopsMatching(t *testing.T) {
 }
 
 // TestIntegration_OracleSubject_MemberBoundAfterDecreeStartsMatching — the
-// other direction: a host bound AFTER the rule was created starts matching it,
-// with no re-write of the Decree. This is the property that makes labelling
-// the incarnation the recommended shape (ADR-080) — a rule covers whoever
-// joins later.
+// other direction: a tagged host bound AFTER the rule was created starts
+// matching it, with no re-write of the Decree. The gate is a live read of the
+// relation, not a snapshot taken when the Decree was written.
 func TestIntegration_OracleSubject_MemberBoundAfterDecreeStartsMatching(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil)
+	h := seedMembershipFixture(t, ctx, []string{"cache"}, []string{"cache"}, nil)
 
 	emit(t, ctx, h, membershipMember)
 	if firedFor(t, ctx, membershipMember) {
@@ -221,20 +223,19 @@ func TestIntegration_OracleSubject_MemberBoundAfterDecreeStartsMatching(t *testi
 }
 
 // TestIntegration_OracleMembershipGate_CovenTagIsNotMembership — the
-// separation that makes the fix safe. A host carries a HOST-ATTACHED coven tag
-// spelled exactly like the target incarnation but holds no membership row.
-// The subject match passes (the union is a label question and the tag is a
-// real label), and the membership gate must still refuse: otherwise anyone who
-// can put a coven tag on a host — or any host that carried the name before
-// migration 099 stripped it — could have that incarnation's scenarios enqueued
-// on it (cross-incarnation escalation, ADR-030(b)).
+// separation that makes the subject axis safe to widen. A host carries a coven
+// tag spelled exactly like the target incarnation but holds no membership row.
+// The subject match passes — the tag is a real label an operator attached — and
+// the membership gate must still refuse: otherwise anyone who can put a coven
+// tag on a host, or any host that carried the name before migration 099 stripped
+// it, could have that incarnation's scenarios enqueued on it
+// (cross-incarnation escalation, ADR-030(b)).
 //
-// This is why the gate reads the relation rather than the resolved covens:
-// answering it from the union would turn the ADR-080 widening into a privilege
-// hole.
+// This is why the gate reads the relation and never the covens: a label is not a
+// membership decision, whoever attached it.
 func TestIntegration_OracleMembershipGate_CovenTagIsNotMembership(t *testing.T) {
 	ctx := context.Background()
-	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil)
+	h := seedMembershipFixture(t, ctx, []string{membershipInc}, nil, nil)
 
 	// Stamp the incarnation's name onto the outsider as an ordinary host tag.
 	if _, err := integrationPool.Exec(ctx,
@@ -258,31 +259,34 @@ func TestIntegration_OracleMembershipGate_CovenTagIsNotMembership(t *testing.T) 
 	}
 }
 
-// TestIntegration_OracleVigilSource_ReachesIncarnationMembers — the quiet half
-// of the chain. A Vigil scoped to the incarnation must be broadcast to its
-// members: if it is not, the host never runs the check, no Portent is ever
-// emitted, and the Decree side is never even consulted — a failure with no
-// error anywhere. Asserted through the real [VigilSource] against live PG.
-func TestIntegration_OracleVigilSource_ReachesIncarnationMembers(t *testing.T) {
+// TestIntegration_OracleVigilSource_MatchesTheDecreeSubject — the quiet half of
+// the chain. The Vigil must reach exactly the hosts the Decree can fire on: if
+// it does not, the host never runs the check, no Portent is ever emitted, and
+// the Decree side is never even consulted — a failure with no error anywhere.
+// Both halves read `souls.coven[]`, so a host tagged for the rule gets the check
+// and an untagged member gets nothing. Asserted through the real [VigilSource]
+// against live PG.
+func TestIntegration_OracleVigilSource_MatchesTheDecreeSubject(t *testing.T) {
 	ctx := context.Background()
-	seedMembershipFixture(t, ctx, []string{membershipInc}, nil)
+	seedMembershipFixture(t, ctx, []string{"cache"}, []string{"cache"}, nil)
 	bindMember(t, ctx, membershipMember)
+	bindMember(t, ctx, membershipOutside)
 
 	src := NewVigilSource(integrationPool)
 
 	defs, err := src.ActiveVigilsForSID(ctx, membershipMember)
 	if err != nil {
-		t.Fatalf("ActiveVigilsForSID(member): %v", err)
+		t.Fatalf("ActiveVigilsForSID(tagged): %v", err)
 	}
 	if len(defs) != 1 || defs[0].GetName() != membershipBeacon {
-		t.Errorf("member should receive the incarnation-scoped Vigil, got %d defs (%+v)", len(defs), defs)
+		t.Errorf("the tagged host should receive the Vigil, got %d defs (%+v)", len(defs), defs)
 	}
 
 	outside, err := src.ActiveVigilsForSID(ctx, membershipOutside)
 	if err != nil {
-		t.Fatalf("ActiveVigilsForSID(outsider): %v", err)
+		t.Fatalf("ActiveVigilsForSID(untagged): %v", err)
 	}
 	if len(outside) != 0 {
-		t.Errorf("a host outside the incarnation should receive no Vigil, got %d", len(outside))
+		t.Errorf("an untagged member should receive no Vigil, got %d — membership must not broadcast a check", len(outside))
 	}
 }

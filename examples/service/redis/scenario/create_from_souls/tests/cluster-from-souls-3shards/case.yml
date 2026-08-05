@@ -22,17 +22,17 @@ fixtures:
   # Multi-host roster: 3 hosts, the order in YAML is intentionally unsorted (b, c, a).
   hosts:
     - sid: node-b.example.com
-      covens: [create_from_souls, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-c.example.com
-      covens: [create_from_souls, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
     - sid: node-a.example.com
-      covens: [create_from_souls, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
@@ -151,7 +151,7 @@ assert:
               cluster-node-timeout: "5000"
           self:
             sid: node-a.example.com
-            covens: [create_from_souls, redis]
+            covens: [redis]
             choirs: []
             traits: {}
             role: ""

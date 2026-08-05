@@ -82,7 +82,7 @@ assert:
                 password: alice-user-secret-pass
           self:
             sid: trial-host
-            covens: [add_user]
+            covens: []
             choirs: []
             # traits — registry projection (ADR-060), empty object without labels.
             traits: {}

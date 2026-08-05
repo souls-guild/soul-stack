@@ -754,7 +754,7 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 		h.logger.Error("soul.get: select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul failed")}
 	}
-	if !h.inScopeWithInherited(ctx, claims, s) {
+	if !h.inScope(claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 	dtos := []SoulListView{toSoulListView(s)}
@@ -762,17 +762,15 @@ func (h *SoulHandler) GetTyped(ctx context.Context, claims *jwt.Claims, sid stri
 	return dtos[0], nil
 }
 
-// inScopeWithInherited is the single-object scope gate, resolved over the host's
-// EFFECTIVE labels (ADR-080): its own coven/traits unioned with those of every
-// incarnation it belongs to. The list endpoint resolves the same union inside
-// SQL, so doing it here too is what keeps get/soulprint/history from hiding a
-// host that the list shows.
+// inScope is the single-object scope gate, resolved over the host's OWN
+// coven/traits and nothing else (NIM-281). The list endpoint pushes down the
+// same predicate in SQL, so get/soulprint/history and the list agree on which
+// hosts an operator may see.
 //
-// The membership lookup is skipped when the answer cannot depend on it — an
-// unrestricted operator sees everything, an empty purview nothing. A lookup
-// failure is fail-closed (out of scope, 404): uncertainty hides, per the
-// soulpurview contract.
-func (h *SoulHandler) inScopeWithInherited(ctx context.Context, claims *jwt.Claims, s *soul.Soul) bool {
+// There is no label inheritance: a label grants only where an operator attached
+// it, and belonging to an incarnation attaches nothing. An operator who needs to
+// reach the members of an incarnation is scoped `incarnation=<name>`.
+func (h *SoulHandler) inScope(claims *jwt.Claims, s *soul.Soul) bool {
 	scope := h.readScopeForClaims(claims)
 	if scope.Unrestricted() {
 		return true
@@ -780,15 +778,7 @@ func (h *SoulHandler) inScopeWithInherited(ctx context.Context, claims *jwt.Clai
 	if scope.Empty() {
 		return false
 	}
-	inherited, err := soul.LoadInheritedLabels(ctx, h.pool, s.SID)
-	if err != nil {
-		h.logger.Error("soul: inherited labels load failed (fail-closed)",
-			slog.String("sid", s.SID), slog.Any("error", err))
-		return false
-	}
-	return soulpurview.InScope(scope, s.SID,
-		soul.UnionCovens(s.Coven, inherited.Covens),
-		soulpurview.TraitsInput(soul.UnionTraits(s.Traits, inherited.Traits)))
+	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits))
 }
 
 // readScopeForClaims derives the single-read scope boundary from the operator's Purview
@@ -875,7 +865,7 @@ func (h *SoulHandler) GetSoulprintTyped(ctx context.Context, claims *jwt.Claims,
 		h.logger.Error("soul.soulprint.get: scope select failed", slog.String("sid", sid), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soulprint failed")}
 	}
-	if !h.inScopeWithInherited(ctx, claims, s) {
+	if !h.inScope(claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
 	}
 
@@ -1010,7 +1000,7 @@ func (h *SoulHandler) HistoryTyped(ctx context.Context, claims *jwt.Claims, in S
 		h.logger.Error("soul.history: scope select failed", slog.String("sid", in.SID), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get soul history failed")}
 	}
-	if !h.inScopeWithInherited(ctx, claims, s) {
+	if !h.inScope(claims, s) {
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+in.SID+" not found")}
 	}
 
@@ -1494,7 +1484,7 @@ type SoulTraitsAssignReply struct {
 	AuditPayload middleware.AuditPayload
 }
 
-// checkTraitPairsInScope is gate (b) of the per-soul trait write (ADR-080): every
+// checkTraitPairsInScope is gate (b) of the per-soul trait write (NIM-281): every
 // pair the operator attaches must lie inside its own trait-scope, the mirror of
 // "the assigned coven label ∈ the operator's coven scope". A list value is checked
 // element-wise — each element is a pair in its own right, and one out-of-scope
@@ -1551,16 +1541,16 @@ func sortedMapKeys(m map[string]any) []string {
 }
 
 // AssignTraitsTyped — the domain function of POST /v1/souls/traits (handler-native): bulk
-// trait-assign, the first-class write path for labels attached to a HOST (ADR-080; the
-// deprecation from the ADR-060 relocation is lifted — nothing overwrites this write any
-// more, because nothing projects incarnation traits onto hosts).
+// trait-assign, the ONLY write path for labels attached to a HOST (NIM-281; the
+// deprecation from the ADR-060 relocation is lifted — nothing overwrites this write and
+// nothing else can produce a host trait, because nothing projects onto hosts).
 // rawReq — the native input; dryRunQuery — the flag from `?dry_run=true` (OR with body.dry_run).
 //
 // SECURITY — two gates, the same pair as coven-assign:
 //   - gate (a): target hosts ⊆ the operator's coven-scope (the shared [soul.BulkScope],
 //     enforced in the WHERE predicate);
 //   - gate (b): every pair being written ⊆ the operator's own trait-scope. Required
-//     since a host-attached trait GRANTS visibility permanently (ADR-080) and
+//     since a host-attached trait GRANTS visibility permanently (NIM-281) and
 //     `trait.<key>=v` is a scope dimension (NIM-128) — without it any holder of this
 //     permission could hand a host to a foreign role by stamping its pair. Applied to
 //     merge/replace only, mirroring coven-assign, where `remove` is likewise ungated:
@@ -1647,7 +1637,7 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	covens, unrestricted := scoper.CovenScope(claims.Subject, "soul", "traits-assign")
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
-	// Gate (b), ADR-080: the pairs being attached must lie inside the operator's
+	// Gate (b), NIM-281: the pairs being attached must lie inside the operator's
 	// own trait-scope. Checked BEFORE any DB access (as coven-assign does for
 	// replace), so a rejected write never reports a misleading dry-run `matched`.
 	if mode == soul.TraitMerge || mode == soul.TraitReplace {

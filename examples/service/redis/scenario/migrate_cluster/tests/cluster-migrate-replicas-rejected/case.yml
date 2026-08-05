@@ -29,22 +29,22 @@ fixtures:
   # deliberately not sorted - the guard operates on size(), not position.
   hosts:
     - sid: node-2.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-1.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
     - sid: node-4.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.4 }
         os: { arch: amd64 }
     - sid: node-3.example.com
-      covens: [migrate_cluster, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }

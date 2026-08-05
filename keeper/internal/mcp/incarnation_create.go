@@ -168,9 +168,8 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// for the same reason REST orders it that way.
 	//
 	// Gate (a) is an OR over the declared covens, so a request naming one coven the
-	// caller holds and one it does not was created carrying BOTH — and an
-	// incarnation's covens become labels on its member hosts (ADR-0080), so that
-	// placed hosts in a coven the caller cannot reach.
+	// caller holds and one it does not was created carrying BOTH — handing the new
+	// incarnation to every role scoped to the coven the caller may not use.
 	if err := handlers.ScreenIncarnationCreateScope(h.deps.RBAC, claims.Subject,
 		name, a.Service, a.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -239,9 +238,8 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "insert incarnation failed")
 	}
 
-	// No projection onto member hosts (ADR-080, parity with REST CreateTyped):
-	// the labels stay on the incarnation and reach hosts by inheritance at read
-	// time, covering hosts that join later.
+	// No projection onto member hosts (NIM-281, parity with REST CreateTyped):
+	// the labels describe the incarnation and reach no host, now or later.
 
 	// Roster bind (NIM-371) — after the insert (FK) and BEFORE the run below: a run
 	// resolves its roster from `incarnation_membership` at start, so binding later

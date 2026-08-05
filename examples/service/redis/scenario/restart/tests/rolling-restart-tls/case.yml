@@ -32,12 +32,12 @@ name: rolling-restart replicas over TLS reads tls-port from incarnation.state
 fixtures:
   hosts:
     - sid: node-1.example.com
-      covens: [restart]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
     - sid: node-2.example.com
-      covens: [restart]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }

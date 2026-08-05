@@ -87,13 +87,14 @@ type Fixtures struct {
 // Mirror of stable fields from topology.HostFacts, visible in render
 // (`soulprint.hosts[]`): sid/covens/role/soulprint/choirs.
 //
-// SID is required; Covens must carry incarnation.name label (scenario name
-// of the case), otherwise host does not get into `on:`/`where:` target. In prod
-// that label is not stored on the host: the roster joins `incarnation_membership`
-// (NIM-124) and hands each member its incarnation's name as an INHERITED coven
-// (ADR-080), which is exactly the effective set a fixture spells out by hand.
-// Role/Soulprint/Choirs are optional. Order of roster in `soulprint.hosts` is
-// deterministic via sorting by SID (harness, not YAML order).
+// SID is required; Covens are the host's OWN tags and nothing else — the exact
+// set prod reads off `souls.coven` (NIM-281). Membership adds none of them: the
+// roster comes from `incarnation_membership` (NIM-124) and is already scoped to
+// the incarnation, so "every member" is `on:` omitted, and `on: [<tag>]` reaches
+// only the hosts a fixture tagged by hand. Never list the incarnation's name
+// here — no host carries it live, and a case that did would target nothing in
+// prod. Role/Soulprint/Choirs are optional. Order of roster in `soulprint.hosts`
+// is deterministic via sorting by SID (harness, not YAML order).
 type HostFixture struct {
 	SID       string         `yaml:"sid"`
 	Covens    []string       `yaml:"covens,omitempty"`

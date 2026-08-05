@@ -576,11 +576,13 @@ func TestSelectAll_ScopeEmpty_FailClosed(t *testing.T) {
 	}
 }
 
-// TestSelectAll_ScopeCovens_CovenUnionName — coven∪{name} matcher (ADR-008,
-// architect major): scope-coven must match an incarnation both by covens[]
-// intersection (`covens && $n`) and by name equality (`name = ANY($n)`). One
-// bind parameter serves both arms of the OR.
-func TestSelectAll_ScopeCovens_CovenUnionName(t *testing.T) {
+// TestSelectAll_ScopeCovens_TagsOnly — a scope-coven matches an incarnation by
+// covens[] intersection and by nothing else (NIM-281). The name arm is
+// deliberately gone: a name is an identity, not a label anyone may attach, and
+// `coven=redis-prod` must mean the same thing here as it does over hosts — the
+// tag, wherever an operator put it. Asking for the incarnation itself is
+// `incarnation=redis-prod`.
+func TestSelectAll_ScopeCovens_TagsOnly(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},
 		ListScope{Covens: []string{"redis-prod"}}, 0, 50)
@@ -590,10 +592,9 @@ func TestSelectAll_ScopeCovens_CovenUnionName(t *testing.T) {
 	if !strings.Contains(f.querySQL, "covens && $1") {
 		t.Errorf("coven intersection covens && $1 is missing: %q", f.querySQL)
 	}
-	if !strings.Contains(f.querySQL, "name = ANY($1)") {
-		t.Errorf("coven∪{name}: name = ANY($1) is missing (incarnation with name=scope-coven should match): %q", f.querySQL)
+	if strings.Contains(f.querySQL, "name = ANY($1)") {
+		t.Errorf("a coven scope still matches by name — the name is not a coven tag: %q", f.querySQL)
 	}
-	// Both arms use the same bind ($1); value = scope-covens.
 	if covs, ok := f.queryArgs[0].([]string); !ok || len(covs) != 1 || covs[0] != "redis-prod" {
 		t.Errorf("scope-covens bind = %v, want [redis-prod]", f.queryArgs[0])
 	}
@@ -633,7 +634,7 @@ func TestSelectAll_ScopeOR_CovenAndState(t *testing.T) {
 		t.Errorf("service filter is missing: %q", f.querySQL)
 	}
 	// scope block is parenthesized and contains OR between dimensions.
-	if !strings.Contains(f.querySQL, "((covens && $2 OR name = ANY($2)) OR name = ANY($3))") {
+	if !strings.Contains(f.querySQL, "(covens && $2 OR name = ANY($3))") {
 		t.Errorf("dimension OR-block is wrong: %q", f.querySQL)
 	}
 }
@@ -729,8 +730,8 @@ func TestAppendScopeClause_Table(t *testing.T) {
 				Traits: []TraitPair{{Key: "owner", Value: "alice"}},
 			},
 			// coven takes $1, trait — $2(key)/$3(value).
-			wantSubstr: []string{"((covens && $1 OR name = ANY($1)) OR traits->>$2 = $3)"},
-			denySubstr: []string{"@>", "FALSE"},
+			wantSubstr: []string{"(covens && $1 OR traits->>$2 = $3)"},
+			denySubstr: []string{"@>", "FALSE", "name = ANY"},
 		},
 		{
 			name:  "empty scope, not Unrestricted -> fail-closed FALSE",

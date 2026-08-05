@@ -9,8 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
 // Querier — narrow subset of pgxpool.Pool needed by resolver (read-only).
@@ -79,18 +77,13 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 //
 // ORDER BY sid — deterministic order (scenario/orchestration.md §:
 // lexicographically by SID; otherwise destructive operations are not reproducible).
-// The two trailing columns carry the labels each host INHERITS from the
-// incarnations it belongs to (ADR-080) — including ones other than the incarnation
-// being resolved, since membership is M:N. [scanHost] unions them with the host's
-// own columns, so `soulprint.self.covens` / `.traits` show exactly what the RBAC
+// `coven` and `traits` are the host's OWN columns and nothing else (NIM-281):
+// belonging to this incarnation attaches no label, so `soulprint.self.covens` /
+// `.traits` show exactly what an operator put on the host — the same set the RBAC
 // scope predicate resolves.
-//
-// The outer query already aliases `m` for the roster join; the inherited-label
-// subqueries alias their own `m`, which shadows it only inside themselves.
-var rosterSQL = `
+const rosterSQL = `
 SELECT s.sid, s.coven, s.traits, s.status,
-       s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at,
-       ` + soul.InheritedLabelsSelectSQL("s.sid") + `
+       s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at
 FROM souls s
 JOIN incarnation_membership m ON m.sid = s.sid
 WHERE m.incarnation_name = $1
@@ -293,23 +286,19 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 // scanHost parses one row of roster. soulprint_facts (JSONB) → map;
 // NULL column (Soul has not yet sent SoulprintReport) → nil map.
 //
-// Coven and Traits come out EFFECTIVE (ADR-080): the host's own columns unioned
-// with the labels of every incarnation it belongs to. The union happens here
-// because a label is stored only where it was attached — nothing is copied onto
-// the host — and `soulprint.self.*` must agree with the scope predicate, which
-// resolves the same union in SQL.
+// Coven and Traits are the host's OWN columns and nothing else (NIM-281): a
+// label lives only where an operator attached it, and belonging to an incarnation
+// attaches none. `soulprint.self.*` therefore shows the same labels the scope
+// predicate resolves in SQL.
 func scanHost(row pgx.Row) (*HostFacts, error) {
 	var (
-		h              HostFacts
-		traitsJSON     []byte
-		factsJSON      []byte
-		collectedAt    *time.Time
-		receivedAt     *time.Time
-		inheritedCoven []string
-		inheritedJSON  []byte
+		h           HostFacts
+		traitsJSON  []byte
+		factsJSON   []byte
+		collectedAt *time.Time
+		receivedAt  *time.Time
 	)
-	if err := row.Scan(&h.SID, &h.Coven, &traitsJSON, &h.Status, &factsJSON, &collectedAt, &receivedAt,
-		&inheritedCoven, &inheritedJSON); err != nil {
+	if err := row.Scan(&h.SID, &h.Coven, &traitsJSON, &h.Status, &factsJSON, &collectedAt, &receivedAt); err != nil {
 		return nil, fmt.Errorf("topology: scan host: %w", err)
 	}
 
@@ -319,12 +308,6 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 			return nil, fmt.Errorf("topology: unmarshal traits for %q: %w", h.SID, err)
 		}
 	}
-	inherited, err := soul.ParseInheritedLabels(inheritedCoven, inheritedJSON)
-	if err != nil {
-		return nil, fmt.Errorf("topology: inherited labels for %q: %w", h.SID, err)
-	}
-	h.Coven = soul.UnionCovens(h.Coven, inherited.Covens)
-	h.Traits = soul.UnionTraits(h.Traits, inherited.Traits)
 	if len(factsJSON) > 0 {
 		if err := json.Unmarshal(factsJSON, &h.Soulprint); err != nil {
 			return nil, fmt.Errorf("topology: unmarshal soulprint for %q: %w", h.SID, err)
@@ -351,10 +334,9 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 // SshDispatcher makes no sense on "not-ready" hosts regardless of lease.
 //
 // ORDER BY sid — determinism for per-host dispatch.
-var inventorySQL = `
+const inventorySQL = `
 SELECT sid, coven, traits, status,
-       soulprint_facts, soulprint_collected_at, soulprint_received_at,
-       ` + soul.InheritedLabelsSelectSQL("souls.sid") + `
+       soulprint_facts, soulprint_collected_at, soulprint_received_at
 FROM souls
 WHERE sid = ANY($1)
   AND status NOT IN ('pending', 'revoked', 'expired', 'destroyed')

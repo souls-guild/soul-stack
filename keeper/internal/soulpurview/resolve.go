@@ -12,13 +12,10 @@
 // trait (jsonb `traits`). They have no service/incarnation column, so a
 // condition on those dimensions renders FALSE (fail-closed).
 //
-// The coven and trait dimensions resolve over EFFECTIVE labels (ADR-080): a
-// host's own labels plus those of every incarnation it belongs to. A label is
-// never copied down onto the host — the union happens here, in the SQL predicate
-// (a correlated subquery over `incarnation_membership`, enabled by
-// [rbac.ScopeColumns.MembershipSID]) and, for single-object reads, in the labels
-// the caller feeds [InScope]. Both readers must be given the SAME union, or a
-// `where:` predicate and a scope predicate would disagree about one host.
+// The coven and trait dimensions resolve over the host's OWN labels and nothing
+// else (NIM-281, reverting ADR-080): a label grants only where an operator
+// attached it, and belonging to an incarnation attaches nothing. Reaching the
+// members of an incarnation is a membership question, not a label one.
 //
 // fail-closed (ADR-047): uncertainty means "hide", NOT "show the whole fleet".
 // This is OPPOSITE of the presence-overlay (`GET /v1/souls` on a Redis error
@@ -36,15 +33,13 @@ import (
 // A Soul carries coven / host / trait; it has no service or incarnation column,
 // so those stay empty — any condition on them renders FALSE (fail-closed).
 //
-// Names are table-qualified because MembershipSID correlates a subquery that
-// aliases `incarnation_membership m` — a bare `sid` would bind to `m.sid` there
-// and correlate every host to itself. Every scoped souls query selects
-// `FROM souls` unaliased, so `souls.<col>` resolves in all of them.
+// Names are table-qualified so the predicate can be ANDed into any scoped souls
+// query. Every one of them selects `FROM souls` unaliased, so `souls.<col>`
+// resolves in all of them.
 var Columns = rbac.ScopeColumns{
-	Coven:         "souls.coven",
-	Host:          "souls.sid",
-	Traits:        "souls.traits",
-	MembershipSID: "souls.sid",
+	Coven:  "souls.coven",
+	Host:   "souls.sid",
+	Traits: "souls.traits",
 }
 
 // Scope is a thin wrapper over the operator's [rbac.Purview] for souls
@@ -82,11 +77,13 @@ func (s Scope) WhereSQL(cols rbac.ScopeColumns, startIdx int) (string, []any, in
 // operator's purview boundary — the single-object gate for GET /v1/souls/{sid},
 // /soulprint and /history.
 //
-// soulCovens and traits must be the host's EFFECTIVE labels — own ∪ inherited
-// from its incarnations (ADR-080). Passing only the row's own columns silently
-// hides hosts that the list endpoint (whose SQL predicate does resolve
-// inheritance) shows. Callers build the union via soul.LoadInheritedLabels +
-// soul.UnionCovens / soul.UnionTraits.
+// soulCovens and traits are the row's OWN columns, `souls.coven` and
+// `souls.traits`, and nothing else (NIM-281): a label exists only where an
+// operator attached it, so belonging to an incarnation adds none. That is
+// exactly what [Scope.WhereSQL] renders, and the two must keep answering
+// alike — a single-object gate reading a wider set than the list predicate
+// would 200 on a host the list never showed, and a narrower one would 404 on
+// a host it did.
 //
 // Fail-closed (symmetric to [Scope.WhereSQL]):
 //

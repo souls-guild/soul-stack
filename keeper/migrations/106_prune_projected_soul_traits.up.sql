@@ -1,9 +1,9 @@
 -- 106_prune_projected_soul_traits.up.sql
 --
--- ADR-080 (label inheritance): the materialized projection of
--- `incarnation.traits` onto member hosts' `souls.traits` is removed. A label now
--- lives only where the operator attached it, and a host sees the union of its own
--- labels and those of the incarnations it belongs to, computed at read time.
+-- The materialized projection of `incarnation.traits` onto member hosts'
+-- `souls.traits` is removed. A label lives only where the operator attached it:
+-- `souls.traits` is the host's own set and nothing writes to it but an explicit
+-- per-host assign (NIM-281 — ADR-080's read-time union was tried and reverted).
 --
 -- Whatever the projection wrote last is still sitting in `souls.traits` on the
 -- day it stops running. Left alone, those pairs would silently change meaning:
@@ -17,14 +17,15 @@
 -- one of its incarnations carries for that key. Equality, not key presence, is
 -- the test — a host key that merely shares a NAME with an incarnation key
 -- (`owner=bobik` on the host, `owner=dba` on the incarnation) is genuinely
--- host-local and must stay. Under ADR-080 both survive anyway: the effective
--- value becomes the union of the two.
+-- host-local and must stay — the two axes are independent, and only an exact
+-- value match identifies a pair as a copy the projection wrote.
 --
--- Effective labels are UNCHANGED by this prune. Every pair it deletes comes
--- straight back through inheritance, from the incarnation that already carries
--- it — only the storage location is corrected. Deliberately not reversible in
--- data (see the .down.sql): the pruned pairs are not lost, they are one join
--- away.
+-- What the prune deletes is deleted for real: a rule matching `trait.<key>=v` on
+-- the HOST stops matching these hosts. That is the intended outcome, not a side
+-- effect — the pair was never something an operator attached to the host, and
+-- after NIM-281 there is no read-time union to bring it back. The pair is still
+-- on the incarnation that carried it, reachable by a rule aimed at the
+-- incarnation. Deliberately not reversible in data (see the .down.sql).
 --
 -- Hosts with no membership and hosts whose incarnations carry no traits are
 -- untouched (the NOT EXISTS below matches nothing for them).

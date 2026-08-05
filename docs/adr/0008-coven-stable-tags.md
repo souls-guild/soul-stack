@@ -51,22 +51,38 @@ Fixed by the user (R4). The original "Decision" made `incarnation.name` the **ro
 
 **Trade-off.** A one-time migration cost (backfill + coven strip) and a behavior change for RBAC roles scoped by `coven=<incarnation-name>` and for scenarios using `on: ["${ incarnation.name }"]` (now the omitted form). We accept it: the coven axis stops meaning two things at once, membership becomes explicit and auditable, and `mode: replace` on coven can no longer accidentally sever a host from its incarnation.
 
-**Amendment (2026-07-27, NIM-121 — Coven is inherited from the incarnation, [ADR-080](0080-label-inheritance-union.md)).** Until now an
-incarnation-level Coven tag granted nothing on that incarnation's hosts: host visibility and targeting resolved over `souls.coven` alone. Before
-[NIM-124](#amendment-2026-07-17-nim-124--incarnationname-is-not-a-coven--membership-is-a-first-class-relation) this was papered over by injecting
-`incarnation.name` into `souls.coven[]`; splitting membership out correctly removed that copy, and with it the only path by which an incarnation tag
-reached its hosts.
+**Amendment (2026-07-27, NIM-121 — Coven is inherited from the incarnation, [ADR-080](0080-label-inheritance-union.md)). REVOKED 2026-08-05 by
+[NIM-281](#amendment-2026-08-05-nim-281-a-label-is-never-inherited).** It made a host's effective covens its own `souls.coven[]` unioned at read time
+with the `incarnation.covens[]` and names of every incarnation it belongs to. That union no longer exists; see the NIM-281 amendment below for the rule
+that replaces it.
 
-ADR-080 restores the reach WITHOUT restoring the copy. A host's **effective** covens are its own `souls.coven[]` unioned, at read time, with the
-`incarnation.covens[]` of every incarnation it belongs to (`incarnation_membership`) **plus those incarnations' names** — the name is already treated as
-a coven tag on the incarnation side (`covens && $x OR name = ANY($x)`), so host visibility has to agree or `coven=<incarnation>` would show the
-incarnation while hiding everything inside it. NIM-124 stands: nothing is written into `souls.coven`, and membership remains the first-class relation.
-The union is resolved by every reader of the coven axis — the RBAC scope predicate (a correlated `EXISTS`, still pushed down to SQL),
-`soulprint.self.covens` / `soulprint.hosts[].covens`, and the Voyage target filter — so a `where:` and a scope check cannot disagree about one host.
+## Amendment (2026-08-05, NIM-281): a label is never inherited
 
-Practical consequence: **prefer labelling the incarnation.** A tag there covers every host that joins it later, with no re-stamping; a tag on the host
-covers exactly one VM. The write paths are unchanged (`POST /v1/souls/coven` for a host, the incarnation's own `covens` for an incarnation), as are both
-of coven-assign's gates.
+**A host's covens are exactly `souls.coven[]` — the tags an operator attached to that host, and nothing else.** Belonging to an incarnation attaches
+none. There is no union, no read-time projection, no materialized copy, and the incarnation's name is not among a host's tags (NIM-124 already removed
+the injected copy; nothing puts it back).
+
+This reverts NIM-121 / [ADR-080](0080-label-inheritance-union.md) on both axes, Coven and Trait, and on both sides of the wire — the RBAC scope
+predicate, `soulprint.self.covens` / `soulprint.hosts[].covens`, the souls list filter, the bulk selector and its gates, push provider routing, the
+Vigil/Decree and Augur Rite subjects. Every one of them now reads the bare column. `keeper/internal/soul.EffectiveCovens` and the union arm of
+`rbac.CovenScopeSQL` are gone; the set-based readers render one predicate, `souls.coven && $N::text[]`.
+
+The incarnation side is symmetric: a coven scope matches an incarnation by `covens &&` alone. `name = ANY($x)` is gone from that predicate too — an
+incarnation's name is its identity, answered by the `incarnation=` dimension, not a label.
+
+**Reaching an incarnation's hosts is a MEMBERSHIP question, and it is spelled `incarnation=<name>`** — resolved from `incarnation_membership`, the same
+relation the roster comes from. `coven=` asks a label question and answers it from labels; neither dimension stands in for the other.
+
+**Consequence, stated plainly:** an incarnation's tag reaches its hosts nowhere. Labelling the incarnation `prod` does not make its members visible to a
+`coven=prod` role, does not route them behind that coven's bastion, and does not match a Vigil subject scoped to it. To give a host a tag, attach the
+tag to the host (`POST /v1/souls/coven`, `POST /v1/souls/traits`). The write paths are unchanged, as are both of coven-assign's gates.
+
+An incarnation's own labels keep the one job that was always theirs: selecting overlays of **its own** config, through a `foreach:` over
+`incarnation.covens` in `vars/_stack.yaml` ([ADR-0082](0082-service-vars.md)). That is the incarnation's config, resolved once per run — not a label on
+any host.
+
+**Known narrowing.** A Vigil/Decree or an Augur Rite takes a subject of `sid` XOR `coven`, so with inheritance gone there is no way to bind one to "every
+member of incarnation X" without tagging those hosts by hand. The missing membership dimension in the Rite/Decree grammar is **NIM-280**.
 
 ## Amendment (2026-07-28, NIM-209): membership has an operator path — bind / unbind / read
 
@@ -86,7 +102,7 @@ That gap closes a real product surface. A run resolves its roster at start and a
 
    Gate (b) is **all-or-nothing**: one out-of-scope SID rejects the whole call. A partial bind would report success while leaving the roster short a host, and the run would then fail somewhere else entirely.
 
-   Gate (b) is evaluated **before** the bind, and that ordering matters now that [ADR-080](0080-label-inheritance-union.md) makes a host inherit the covens of the incarnations it belongs to. A host acquires incarnation X's tags by being bound to X; if the check ran after, binding would mint the very label that authorizes it. So the caller must already see the host on some other basis — its own `souls.coven[]`, a `host=` selector, or another incarnation it is already in. In practice this means labelling the host at onboarding, or letting a provisioning scenario stamp it, and it is why the operator path is a bind of hosts you can already reach rather than a way to reach new ones.
+   Gate (b) is evaluated **before** the bind, and the ordering still matters after [NIM-281](#amendment-2026-08-05-nim-281-a-label-is-never-inherited) removed inheritance. A bind mints no tag now, but it does hand the host to every `incarnation=`-scoped permission on that incarnation; checking after would let the act create its own authorization on that dimension. So the caller must already see the host on some other basis — its own `souls.coven[]`, a `host=` selector, or another incarnation it is already in. In practice this means labelling the host at onboarding, or letting a provisioning scenario stamp it, and it is why the operator path is a bind of hosts you can already reach rather than a way to reach new ones.
 
    No new selector keys: the grammar stays `{service, coven, incarnation, host}` ([rbac.md § Selector grammar](../keeper/rbac.md)).
 
@@ -130,17 +146,21 @@ non-default rungs are gone for two reasons:
 - **`incarnation.spec.essence`** is removed outright: it had two readers and no writer. A fleet that
   needs different defaults **forks the service repo** and re-pins its `ServiceRef`.
 
-**The coven axis of [ADR-0080](0080-label-inheritance-union.md) is not weakened.** An incarnation's
-label still reaches its members' service parameters — through a `foreach:` step over
+**The coven axis of service vars survives, and it was never the inherited one.** An incarnation's
+label still selects overlays of **its own** config — through a `foreach:` step over
 **`incarnation.covens`**, the row's own declared tags. Not `soulprint.self.covens`: the step context
 has no `soulprint` root at all, and it must not, because a service's vars are resolved once per run
 and handed to every host ([ADR-0082 §3](0082-service-vars.md#3-the-os-and-coven-layers-are-deleted-vars_stackyaml-becomes-real)).
-The old coven layer read the host's EFFECTIVE union — but on the keeper path it was already being
+The old coven layer nominally read a host's labels — but on the keeper path it was already being
 handed `inc.Covens` under that name, so the incarnation's own tags are what it resolved from in the
-case this guard covers. The live guard (`TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars`,
-NIM-248) is retargeted onto that step, not dropped: what it protects is still true, only the way to
-write it moved from an implicit directory convention to an explicit declaration.
+case this guard covers. That is why [NIM-281](#amendment-2026-08-05-nim-281-a-label-is-never-inherited)
+leaves this axis untouched while deleting inheritance everywhere else: what decides the overlay is a
+label on the incarnation, applied to the incarnation's config. Membership decides WHICH incarnation's
+config a host is owed; the incarnation's labels decide which overlays of that config apply. The live
+guard (`TestIntegration_TelemetryIncarnationCovenSelectsServiceVarsOverlay`, NIM-248) is retargeted
+onto that step, not dropped.
 
-**Narrowing worth naming:** a tag attached to a HOST alone no longer selects a service-vars overlay.
-Nothing shipped did that (no example carried a `coven/` overlay at all), and it is the price of a
-layer that is host-invariant by construction rather than by a representative host.
+**Narrowing worth naming:** a tag attached to a HOST does not select a service-vars overlay, and
+after NIM-281 nothing carries a host's tag into that layer at all. Nothing shipped did that (no
+example carried a `coven/` overlay), and it is the price of a layer that is host-invariant by
+construction rather than by a representative host.

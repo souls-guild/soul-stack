@@ -2,8 +2,8 @@
 
 package migrations_test
 
-// Integration test for migration 106 (ADR-080): the prune of the residue the
-// removed trait projection left in `souls.traits`.
+// Integration test for migration 106: the prune of the residue the removed trait
+// projection left in `souls.traits`.
 //
 // The distinction it has to get right is value equality, not key presence. A pair
 // that MATCHES what one of the host's incarnations carries is a copy the
@@ -11,7 +11,7 @@ package migrations_test
 // key from the incarnation and grant visibility nobody can trace. A pair that
 // merely shares a KEY with the incarnation (`owner=bobik` on the host,
 // `owner=dba` on the incarnation) is a label the operator attached to that host,
-// and must stay: under ADR-080 both values grant.
+// and must stay — the host's own pair is the only thing that grants (NIM-281).
 //
 // Shares freshContainer / newMigrator / requireDocker with the other files in
 // this package. Under testcontainers-PG, build tag `integration`.
@@ -116,8 +116,8 @@ func TestMigration106_PrunesCopiesKeepsHostLocal(t *testing.T) {
 		t.Errorf("mixed host lost env=staging — a shared KEY is not a copy, only a shared VALUE is: %v", mixed)
 	}
 
-	// Not a member: the incarnation's labels were never its to inherit, so the
-	// identical-looking pair is its own and must survive.
+	// Not a member: the projection never reached it, so the identical-looking
+	// pair is its own and must survive.
 	if got := soulTraitsJSON(t, pool, "unrelated.example.com"); got["team"] != "dba" {
 		t.Errorf("non-member host traits = %v, want team=dba intact", got)
 	}

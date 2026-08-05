@@ -46,13 +46,6 @@ type fakeSoulPool struct {
 	// active token (pgx.ErrNoRows from RETURNING).
 	activeTokenID string
 
-	// inheritedCovens / inheritedTraits: the labels a host inherits from its
-	// incarnations (ADR-080), served to soul.LoadInheritedLabels. Zero values
-	// mean "belongs to no incarnation" — the default for tests that only care
-	// about a host's own labels.
-	inheritedCovens []string
-	inheritedTraits []byte
-
 	// listCount: the COUNT(*) value for List (SelectAll). Read from
 	// QueryRow when the SQL contains "COUNT(*) FROM souls".
 	listCount int
@@ -201,19 +194,6 @@ func (f *fakeSoulPool) Exec(_ context.Context, sql string, args ...any) (pgconn.
 
 func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
-	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
-		// soul.LoadInheritedLabels (ADR-080): the labels the host picks up from
-		// its incarnations. Comes FIRST — the query is a bare SELECT of two
-		// correlated subqueries and would fall through to the catch-all below.
-		traits := f.inheritedTraits
-		if traits == nil {
-			traits = []byte("[]")
-		}
-		covens := f.inheritedCovens
-		if covens == nil {
-			covens = []string{}
-		}
-		return staticRow{values: []any{covens, traits}}
 	case strings.Contains(sql, "WITH chunk AS"):
 		// Bulk chunk CTE: returns (scanned, changed, max_sid). One chunk
 		// smaller than bulkChunkSize → BulkAssignCoven finishes the iteration. This branch

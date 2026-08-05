@@ -22,7 +22,7 @@ fixtures:
   # covens must carry the scenario name (= incarnation.name) — otherwise the host is out of target.
   hosts:
     - sid: vm-1.example.com
-      covens: [destroy]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }

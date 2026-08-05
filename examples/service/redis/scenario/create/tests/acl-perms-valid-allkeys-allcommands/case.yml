@@ -11,17 +11,17 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: node-b.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: node-c.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
     - sid: node-a.example.com
-      covens: [create, redis]
+      covens: [redis]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
@@ -120,7 +120,7 @@ assert:
                 password: app-user-secret-pass
           self:
             sid: node-a.example.com
-            covens: [create, redis]
+            covens: [redis]
             choirs: []
             traits: {}
             role: ""

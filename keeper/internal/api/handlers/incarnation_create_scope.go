@@ -16,11 +16,12 @@ import (
 //
 //   - **The OR admits a superset.** A request declaring `covens: [billing, prod]`
 //     emits one context per coven, and an operator scoped `coven=billing` matches
-//     the first. The create then proceeds carrying the `prod` label too — and an
-//     incarnation's covens become labels on its member hosts
-//     ([ADR-0080](../../../docs/adr/0080-label-inheritance-union.md)), so the caller
-//     has just placed hosts into a coven they may not reach. This is not specific to
-//     templating and predates it: named create has always had it.
+//     the first. The create then proceeds carrying the `prod` label too — a label
+//     the caller may not use, on an object it just minted. Every `coven=prod` role
+//     now reads and runs that incarnation, and its service vars resolve through
+//     whatever `prod` overlay the service declares (ADR-0082), so the caller has
+//     written into a scope it does not hold. This is not specific to templating and
+//     predates it: named create has always had it.
 //   - **`incarnation=` is unanswerable before composition.** Under `name_template`
 //     (ADR-0079) the name is composed server-side from the resolved input, so at
 //     gate (a) it does not exist. Answering nil there is what made templated create

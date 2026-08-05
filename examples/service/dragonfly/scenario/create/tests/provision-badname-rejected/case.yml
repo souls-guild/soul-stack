@@ -14,17 +14,17 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: vm-1.example.com
-      covens: [9redis, dragonfly]
+      covens: [dragonfly]
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
     - sid: vm-2.example.com
-      covens: [9redis, dragonfly]
+      covens: [dragonfly]
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
     - sid: vm-3.example.com
-      covens: [9redis, dragonfly]
+      covens: [dragonfly]
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }

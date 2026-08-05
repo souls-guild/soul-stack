@@ -149,7 +149,7 @@ Permission: `soul.list`. MCP-tool: `keeper.soul.list`.
 
 | Param | Type | Meaning |
 |---|---|---|
-| `coven` | `string`, repeatable | Filter by coven tag - the host's own or inherited from an incarnation it belongs to, that incarnation's name included ([ADR-080](../../adr/0080-label-inheritance-union.md)). Repeat the parameter to match **ANY** of the labels (`?coven=a&coven=b`). |
+| `coven` | `string`, repeatable | Filter by coven tag the host carries itself (`souls.coven[]`). Belonging to an incarnation attaches no tag ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)), so to list an incarnation's hosts use `?incarnation=<name>`. Repeat the parameter to match **ANY** of the labels (`?coven=a&coven=b`). |
 | `status` | `enum` | `pending` / `connected` / `disconnected` / `expired`. |
 | `transport` | `enum` | `agent` / `ssh` ([push.md](../push.md)). |
 | `unassigned` | `bool` | Only hosts belonging to **no** incarnation (`incarnation_membership`) - the free souls a create scenario can be rolled onto ([ADR-081](../../adr/0081-roster-at-create.md)). A membership question, not a label one: an incarnation's name is also an inherited coven label, so a label-based filter would call a host with a stray self-attached tag occupied. |

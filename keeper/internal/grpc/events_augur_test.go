@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
-	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -23,24 +22,18 @@ import (
 )
 
 // augurFakeDB — implements augurDB (augur.ExecQueryRower + soul.ExecQueryRower).
-// Routes by SQL: SELECT ... FROM omens → an omen row; the inherited-labels
-// marker → what the host's incarnations lend it; FROM souls → a soul row (the
-// host's OWN covens); FROM rites → a rite set.
+// Routes by SQL: SELECT ... FROM omens → an omen row; FROM souls → a soul row
+// (the host's covens); FROM rites → a rite set.
 //
-// Labels and membership are separate fields on purpose (NIM-249): a fake that
-// answered "which covens does this host carry" from a single place could not
-// fail the way production did, where the incarnation half of the answer was
-// simply never read.
+// There is one place a coven can come from, because in production there is one
+// (NIM-281): `souls.coven`, what an operator attached to that host. The fake
+// carries no membership at all — a subject resolve that consulted membership
+// would find nothing here and fail the guards below.
 type augurFakeDB struct {
-	omenRow  func() pgx.Row // SelectOmenByName
-	soulRow  func() pgx.Row // SelectBySID (the host's own covens)
-	riteRows func() (pgx.Rows, error)
-	// memberOf — incarnations this host is bound to; each lends the host its
-	// NAME as an inherited coven (ADR-080).
-	memberOf []string
-	// incarnationCoven — extra tags those incarnations carry.
-	incarnationCoven []string
-	queryRows        int
+	omenRow   func() pgx.Row // SelectOmenByName
+	soulRow   func() pgx.Row // SelectBySID (the host's covens)
+	riteRows  func() (pgx.Rows, error)
+	queryRows int
 	// gotCovens — the covens the resolve actually matched Rites against.
 	gotCovens []string
 }
@@ -51,13 +44,6 @@ func (f *augurFakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, 
 
 func (f *augurFakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	switch {
-	// Must precede the souls route only in spirit — the marker names the
-	// statement unambiguously, which is why it is matched first everywhere.
-	case strings.Contains(sql, soul.InheritedLabelsQueryMarker):
-		return augurValRow{vals: []any{
-			append(append([]string{}, f.memberOf...), f.incarnationCoven...),
-			[]byte("[]"),
-		}}
 	case strings.Contains(sql, "FROM omens"):
 		if f.omenRow != nil {
 			return f.omenRow()
@@ -445,11 +431,10 @@ func TestAugur_RoundTrip_Denied_NoRite(t *testing.T) {
 	}
 }
 
-// --- subject resolution over inherited labels (NIM-249, ADR-080) ---
+// --- subject resolution reads the host's own covens (NIM-281) ---
 
 // augurMemberDB — an Omen + one coven-Rite naming `riteCoven`, and a host whose
-// OWN covens are `own`. Membership and incarnation tags are supplied separately
-// by the caller.
+// covens are `own`.
 func augurMemberDB(sid, riteCoven string, own []string) *augurFakeDB {
 	return &augurFakeDB{
 		omenRow: func() pgx.Row { return augurOmenRowVault("vault-prod") },
@@ -460,18 +445,12 @@ func augurMemberDB(sid, riteCoven string, own []string) *augurFakeDB {
 	}
 }
 
-// TestAugur_CovenRiteAuthorizesIncarnationMember — a Rite scoped to an
-// incarnation's name authorizes that incarnation's members, even though nothing
-// is written onto the host: the name is an inherited label (ADR-080).
-//
-// This is the regression NIM-249 filed. Until NIM-124 the name sat physically in
-// `souls.coven[]`, so the Rite matched as a side effect of the copy; the copy is
-// gone and the subject resolve had not been moved to the union, so an
-// incarnation-scoped Rite denied its own members mid-apply.
-func TestAugur_CovenRiteAuthorizesIncarnationMember(t *testing.T) {
+// TestAugur_OwnCovenTagAuthorizesRite — the positive half: a Rite scoped to
+// `redis-prod` authorizes a host tagged `redis-prod`. The subject a Rite matches
+// is the host's own coven set, and it is matched against exactly that.
+func TestAugur_OwnCovenTagAuthorizesRite(t *testing.T) {
 	const sid = "host.example.com"
-	db := augurMemberDB(sid, "redis-prod", nil)
-	db.memberOf = []string{"redis-prod"}
+	db := augurMemberDB(sid, "redis-prod", []string{"redis-prod"})
 	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
 	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
 
@@ -481,18 +460,29 @@ func TestAugur_CovenRiteAuthorizesIncarnationMember(t *testing.T) {
 
 	reply := recvReply(t, outCh)
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
-		t.Fatalf("status = %v (%q), want OK — a member must match a Rite scoped to its incarnation",
+		t.Fatalf("status = %v (%q), want OK — the host carries the Rite's coven",
 			reply.GetStatus(), reply.GetError())
+	}
+	if len(db.gotCovens) == 0 {
+		t.Fatal("resolve matched Rites against an empty coven set")
 	}
 }
 
-// TestAugur_UnboundHostLosesCovenRite — the same Rite, the same host, no
-// membership: nothing to inherit, no match, default-deny. The pair with the test
-// above is what makes it a guard rather than a smoke test — one of them fails
-// whichever way the resolve is broken.
-func TestAugur_UnboundHostLosesCovenRite(t *testing.T) {
+// TestAugur_MembershipDoesNotAuthorizeCovenRite — GUARD (NIM-281): a host bound
+// to incarnation `redis-prod` but not tagged with it does NOT match a Rite
+// scoped to `redis-prod`. Membership grants no label, so there is no subject to
+// match and the default-deny stands.
+//
+// This is a secret-reading path, so the direction matters: if the resolve ever
+// starts folding membership back into the subject, every host bound to an
+// incarnation silently gains that incarnation's Rites — a widening of who can
+// read which Vault path, decided by a bind operation nobody read as a grant.
+// The fake carries no membership precisely so the widening cannot come from the
+// fixture: it would have to come from the resolve itself, and then this test
+// still passes while [TestAugur_IncarnationTagDoesNotReachMembers] does not.
+func TestAugur_MembershipDoesNotAuthorizeCovenRite(t *testing.T) {
 	const sid = "host.example.com"
-	db := augurMemberDB(sid, "redis-prod", nil)
+	db := augurMemberDB(sid, "redis-prod", []string{"db"}) // member of redis-prod, tagged `db`
 	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
 	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
 
@@ -502,21 +492,19 @@ func TestAugur_UnboundHostLosesCovenRite(t *testing.T) {
 
 	reply := recvReply(t, outCh)
 	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
-		t.Fatalf("status = %v, want DENIED (no membership, no tag → no subject match)", reply.GetStatus())
+		t.Fatalf("status = %v, want DENIED (belonging to an incarnation is not a tag)", reply.GetStatus())
 	}
 	if kv.gotPath != "" {
 		t.Errorf("ReadKV must NOT be called on denied, got path %q", kv.gotPath)
 	}
 }
 
-// TestAugur_IncarnationTagReachesMembers — a tag put on the incarnation, not on
-// any host, reaches its members: `coven: cache` authorizes every host of every
-// incarnation tagged `cache`, which is the widening ADR-080 declares.
-func TestAugur_IncarnationTagReachesMembers(t *testing.T) {
+// TestAugur_IncarnationTagDoesNotReachMembers — GUARD (NIM-281): a tag put on
+// the incarnation and on no host reaches nobody. `coven: cache` authorizes hosts
+// tagged `cache`, not hosts of incarnations tagged `cache`.
+func TestAugur_IncarnationTagDoesNotReachMembers(t *testing.T) {
 	const sid = "host.example.com"
-	db := augurMemberDB(sid, "cache", nil)
-	db.memberOf = []string{"redis-prod"}
-	db.incarnationCoven = []string{"cache"}
+	db := augurMemberDB(sid, "cache", []string{"db"}) // the `cache` tag is on the incarnation
 	kv := &stubKV{data: map[string]any{"password": "s3cr3t"}}
 	h, outCh := newAugurHandler(t, db, kv, &recordingAudit{}, sid)
 
@@ -525,12 +513,11 @@ func TestAugur_IncarnationTagReachesMembers(t *testing.T) {
 	})
 
 	reply := recvReply(t, outCh)
-	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_OK {
-		t.Fatalf("status = %v (%q), want OK — an incarnation's tag is inherited by its members",
-			reply.GetStatus(), reply.GetError())
+	if reply.GetStatus() != keeperv1.AugurStatus_AUGUR_STATUS_DENIED {
+		t.Fatalf("status = %v, want DENIED — an incarnation's tag stays on the incarnation", reply.GetStatus())
 	}
-	if len(db.gotCovens) == 0 {
-		t.Fatal("resolve matched Rites against an empty coven set")
+	if kv.gotPath != "" {
+		t.Errorf("ReadKV must NOT be called on denied, got path %q", kv.gotPath)
 	}
 }
 

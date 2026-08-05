@@ -178,13 +178,13 @@ SELECT EXISTS (
 // single-host form of the relation, for gates that admit or refuse ONE host
 // (the Oracle's cross-incarnation guard, ADR-030(b)).
 //
-// ★ A membership gate must NOT be answered from the label layer. Since ADR-080
-// a host's effective covens are its own UNIONED with those of every incarnation
-// it belongs to, so `incName ∈ effectiveCovens` is true both for a member and
-// for a host that merely carries a host-attached tag spelled like the
-// incarnation's name — and the latter is exactly the cross-incarnation
-// escalation such gates exist to refuse. Labels answer "may this rule see the
-// host"; only this relation answers "does the host belong here".
+// ★ A membership gate must NOT be answered from the label layer. `souls.coven`
+// holds only what an operator attached by hand (NIM-281), so `incName ∈ coven`
+// is true for any host somebody tagged with a string spelled like the
+// incarnation's name and false for a member nobody tagged — wrong in both
+// directions, and the first is exactly the cross-incarnation escalation such
+// gates exist to refuse. Labels answer "may this rule see the host"; only this
+// relation answers "does the host belong here".
 //
 // An invalid name is an error, not a false: it means the caller passed
 // something that could never be a member, and a gate must not read that as a

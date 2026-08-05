@@ -19,7 +19,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   hosts:
     - sid: vm-1.example.com
-      covens: [destroy]
+      covens: []
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
