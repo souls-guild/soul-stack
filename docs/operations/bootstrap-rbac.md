@@ -60,12 +60,28 @@ The answer is JSON with the fields of the created Archon. The JWT itself for the
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/operators/archon-bob/issue-token \
-  -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)" \
-  -H "Content-Type: application/json" \
-  -d '{"ttl": "24h"}'
+  -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)"
 ```
 
-Answer: `{"jwt": "eyJ…", "exp": "2026-05-26T15:30:00Z"}`. JWT is the only time the operator sees it; Keeper does not store issued tokens (only signing-key and the Archon registry).
+The request has **no body** - the TTL of the issued token is not a per-request parameter (the full endpoint contract - [`operator-api/operator.md`](../keeper/operator-api/operator.md)). Answer:
+
+```json
+{"aid": "archon-bob", "jwt": "eyJ…", "expires_at": "2026-05-26T15:30:00Z"}
+```
+
+JWT is the only time the operator sees it; Keeper does not store issued tokens (only signing-key and the Archon registry).
+
+### Token lifetimes
+
+There is no per-request TTL: every lifetime is a `keeper.yml` knob read **once at Keeper startup** ([config.md → `auth.jwt`](../keeper/config.md)), so changing any of them requires editing the file and **restarting** Keeper - a hot-reload will not affect newly issued tokens.
+
+| Knob | Default | Applies to |
+|---|---|---|
+| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. |
+| `auth.jwt.ttl_bootstrap` | `720h` (30 days) | Only the first token written by `keeper init`. Read by the subcommand itself at each invocation, so it does not depend on the running daemon. |
+| `auth.jwt.exchange_ttl` | `10m` (floor `1m`) | The short Bearer that `POST /auth/token` gives the web UI in exchange for a `soul_session` cookie ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md)); additionally capped by the remaining lifetime of the cookie. |
+
+Issuing a fresh token does **not** invalidate the previous one: both live until their own `exp`. The only levers that cut a live token short are § Archon Revocation and § Emergency recall of all JWTs below - with the reservations stated there.
 
 ### Role assignment
 
@@ -139,10 +155,12 @@ If the live JWT is compromised and you can't wait for `exp`, the only reliable w
 
 ```sh
 vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"
-systemctl reload keeper  # hot-reload will reread the key
+systemctl restart keeper  # RESTART, not reload (see below)
 ```
 
-After this, re-issue JWT via `operator.issue-token` for all active Archons (old Bearers → 401).
+**A `reload` is not enough.** The signing-key is resolved from Vault once during startup, and the JWT verifier/issuer are built from that copy for the whole process lifetime (`bootstrap.LoadSigningKey` in `keeper/cmd/keeper/daemon.go`); the SIGHUP hot-reload path re-reads `keeper.yml` but does not rebuild them ([config.md → reload-policy](../keeper/config.md), row `auth.jwt.signing_key_ref`). After a `reload` Keeper keeps signing **and accepting** tokens made with the compromised key - that is, the rotation silently does not happen. In an HA cluster restart **every** instance: an instance still holding the old key will keep validating the old Bearers.
+
+After this, re-issue JWT via `operator.issue-token` for all active Archons (old Bearers → 401). The bootstrap token from `keeper init` is signed with the same key and dies together with the rest.
 
 ## Audit RBAC operations
 

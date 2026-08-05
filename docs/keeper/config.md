@@ -214,8 +214,9 @@ auth:
 |---|---|---|---|
 | `auth.jwt.signing_key_ref` | `vault-ref` | `vault:secret/keeper/jwt-signing-key` | Vault KV-path to signing-key, which is used to sign operator JWTs (`iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`). Post-MVP - Vault Transit without key export ([ADR-014(b)](../adr/0014-operator-identity.md)). |
 | `auth.jwt.issuer` | `string` | `<kid>` | The value of claim is `iss` in issued JWTs. If there is no value, the parser substitutes the value of the `kid:` field of the instance ([ADR-014(b)](../adr/0014-operator-identity.md)). It is permissible to redefine - a single name per cluster instead of per-instance. |
-| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of regular operator tokens issued through `operator.issue-token`. Short TTL is a natural defense against revocation-blocklist ([ADR-014(d)/(tradeoffs)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of regular operator tokens issued through `POST /v1/operators` and `operator.issue-token`, and of the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. **The only place the lifetime is set** - the issuing endpoints take no `ttl` parameter. Short TTL is a natural defense against revocation-blocklist ([ADR-014(d)/(tradeoffs)](../adr/0014-operator-identity.md)). |
 | `auth.jwt.ttl_bootstrap` | `duration` | `720h` (30 days) | TTL of the first bootstrap token issued by `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md), [ADR-014(b)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.exchange_ttl` | `duration` | `10m` | TTL of the short Bearer that `POST /auth/token` returns to the web UI in exchange for the `soul_session` cookie ([ADR-058, amendment NIM-77](../adr/0058-operator-auth-ldap-oidc.md)). A value below the floor of `1m` is raised to it; the effective lifetime is additionally capped by what is left of the cookie (`≤0` → 401). |
 
 If according to `signing_key_ref` there is no key in Vault at the time Keeper starts, there is an implementation fork ([ADR-014, section Consequences](../adr/0014-operator-identity.md): "either Keeper generates it itself and puts it at `keeper init`, or refuses to start"). Before closing with a separate task, normative behavior was not recorded.
 
@@ -1057,7 +1058,8 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `vault.auth.*` | — | yes | Re-auth only at the start. |
 | `vault.pki_mount` | yes | — | Read per-request. |
 | `auth.jwt.signing_key_ref` | — | yes | The Signing key is loaded into memory at start. |
-| `auth.jwt.issuer` / `ttl_default` / `ttl_bootstrap` | yes | — | Apply to **new** issued tokens; already issued JWTs are valid until their exp. |
+| `auth.jwt.issuer` / `ttl_default` / `exchange_ttl` | — | yes | Read once at startup: `issuer` is baked into the JWT verifier/issuer, the TTLs are captured by the operator service and the `/auth/token` handler when they are constructed. A reload swaps the config snapshot, but tokens keep being issued with the old `iss` and the old lifetime. Already issued JWTs are valid until their own `exp` in any case. |
+| `auth.jwt.ttl_bootstrap` | — | — | Not used by the daemon at all: it is read by the `keeper init` subcommand, which parses the file at each invocation. |
 | `metrics.auth.basic.*` | — | yes | The password is resolved from the vault at the start, the listener is raised once. |
 | `otel.*` | — | yes | Re-init exporter/connection; `SetupOTel` is called once per process ([ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). |
 | `logging.level` | yes | — | In-memory variable. |

@@ -85,7 +85,7 @@ Operator JWTs (ADR-014) are signed with a key from KV `secret/keeper/jwt-signing
 **Rotating the signing key** is an operational procedure (not automated):
 
 1. Generate a new key and write it to KV: `vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"`.
-2. Redeploy / hot-reload Keeper so it re-reads the key.
+2. **Restart** Keeper — every instance of the cluster. A `reload` will not do: the key is resolved from Vault once during startup and the JWT verifier/issuer are built from that copy for the process lifetime (`bootstrap.LoadSigningKey`, `keeper/cmd/keeper/daemon.go`), while the SIGHUP path only re-reads `keeper.yml` (see the reload-policy table in [config.md](config.md), row `auth.jwt.signing_key_ref`). An instance that was merely reloaded keeps signing and accepting tokens made with the old key.
 3. **Recreate bootstrap tokens / reissue operator JWTs** — all previously issued HS256 JWTs become invalid after the key change (the signature will not verify). The short JWT TTL (`auth.jwt.ttl_default`) limits the window, but active tokens will have to be reissued explicitly.
 
 For this reason, plan rotation for a maintenance window, not "on the fly".

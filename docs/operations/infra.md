@@ -352,7 +352,7 @@ Vault backs up the **storage backend**, not the binary itself. Depends on the se
 
 | Secret | How often | Procedure |
 |---|---|---|
-| JWT signing-key (`secret/keeper/jwt-signing-key`) | By compromise / by policy (every 6-12 months) | `vault kv put` → `systemctl reload keeper` → reissue of all JWTs (old ones are invalid). See [§ Rotation of signing-key in prod-setup.md](../keeper/prod-setup.md). |
+| JWT signing-key (`secret/keeper/jwt-signing-key`) | By compromise / by policy (every 6-12 months) | `vault kv put` → `systemctl restart keeper` **on every instance** → reissue of all JWTs (old ones are invalid). A `reload` does nothing here: the key is read once at startup and the verifier/issuer keep the old copy. See [§ Rotation of signing-key in prod-setup.md](../keeper/prod-setup.md). |
 | PG password (`secret/keeper/postgres`) | By policy (once every 90 days) | `ALTER USER keeper PASSWORD …` in PG → `vault kv put secret/keeper/postgres dsn=…` → `systemctl reload keeper` (the pool is recreated with a new DSN). The atomicity window is short-term `connection failed` while the pool is being recreated. |
 | Redis password (`secret/keeper/redis`) | By politics | `CONFIG SET requirepass …` in Redis → `vault kv put secret/keeper/redis password=…` (if `redis.password_ref` is vault-ref) → `systemctl reload keeper`. The Redis password resolution from Vault has been implemented - `password_ref: vault:secret/keeper/redis` is valid. |
 | SoulSeed (mTLS-cert Soul) | Regularly (TTL `pki/soulstack/roles/soul-seed`, up to 30d) | automatically via live stream ([`docs/soul/onboarding.md`](../soul/onboarding.md)). |
