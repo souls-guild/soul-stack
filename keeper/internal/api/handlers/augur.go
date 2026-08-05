@@ -33,8 +33,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
-	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 

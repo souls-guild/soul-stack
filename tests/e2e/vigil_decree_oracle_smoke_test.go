@@ -38,12 +38,15 @@ func TestL3b_VigilDecreeOracleFlow_Smoke(t *testing.T) {
 	defer cancel()
 
 	// 1. CreateVigil -- core-beacon file_changed with a coven subject. coven=web
-	// is arbitrary; the harness does not check host subject membership.
+	// is arbitrary and stays a coven: it is a label, not an incarnation name, so
+	// NIM-281 never touched it. This test drives EmitPortent (a direct
+	// oracle_fires UPSERT), so no subject is ever matched against a host -- what
+	// is exercised here is the create contract, not the reach.
 	vigilName := stack.CreateVigil(ctx, t, harness.CreateVigilOpts{
 		Name:     "l3b-vigil-smoke",
 		Interval: "30s",
 		Check:    "core.beacon.file_changed",
-		Coven:    []string{"web"},
+		Subject:  harness.Subject{Coven: []string{"web"}},
 		Params:   map[string]any{"path": "/etc/nginx.conf"},
 	})
 
@@ -54,7 +57,7 @@ func TestL3b_VigilDecreeOracleFlow_Smoke(t *testing.T) {
 	decreeName := stack.CreateDecree(ctx, t, harness.CreateDecreeOpts{
 		Name:            "l3b-decree-smoke",
 		OnBeacon:        vigilName,
-		Coven:           []string{"web"},
+		Subject:         harness.Subject{Coven: []string{"web"}},
 		IncarnationName: "web-app",
 		ActionScenario:  "noop",
 		Cooldown:        "5m",

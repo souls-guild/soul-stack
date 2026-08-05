@@ -41,25 +41,89 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// --- Subject ----------------------------------------------------------
+
+// Subject — WHO a Vigil or Decree applies to, mirroring the request DTO
+// (api.Subject, NIM-280). EXACTLY ONE of the four fields is set; the keeper
+// rejects zero or two with 422 (subject.Validate, symmetric with the
+// `*_subject_one_of` CHECKs).
+//
+// It is a NESTED object on the wire. The flat `coven`/`sid` pair this harness
+// used to send is no longer in the schema, and `additionalProperties:false`
+// turns it into a 400 `unknown field in request body` — a rejection at the
+// door, before any subject semantics are reached (NIM-482).
+//
+// Coven and Trait reach two levels: a host carrying the label, and every member
+// of an incarnation carrying it. An incarnation's NAME is not one of its labels,
+// so "the hosts of this incarnation" is Incarnation and never Coven{name} —
+// that union was retired by NIM-281.
+//
+// The harness deliberately does not enforce the one-of rule before the round
+// trip: these tests exercise the public OpenAPI contract as a black box, and a
+// harness-side guard would hide the very rejection they exist to observe.
+type Subject struct {
+	Coven       []string
+	Incarnation *SubjectIncarnation
+	SID         []string
+	Trait       *SubjectTrait
+}
+
+// SubjectIncarnation — the `service.incarnation` address. Both halves are
+// required: a name is unique only within its service.
+type SubjectIncarnation struct {
+	Service string
+	Name    string
+}
+
+// SubjectTrait — one trait key/value pair.
+type SubjectTrait struct {
+	Key   string
+	Value string
+}
+
+// body renders the nested `subject` object. A zero Subject renders an empty
+// object rather than disappearing, so a test can drive the "zero dimensions"
+// rejection without hand-assembling a request body.
+func (s Subject) body() map[string]any {
+	out := map[string]any{}
+	if len(s.Coven) > 0 {
+		out["coven"] = s.Coven
+	}
+	if s.Incarnation != nil {
+		out["incarnation"] = map[string]any{
+			"service": s.Incarnation.Service,
+			"name":    s.Incarnation.Name,
+		}
+	}
+	if len(s.SID) > 0 {
+		out["sid"] = s.SID
+	}
+	if s.Trait != nil {
+		out["trait"] = map[string]any{
+			"key":   s.Trait.Key,
+			"value": s.Trait.Value,
+		}
+	}
+	return out
+}
+
 // --- CreateVigil ------------------------------------------------------
 
-// CreateVigilOpts — parameters for [Stack.CreateVigil]. The subject is XOR
-// Coven/SID (CHECK vigils_subject_xor, migration 041); validated at the
-// keeper's service layer, the harness checks nothing before the round trip
-// (we test the public OpenAPI contract as a black box).
+// CreateVigilOpts — parameters for [Stack.CreateVigil]. Validation lives at the
+// keeper's service layer; the harness checks nothing before the round trip (we
+// test the public OpenAPI contract as a black box).
 //
 //   - Name — vigils.name (kebab-case 1..63).
 //   - Interval — Soul Stack duration convention ("30s"/"5m"; config.ParseDuration).
 //   - Check — core-beacon address (`core.beacon.<name>`; shared/beaconaddr.All).
-//   - Coven / SID — XOR subject.
+//   - Subject — which hosts run the check; exactly one dimension (see [Subject]).
 //   - Params — opaque JSON check parameters; shape depends on Check.
 //   - Enabled — defaults to true (same as REST with an empty enabled field).
 type CreateVigilOpts struct {
 	Name     string
 	Interval string
 	Check    string
-	Coven    []string
-	SID      *string
+	Subject  Subject
 	Params   map[string]any
 	Enabled  *bool
 }
@@ -77,12 +141,7 @@ func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilO
 		"name":     opts.Name,
 		"interval": opts.Interval,
 		"check":    opts.Check,
-	}
-	if len(opts.Coven) > 0 {
-		body["coven"] = opts.Coven
-	}
-	if opts.SID != nil {
-		body["sid"] = *opts.SID
+		"subject":  opts.Subject.body(),
 	}
 	if opts.Params != nil {
 		raw, err := json.Marshal(opts.Params)
@@ -126,8 +185,8 @@ func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilO
 //   - WhereCEL — optional predicate over the event payload (typed payload
 //     V5-1 or legacy event.data); empty -> always matches (subject already
 //     filtered). Compiled on create via WhereCompiler (broken CEL -> 422).
-//   - Coven / SID — XOR subject of the Decree (independent of the Vigil's
-//     subject).
+//   - Subject — which hosts may fire the rule; exactly one dimension (see
+//     [Subject]), independent of the Vigil's subject.
 //   - IncarnationName — target incarnation of the reaction
 //     (decrees.incarnation_name, required). On enqueue, membership is
 //     checked: incarnation_name in the sender's covens (ADR-030(b) protects
@@ -143,8 +202,7 @@ type CreateDecreeOpts struct {
 	Name            string
 	OnBeacon        string
 	WhereCEL        string
-	Coven           []string
-	SID             *string
+	Subject         Subject
 	IncarnationName string
 	ActionScenario  string
 	ActionInput     map[string]any
@@ -162,15 +220,10 @@ func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecre
 		"on_beacon":        opts.OnBeacon,
 		"incarnation_name": opts.IncarnationName,
 		"action_scenario":  opts.ActionScenario,
+		"subject":          opts.Subject.body(),
 	}
 	if opts.WhereCEL != "" {
 		body["where"] = opts.WhereCEL
-	}
-	if len(opts.Coven) > 0 {
-		body["coven"] = opts.Coven
-	}
-	if opts.SID != nil {
-		body["sid"] = *opts.SID
 	}
 	if opts.ActionInput != nil {
 		raw, err := json.Marshal(opts.ActionInput)

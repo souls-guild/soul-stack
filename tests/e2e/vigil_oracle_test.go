@@ -72,12 +72,19 @@ func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 	_, createApplyID := stack.CreateIncarnationOnRoster(t, incName, "noop@main", "create", []int{0}, nil)
 	stack.WaitApplySuccess(t, createApplyID, 60)
 
+	// Subject = the incarnation, addressed as service.name. It used to be
+	// spelled `coven: [incName]`, which worked only through the `covens ∪
+	// {name}` union NIM-281 retired: an incarnation's name is an identity, not a
+	// label an operator attached to it. NIM-280 gave the reach back as its own
+	// dimension, so this is the same intent said in the shape that survives.
 	vigilName := stack.CreateVigil(ctx, t, harness.CreateVigilOpts{
 		Name:     "oracle-fire-vigil",
 		Interval: "30s",
 		Check:    "core.beacon.file_changed",
-		Coven:    []string{incName},
-		Params:   map[string]any{"path": "/etc/nginx.conf"},
+		Subject: harness.Subject{
+			Incarnation: &harness.SubjectIncarnation{Service: "noop", Name: incName},
+		},
+		Params: map[string]any{"path": "/etc/nginx.conf"},
 	})
 
 	// action_scenario = converge (exists in service-noop, different from
@@ -85,10 +92,12 @@ func TestOracle_FileChanged_FiresScenario(t *testing.T) {
 	// (scenario, started_by_aid IS NULL). where-CEL -- typed-field-access
 	// V5-1 over FileChangedPortent.
 	decreeName := stack.CreateDecree(ctx, t, harness.CreateDecreeOpts{
-		Name:            "oracle-fire-decree",
-		OnBeacon:        vigilName,
-		WhereCEL:        `event.file_changed.path.startsWith("/etc/")`,
-		Coven:           []string{incName},
+		Name:     "oracle-fire-decree",
+		OnBeacon: vigilName,
+		WhereCEL: `event.file_changed.path.startsWith("/etc/")`,
+		Subject: harness.Subject{
+			Incarnation: &harness.SubjectIncarnation{Service: "noop", Name: incName},
+		},
 		IncarnationName: incName,
 		ActionScenario:  "converge",
 		Cooldown:        "5m",
