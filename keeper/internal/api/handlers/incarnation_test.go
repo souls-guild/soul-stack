@@ -34,8 +34,11 @@ type fakeIncDB struct {
 	// Create-path
 	insertRow   func() pgx.Row
 	insertCalls int
-	// insertArgs — the last arguments of INSERT INTO incarnation (spec=$5, traits=$11)
-	// to verify threading of spec.traits on the create path (ADR-060 amend R1).
+	// insertArgs — the last arguments of INSERT INTO incarnation. traits is $10
+	// (index 9); there is no spec argument since NIM-410 dropped the column. Read
+	// these by counting the column list in incarnation.insertSQL, never from
+	// memory: an assertion here once kept reading $5 as "spec" after the column
+	// list shifted it to `state`, and stayed green (NIM-470).
 	insertArgs []any
 	// updateTraitsArg — jsonb arg $2 of UPDATE incarnation SET traits (PUT .../traits,
 	// ADR-060 amend R1): a wholesale replacement of incarnation.traits.
@@ -78,10 +81,10 @@ type fakeIncDB struct {
 	// "DELETE 0" for a no-op race. archive INSERTs return an empty tag.
 	deleteTag pgconn.CommandTag
 
-	// UpdateHosts path: SELECT FROM souls WHERE sid = ANY($1) — the set of SIDs
-	// that "exist" in the `souls` registry. nil → none (for the
-	// UnknownSID test). The UpdateHosts SQL `UPDATE incarnation SET spec = ...` is caught
-	// by the generic Exec — recording the write in execCalls.
+	// Membership path: SELECT FROM souls WHERE sid = ANY($1) — the set of SIDs
+	// that "exist" in the `souls` registry. nil → none (for the UnknownSID test).
+	// This used to serve UpdateHosts (`UPDATE incarnation SET spec = ...`), an
+	// endpoint removed by NIM-330 along with the column it wrote.
 	soulsExisting map[string]struct{}
 
 	// Runs read-view (GET .../runs[/{apply_id}]): the count row of the runs list

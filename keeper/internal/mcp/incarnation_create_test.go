@@ -107,10 +107,14 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSouls(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey — without a `traits`
-// key, spec.traits is absent (distinguishable in CEL from "set empty"). REST
-// parity.
-func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
+// TestToolsCall_IncarnationCreate_NoTraits_WritesEmptyTraits — a create without
+// a `traits` key writes an EMPTY traits map. REST parity.
+//
+// The previous version read `insertIncArgs[3]` and called it spec. That is $4,
+// `state_schema_version` — an int, so the []byte assertion failed, the swallowed
+// Unmarshal left a nil map, and the "key is absent" check passed no matter what
+// the handler did. It could not fail. traits is $10 (index 9).
+func TestToolsCall_IncarnationCreate_NoTraits_WritesEmptyTraits(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 
@@ -119,16 +123,24 @@ func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	specBytes, _ := pool.insertIncArgs[3].([]byte)
-	var spec map[string]any
-	_ = json.Unmarshal(specBytes, &spec)
-	if _, has := spec["traits"]; has {
-		t.Errorf("spec.traits present without traits in the request: %v", spec)
+	if len(pool.insertIncArgs) < 10 {
+		t.Fatalf("insertIncArgs len = %d, want ≥10", len(pool.insertIncArgs))
+	}
+	traitsBytes, ok := pool.insertIncArgs[9].([]byte)
+	if !ok {
+		t.Fatalf("insertIncArgs[9] traits = %T, want []byte", pool.insertIncArgs[9])
+	}
+	var traits map[string]any
+	if err := json.Unmarshal(traitsBytes, &traits); err != nil {
+		t.Fatalf("traits not JSON: %v", err)
+	}
+	if len(traits) != 0 {
+		t.Errorf("traits = %v, want {} without traits in the request", traits)
 	}
 }
 
 // TestToolsCall_IncarnationCreate_InvalidTraitValue_422 — a nested trait
-// value is rejected by the domain (TraitsFromSpec → ValidateTraitDelta)
+// value is rejected by the domain (ValidateCreateTraits)
 // before insert. REST parity.
 func TestToolsCall_IncarnationCreate_InvalidTraitValue_422(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {

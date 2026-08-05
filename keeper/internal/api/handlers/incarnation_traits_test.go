@@ -57,9 +57,18 @@ func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	}
 }
 
-// TestIncarnation_Create_NoTraits_NoSpecKey — without `traits` the spec.traits key does NOT
-// appear (distinguishable for CEL from "traits set to empty").
-func TestIncarnation_Create_NoTraits_NoSpecKey(t *testing.T) {
+// TestIncarnation_Create_NoTraits_WritesEmptyTraits — a create without `traits`
+// writes an EMPTY traits map, not a populated one.
+//
+// This used to read `insertArgs[4]`, call it spec and look for a `traits` key in
+// it. NIM-410 dropped the spec column, so $5 became `state` and the assertion
+// went on passing against the wrong argument — and it swallowed the unmarshal
+// error, so it would also have passed against no argument at all. Two ways to be
+// green regardless of what the handler did.
+//
+// The real argument is $10 (index 9), the same one the populated case above
+// reads, and its emptiness is a claim that can fail.
+func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
@@ -69,16 +78,24 @@ func TestIncarnation_Create_NoTraits_NoSpecKey(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	specBytes, _ := db.insertArgs[4].([]byte)
-	var spec map[string]any
-	_ = json.Unmarshal(specBytes, &spec)
-	if _, has := spec["traits"]; has {
-		t.Errorf("spec.traits present without traits in request: %v", spec)
+	if len(db.insertArgs) < 10 {
+		t.Fatalf("insertArgs len = %d, want ≥10", len(db.insertArgs))
+	}
+	traitsBytes, ok := db.insertArgs[9].([]byte)
+	if !ok {
+		t.Fatalf("insertArgs[9] traits = %T, want []byte", db.insertArgs[9])
+	}
+	var traits map[string]any
+	if err := json.Unmarshal(traitsBytes, &traits); err != nil {
+		t.Fatalf("traits not JSON: %v", err)
+	}
+	if len(traits) != 0 {
+		t.Errorf("traits = %v, want {} without traits in the request", traits)
 	}
 }
 
 // TestIncarnation_Create_InvalidTraitValue_422 — a nested trait value is rejected
-// by the domain (TraitsFromSpec → ValidateTraitDelta) BEFORE the insert.
+// by the domain (ValidateCreateTraits) BEFORE the insert.
 func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)

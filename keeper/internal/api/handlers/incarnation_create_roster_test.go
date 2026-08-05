@@ -94,9 +94,14 @@ type fakeRosterDB struct {
 	hosts []memberHost
 
 	insertedIncarnation bool
-	// insertArgs — the arguments of the incarnation INSERT, so a test can read the
-	// spec jsonb ($5) the row was created with.
+	// insertArgs — the arguments of the incarnation INSERT. Read them by NAME via
+	// the captured SQL, never by a bare position: the column list changed under
+	// this fixture once already (NIM-410 dropped `spec`, and $5 silently became
+	// `state` while the assertion kept calling it spec).
 	insertArgs []any
+	// insertSQL — the incarnation INSERT as issued. A column list is the one thing
+	// a fake can be held to: it is the statement the real database would reject.
+	insertSQL string
 	// boundSIDs — what the membership INSERT was asked to write. nil until it runs,
 	// which is how a starter can tell "roster already bound" from "not yet".
 	boundSIDs []string
@@ -115,6 +120,7 @@ func (f *fakeRosterDB) QueryRow(_ context.Context, sql string, args ...any) pgx.
 	if strings.Contains(sql, "INSERT INTO incarnation") {
 		f.insertedIncarnation = true
 		f.insertArgs = args
+		f.insertSQL = sql
 		// RETURNING created_at, updated_at (incarnation.Create scans exactly these two).
 		return staticRow{values: []any{time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC()}}
 	}
@@ -285,21 +291,23 @@ func TestCreateRoster_DoesNotWriteSpecHosts(t *testing.T) {
 	if len(db.boundSIDs) != 1 {
 		t.Fatalf("bound SIDs = %v, want the roster bound as membership", db.boundSIDs)
 	}
-	// spec ($5) carries the operator's input and NO synthesized hosts[] declaration.
-	specBytes, ok := db.insertArgs[4].([]byte)
-	if !ok {
-		t.Fatalf("INSERT spec ($5) = %T, want []byte", db.insertArgs[4])
+	// The create INSERT names no spec-like column at all. This is asserted on the
+	// STATEMENT rather than on an argument, because there is no longer an argument
+	// to read: NIM-410 dropped the column, and the assertion that used to live here
+	// went on reading position $5 — which had become `state`. It stayed green while
+	// naming a column that does not exist, which is the failure this test is about.
+	//
+	// The roster's home is `incarnation_membership` (bound above), and the input
+	// the create ran on lives in that run's history snapshot, which is what
+	// rerun-last replays from.
+	if !strings.Contains(db.insertSQL, "INSERT INTO incarnation") {
+		t.Fatalf("no incarnation INSERT was issued; SQL = %q", db.insertSQL)
 	}
-	var spec map[string]any
-	if err := json.Unmarshal(specBytes, &spec); err != nil {
-		t.Fatalf("unmarshal spec: %v", err)
-	}
-	// Since NIM-408 the create path writes NOTHING into spec — not the roster, and
-	// not the input that used to carry it. The roster is `incarnation_membership`
-	// (bound below), and the input the create ran on lives in that run's history
-	// snapshot, which is what rerun-last replays from.
-	if len(spec) != 0 {
-		t.Errorf("spec = %v, want {} — the create path writes nothing into it", spec)
+	for _, banned := range []string{"spec", "hosts"} {
+		if strings.Contains(db.insertSQL, banned) {
+			t.Errorf("create INSERT names %q — the roster is membership and the "+
+				"declared-hosts blob is gone (NIM-330, NIM-410):\n%s", banned, db.insertSQL)
+		}
 	}
 }
 
