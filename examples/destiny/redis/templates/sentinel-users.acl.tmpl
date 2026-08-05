@@ -13,7 +13,7 @@
 
   ★ default_admin REDESIGN (2026-06-30): the previous default user (allchannels allkeys
   +@all) was REPLACED with the SYSTEM default_admin (same perms set) - it comes into
-  .vars.users from the scenario (essence.system_acl_users_sentinel) and is rendered by
+  .vars.users from the scenario (vars.system_acl_users_sentinel) and is rendered by
   range, like the other system users. The sentinel daemon connects to :26379 as
   default_admin (its password is secret/redis/<inc>/users/default_admin#password), and to
   the master as auth_user default_admin (sentinel.conf). The built-in `default` is rendered

@@ -99,14 +99,14 @@ Keeper→Soul without both fields is considered a product blocker (see comments
 | `owner` | string | optional | Owner as `present`. |
 | `group` | string | optional | Group like `present`. |
 
-Template sees context root `{ vars, self, role, essence }` + **conditional**
+Template sees context root `{ vars, self, role }` + **conditional**
 `input`: `.vars.*` - from `vars:` (derived values), `.input.*` - resolved
 operator-input pass (**Option B**: the template reads the input fields directly, without
 passthrough via `vars:`; key `input` Keeper puts **only if the template is real
 refers to `.input.*`** - detector by bypassing parse-AST `.tmpl`, not string-search;
 templates on some `.vars` `input` are not received), `.self.*` - soulprint projection
 ([ADR-018](../../../adr/0018-soulprint-typed.md)), `.role` —
-declared-host role, `.essence.*` - effective essence. Missing variable in
+declared-host role. Missing variable in
 template - rendering error (text/template strict-mode, `missingkey=error`).
 
 > **`.input.*` and secrets.** The secret operator-input field read by the template via

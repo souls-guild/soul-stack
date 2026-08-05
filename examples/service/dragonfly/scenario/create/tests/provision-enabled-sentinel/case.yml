@@ -47,7 +47,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     sentinel_master_name: master
     provision_await_timeout: "10m"
     memory_reserve_percent: 75
@@ -108,7 +108,7 @@ assert:
 
     # (c) core.soul.registered: sid — the list of SIDs of the created VMs (register.provision.hosts
     # .map(h, h.sid)); membership is implicit (incarnation_membership, no coven:); the onboarding barrier
-    # await_online + refresh_soulprint; await_timeout from essence (10m, input.provision
+    # await_online + refresh_soulprint; await_timeout from service vars (10m, input.provision
     # .await_timeout not set). The only one in the plan.
     - module: core.soul.registered
       params_subset:

@@ -49,7 +49,7 @@ func (s *systemSource) Hostname() string {
 }
 
 // Arch returns Go's architecture notation (amd64 / arm64), matching what
-// core modules and the essence pipeline expect.
+// core modules and the service-vars resolver expect.
 func (s *systemSource) Arch() string {
 	return runtime.GOARCH
 }

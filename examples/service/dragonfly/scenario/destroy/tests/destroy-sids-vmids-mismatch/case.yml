@@ -32,7 +32,7 @@ fixtures:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
 
-  essence:
+  vars:
     install_method: package
     conf_dir: /etc/dragonfly
 

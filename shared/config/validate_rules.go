@@ -10,7 +10,7 @@ package config
 // [compileRequiredWhen] against inputEnv with the single variable `input`. No
 // second CEL engine — one source of input-only eval for both required_when and
 // validate. A reference to any name outside `input`
-// (essence/soulprint/register/vault/now) → an undeclared-reference compile
+// (vars/soulprint/register/vault/now) → an undeclared-reference compile
 // error: the structural input-only barrier comes from the env being undeclared,
 // not from a text guard (symmetric to required_when and migration-CEL ADR-019).
 
@@ -209,7 +209,7 @@ func validateRuleThat(kv *ast.MappingValueNode, path string) []diag.Diagnostic {
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "validate_rule_invalid",
 			Message:  fmt.Sprintf("validate.that does not compile as CEL over input.*: %v", err),
-			Hint:     "predicate may reference only input.* (no essence/soulprint/register/vault/now)",
+			Hint:     "predicate may reference only input.* (no vars/soulprint/register/vault/now)",
 			YAMLPath: path + ".that",
 		})}
 	}

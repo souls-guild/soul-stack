@@ -30,7 +30,7 @@
 #   - secret/keeper/postgres         (postgres.dsn_ref, field `dsn`)
 #   - secret/keeper/redis            (redis.password_ref)
 #   - secret/keeper/providers/*      (cloud driver credentials, ADR-017)
-#   - essence secrets under secret/keeper/* (resolving `${ vault(...) }` in CEL)
+#   - service-vars secrets under secret/keeper/* (resolving `${ vault(...) }` in CEL)
 #
 # `read` is enough: reading a KV v2 value doesn't need list/data-write.
 path "secret/data/keeper/*" {

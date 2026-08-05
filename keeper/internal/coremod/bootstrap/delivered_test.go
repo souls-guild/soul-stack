@@ -1314,7 +1314,7 @@ func TestDefaultJoinWaitTimeout_Is15m(t *testing.T) {
 
 // TestValidate_JoinWaitTimeout_Forms is a guard of `join_wait_timeout` param format:
 // accepts duration-string (convention `duration`, symmetry with await_timeout —
-// essence.provision_join_wait_timeout uses it) AND seconds number (back-compat
+// vars.provision_join_wait_timeout uses it) AND seconds number (back-compat
 // ADR-063). Negative/invalid string rejected.
 func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
 	m := &coremodbootstrap.Module{}
@@ -1350,7 +1350,7 @@ func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
 }
 
 // TestApply_Teleport_JoinWaitDurationString is a guard: duration-string (form of
-// essence.provision_join_wait_timeout) really reaches retry-loop as wait budget,
+// vars.provision_join_wait_timeout) really reaches retry-loop as wait budget,
 // not hardcoded. "60s"-string + flakyDialer(3 fail) → step reaches success
 // (budget positive, retries fit). Counterexample with tiny budget ("1ms") in
 // TestApply_Teleport_JoinWaitTiny.

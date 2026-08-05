@@ -1,7 +1,7 @@
 # L0 test for the validate-guard in update_users (system-ACL-users d2): no element of
 # input.users may take the name of a SYSTEM user (default/replica/monitoring/sentinel/
 # haproxy). The operator puts a user named monitoring into the set — reserved (merged in
-# from essence ON TOP OF operator-extra → would silently overwrite the exporter's
+# from service vars ON TOP OF operator-extra → would silently overwrite the exporter's
 # monitoring perms). The validate rule in update_users/main.yml (.all() over the array)
 # catches this at INPUT validation (422 BEFORE applying). Rule false → expect_render_error
 # matches a substring of message.
@@ -21,8 +21,8 @@ fixtures:
     redis_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
-  essence:
-    # host-layout — in essence (v11→v12, Variant A). the guard aborts the render before
+  vars:
+    # host-layout — in service vars (v11→v12, Variant A). the guard aborts the render before
     # the deploy body; layout is here for fixture fidelity (state v12 shape without
     # layout keys).
     conf_dir: /etc/redis

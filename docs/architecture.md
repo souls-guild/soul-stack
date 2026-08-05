@@ -15,7 +15,7 @@ The document is the single source of truth for top-level architecture. If the so
 - [Soul Stack artifacts: what's in git, what's in the database](#soul-stack-artifacts-whats-in-git-whats-in-the-database)
 - [Destiny: Entry Contract and Validation](#destiny-entry-contract-and-validation)
 - [Service - structure and manifest](#service---structure-and-manifest)
-- [Essence: assembly pipeline](#essence-assembly-pipeline)
+- [Service vars: assembly pipeline](#service-vars-the-assembly-pipeline)
 - [Incarnation — runtime service instance](#incarnation--runtime-service-instance)
 - [Targeting and host communication](#targeting-and-host-communication)
 - [Versioning and migration state_schema](#versioning-and-state_schema-migrations)
@@ -39,7 +39,7 @@ Soul Stack is a configuration management system with its own dictionary of names
 
 - declarative description of the desired state of the hosts (**Destiny**),
 - collecting facts about hosts (**Soulprint**),
-- storing parameters and secrets (**Essence**),
+- storing parameters and secrets (**service vars**),
 - remote execution and run check.
 
 Two delivery models are supported:
@@ -255,16 +255,16 @@ Moved to [`docs/adr/0044-choir.md`](adr/0044-choir.md). Choir - first-class name
 
 In parallel:
    ┌──────────────┐
-   │  soul-lint   │  offline validation of Destiny + Essence
+   │  soul-lint   │  offline validation of Destiny + service vars
    │  (CI / dev)  │  on the developer side, without Keeper
    └──────────────┘
 ```
 
 ### Roles of binaries
 
-- **`keeper`.** Central server. Stores the Souls registry (Postgres), RBAC policies, validates and renders Destiny, issues Souls commands, aggregates Soulprint and run results, sets gRPC + OpenAPI + MCP. Contains module `keeper.push` (SSH delivery). Integrates with Vault for Essence (secrets) and for CA (issuing SoulSeed certificates).
+- **`keeper`.** Central server. Stores the Souls registry (Postgres), RBAC policies, validates and renders Destiny, issues Souls commands, aggregates Soulprint and run results, sets gRPC + OpenAPI + MCP. Contains module `keeper.push` (SSH delivery). Integrates with Vault for service-vars secrets and for CA (issuing SoulSeed certificates).
 - **`soul`.** Agent daemon on the managed host; runs as a service and runs continuously. Raises gRPC bidi stream to Keeper, executes received commands, collects Soulprint, and sends results. No Keeper server code, no outgoing traffic except to your Keeper and to explicitly allowed resources. There is no local admin endpoint in MVP ([open Q No. 8](#current) - post-MVP); admin operations on Soul-host in MVP - SIGHUP for hot-reload `soul.yml` + local shell access to logs/metrics.
-- **`soul-lint`.** Offline linter for Destiny and Essence. Parses, renders, validates according to the schema, runs static analysis (non-existent modules, dependency cycles, typos in Soulprint targets). Runs locally and in CI, does not require Keeper or a network.
+- **`soul-lint`.** Offline linter for Destiny and service vars. Parses, renders, validates according to the schema, runs static analysis (non-existent modules, dependency cycles, typos in Soulprint targets). Runs locally and in CI, does not require Keeper or a network.
 
 ## Soul Life Cycle and Soul Registry
 
@@ -295,7 +295,7 @@ Host management **without installing a Soul agent**: Keeper goes to the host via
 Properties important at the architectural level:
 
 - **Unified registry.** Push host - record in the same table `souls` with `transport: ssh`; push↔agent migration - changing one field, the history is not lost. The SoulSeed table is not used for push hosts (there is no mTLS identity - its role is played by the SSH side).
-- **Same `soul` binary.** Same artifact as the pull daemon, run one-time as `soul apply` (stdin = rendered `ApplyRequest` as protojson - `apply_id` + `RenderedTask[]` after Keeper-side render phases, ADR-012(d); stdout = NDJSON stream `TaskEvent` + final `RunResult` as protojson; exit 0 for `RunResult.status==success`, 1 otherwise). Raw Destiny/Essence does not reach the push host - Keeper renders on its own, Soul does not resolve Vault.
+- **Same `soul` binary.** Same artifact as the pull daemon, run one-time as `soul apply` (stdin = rendered `ApplyRequest` as protojson - `apply_id` + `RenderedTask[]` after Keeper-side render phases, ADR-012(d); stdout = NDJSON stream `TaskEvent` + final `RunResult` as protojson; exit 0 for `RunResult.status==success`, 1 otherwise). Raw Destiny and service vars do not reach the push host - Keeper renders on its own, Soul does not resolve Vault.
 - **SHA-256 cache on the host.** The binary and modules are cached in `/var/lib/soul-stack/{bin,modules}/`; a repeated run does not download anything.
 - **SSH authentication - pluggable provider.** Contract `SshProvider` (Vault SSH CA / static key / Teleport - all fit under it), a specific set of required implementations - [open Q SSH-2](#current).
 
@@ -316,7 +316,7 @@ When applying Destiny step `soul`:
 1. parses the module name according to the scheme `<namespace>.<module>.<state>` (see "Addressing modules");
 2. for a built-in core module calls the implementation of `<module>.<state>` directly, in the process;
 3. otherwise looks for the file `soul-mod-<module>` in the collection modules directory; no file - validation error (`soul-lint` catches this before running);
-4. launches a sub-process, transfers state, parameters and Essence via gRPC-stdio, reads events as a stream (see "Modules Protocol").
+4. launches a sub-process, transfers state and parameters via gRPC-stdio, reads events as a stream (see "Modules Protocol").
 
 ### Module addressing
 
@@ -596,6 +596,10 @@ Moved to [`docs/adr/0080-label-inheritance-union.md`](adr/0080-label-inheritance
 
 Moved to [`docs/adr/0081-roster-at-create.md`](adr/0081-roster-at-create.md). A create scenario that deploys onto hosts somebody already onboarded (`create_from_souls`) had no way to be **given** them: `POST /v1/incarnations` accepted no hosts, membership was bound afterwards ([ADR-008](#adr-008-coven---stable-logical-tags-only) amendment / NIM-209), and the bootstrap run resolves its roster from `incarnation_membership` **at start** — so it aborted `no_hosts` before its first task, and a scenario cannot bind its own roster from the inside. The scenario now **declares** which of its `input:` fields carries the roster, with a third variant of the [ADR-044](adr/0044-choir.md) S-T1 source discriminator: `source: { roster: true }`. The key does double duty — for the UI it is the SID catalog (**free onboarded souls the caller may see**; the incarnation-scoped variants have no incarnation to resolve against on a create form), and for Keeper it is the statement that this input **is the composition** of the incarnation, bound into `incarnation_membership` after the insert and **BEFORE** `runner.Start`. Which field carries it is the author's choice (`config.RosterInputField`), at most one per block. **The create contract is unchanged** — the roster rides inside `input`, so `required` / `min_items` / `format: sid` and a `validate:` size rule against the declared topology all come from the ordinary input gate, turning a render-time `error_locked` into a request-path 422. **The order IS the decision:** screen before the insert (a refusal leaves no half-made incarnation), bind after it (the FK needs the row), run last; a bind that fails infrastructurally answers 500 with **no run**, leaving an empty ready incarnation the operator repairs with `POST .../members`. Authorization reuses the bind route's two gates verbatim — `incarnation.bind-member` ANDed over every declared coven (otherwise create is the way around NIM-209's gate (a)) plus every SID inside the caller's `soul.list` purview, all-or-nothing, buckets ordered unknown→422 / out-of-scope→**403** / not-connected→422 — through one screening function shared by REST and MCP. **`input.hosts` is a journal, membership is the truth:** the input records what the incarnation was created ON, and the two diverge legitimately once the Hosts tab edits the roster; later runs read the relation. It is deliberately **not** written to `spec.hosts`, which declares host ROLES ([ADR-008](#adr-008-coven---stable-logical-tags-only)) and would read plausible while binding nothing. The catalog is `GET /v1/souls` with `sid_prefix` (literal, LIKE metacharacters escaped) and a repeatable `coven` (ANY-of), narrowed by **`status=connected` and nothing else** — the two tighter filters this began with are both wrong and were dropped after the first live review: an incarnation's declared covens reach a host only by inheritance once it BELONGS to it ([ADR-080](adr/0080-label-inheritance-union.md), so a candidate cannot carry them), and "unassigned" contradicts M:N membership (a host legitimately serves several incarnations). The RBAC scope, not a guess about occupancy, is what keeps other people's hosts out. Reused instead of extending form-prep because that endpoint is addressed per module and the souls list is **already** `soul.list`-scoped, so "the picker cannot show a SID the caller could not otherwise see" holds by construction rather than by a second copy of the rule (the failure class of NIM-148 / NIM-202/203). Rejected: a `hosts[]` field in the create body (core contract for every service, when the scenario is what knows whether it is given hosts or produces them), writing `spec.hosts`, a scenario binding itself, a separate `requires_roster` flag (the field's presence **is** the flag — and it retired the web form's guess by scenario NAME), operator-assigned master/replica roles (`cluster_topology` already covers it; otherwise the plugin lays roles out by sorted SID). Impl — NIM-371. **Amends [ADR-008](#adr-008-coven---stable-logical-tags-only) / [ADR-044](adr/0044-choir.md) / [ADR-045](adr/0045-param-dsl.md).**
 
+### [ADR-082. Service vars replace Essence — one `vars` namespace, `incarnation.spec.essence` removed](adr/0082-service-vars.md)
+
+Moved to [`docs/adr/0082-service-vars.md`](adr/0082-service-vars.md). A service repository's default parameters move from `essence/` into **`vars/`**, the CEL root `essence.*` merges into **`vars.*`**, the package `keeper/internal/essence` becomes `servicevars`, and **`incarnation.spec.essence` is removed with no replacement**. The two namespaces were separated by exactly one property — essence was overridable from outside, a `vars` local by definition is not ([`docs/destiny/vars.md`](destiny/vars.md)) — and the override is what goes: `spec.essence` had two live readers (`scenario/state.go`, `grpc/events_telemetry.go`, both through `specEssence()`) and **no writer at all** (no field in `IncarnationCreateRequest`; the only write of the key anywhere is the fixture of the unit test that reads it back), while being the last key blocking the drop of the `incarnation.spec` column (NIM-408). **A fleet overrides a service's defaults by FORKING the service repo** and re-pinning its `ServiceRef` ([ADR-007](#adr-007-versioning-of-artifacts-is-done-through-git-ref-not-through-a-field-in-the-manifest)) — the ansible-role model, zero new machinery; the redis keys commented "the operator overrides this in `spec.essence`" (eighteen comments over a couple of dozen keys: fleet-wide facts pinned to a single instance's row, plus values deliberately kept out of the Run form) do not move at all, only the way to override them does. Rejected: a replacement column `incarnation.essence_override`, `keeper_settings` ([ADR-0073](adr/0073-keeper-runtime-config-pg.md)) for the fleet group — it needs a `settings.*` CEL root, and adding an entity is the opposite of the point (still available later, on top, changing nothing) — and relocating the per-incarnation keys into `input:` behind a collapsed `form:` section, which would park **desired** constants in `state`, a projection of **actual**. **The priority ladder becomes one flat stack:** `<service>/vars/*.yaml` → destiny `vars.yml` → `block:` → task, with no operator rung (and no scenario file rung — `scenario/<name>/vars.yml` is documented but read by nothing); a layer may reference the layers **below** it, since a task var used to reach the service layer as `${ essence.X }` and would otherwise fail on the same expression spelled `${ vars.X }`, while sideways stays refused; the merge's one real cost is silent shadowing (a task var taking over a service var's name), to be covered by a soul-lint WARNING `vars_shadows_service_var` (NIM-416, not built yet) on the model of the existing `vars_collision`. It also pays for part of itself — the transit hops `essence.conf_dir → compute.conf_dir → task vars.conf_dir`, which existed only to cross the namespace boundary, collapse (redis, dragonfly, mongo). **`essence/os/` and `essence/coven/` are deleted** (implemented, used by zero shipped examples and zero external destiny repos) and **`vars/_stack.yaml` becomes real** — it was documented as working in [`docs/service/manifest.md`](service/manifest.md) and in the section above while the code read `// Convention-based ordering (no _stack.yaml)`; conditionality gets ONE mechanism instead of two, and the [ADR-080](#adr-080-coven-and-trait--one-label-world-inheritance-by-membership-union-at-read) guard proving that an incarnation's tag reaches its members' parameters (NIM-248) is **retargeted onto a `foreach:` step, not deleted**. The step context is `incarnation.*` (covens included) / accumulated `vars.*` / the `foreach:` binding, and **nothing else**: the draft's `host` root is dropped (it duplicated the incarnation's labels on one axis and misreported the keeper context, which has no host, on the other), and `soulprint.self` is refused outright — a service's vars resolve **once per run** and are handed to every host, so a step keyed on one host's facts would silently apply that host's answer to the whole roster (a mixed debian/rhel roster being the obvious case). The layer is host-invariant by construction. Host-dependent behaviour belongs where the render already is per-host — `where:` on a task, a task's own `vars:`/`params:` over `soulprint.self.*`, a `.tmpl` — and **not** in `apply: input:`, which resolves on `targeted[0]` and hands one set of values to a destiny's whole roster. Per-host service vars were weighed and deferred: doing them honestly means refusing `vars.*` in `compute:` and in `apply: input:` and rewriting the 141 sites that read it there, a train of its own. `os/<family>.yaml` therefore has no replacement — it was used by zero shipped services and already answered with `hosts[0]`'s family for all of them. Corollary: the incarnation's covens must be read on every resolving path, so the runner's `FOR UPDATE` read and the telemetry query now select the column they used to omit. New per-step **`strategy: deep|replace`**: redis documents `install_package` as "the whole map that an override replaces" while `mergeInto` recurses, so overriding `repo_uri` alone kept the base's `gpg_key_url` — an intent the mechanism could not express. Without a `_stack.yaml` the order is every `*.yaml`/`*.yml` directly inside `vars/`, sorted lexically (subdirectories are **not** walked → `vars_dir_nested`), and the base file is **`00-base.yaml`, not `_default.yaml`** — a rename forced BY that scheme rather than one fixing a defect in the old one (the old resolver read `_default.yaml` through a hard-coded constant and never sorted anything), because once the directory listing is the order the name carries the precedence, and `_` is `0x5F`, between `Z` and `a`: `00-base.yaml` < `Base.yaml` < `_default.yaml` < `base.yaml`. **Two Struct payloads that cross the wire lose the `essence` key** — `RenderedTask.flow_context` ([ADR-012](#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add)) becomes `{input, vars, incarnation, self}` and `core.file.rendered`'s `render_context` ([ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) becomes `{vars, self, role}` (plus its conditional `input`); no proto field number moves (only-add intact), but a Soul from before this train finds nothing under `essence`, stated here rather than left to a field report, and cheap in practice since **no `.tmpl` in `examples/` reads `.essence`**. The name asymmetry across the `apply:` boundary is documented head-on instead of removed (in a scenario `vars` = service vars + locals, in a destiny only its own `vars.yml`; isolation untouched) — that same asymmetry already cost `apply_when_dynamic_unsupported`, where different names merely camouflaged it. **Essence retires from the dictionary** ([naming-rules.md](naming-rules.md) entries rewritten to forward here, not deleted). Impl — NIM-412…NIM-416, with the column drop in NIM-408. **Amends [ADR-008](#adr-008-coven---stable-logical-tags-only) / [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files) / [ADR-012](#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add).**
+
 ### General mechanism
 
 - A plugin is a separate executable file, supplied as an independent artifact (its own git repo, its own release pipeline, its own versions).
@@ -664,7 +668,7 @@ Service is a **service type** (Redis HA, PostgreSQL, Vector-collector). One serv
 ```
 redis/
 ├── service.yml                         # manifest: name, state/host schemas, destiny, modules (version = git tag, see ADR-007)
-├── essence/                            # parameters in the hierarchy (see "Essence: assembly pipeline")
+├── vars/                               # the service's default parameters (see "Service vars: the assembly pipeline")
 │   ├── _stack.yaml                     # OPTIONAL: declarative build pipeline
 │   ├── _default.yaml                   # baseline for all incarnation
 │   ├── coven/
@@ -678,7 +682,6 @@ redis/
 │   │   ├── main.yml                    # entry point: input + state_changes + tasks (all inline)
 │   │   ├── standalone.yml              # reusable mode blocks (include from main.yml)
 │   │   ├── templates/                  # OPTS: scenario-local templates (two-level resolve)
-│   │   ├── vars.yml                    # OPTS: scenario-locals
 │   │   └── tests/                      # OPT: scenario tests (see scenario/orchestration.md)
 │   ├── add_node/
 │   │   └── main.yml
@@ -798,7 +801,7 @@ input:
 # state_changes - ordered list of CRUD verbs (ADR-057): set/add/modify/
 # remove + foreach. set - rewrite the entire field; value from CEL ${ ... }
 # (rendered by Keeper-side, scenario/orchestration.md §7.1). Context:
-# input/incarnation/soulprint.self/register/vars/essence.
+# input/incarnation/soulprint.self/register/vars.
 state_changes:
   - set: redis_version
     value: "${ input.redis_version }"
@@ -826,7 +829,7 @@ tasks:
     apply:
       destiny: redis
       input:
-        version:  "${ essence.redis_version }"
+        version:  "${ vars.redis_version }"
         password: "${ input.redis_password }"
 
   - include: replication.yml
@@ -868,78 +871,77 @@ input:
 
 `$type` resolves service-level at the input stage (with cycle-detection); We keep the types inline in one scenario, and only include reused ones in `types.yml`. The previous provision `$ref` for an external JSON-Schema file in `schemas/` **cancelled** (not implemented, replaced by named types) - see [ADR-062](#adr-062-named-input-types---reusable-named-input-schemes-via-types--type) and [docs/input.md → "Reused named types"](input.md#reusable-named-types-types--type).
 
-## Essence: assembly pipeline
+## Service vars: the assembly pipeline
 
-The service parameters are not a flat list, but a **hierarchical assembly**: at each step, already accumulated data is available, the next step can rely on them. This gives conditional inclusions, iteration and dynamic values.
+A service's own default parameter values live in `<service>/vars/` and read in CEL as `vars.*`. Regulatory spec — [ADR-0082](adr/0082-service-vars.md); the authoring view — [`docs/service/manifest.md` → Service vars](service/manifest.md#service-vars).
 
-### Convention-based default (without `_stack.yaml`)
+### Lexical default (without `_stack.yaml`)
 
-If the operator does not write `_stack.yaml`, keeper applies the default order:
+Every `*.yaml` / `*.yml` **directly inside** `vars/`, sorted lexically, deep-merged in that order. Subdirectories are not walked — `soul-lint` reports `vars_dir_nested` rather than letting a layer sit somewhere the resolver will never look.
 
-1. `_default.yaml` — baseline.
-2. `os/<soulprint.os.family>.yaml` - OS family (if the file exists).
-3. For each Coven tag of the current host: `coven/<label>.yaml` (if the file exists).
-4. On top of everything - `incarnation.spec` from the operator (via API).
+The base file is **`00-base.yaml`**. The name is load-bearing: once the directory listing IS the order, the filename carries the precedence, and a numeric prefix leaves room to insert a layer between two others without renaming either. (`_` sorts at `0x5F`, between `Z` and `a`, so the old `_default.yaml` would land in the middle of an alphabetical set rather than at its head.)
 
-This is enough for most services.
+> **Service vars are role-agnostic** ([ADR-008](adr/0008-coven-stable-tags.md)) — there is no `role/<Y>.yaml` stage. Role-dependent parameters move to destiny and are passed through `input:` after the probe (see [`docs/scenario/concept.md`](scenario/concept.md)).
 
-> **Essence role-agnostic** ([ADR-008](adr/0008-coven-stable-tags.md)). Stages `role/<host.role>.yaml` in the pipeline **no** - essence is not layered by role. Role-dependent parameters move to destiny and are passed through `input:` via the probe role (see [`docs/scenario/concept.md`](scenario/concept.md)). The assembly order is `default → os → coven → incarnation.spec`.
+> **There is no operator rung.** Nothing overrides these from outside: no field on the incarnation, no API, no successor to one. A fleet that needs different defaults **forks the service repo** and re-pins its `ServiceRef` ([ADR-007](adr/0007-versioning-git-ref.md)) — the ansible-role model. What an operator supplies is `input:`, and only `input:`.
 
-### `_stack.yaml` - declarative pipeline
+### `_stack.yaml` — the declarative pipeline
 
-When conditions, iteration or calculated values are needed, the operator writes `_stack.yaml`:
+When a layer is conditional, iterated, or computed, write `vars/_stack.yaml`. Present, it replaces the lexical order entirely; `_stack.yaml` itself is never a layer.
 
 ```yaml
-# essence/_stack.yaml
+# vars/_stack.yaml
 #
-# Available at every step:
-#   soulprint - host facts (os, kernel, network, custom facts)
-#   incarnation — { name, service, scenario, ... }
-#   host - { sid, covens } for the current host (role is NOT available here - ADR-008)
-#   vars - already accumulated essence from previous steps
+# Available at every step, and NOTHING else:
+#   incarnation - { name, service, service_version, covens, traits }
+#   vars        - the layers accumulated by the steps before this one
+#   <as>        - the foreach binding, inside a foreach step
 
 stack:
-  # 1. Baseline - always
-  - file: _default.yaml
+  # 1. The base — always
+  - file: 00-base.yaml
 
-  # 2. OS family
-  - file: "os/${ soulprint.self.os.family }.yaml"
-    optional: true                     # skip silently if file is not present
-
-  # 3. Iterate over all coven labels of the host
-  - foreach: "${ host.covens }"
+  # 2. Iterate over the incarnation's coven labels
+  - foreach: "${ incarnation.covens }"
     as: coven_name
-    file: "coven/${ coven_name }.yaml"
-    optional: true
+    file: "coven-${ coven_name }.yaml"
+    optional: true                     # skip silently when the file is absent
 
-  # 4. Depends on the ALREADY collected value (uses earlier-accumulated data)
-  - file: "env/${ vars.env }.yaml"
+  # 3. Depends on a value an earlier step already put in
+  - file: "env-${ vars.env }.yaml"
     when: vars.env != null
     optional: true
 
-  # 5. Conditional inline block - without a separate file
+  # 4. A conditional inline block, no separate file
   - inline:
-      redis_maxmemory: "${ int(soulprint.self.memory.total_mb * 0.6) }mb"
-    when: vars.redis_maxmemory == null
+      redis_maxmemory_percent: 60
+    when: vars.redis_maxmemory_percent == null
+
+  # 5. Replace a map wholesale instead of merging into it
+  - file: 90-mirror.yaml
+    strategy: replace
 ```
+
+**`soulprint` is refused outright** — it is not declared in that environment, so naming it is a compile error rather than a silently empty map. Service vars resolve **once per run** and the result is handed to every host; a step keyed on one host's facts would apply that host's answer to the whole roster, which a mixed debian/rhel roster makes obvious. `input`, `register` and `compute` are refused for the same structural reason. Host-dependent behaviour belongs where the render already is per-host: `where:` on a task, a task's own `vars:`/`params:` over `soulprint.self.*`, or a `.tmpl`.
 
 ### Pipeline operators
 
-| Operator | Destination |
+| Operator | Purpose |
 |---|---|
-| `file: <path>` | Include file; path is a template with variables. |
-| `inline: <map>` | Include a set of variables without a separate file. |
-| `when: <expr>` | The inclusion condition (Boolean expression). |
-| `optional: true` | Don't crash if file `file:` does not exist. |
-| `foreach: <list>` + `as: <name>` | Iteration: The step is repeated for each element, the variable `<name>` is available internally. |
+| `file: <path>` | Include a file from `vars/`; the path is a template. Escaping `vars/` is refused. |
+| `inline: <map>` | Include a set of values without a separate file. |
+| `when: <expr>` | Inclusion condition (boolean expression). |
+| `optional: true` | Do not fail when the `file:` is absent. |
+| `foreach: <list>` + `as: <name>` | Repeat the step per element, binding `<name>` inside it. |
+| `strategy: deep\|replace` | How this step merges. `deep` (default) recurses into nested maps; `replace` swaps the whole value. Also settable per key with `_strategy` inside a layer file. |
 
-Between steps, keeper re-evaluates the available variables so that a later step can reference the `vars.X` that came from the file included earlier.
+Between steps the accumulated `vars.*` is re-evaluated, so a later step can reference a key an earlier one contributed.
 
-### Final merge with incarnation.spec
+The decoder is **strict**: an unknown key in a step is an error, not a silent drop. `whn:` would otherwise remove a gate and `strateg:` would quietly deep-merge — both changing what gets applied to a host while the file still looked right.
 
-After passing the pipeline, the keeper makes the final deep-merge: `effective_essence = merge(stack_result, incarnation.spec)`. Spec operator is the strongest override (it interrupts everything that the hierarchy has collected).
+### Where the merge continues
 
-The **original `incarnation.spec`** (not merged) is stored in the database - for auditing it is clear what exactly the operator has redefined.
+The service's resolved `vars/` is the **bottom** of one flat `vars.*` namespace: `<service>/vars/*.yaml` → destiny `vars.yml` → `block:` → task, each layer overriding the one below and able to reference it. Across an `apply:` boundary the name survives but the meaning does not — inside a destiny pass `vars.*` is that destiny's own `vars.yml` and nothing else ([`docs/destiny/vars.md`](destiny/vars.md)).
 
 ## Incarnation — runtime service instance
 
@@ -954,7 +956,6 @@ Incarnation is a specific **instance** of a service in reality (one Redis cluste
 | `service` | text | service name |
 | `service_version` | text | pin version (git-tag) of the service under which incarnation runs |
 | `state_schema_version` | integer | version of state_schema under which state is structured |
-| `spec` | jsonb | what the operator declared (input for the last successful create/update) |
 | `state` | jsonb | current structured configuration, by `state_schema` service |
 | `status` | enum | `provisioning` / `ready` / `applying` / `error_locked` / `migration_failed` / `drift` / `destroying` / `destroy_failed` |
 | `status_details` | jsonb NULL | error details if `status` locking |
@@ -1070,11 +1071,11 @@ Two-phase resolve: `on:` → Postgres (stable), `where:` → `register:` (runtim
 In the template context of the scenario, the following are always available:
 - `incarnation.name` - instance name.
 - `input` - parameters passed to the scenario.
-- `essence` — merged essence (default + spec) after passing [pipeline](#essence-assembly-pipeline).
+- `vars` — one flat namespace: the service's resolved [`vars/`](#service-vars-the-assembly-pipeline) at the bottom, then the scenario's `vars:`, a `block:`'s, and the task's.
 - `state` - current state from the database (for scenarios that read the existing state).
 - `soulprint.hosts` - list of run hosts with stable facts (`sid`/`role`(declared)/`network`/`os`/`covens`); `.where("<predicate>")` filters by CEL predicate string. A shortened form of the same request is `soulprint.where("<predicate>")` (for example, `soulprint.where("'X' in covens")` instead of `soulprint.hosts.where("'X' in covens")`). Scenario-only; receive destiny topology only through explicit `apply: input:`. Regulatory - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md).
 
-> **Difference from destiny template context.** In destiny, `vars.*` means [destiny locals from `vars.yml`](destiny/vars.md), and `essence.*` is **absent**: destiny is isolated, receiving only what came in `input:`. In scenario, on the contrary, `essence.*` is directly accessible (hence scenario puts values in `input:` destiny when `apply:` is called), but destiny-`vars` is not visible - it is local to a specific destiny.
+> **Difference from the destiny template context.** Both spell it `vars.*`, and the name means different things on the two sides of an `apply:` boundary ([ADR-0082](adr/0082-service-vars.md)). In a destiny, `vars.*` is [that destiny's own `vars.yml`](destiny/vars.md) and nothing else — it is isolated and receives only what came in `input:`. In a scenario, `vars.*` additionally holds the service's resolved `vars/` underneath the scenario's own locals, which is why a scenario has values to put into a destiny's `input:` when it calls `apply:`. The asymmetry is stated rather than hidden: it is the same one that forced `apply_when_dynamic_unsupported`.
 
 ### Host communication via Soulprint
 
@@ -1137,7 +1138,7 @@ transform:
   - delete: { path: state.redis_users_legacy_v1 }
 ```
 
-Execution context of migration-CEL: `state.*` (mutable) and `<as-name>` inside `foreach.do[*]` are available. Prohibited: `vault(...)`, `now()`, `register.*`, `soulprint.*`, `essence.*`, `input.*` - migration = pure function from the old state, side-effect-free.
+Execution context of migration-CEL: `state.*` (mutable) and `<as-name>` inside `foreach.do[*]` are available. Prohibited: `vault(...)`, `now()`, `register.*`, `soulprint.*`, `vars.*`, `input.*` - migration = pure function from the old state, side-effect-free.
 
 ### Upgrade - an explicit operator step through the UI
 
@@ -1164,7 +1165,7 @@ The scenario is tied to the **service version** under which it is launched. Afte
 
 Dynamic VM creation is implemented as a **cloud-create-scenario step** with `on: keeper` via the CloudDriver plugin. Service does not know the specifics of clouds - it knows "the step of creating a VM with parameters is needed," Keeper selects a driver and executes it.
 
-Git/DB boundary: **Provider** (configured cloud account) and **Profile** (reusable VM template) live in Postgres, controlled via API/MCP - this is a runtime config, not code. The Default-essence of a service in git acts as a substrate, the operator is overridden in the spec incarnation. The profile parameters are validated against `profile_schema`, which CloudDriver publishes via RPC `Schema()`.
+Git/DB boundary: **Provider** (configured cloud account) and **Profile** (reusable VM template) live in Postgres, controlled via API/MCP - this is a runtime config, not code. A service's default parameters live in its git repo's `vars/` and are not overridable from outside — a fleet that needs different ones forks the service repo ([ADR-0082](adr/0082-service-vars.md)). The profile parameters are validated against `profile_schema`, which CloudDriver publishes via RPC `Schema()`.
 
 Destroy operations are protected by a mandatory set of guard-rails (tombstone period with `tombstone_ttl`, confirm-flag, storage protection, audit) - one typo in `count` should not erase the rest.
 
@@ -1212,9 +1213,9 @@ Reference path from empty infrastructure to managed Souls. Each step is linked t
 
 ## Top level data flow
 
-1. The operator writes Destiny/Essence in git, runs `soul-lint` locally and in CI (render → schema validation → static analysis). Without the green `soul-lint` nothing goes outside.
+1. The operator writes Destiny and service vars in git, runs `soul-lint` locally and in CI (render → schema validation → static analysis). Without the green `soul-lint` nothing goes outside.
 2. Destiny reaches Keeper via OpenAPI or MCP. Keeper checks RBAC, re-renders and validates, puts it in the Destiny (Postgres) registry.
-3. **Pull:** Keeper pushes the command "apply such and such Destiny with such and such Essence" to the corresponding Souls (agent transport) on the live gRPC stream.
+3. **Pull:** Keeper pushes the command "apply such and such Destiny with such and such parameters" to the corresponding Souls (agent transport) on the live gRPC stream.
    **Push:** Keeper for each target host (`transport: ssh`) raises an SSH session through the selected provider, performs the steps, takes the result.
 4. Soul (or push session) applies, reports events (start, step, success/failure).
 5. Keeper aggregates the result, exposes it externally via OpenAPI/MCP, publishes metrics and traces (OTel).
@@ -1228,7 +1229,7 @@ Reference path from empty infrastructure to managed Souls. Each step is linked t
 | OpenTelemetry | All three binaries | Normalized [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge): OTel-bridge for traces (end-to-end operator → Keeper → Soul via gRPC metadata) + opt. push metrics; resource-attrs `service.name` + `soulstack.kid` / `soulstack.sid`. Spec - [observability.md](observability.md). |
 | Hot-reload config + rewrite to disk | All three binaries | The mechanism is standardized [ADR-021](#adr-021-hot-reload-config-with-write-back-yaml): file-edit (SIGHUP) + API/MCP with write-back YAML, validation pipeline parse → schema → semantic → atomic swap, audit-events `config.reload_succeeded` / `config.reload_failed`. History - git-blame + audit (DB table `config_history` deferred). |
 | Log rotation | All three binaries | Built-in by default, without dependence on external logrotate. |
-| Vault | Keeper (full: Essence, CA for SoulSeed, SSH provider); Soul (short-lived token client only) | Soul should not have the right to read other people's Essence. |
+| Vault | Keeper (full: service-vars secrets, CA for SoulSeed, SSH provider); Soul (short-lived token client only) | Soul should not have the right to read another service's secrets. |
 | RBAC | Keeper | Applies to OpenAPI, MCP, push operations uniformly. |
 | MCP | Keeper | Keeper - MCP server; primary operator interface on par with OpenAPI. |
 | OpenAPI | Keeper | gRPC-Gateway or connect-go on top of the same contract; primary operator interface. |

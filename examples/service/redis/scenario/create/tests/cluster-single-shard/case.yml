@@ -33,7 +33,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -47,7 +47,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System redis-server ACL users (1:1 from essence/_default.yaml). REQUIRED:
+    # System redis-server ACL users (1:1 from service vars/_default.yaml). REQUIRED:
     # the guard in create/cluster.yml (assert 1b) aborts render if system_acl_users is empty
     # (silent fail-open is unacceptable — replication/health-check would break without them).
     # ★ default_admin redesign (2026-06-30): default_admin is the full-access system user
@@ -128,7 +128,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # cluster-build: nodes MAP with a single entry. The only
     # community.redis.cluster in the plan → no disambiguator needed.

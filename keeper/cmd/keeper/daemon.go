@@ -51,7 +51,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	coremodsoul "github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -75,6 +74,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 	"github.com/souls-guild/soul-stack/keeper/internal/secretwrite"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/settingsstore"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
@@ -193,7 +193,7 @@ type daemon struct {
 	serviceDependencies *serviceregistry.DependenciesCache
 
 	// serviceDirectives -- TTL cache of the valid redis.conf directive
-	// catalog by version (essence.redis_directives) from a snapshot of the
+	// catalog by version (vars.redis_directives) from a snapshot of the
 	// Service's git repo for `GET /v1/services/{name}/directives` (UI
 	// redis_settings editor). Per-keeper, not cluster-wide -- read-only
 	// catalog (parity with serviceDependencies).
@@ -216,7 +216,7 @@ type daemon struct {
 	// read-only view.
 	serviceCompat *serviceregistry.CompatCache
 
-	// serviceTelemetry — TTL cache of the default (per-service, no essence)
+	// serviceTelemetry — TTL cache of the default (per-service, without an incarnation's own layer)
 	// host-vitals telemetry config from the manifest of the Service git-repo
 	// snapshot for `GET /v1/services/{name}/telemetry` (UI editor, ADR-042/072).
 	// Per-keeper, not cluster-wide — read-only config (parity with
@@ -330,12 +330,12 @@ type daemon struct {
 	oracleMetrics *oracle.OracleMetrics
 
 	// --- scenario deps ---
-	serviceLoader    *artifact.ServiceLoader
-	topologyResolver *topology.Resolver
-	essenceResolver  *essence.Resolver
-	renderPipeline   *render.Pipeline
-	serviceRegistry  *scenario.ServiceRegistry
-	destinySource    *scenario.DestinySource
+	serviceLoader       *artifact.ServiceLoader
+	topologyResolver    *topology.Resolver
+	serviceVarsResolver *servicevars.Resolver
+	renderPipeline      *render.Pipeline
+	serviceRegistry     *scenario.ServiceRegistry
+	destinySource       *scenario.DestinySource
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -1629,7 +1629,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// TTL cache of the default host-vitals telemetry config for
 	// `GET /v1/services/{name}/telemetry` (ADR-042/072). The lister loads the
 	// snapshot via d.serviceLoader.Load → effective manifest defaults `telemetry:`
-	// (essence=nil → pure per-service default) + snapshot SHA1 (ETag). Parity
+	// (no incarnation → pure per-service default) + snapshot SHA1 (ETag). Parity
 	// with serviceDirectives.
 	d.serviceTelemetry = serviceregistry.NewTelemetryCache(
 		serviceregistry.TelemetryListerFunc(func(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error) {
@@ -1643,7 +1643,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			}
 			return &serviceregistry.TelemetryCatalog{
 				SHA1:      art.SHA1,
-				Telemetry: essence.ResolveEffectiveTelemetry(mt, nil),
+				Telemetry: servicevars.ResolveEffectiveTelemetry(mt, nil),
 			}, nil
 		}),
 		0, // 0 → default TelemetryTTL
@@ -1653,7 +1653,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// phase (Variant A, ADR-006(a)) derives "Soul online" from the live Redis
 	// SID-lease, and d.redisClient is only brought up in setupRedis (after this
 	// step).
-	d.essenceResolver = essence.NewResolver(logger)
+	d.serviceVarsResolver = servicevars.NewResolver(logger)
 	celEngine, err := cel.New(cel.WithVault(d.vc))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build CEL engine: %v\n", err)
@@ -3132,7 +3132,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	scenarioRunner := scenario.NewRunner(scenario.Deps{
 		Loader:        d.serviceLoader,
 		Topology:      d.topologyResolver,
-		Essence:       d.essenceResolver,
+		ServiceVars:   d.serviceVarsResolver,
 		Render:        d.renderPipeline,
 		Outbound:      outbound,
 		Destiny:       d.destinySource,
@@ -3266,11 +3266,11 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Connect-time broadcast of the effective host-vitals telemetry config
 		// (ADR-072, NIM-87): per-SID resolve (souls→incarnation→service-artifact
-		// manifest `telemetry:` + essence-override) on top of the shared pool +
-		// service registry (git coordinates by name) + Service loader + essence
+		// manifest `telemetry:` + the service's own vars) on top of the shared pool +
+		// service registry (git coordinates by name) + Service loader + the service-vars
 		// resolver. No incarnation → broadcast is skipped (Soul stays on its
 		// soul-local cadence).
-		TelemetrySource: keepergrpc.NewTelemetrySource(d.pool, d.serviceRegistry, d.serviceLoader, d.essenceResolver, logger),
+		TelemetrySource: keepergrpc.NewTelemetrySource(d.pool, d.serviceRegistry, d.serviceLoader, d.serviceVarsResolver, logger),
 		// Toll cluster-detector hook (ADR-038): NotifyDisconnect is invoked on
 		// every exit of the EventStream handler (Recv-error / ctx-cancel). With
 		// Toll disabled, d.tollWatcher = nil → handler-side hook no-op (see
@@ -5095,12 +5095,12 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	claimRunner := scenario.NewClaimRunner(scenario.ClaimDeps{
 		Deps: scenario.Deps{
-			Loader:   d.serviceLoader,
-			Topology: d.topologyResolver,
-			Essence:  d.essenceResolver,
-			Render:   d.renderPipeline,
-			Outbound: d.outbound,
-			Destiny:  d.destinySource,
+			Loader:      d.serviceLoader,
+			Topology:    d.topologyResolver,
+			ServiceVars: d.serviceVarsResolver,
+			Render:      d.renderPipeline,
+			Outbound:    d.outbound,
+			Destiny:     d.destinySource,
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.

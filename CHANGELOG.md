@@ -461,6 +461,88 @@ order to act in.
   the only alias it served. A future rename follows the pattern of migration
   `095`: drop the old name and migrate the rows.
 
+- **`incarnation.spec` is removed from the API.** `GET /v1/incarnations/{name}`,
+  the list endpoint and the MCP twins stop returning a `spec` field, and the
+  column is dropped (migration `112`). It was never a designed store: it was the
+  create REQUEST, persisted, and every key that turned out to matter was given a
+  real home outside it while the copy stayed behind and started lying —
+  `hosts[]` to `incarnation_membership` and then to the Voice's role, `traits` to
+  the `incarnation.traits` column (where a day-2 `PUT .../traits` edited only the
+  column, so `spec.traits` went stale on the first edit), `essence` to nothing.
+
+  **What was `spec.input` is now per-attempt.** Each run's replayable snapshot —
+  the operator's input AS-IS plus the git coordinates it rendered with — is
+  stamped into that run's own `state_history` row (migration `111`), together
+  with the outcome it reached. A client that read `spec.input` to learn "what was
+  this created with" reads the incarnation's history instead, where the answer
+  cannot silently diverge from what actually ran. It did diverge: caught live
+  during NIM-330 on a fixture whose `spec` said one thing and whose recipe said
+  another.
+
+  **`rerun-last` therefore replays the service version the attempt USED**, not
+  whatever the incarnation is pinned to now. An upgrade between the failure and
+  the retry used to substitute the new code silently. It also has one source
+  instead of two: the create path read `spec.input` and the day-2 path read
+  `apply_runs.recipe`, whose 30-day purge made a day-2 rerun eventually
+  impossible. Where an attempt has no snapshot (a terminal recorded without one,
+  or a row predating the migration) the endpoint now accepts an `input` in the
+  body — and REFUSES one when the attempt is replayable, because "rerun that" and
+  "run this instead" are different requests.
+
+  The history feed also stops showing the rerun-transition markers: they carry
+  `state_before == state_after` and never gain an outcome, so among state changes
+  they read as a run that happened and changed nothing — which is also what a
+  failed run looks like.
+
+- **Every service repository renames a directory and a file, and rewrites its
+  `essence.` references.** `Essence` is retired: a service's default parameters
+  move from `essence/` to **`vars/`**, the baseline layer `_default.yaml` becomes
+  **`00-base.yaml`**, and the CEL root `essence.*` merges into **`vars.*`**
+  ([ADR-0082](docs/adr/0082-service-vars.md)). One flat namespace now runs
+  `<service>/vars/*.yaml` → destiny `vars.yml` → `block:` → task, outermost
+  first, and a layer may reference the layers below it. Nothing renames itself:
+  a repo that keeps `essence/` resolves to no vars at all, and every
+  `${ essence.X }` becomes a compile error naming an undeclared reference — loud
+  in both directions, which is the intent.
+
+  **`incarnation.spec.essence` is removed with no replacement.** A fleet that
+  needs different defaults **forks the service repo** and re-pins its
+  `ServiceRef` — the ansible-role model. There is no override field on the
+  incarnation and no successor to it; what an operator supplies is `input:`.
+  Migration `110_drop_incarnation_spec_essence` strips the key out of existing
+  `spec` jsonb. In practice it matches nothing: the field never had a writer.
+
+  **The two per-host overlays are gone**, `essence/os/<family>.yaml` and
+  `essence/coven/<label>.yaml`. Neither was used by any shipped service, and
+  both were resolved once per run from the FIRST host of the roster — so on a
+  mixed-OS roster they were already answering with somebody else's facts.
+  Conditional assembly is now explicit, in **`vars/_stack.yaml`**
+  (`file:` / `inline:` / `when:` / `optional:` / `foreach:` + `as:`, plus a
+  per-step `strategy: deep|replace`), which was documented for a year and read by
+  nothing. Its step context is `incarnation.*` (covens included) and the vars
+  accumulated so far — deliberately no `soulprint.self`, so the layer is
+  host-invariant by construction. A tag on a HOST alone no longer selects a
+  service-vars overlay; a tag on the INCARNATION still does, through
+  `foreach: "${ incarnation.covens }"`.
+
+  **Upgrade Keeper first, then Souls — never the reverse.** Two context maps that cross the wire
+  lose their `essence` key: `RenderedTask.flow_context` becomes
+  `{input, vars, incarnation, self}` and `core.file.rendered`'s `render_context`
+  becomes `{vars, self, role}` (plus its conditional `input`). No proto field
+  number moves, so the forward-compat rule does not catch this — what changed is
+  a key inside a `google.protobuf.Struct`. An older Soul against a newer Keeper
+  reads `flow_context["essence"]`, finds nothing, and evaluates its flow-control
+  predicates against an empty section rather than failing. The reverse ordering is
+  worse and is the one a pull fleet with auto-updating agents drifts into on its
+  own: a NEW Soul no longer DECLARES `essence` in its flow-control env, so an old
+  Keeper's `when: essence.X` becomes an undeclared-reference compile error on the
+  host, per task, after dispatch. A mixed-version fleet across this boundary is not
+  supported in either direction.
+
+  `GET /v1/incarnations/{name}` stops returning `spec.essence`. The trial fixture
+  key `essence:` becomes `vars:`, and the run error code `essence_failed` becomes
+  `service_vars_failed`.
+
 ### Added
 
 - **The composed incarnation name, previewed before it is permanent**

@@ -131,9 +131,9 @@
 # IP via the SSRF guard (shared/netguard) → fetching binaries would fail.
 # allow_private: ${ vars.redis_binary_allow_private } lifts the guard for these fetches —
 # SPECIFICALLY for a trusted internal mirror (vars normalizes the flag from
-# apply.input.install.allow_private ← essence.binary_allow_private, default false: the guard
+# apply.input.install.allow_private ← vars.binary_allow_private, default false: the guard
 # stays up for a publicly resolvable base). This relaxation is SCOPED to the binary branch
-# and is enabled deliberately (essence), not a global opt-out.
+# and is enabled deliberately (service vars), not a global opt-out.
 #
 # ★ render-safety: tasks in the binary block carry a has() guard on input.install.version/base_url,
 #   even though at method=binary these fields are present. Reason: at method=package the whole block

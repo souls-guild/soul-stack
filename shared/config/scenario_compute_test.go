@@ -13,7 +13,7 @@ import (
 func TestLoadScenarioManifest_ComputeOK(t *testing.T) {
 	src := `name: create
 compute:
-  base: "${ merge(essence.redis_config, default(input.redis_settings, {})) }"
+  base: "${ merge(vars.redis_config, default(input.redis_settings, {})) }"
   full: "${ merge(compute.base, { 'cluster-enabled': 'yes' }) }"
   count: 3
 tasks: []
@@ -38,7 +38,7 @@ tasks: []
 }
 
 func TestLoadScenarioManifest_ComputeReservedName(t *testing.T) {
-	for _, name := range []string{"input", "essence", "soulprint", "vars", "compute", "incarnation", "register"} {
+	for _, name := range []string{"input", "soulprint", "vars", "compute", "incarnation", "register"} {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			src := "name: x\ncompute:\n  " + name + ": \"${ 1 }\"\ntasks: []\n"

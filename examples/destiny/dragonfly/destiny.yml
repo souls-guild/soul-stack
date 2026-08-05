@@ -228,7 +228,7 @@ input:
     description: >-
       Kernel parameters for DragonFly (map name->value), rendered into
       /etc/sysctl.d/30-dragonfly.conf. Values are STRINGS (multi-value via space).
-      Passed by the service scenario (defaults - essence.sysctl_settings).
+      Passed by the service scenario (defaults - vars.sysctl_settings).
     properties: {}
     additional_properties: true
 

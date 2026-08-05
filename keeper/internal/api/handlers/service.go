@@ -70,7 +70,7 @@ type ServiceDependenciesLister interface {
 // ServiceDirectivesLister — the surface for reading the FULL directive catalog (all
 // series) of a service + snapshot SHA1 from a materialized snapshot of the Service repo for
 // `(name, ref)`. Symmetric to [ServiceScenarioLister]: the handler takes a
-// minimal dependency, the real git-clone + reading essence/_default.yaml lives
+// minimal dependency, the real git-clone + reading vars/00-base.yaml lives
 // inside the implementation (TTL cache + ServiceLoader). Version narrowing is done by the handler
 // over the result (the cache is version-agnostic). When nil,
 // `GET /v1/services/{name}/directives` responds 500 "not configured".
@@ -78,7 +78,7 @@ type ServiceDirectivesLister interface {
 	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
 }
 
-// ServiceTelemetryLister — read surface for the default (per-service, without essence)
+// ServiceTelemetryLister — read surface for the default (per-service, without an incarnation)
 // host-vitals telemetry config of the service + SHA1 snapshot (for ETag) from the
 // materialized Service repo snapshot for `(name, ref)`. Symmetric to
 // [ServiceDirectivesLister]: the handler takes a minimal dependency, the real
@@ -911,7 +911,7 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 
 // ServiceTelemetryReply — GET /v1/services/{name}/telemetry body. Self-contained
 // JSON (like ServiceDirectivesReply): service + ref echo-duplicates, snapshot sha1 (== ETag),
-// the effective default (per-service, without essence/incarnation) host-vitals config
+// the effective default (per-service, without an incarnation) host-vitals config
 // (enabled/interval_sec/collectors) + known_collectors — the full allowed set of
 // collectors for the UI (ADR-042 backend-driven, ADR-072). Empty Collectors → `[]`
 // (not null); KnownCollectors is always the full set. json tags fix the wire; the huma

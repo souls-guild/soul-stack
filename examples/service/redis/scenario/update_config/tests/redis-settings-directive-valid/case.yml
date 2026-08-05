@@ -1,5 +1,5 @@
 # L0 test of the version-aware validator for redis_settings directive names in update_config
-# (assert, #6) - POSITIVE case. essence carries the redis_directives catalog with the 7.2 series;
+# (assert, #6) - POSITIVE case. service vars carries the redis_directives catalog with the 7.2 series;
 # the DEPLOYED version (incarnation.state.redis_version) = 7.2.4 → series 7.2.
 # redis_settings contains a VALID name (appendfsync ∈ catalog[7.2]) → the assert passes,
 # the directive makes it through to hot-reload (community.redis.config) and the final redis_config.
@@ -14,9 +14,9 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  essence:
+  vars:
     memory_reserve_percent: 75
-    # host-layout - in essence (v11→v12, Variant A): moved out of state, a repeat run reads it from here.
+    # host-layout - in service vars (v11→v12, Variant A): moved out of state, a repeat run reads it from here.
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"

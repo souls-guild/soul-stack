@@ -1,6 +1,6 @@
 # soul-lint
 
-Offline linter for Destiny and Essence. The purpose and place in the system are specified in [ADR-004](adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper): parsing, rendering, checking according to the scheme, static analysis. Works without connecting to Keeper - suitable for CI, IDE and local launch.
+Offline linter for Destiny and service vars. The purpose and place in the system are specified in [ADR-004](adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper): parsing, rendering, checking according to the scheme, static analysis. Works without connecting to Keeper - suitable for CI, IDE and local launch.
 
 This document maintains a list of **planned checks** (TODO) and states the rules/reasons why a linter should perform them.
 
@@ -131,6 +131,30 @@ allow-listed, so a definition linted here and rendered there is held to the same
 manifest. Either way an undeclared key fails the task on the host
 ([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
 where the definition is being written.
+
+## Service vars checks (`validate-service`, `validate-scenario`)
+
+Implemented, [ADR-0082](adr/0082-service-vars.md). All four answer the same class:
+a service that resolves to something other than what its author wrote, and
+resolves without complaint.
+
+| Code | Level | What it catches |
+|---|---|---|
+| `stack_step_invalid` | ERROR | `vars/_stack.yaml` cannot be read as written — an unknown key, no steps under `stack:`, `file:` together with `inline:`, `foreach:` without `as:` (or the reverse), an `as:` shadowing the step context, a `strategy:` that is neither `deep` nor `replace`. Also the `_stack.yml` spelling, which is not read at all. |
+| `vars_dir_nested` | WARNING | A layer file in a subdirectory of `vars/`. The resolver reads `vars/*.yaml` and does not descend, so the file is never read — this is exactly the shape the retired `essence/coven/` layout had. One diagnostic per subdirectory. |
+| `vars_retired_layout` | ERROR | The retired `essence/` directory is still present. Half a migration is worse than none: `vars/` resolves to nothing and every `default(vars.X, y)` in the repo silently takes its fallback. |
+| `vars_shadows_service_var` | WARNING | A scenario-level or task-level `vars:` name taking over one of the service's own vars. Deterministic and sometimes deliberate — `conf_dir: "${ vars.conf_dir }/conf.d"` derives from the layer below on purpose — so it warns rather than fails. Modelled on `vars_collision` ([destiny/vars.md](destiny/vars.md)). |
+
+`stack_step_invalid` runs the **same parser the Keeper runs**
+(`config.ParseServiceVarsStack`), not a second copy of the schema: a linter with
+its own reading of a file format is how a file starts passing one check and
+failing the other.
+
+`vars_shadows_service_var` reads the service's var NAMES as a superset — the
+top-level keys of every `*.yaml` in `vars/`, without evaluating `_stack.yaml`.
+A name a conditional step might contribute still counts, which is the right side
+to err on: a `when:`-gated layer that shadows on Tuesdays is precisely the case
+an author will not find by reading.
 
 ## What is NOT soul-lint
 

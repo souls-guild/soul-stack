@@ -359,7 +359,7 @@ func (m *Module) readCertMeta(ctx context.Context, ref string) (certMeta, error)
 // splitVaultRef splits `<mount>/<path>#<field>` into logical-path and field.
 // logical-path goes to ReadKV as-is (without `vault:` prefix) — symmetry with CEL
 // `vault('secret/...#field')` (shared/cel splitVaultField): author refs for service
-// certs are pure logical-path, like essence tls_cert_ref "secret/services/redis/tls#cert".
+// certs are pure logical-path, like service-var tls_cert_ref "secret/services/redis/tls#cert".
 // ReadKV normalizes the path itself (relativeKVPath: strip mount + fail-closed
 // guard on `..`).
 func splitVaultRef(ref string) (path, field string, err error) {

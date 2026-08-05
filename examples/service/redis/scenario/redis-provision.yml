@@ -20,16 +20,16 @@
 #   group-drop): with enabled=false / an omitted section, the body's steps target no one.
 #
 # ★★ INVARIANT OF THE INCLUDING SCENARIO (drift-guard by hand — soul-lint cross-file does NOT catch it) ★★
-#   This file REFERENCES input.*/incarnation.*/essence.*/register.*, but doesn't declare
+#   This file REFERENCES input.*/incarnation.*/vars.*/register.*, but doesn't declare
 #   them. Any scenario including this body MUST carry in its own contract the ENTIRE set
 #   the body reads, WITH THE SAME SEMANTICS:
 #       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
 #       input.redis_type   input.shards   input.replicas_per_master
 #       incarnation.name
-#       essence.provision_{provider, profile, await_timeout, ssh_provider}
+#       vars.provision_{provider, profile, await_timeout, ssh_provider}
 #   provider/profile/await_timeout/ssh_provider are read as default(input.provision.X,
-#   essence.provision_X) — the operator may omit them (provision form is hidden, default-on),
-#   then the essence default is used. The including scenario MUST carry the corresponding essence.provision_*.
+#   vars.provision_X) — the operator may omit them (provision form is hidden, default-on),
+#   then the service vars default is used. The including scenario MUST carry the corresponding vars.provision_*.
 #   Steps (b)/(c) read register.provision.hosts — the register of the FIRST step (a)
 #   core.cloud.created (created HERE). A missing/renamed input field in the
 #   including scenario is NOT caught statically (cross-file drift is invisible to soul-lint) — it will
@@ -64,12 +64,12 @@
   module: core.cloud.created
   register: provision
   params:
-    # provider/profile — input.provision.X with a fallback to essence.provision_X (default-on:
-    # the provision form is hidden, the operator usually does NOT set provider/profile → essence default).
+    # provider/profile — input.provision.X with a fallback to vars.provision_X (default-on:
+    # the provision form is hidden, the operator usually does NOT set provider/profile → service vars default).
     # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. Currently
-    # one static essence pair (prod); environment switching is NOT implemented.
-    provider: "${ default(input.provision.provider, essence.provision_provider) }"
-    profile:  "${ default(input.provision.profile, essence.provision_profile) }"
+    # one static service vars pair (prod); environment switching is NOT implemented.
+    provider: "${ default(input.provision.provider, vars.provision_provider) }"
+    profile:  "${ default(input.provision.profile, vars.provision_profile) }"
     # count = cluster size by topology: cluster shards*(1+replicas); sentinel 1+replicas.
     # int() unifies the numeric type (YAML→uint64 in L0, JSON→double in prod). SINGLE-LINE
     # quoted string (NOT block-scalar `>-`): goccy parses a block-scalar as LiteralNode, and
@@ -104,13 +104,13 @@
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
-    # ssh_provider — input.provision.ssh_provider with a fallback to essence.provision_ssh_provider
-    # (default-on: the form is hidden, the operator usually does NOT set it → essence default teleport).
-    ssh_provider: "${ default(input.provision.ssh_provider, essence.provision_ssh_provider) }"
+    # ssh_provider — input.provision.ssh_provider with a fallback to vars.provision_ssh_provider
+    # (default-on: the form is hidden, the operator usually does NOT set it → service vars default teleport).
+    ssh_provider: "${ default(input.provision.ssh_provider, vars.provision_ssh_provider) }"
     # join_wait_timeout — the retry-wait ceiling for a fresh VM joining Teleport.
-    # input.provision.join_wait_timeout → essence.provision_join_wait_timeout → '15m'
+    # input.provision.join_wait_timeout → vars.provision_join_wait_timeout → '15m'
     # (symmetric with await_timeout of the onboarding step).
-    join_wait_timeout: "${ default(input.provision.join_wait_timeout, default(essence.provision_join_wait_timeout, '15m')) }"
+    join_wait_timeout: "${ default(input.provision.join_wait_timeout, default(vars.provision_join_wait_timeout, '15m')) }"
     install:      true
   require:
     - provision
@@ -124,7 +124,7 @@
 #     await_timeout; B1-strict: insufficient quorum → the step fails → state isn't committed →
 #     error_locked. refresh_soulprint: true → after success the roster is re-resolved, the deploy
 #     branch sees the online set. await_timeout: input.provision.await_timeout →
-#     essence.provision_await_timeout → '10m'.
+#     vars.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
   on: keeper
   module: core.soul.registered
@@ -134,7 +134,7 @@
   params:
     sid:               "${ register.provision.hosts.map(h, h.sid) }"
     await_online:      true
-    await_timeout:     "${ default(input.provision.await_timeout, default(essence.provision_await_timeout, '10m')) }"
+    await_timeout:     "${ default(input.provision.await_timeout, default(vars.provision_await_timeout, '10m')) }"
     refresh_soulprint: true
 
 # (d) install community.redis is synthesized by Keeper from service.yml::modules[] (ADR-065); an explicit step = takeover.

@@ -41,20 +41,20 @@ input:
       DragonFly ACL user (AclUser: name + perms + state). Added to users.acl
       (or overrides an existing one with the same name — idempotent upsert). perms is the FULL
       ACL string (Redis ACL syntax, DragonFly accepts it), validated by the AclUser pattern.
-      default_admin is not set by this scenario (it's a system user, filled in from essence).
+      default_admin is not set by this scenario (it's a system user, filled in from service vars).
 
 # ── Declarative input invariants (validate:) ───────────────────────────────────
 # system-ACL-users guard (same as create/redis-add_user): the operator CANNOT add a user with
 # a SYSTEM name (default_admin/replica/monitoring/sentinel/haproxy). System users are filled into
-# users.acl from essence ON TOP OF operator-extra (last-wins) — operator `replica` would silently
+# users.acl from service vars ON TOP OF operator-extra (last-wins) — operator `replica` would silently
 # override replication perms; operator `default_admin` would replace the admin account. We catch this at
-# INPUT validation (422 BEFORE applying). INPUT-ONLY (essence unavailable): the name list is hardcoded.
+# INPUT validation (422 BEFORE applying). INPUT-ONLY (service vars unavailable): the name list is hardcoded.
 validate:
   - that: "!(input.user.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy'])"
-    message: "ACL username is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name — system users are created automatically from essence"
+    message: "ACL username is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name — system users are created automatically from service vars"
 
 # ── Computed scenario vars (compute:) ─────────────────────────────────────────
-# Run-level context (input/essence/incarnation — no soulprint).
+# Run-level context (input/vars/incarnation — no soulprint).
 #
 # ★ DragonFly vs redis (blocker fix): ACL LOAD goes to the LOCAL instance via a UNIX SOCKET
 # (compute.local_addr), NOT 127.0.0.1:port. DF with --bind=primary_ip does NOT listen on loopback;
@@ -62,17 +62,17 @@ validate:
 # (tls/tls_ca were removed from ACL LOAD even on a TLS instance). run_dir is host-invariant; the default
 # duplicates the destiny default.
 compute:
-  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (default_admin redesign): the system admin username. Operational, outside covenant
   # (dragonfly has no covenant.yml) — a literal right here. ACL LOAD connects as this user.
   admin_user: "${ 'default_admin' }"
-  # ── Effective host layout: install/conf_dir/data_dir from essence (v1→v2, migration) ──
-  # install/conf_dir/data_dir were MOVED out of state into essence — read essence directly
+  # ── Effective host layout: install/conf_dir/data_dir from service vars (v1→v2, migration) ──
+  # install/conf_dir/data_dir were MOVED out of state into service vars — read service vars directly
   # (default() handles a missing leaf). install here is a read-model for an operational scenario with no real reader
   # (destiny renders configs, installation already happened at create) → a conservative package default.
-  install:  "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
-  conf_dir: "${ default(essence.conf_dir, '/etc/dragonfly') }"
-  data_dir: "${ default(essence.data_dir, '/var/lib/dragonfly') }"
+  install:  "${ (default(vars.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(vars.binary_base_url, ''), 'version': default(vars.binary_version, '') } : { 'method': 'package' } }"
+  conf_dir: "${ default(vars.conf_dir, '/etc/dragonfly') }"
+  data_dir: "${ default(vars.data_dir, '/var/lib/dragonfly') }"
 
   # ── New ACL user set: EXPANDED state.df_users + the added user ──
   # state.df_users — an ARRAY of AclUser [{name,perms,state}]. Array upsert: FILTER OUT of
@@ -100,7 +100,7 @@ tasks:
   #    side vault(), .tmpl hashes sha256, no plaintext written). We do NOT reactivate dragonfly.conf/TLS —
   #    add_user changes ONLY the ACL (destiny renders the whole brick, but we reactivate only the ACL in step 2;
   #    the flagfile on disk won't change for the same config — idempotent render). version — from state;
-  #    install/conf_dir/data_dir — from essence (v1→v2, host layout moved to essence, Option A).
+  #    install/conf_dir/data_dir — from service vars (v1→v2, host layout moved to service vars, Option A).
   #    We do NOT pass the sentinel block in apply.input (sentinel.conf on disk stays as-is).
   - name: Re-render users.acl with the new ACL user set (full file on disk)
     apply:
@@ -123,19 +123,19 @@ tasks:
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
-        # ★★ CRITICAL (system-ACL-users): the FULL users.acl = SYSTEM users (from essence, FIRST) +
+        # ★★ CRITICAL (system-ACL-users): the FULL users.acl = SYSTEM users (from service vars, FIRST) +
         # operator-extra (state.df_users + the new one, compute.users_new — an ARRAY of AclUser — ON TOP).
         # add_user re-renders the WHOLE file (not append) → WITHOUT filling in system users, this render WOULD
         # WIPE OUT default_admin/replica/monitoring/sentinel/haproxy → breaking AUTH/replication/sentinel
         # in an operational run. System users (incl. default_admin) are filled in on EVERY render from
-        # essence.system_acl_users. last-wins: operator-extra overrides a system user with the same name
+        # vars.system_acl_users. last-wins: operator-extra overrides a system user with the same name
         # (system names are locked out by the validate guard — no collision). Each one's Vault password —
         # secret/dragonfly/<inc>/users/<name>#password.
         users: >-
           ${ merge(
-               merge(default(essence.system_acl_users, {}).map(name, {
+               merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    essence.system_acl_users[name],
+                   'perms':    vars.system_acl_users[name],
                    'state':    'on',
                    'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
                  }

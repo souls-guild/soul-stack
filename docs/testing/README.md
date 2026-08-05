@@ -304,8 +304,8 @@ at an internal mirror and the gate stops being runnable, the red goes unnoticed,
 example rots invisibly (which is exactly what happened between `22130c2b` and NIM-208:
 `examples/service/redis` pointed at an internal Nexus placeholder and nobody could run
 it). `examples/service/redis` therefore installs from the official Redis apt repository
-by default; a fleet on an internal mirror overrides `essence.install_package` in
-`spec.essence`.
+by default; a fleet on an internal mirror forks the service repo and edits
+`vars/00-base.yaml`.
 
 `TestL3bRedisLive_CreateStandalone` remains skipped for an unrelated reason: it targets
 the `standalone` redis_type removed in 2026-06-25, not any coverage gap.

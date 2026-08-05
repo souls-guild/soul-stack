@@ -98,7 +98,7 @@ func Issue(ctx context.Context, s Signer, w KVWriter, csrgen CSRGenFunc, p Param
 		return nil, fmt.Errorf("certissue: sign csr: %w", err)
 	}
 
-	// cert-PEM in the `cert` field, key-PEM in the `key` field (parity with the essence
+	// cert-PEM in the `cert` field, key-PEM in the `key` field (parity with the service-vars
 	// convention tls_cert_ref "<path>#cert"). WriteKV never leaks values into an error text.
 	if werr := w.WriteKV(ctx, p.CertPath, map[string]any{"cert": string(signed.CertificatePEM)}); werr != nil {
 		return nil, fmt.Errorf("certissue: write cert to vault: %w", werr)

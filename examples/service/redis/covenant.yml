@@ -39,31 +39,31 @@ input:
   # published release instead of writing an arbitrary string. required (ALWAYS needed:
   # the package branch pins =version, the binary branch puts it in the binary path).
   # Every value here is published by the official Redis apt repository
-  # (essence.package_repo_uri), so all of them are installable out of the box.
+  # (vars.package_repo_uri), so all of them are installable out of the box.
   version:
     type: string
     required: true
     enum: ["8.6.1", "8.4.0", "8.2.2", "8.0.3", "7.4.1", "6.2.21"]
     description: >-
       Redis version (a fixed set of upstream releases). Install method package
-      (essence.install_method, default) pins the package to this version in the
+      (vars.install_method, default) pins the package to this version in the
       configured apt repository; install method binary puts it in the binary path.
       The list is closed - an arbitrary version is not accepted.
 
   # ── install_method REMOVED from operator-input (2026-06-28) ──────────────────────
   # The redis install method is NOT an operator choice in the Run form: it's fixed in
-  # essence.install_method (default package, author-context). compute.install reads
-  # default(essence.install_method, 'package') - the operator no longer sees/sets this
-  # field. A fleet publishing its own redis binaries overrides the method in spec.essence
+  # vars.install_method (default package, author-context). compute.install reads
+  # default(vars.install_method, 'package') - the operator no longer sees/sets this
+  # field. A fleet publishing its own redis binaries overrides the method in the service vars
   # (install_method: binary), a regular operator doesn't. Symmetric with
-  # modules_base_url/binary_base_url (also essence).
+  # modules_base_url/binary_base_url (also service vars).
   #
   # ★ The conf_dir/data_dir layout is also NOT operator input (#2): the defaults moved
-  # to essence (conf_dir/data_dir), compute reads them from there. Override is in the
-  # incarnation's spec.essence, not the Run form. conf_dir/data_dir are NOT persisted
-  # in state (state_changes doesn't write them, see below) - layout lives in essence,
-  # day-2 add_node reads essence.conf_dir/data_dir (has()-safe default). The only
-  # place to change it is essence.
+  # to service vars (conf_dir/data_dir), compute reads them from there. Override is in the
+  # incarnation's the service vars, not the Run form. conf_dir/data_dir are NOT persisted
+  # in state (state_changes doesn't write them, see below) - layout lives in service vars,
+  # day-2 add_node reads vars.conf_dir/data_dir (has()-safe default). The only
+  # place to change it is vars.
 
   memory_mb:
     type: integer
@@ -71,18 +71,18 @@ input:
     min: 64
     description: >-
       Memory budget for Redis on the host, MB. maxmemory is computed as a share of it
-      (essence.memory_reserve_percent - the OS reserve) with INTEGER truncation:
+      (vars.memory_reserve_percent - the OS reserve) with INTEGER truncation:
       maxmemory = int(memory_mb)*int(reserve)/100 + "mb". The min:64 floor isn't
       arbitrary: too small a memory_mb truncates to "0mb", and in Redis maxmemory 0
       means NO limit (the opposite of the intent to cap memory). 64 MB at reserve=75
       -> 48mb - a safely non-zero result. Not set -> the maxmemory directive comes
-      from the essence.redis_config merge substrate.
+      from the vars.redis_config merge substrate.
 
   # io_threads: number of redis I/O threads (the io-threads directive). default 0 =
   # single-threaded I/O (Redis's default behavior). >0 - Redis spreads socket
   # read/write across N threads. compute.redis_config writes io-threads ONLY when >0
   # (has-guard, like memory_mb) - so io-threads 0 doesn't add diff noise. The
-  # directive exists across every catalog series (essence.redis_directives).
+  # directive exists across every catalog series (vars.redis_directives).
   io_threads:
     type: integer
     required: false
@@ -101,7 +101,7 @@ input:
     enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     description: >-
       Persistence mode. Translated into save/appendonly/appendfsync via
-      essence.persistence_presets[persistence] (a data table). off - no persistence;
+      vars.persistence_presets[persistence] (a data table). off - no persistence;
       aof_1sec/aof_always - AOF only (fsync everysec / always); rdb - snapshots only;
       rdb_aof_1sec/rdb_aof_always - snapshots + AOF (double durability).
 
@@ -119,7 +119,7 @@ input:
       - volatile-ttl
     description: >-
       Eviction policy when maxmemory is reached. Not set -> comes from the
-      essence.redis_config merge substrate.
+      vars.redis_config merge substrate.
 
   # ── Replicas per master (UNIFIED, both modes) ──────────────────────────────────
   # A SINGLE replicas_per_master field for both modes (unified 2026-06-25): replicas
@@ -216,18 +216,18 @@ input:
   # yet). The sentinel daemon comes up on EVERY host. Replicas of the master are set
   # by the UNIFIED field replicas_per_master (see above). sentinel_quorum is AUTO
   # (size(soulprint.hosts)/2+1, majority): there's no operator field for it (removed
-  # 2026-06-25). sentinel_master_name lives in essence (default `master`), not in
+  # 2026-06-25). sentinel_master_name lives in service vars (default `master`), not in
   # input.
   #
   # ★ sentinel_master_settings: per-master sentinel directives (dict, mode
   # sentinel). SUBSUMES the former named fields
   # sentinel_down_after_ms/sentinel_failover_timeout_ms (their defaults
   # down-after-milliseconds=5000 / failover-timeout=60000 moved into
-  # essence.sentinel_master_defaults - the substrate under this dict). KEY -> VALUE:
+  # vars.sentinel_master_defaults - the substrate under this dict). KEY -> VALUE:
   # the key is the per-master sentinel option name WITHOUT the `sentinel ` prefix and
   # WITHOUT the master name (compute adds those), e.g.
   # `down-after-milliseconds`/`failover-timeout`/`parallel-syncs`; the value is a
-  # string. compute.sentinel_directives merges the essence defaults + this dict and
+  # string. compute.sentinel_directives merges the service vars defaults + this dict and
   # expands them into `sentinel <opt> <master>` directives (sentinel.conf + the
   # community.redis.sentinel plugin's SENTINEL SET). UI - a KEY->VALUE editor. No
   # version validation (there's no sentinel catalog - passthrough).
@@ -238,7 +238,7 @@ input:
       Per-master Sentinel directives (key->value, strings; mode sentinel). The key is
       the SENTINEL SET option name without the prefix and master name
       (down-after-milliseconds, failover-timeout, parallel-syncs, ...). Overrides the
-      essence.sentinel_master_defaults defaults (down-after-milliseconds=5000,
+      vars.sentinel_master_defaults defaults (down-after-milliseconds=5000,
       failover-timeout=60000). UI - a KEY->VALUE editor.
     properties: {}
     additional_properties:
@@ -294,7 +294,7 @@ input:
     type: object
     required: false
     # x-directives: redis - validate keys against the service directive catalog
-    # (essence.redis_directives). Passed through raw into the input_schema DTO
+    # (vars.redis_directives). Passed through raw into the input_schema DTO
     # (NIM-76).
     x-directives: redis
     description: >-
@@ -316,7 +316,7 @@ input:
   # compute.tls_on/tls_only_on - unchanged. The enum STRUCTURALLY rules out "no
   # listener at all" (you can't pick "TLS off + plain closed") -> the former validate
   # rule "at least one listener" was removed. The TLS technical parameters (port,
-  # Vault paths for cert/key/ca) are NOT operator input, they live in essence
+  # Vault paths for cert/key/ca) are NOT operator input, they live in service vars
   # (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref, author-context). cert/key/ca are
   # Vault PATHS (NOT PEM): destiny reads the PEM via vault(ref) in a content cell
   # (seal masking).
@@ -328,7 +328,7 @@ input:
     description: >-
       Redis network channel mode. plain (default) - plain port 6379 only (TLS off);
       tls_plain - TLS and plain simultaneously; tls - TLS only (plain port closed,
-      port 0). The TLS port and the Vault paths for cert/key/ca come from essence
+      port 0). The TLS port and the Vault paths for cert/key/ca come from service vars
       (tls_port/tls_cert_ref/tls_key_ref/tls_ca_ref).
   # ── Redis modules ─────────────────────────────────────────────────────────────
   # ★ THE "modules are ALWAYS ALL" DIRECTIVE (2026-06-25): the module SET is no
@@ -338,10 +338,10 @@ input:
   # version-guard (on compute.redis_version) drops the .so both in destiny (include
   # modules.yml group-drop) and in the read-model (state.modules=[]).
   #
-  # ★ THE .so SOURCE is an essence placeholder (2026-06-25): modules_base_url was
+  # ★ THE .so SOURCE is a service-vars placeholder (2026-06-25): modules_base_url was
   # removed from operator input. It's an author-context parameter
-  # (essence.modules_base_url, default ""), which the operator overrides in the
-  # incarnation's spec.essence, not in each run's Run form. On Redis < 8 without a
+  # (vars.modules_base_url, default ""), which a fleet changes by forking this repo and
+  # editing vars/, not in each run's Run form. On Redis < 8 without a
   # .so source, destiny can't build the URL - a soft check in validate: (see below).
   # The .so files are fetched by content idempotency (SHA-256 of the content),
   # without integrity verification (like node-exporter).
@@ -350,7 +350,7 @@ input:
 # validate: — cross-field preconditions on the INPUT that can't be expressed by a
 # single schema key and aren't covered by required_when (presence) or
 # enum/min/max (a single field). The rule context is INPUT-ONLY (only input.*;
-# essence/soulprint/roster are unavailable - a structural CEL barrier). The first
+# service vars/soulprint/roster are unavailable - a structural CEL barrier). The first
 # failure -> 422 validation_failed BEFORE the incarnation commit and BEFORE
 # applying (like required_when), with the rule's message to the operator.
 #
@@ -368,25 +368,25 @@ validate:
   # STRUCTURALLY inexpressible -> a separate rule isn't needed.
 
   # ★ #1 (2026-06-26): the rule "install.method=binary requires base_url+version" is
-  # REMOVED. The binary URL and version moved from operator-input into essence
+  # REMOVED. The binary URL and version moved from operator-input into service vars
   # (binary_base_url/binary_version, author-context), and the validate context is
-  # INPUT-ONLY - essence is unavailable there (a structural CEL barrier). The essence
+  # INPUT-ONLY - service vars are unavailable there (a structural CEL barrier). The service vars
   # substrate supplies the source; an empty binary_base_url with
-  # essence.install_method=binary will surface at destiny render time (the binary
-  # URL), not at input validation. install_method itself is also in essence
+  # vars.install_method=binary will surface at destiny render time (the binary
+  # URL), not at input validation. install_method itself is also in service vars
   # (2026-06-28) - NOT operator-input -> there's no separate input rule for it.
 
   # ★ system-ACL-users guard (design d2 + default_admin redesign 2026-06-30):
   # operator-extra (input.users) CANNOT claim a SYSTEM user's name. System users
   # (default_admin/replica/monitoring/sentinel/haproxy) are merged into users.acl
-  # from essence.system_acl_users[_sentinel] with last-wins OVER the system ones - an
+  # from vars.system_acl_users[_sentinel] with last-wins OVER the system ones - an
   # operator user with the same name would SILENTLY shadow the system perms (e.g. an
   # operator `replica` with `~* +@all` would break replication's replica perms; an
   # operator `default_admin` would displace the admin account used for in-cluster
   # AUTH). We catch the collision at INPUT validation (422 BEFORE applying) with a
-  # clear refusal, not a silent override. INPUT-ONLY (essence is unavailable in
+  # clear refusal, not a silent override. INPUT-ONLY (service vars are unavailable in
   # validate - a structural CEL barrier): the reserved-name list is hardcoded here (=
-  # essence.system_acl_users[_sentinel] keys). ★ `default` was REMOVED from the
+  # vars.system_acl_users[_sentinel] keys). ★ `default` was REMOVED from the
   # reserved list (redesign): the built-in Redis user default is no longer a system
   # user (default_admin took over its role) - the operator can declare default in
   # input.users (then it's rendered by the range, otherwise the template sets `user
@@ -394,14 +394,14 @@ validate:
   # the ARRAY iterates AclUser elements (wave 1b), the name is field u.name (formerly
   # a map key name).
   - that: "!has(input.users) || input.users.all(u, !(u.name in ['default_admin', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "ACL username is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name - system users are provisioned automatically from essence"
+    message: "ACL username is reserved for a system user (default_admin/replica/monitoring/sentinel/haproxy): pick another name - system users are provisioned automatically from service vars"
 
   # ★ The rule "modules_base_url is required on Redis < 8" is REMOVED (2026-06-25):
-  # the .so source moved from operator-input into essence.modules_base_url
-  # (author-context, default ""), and the validate context is INPUT-ONLY - essence is
+  # the .so source moved from operator-input into vars.modules_base_url
+  # (author-context, default ""), and the validate context is INPUT-ONLY - service vars is
   # unavailable there (a structural CEL barrier). Checking whether
-  # essence.modules_base_url is filled in can't be done here. The essence substrate
-  # supplies a default source, the operator overrides it in spec.essence; an empty
+  # vars.modules_base_url is filled in can't be done here. The service vars substrate
+  # supplies a default source, the a fleet forks this repo and edits it here; an empty
   # source on Redis < 8 will surface at destiny render time (the .so URL), not at
   # input validation.
 
@@ -410,12 +410,12 @@ validate:
 # Mode-agnostic per-host extras - THP disabling, logrotate, sysctl - are
 # UNCONDITIONAL (a Redis recommendation / hardening, not an operator choice): there
 # are no flags for them in the operator contract, the tasks are always active.
-# sysctl parameter values are a data table, essence.sysctl_settings (not in operator
+# sysctl parameter values are a data table, vars.sysctl_settings (not in operator
 # input), passed through to destiny `redis` via apply.input (host-invariant).
 
 # ── Computed scenario vars (compute:, ADR-009 amendment 2026-06-23) ────────────
 # `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
-# (input/essence/incarnation - WITHOUT soulprint, the host-invariance barrier) and is
+# (input/vars/incarnation - WITHOUT soulprint, the host-invariance barrier) and is
 # visible as `compute.<name>` BOTH in the branches' apply.input AND in state_changes
 # below. This removes the duplication of the large merge() translation: it's declared
 # HERE ONCE, and the branches and state reference `${ compute.redis_config }` - the
@@ -427,11 +427,11 @@ validate:
 #   - cluster -> base merge + cluster directives (cluster-enabled/config-file/
 #     node-timeout) + tls-cluster yes under TLS;
 #   - sentinel -> base merge (no cluster directives).
-# Merge layers (SHALLOW last-wins, left to right): essence.redis_config (defaults) ->
+# Merge layers (SHALLOW last-wins, left to right): vars.redis_config (defaults) ->
 # persistence preset -> computed maxmemory/policy/io-threads (guard) ->
 # input.redis_settings (operator passthrough) -> TLS block (after redis_settings, so
 # the operator can't break TLS). The TLS gate is
-# compute.tls_on/tls_only_on/tls_port (enum connection_mode + port/refs from essence;
+# compute.tls_on/tls_only_on/tls_port (enum connection_mode + port/refs from service vars;
 # declared above). ★ FIX (qa): the TLS directives
 # tls-cert-file/tls-key-file/tls-ca-cert-file are derived from compute.conf_dir (NOT
 # hardcoded /etc/redis/tls) - destiny puts the PEM under ${conf_dir}/tls/
@@ -461,23 +461,23 @@ compute:
   # cluster-joinable}.yml) reads compute.admin_user in the community.redis.* plugin
   # calls (params.username/master_username/auth_user) and in its password's Vault
   # path - they DON'T hardcode 'default_admin' in dozens of places. A literal (not
-  # from input/essence): the system user's name is a service invariant, not an
+  # from input/service vars): the system user's name is a service invariant, not an
   # operator choice. default_admin's password is
   # secret/redis/<inc>/users/<admin_user>#password. ★ day-2 bodies (outside covenant)
   # hardcode 'default_admin' directly (they don't have extends: covenant compute).
   admin_user: "${ 'default_admin' }"
-  # ── TLS flags: connection_mode enum + essence parameters (redesign) ────────────
+  # ── TLS flags: connection_mode enum + service vars parameters (redesign) ────────────
   # TLS intent is connection_mode (an input enum with a default -> always present);
-  # port/refs come from essence (see tls_on/tls_only_on/tls_port/tls_*_ref below).
+  # port/refs come from service vars (see tls_on/tls_only_on/tls_port/tls_*_ref below).
   # Declared as SEPARATE compute vars so that both redis_config (below) and the
   # branches (apply.input.tls + health-gate) read ONE resolved value - instead of
-  # repeating it. The compute context is run-level: input/essence are available,
+  # repeating it. The compute context is run-level: input/service vars are available,
   # soulprint isn't (TLS host-invariance).
   #
   # ── Effective redis version: input.version (enum of upstream releases) ─────────────
   # ★ Redesign: version is a required enum, ONE for both install methods (binary
   # pulls binaries of this version; package pins =version). The former
-  # "binary -> essence.binary_version" cascade is gone - the version is always
+  # "binary -> vars.binary_version" cascade is gone - the version is always
   # operator input.version. Declared ONCE: state_changes.redis_version, the plugin's
   # redis_version param, and destiny's binary URL all read it. required:true
   # guarantees presence -> plain input.version without a has() wrapper.
@@ -496,33 +496,33 @@ compute:
     ${ compute.redis_version.matches('^([0-9]+:)?(8|9|[1-9][0-9])\\.')
          ? []
          : ['bloom', 'json', 'search', 'timeseries'] }
-  # ── Source of the Redis modules' .so files (essence placeholder, 2026-06-25) ─────────────
-  # modules_base_url moved from operator-input into essence.modules_base_url
-  # (author-context, default ""; the operator overrides it in spec.essence). Declared
+  # ── Source of the Redis modules' .so files (service vars placeholder, 2026-06-25) ─────────────
+  # modules_base_url moved from operator-input into vars.modules_base_url
+  # (author-context, default ""; the a fleet forks this repo and edits it here). Declared
   # as ONE compute var so that the branches (apply.input.modules_base_url) and
   # state_changes read the same value. default() catches a missing key on an
-  # existing essence map; default "" mirrors the former
+  # existing service vars map; default "" mirrors the former
   # default(input.modules_base_url, '').
-  modules_base_url: "${ default(essence.modules_base_url, '') }"
-  # ── SSRF guard for fetching .so modules (essence placeholder, 2026-06-28) ────────
+  modules_base_url: "${ default(vars.modules_base_url, '') }"
+  # ── SSRF guard for fetching .so modules (service vars placeholder, 2026-06-28) ────────
   # Symmetric with install.allow_private: modules_base_url can be an internal mirror
   # (resolves to RFC1918) → the 4 .so-fetch destiny would trip the SSRF guard core.url. Read from
-  # essence.modules_allow_private (default false - the guard stays up; a fleet on an internal
+  # vars.modules_allow_private (default false - the guard stays up; a fleet on an internal
   # mirror sets true). Declared as ONE compute var, branches feed it into
-  # apply.input.modules_allow_private. default() catches a missing key on an existing essence.
-  modules_allow_private: "${ default(essence.modules_allow_private, false) }"
+  # apply.input.modules_allow_private. default() catches a missing key on an existing vars.
+  modules_allow_private: "${ default(vars.modules_allow_private, false) }"
   # ── Per-master sentinel directives (generalized dict, redesign) ────────────────
   # ★ Previously hardcoded exactly 2 directives (down-after-milliseconds/failover-timeout) from
   # named fields. Now GENERALIZED: per-master options - dict input.sentinel_master_settings
-  # OVER the defaults essence.sentinel_master_defaults (down-after-milliseconds=5000,
+  # OVER the defaults vars.sentinel_master_defaults (down-after-milliseconds=5000,
   # failover-timeout=60000 - the removed fields' defaults moved there). merge() gives
-  # the effective options map (last-wins, operator over essence), then .map() expands
+  # the effective options map (last-wins, operator over service vars), then .map() expands
   # EVERY `k:v` pair into a directive `sentinel <k> <master> → string(v)` (the form
   # sentinel.conf.tmpl prints AND the community.redis.sentinel plugin's
-  # classifyConfig classifies → SENTINEL SET). master_name - from essence (default 'master'). ONE
+  # classifyConfig classifies → SENTINEL SET). master_name - from service vars (default 'master'). ONE
   # source of truth: both the initial sentinel.conf and live-reconcile read this same map.
-  # value is already a string (additional_properties:{type:string}) + essence defaults are strings;
-  # string() normalizes in case an essence value isn't a string.
+  # value is already a string (additional_properties:{type:string}) + service vars defaults are strings;
+  # string() normalizes in case a service-vars value isn't a string.
   # .map over a map gives a LIST of maps - wrap it in merge() to fold into ONE map
   # (the same pattern as cluster-nodes merge(soulprint.hosts.map(...)) in cluster.yml).
   # ★ GLOBAL sentinel directives (input.sentinel_settings) are merged in RIGHT HERE: their
@@ -534,11 +534,11 @@ compute:
     ${ merge(
          merge(
            merge(
-             default(essence.sentinel_master_defaults, {}),
+             default(vars.sentinel_master_defaults, {}),
              default(input.sentinel_master_settings, {})
            ).map(k, {
-             'sentinel ' + k + ' ' + default(essence.sentinel_master_name, 'master'): string(merge(
-               default(essence.sentinel_master_defaults, {}),
+             'sentinel ' + k + ' ' + default(vars.sentinel_master_name, 'master'): string(merge(
+               default(vars.sentinel_master_defaults, {}),
                default(input.sentinel_master_settings, {})
              )[k])
            })
@@ -554,12 +554,12 @@ compute:
   # each inheritor declares sentinel_monitor_now in ITS OWN compute delta. See the header of
   # redis-deploy-sentinel.yml.
   # ── install: destiny struct, one shape per method (redesign) ──────────────────
-  # Assembled from essence.install_method (default package, author-context - NOT operator
-  # input, 2026-06-28) + the essence keys of the chosen method + input.version (the version -
+  # Assembled from vars.install_method (default package, author-context - NOT operator
+  # input, 2026-06-28) + the service vars keys of the chosen method + input.version (the version -
   # an operator enum of upstream releases). method is always present, the rest is
   # method-specific. The same struct goes into destiny `redis` (apply.input.install) and into
-  # state_changes.install. default(essence.install_method, 'package') catches a missing key on
-  # an existing essence map (symmetric with modules_base_url).
+  # state_changes.install. default(vars.install_method, 'package') catches a missing key on
+  # an existing service vars map (symmetric with modules_base_url).
   #
   # package (DEFAULT): repo_uri/gpg_key_url declare the apt repository the package comes from
   # - by default the official Redis one, which publishes every version of the operator enum
@@ -571,60 +571,60 @@ compute:
   # <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-* (see the install.yml binary
   # branch). ★ allow_private (2026-06-28): the core.url SSRF guard blocks dialing a private IP,
   # so a fleet whose binary_base_url is an internal mirror resolving to RFC1918 sets
-  # essence.binary_allow_private true. default() catches a missing key on an existing essence map.
+  # vars.binary_allow_private true. default() catches a missing key on an existing service vars map.
   install: >-
-    ${ (default(essence.install_method, 'package') == 'binary')
+    ${ (default(vars.install_method, 'package') == 'binary')
          ? {
              'method':        'binary',
-             'base_url':      default(essence.binary_base_url, ''),
+             'base_url':      default(vars.binary_base_url, ''),
              'version':       input.version,
-             'allow_private': default(essence.binary_allow_private, false)
+             'allow_private': default(vars.binary_allow_private, false)
            }
-         : default(essence.install_package, {'method': 'package'}) }
-  # ── Effective host layout: conf_dir/data_dir from essence (#2) ───────────────
+         : default(vars.install_package, {'method': 'package'}) }
+  # ── Effective host layout: conf_dir/data_dir from service vars (#2) ───────────────
   # ★ #2 (2026-06-26): conf_dir/data_dir are NO LONGER operator input - the defaults
-  # moved into essence (conf_dir/data_dir; the operator overrides them in spec.essence).
+  # moved into service vars (conf_dir/data_dir; the a fleet forks this repo and edits it here).
   # Declared as SEPARATE compute vars so that redis_config (TLS paths below), the branches
   # (apply.input.conf_dir/data_dir), and state_changes all read ONE resolved value.
-  # default(essence.<x>, …) - the author-context default = the current path (back-compat). host
+  # default(vars.<x>, …) - the author-context default = the current path (back-compat). host
   # invariant (one layout per cluster) - soulprint isn't available in compute. ★ The TLS directives
   # in redis.conf (tls-cert-file/...) follow conf_dir: destiny puts the PEM under ${conf_dir}/tls/
   # (server.yml) - redis.conf must point at the same place (otherwise redis can't find the cert).
-  conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
-  data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
-  # ── TLS flags: from the connection_mode enum + essence (redesign) ──────────────────
+  conf_dir: "${ default(vars.conf_dir, '/etc/redis') }"
+  data_dir: "${ default(vars.data_dir, '/var/lib/redis') }"
+  # ── TLS flags: from the connection_mode enum + service vars (redesign) ──────────────────
   # ★ TLS intent is ONE enum field connection_mode (has a default → ALWAYS present),
-  # the technical parameters come from essence. tls_on = connection_mode != 'plain' (the main
+  # the technical parameters come from vars. tls_on = connection_mode != 'plain' (the main
   # gate: TLS is on in modes tls/tls_plain). tls_only_on = connection_mode == 'tls'
-  # (close the plain port, TLS-only mode). Port/refs - from essence (default() catches
+  # (close the plain port, TLS-only mode). Port/refs - from service vars (default() catches
   # a missing key; L0 cases without TLS don't set them). Declared as SEPARATE compute vars,
   # so that redis_config/branches/health-gate all read ONE value. The downstream redis_config
   # TLS block reads compute.tls_on/tls_only_on unchanged.
   tls_on:      "${ input.connection_mode != 'plain' }"
   tls_only_on: "${ input.connection_mode == 'tls' }"
-  tls_port:    "${ int(default(essence.tls_port, 7379)) }"
-  # Vault PATHS for the PEM - from essence (author-context). A has() chain (default() catches no-such-
-  # key only in the FIRST argument): L0 cases without TLS don't set essence.tls_*_ref → ''.
-  tls_cert_ref: "${ has(essence.tls_cert_ref) ? essence.tls_cert_ref : '' }"
-  tls_key_ref:  "${ has(essence.tls_key_ref)  ? essence.tls_key_ref  : '' }"
-  tls_ca_ref:   "${ has(essence.tls_ca_ref)   ? essence.tls_ca_ref   : '' }"
+  tls_port:    "${ int(default(vars.tls_port, 7379)) }"
+  # Vault PATHS for the PEM - from service vars (author-context). A has() chain (default() catches no-such-
+  # key only in the FIRST argument): L0 cases without TLS don't set vars.tls_*_ref → ''.
+  tls_cert_ref: "${ has(vars.tls_cert_ref) ? vars.tls_cert_ref : '' }"
+  tls_key_ref:  "${ has(vars.tls_key_ref)  ? vars.tls_key_ref  : '' }"
+  tls_ca_ref:   "${ has(vars.tls_ca_ref)   ? vars.tls_ca_ref   : '' }"
   # ── redis_config_base: the SHARED base of the redis.conf map for both branches (R3, dedup) ──────
   # ★ R3 (compute[i]→compute[j], j<i): mode-AGNOSTIC merge layers, identical in the cluster
   # and sentinel branches, are factored out here as ONE declaration - previously duplicated in both
   # branches of the redis_config ternary (~50 lines of copied maxmemory/io-threads/persistence/
   # redis_settings + TLS). The redis_config branches below inherit this base and ADD their own
   # delta (cluster - cluster directives; both - the TLS block redis_config_tls). Layers (SHALLOW
-  # last-wins, left to right): essence.redis_config (defaults) → persistence preset →
+  # last-wins, left to right): vars.redis_config (defaults) → persistence preset →
   # computed maxmemory/policy/io-threads (has-guard) → input.redis_settings (operator
   # passthrough). ★ last-wins ORDER PRESERVED: cluster directives and TLS are added by the branches
   # AFTER this base (as before), so the operator's redis_settings doesn't overwrite TLS/cluster.
   redis_config_base: >-
     ${ merge(
-         essence.redis_config,
-         essence.persistence_presets[input.persistence],
+         vars.redis_config,
+         vars.persistence_presets[input.persistence],
          merge(
            has(input.memory_mb)
-             ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+             ? { 'maxmemory': string(int(input.memory_mb) * int(vars.memory_reserve_percent) / 100) + 'mb' }
              : {},
            has(input.maxmemory_policy) ? { 'maxmemory-policy': input.maxmemory_policy } : {},
            int(input.io_threads) > 0 ? { 'io-threads': string(int(input.io_threads)) } : {}
@@ -715,14 +715,14 @@ state_changes:
   - set: connection_mode
     value: "${ input.connection_mode }"
   # persistence: input.persistence (default rdb) - the same key used to select
-  # essence.persistence_presets in redis_config (the read-model duplicates the operator's choice).
+  # vars.persistence_presets in redis_config (the read-model duplicates the operator's choice).
   - set: persistence
     value: "${ input.persistence }"
   # memory_mb: the operator's memory budget (int). Not set → 0 (a flat set always
-  # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from essence).
+  # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from service vars).
   - set: memory_mb
     value: "${ int(default(input.memory_mb, 0)) }"
-  # maxmemory_policy: the operator's explicit choice; not set → '' (the directive comes from the essence
+  # maxmemory_policy: the operator's explicit choice; not set → '' (the directive comes from the service vars
   # substrate, see redis_config). The namedfield marks the ABSENCE of an explicit choice with an empty
   # string (we don't reach into redis_config for the actual value - this is a write-model).
   - set: maxmemory_policy
@@ -736,40 +736,40 @@ state_changes:
   # are built in). NOT an operator choice (input.modules was removed) - compute.redis_modules_deployed.
   - set: modules
     value: "${ compute.redis_modules_deployed }"
-  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) moved into essence
+  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) moved into service vars
   # (v11→v12, Variant A): install - a read-model with no readers, layout - day-2 reads
-  # essence directly (default(essence.<x>, '<default>')). There are no more sets for them here -
+  # service vars directly (default(vars.<x>, '<default>')). There are no more sets for them here -
   # the keys aren't in state_schema, a set would write a field outside the schema → state validation would fail.
-  # sysctl_settings: the applied host tuning (the same essence.sysctl_settings that
-  # goes into destiny apply.input). From essence (host-invariant, not operator input).
+  # sysctl_settings: the applied host tuning (the same vars.sysctl_settings that
+  # goes into destiny apply.input). from service vars (host-invariant, not operator input).
   - set: sysctl_settings
-    value: "${ default(essence.sysctl_settings, {}) }"
+    value: "${ default(vars.sysctl_settings, {}) }"
   # monitoring: a read-model of the FACT of deployed exporters (Slice I, symmetric with the install/tls
-  # read-model). Versions/ports - from essence.node_exporter_*/redis_exporter_* (the same values
+  # read-model). Versions/ports - from vars.node_exporter_*/redis_exporter_* (the same values
   # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
   # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
-  # duplicate essence/migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the essence substrate).
+  # duplicate service vars/migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
   - set: monitoring
     value: >-
       ${ {
-           'node_exporter_version':  default(essence.node_exporter_version, ''),
-           'redis_exporter_version': default(essence.redis_exporter_version, ''),
-           'node_exporter_listen':   default(essence.node_exporter_listen, ':9100'),
-           'redis_exporter_listen':  default(essence.redis_exporter_listen, ':9121')
+           'node_exporter_version':  default(vars.node_exporter_version, ''),
+           'redis_exporter_version': default(vars.redis_exporter_version, ''),
+           'node_exporter_listen':   default(vars.node_exporter_listen, ':9100'),
+           'redis_exporter_listen':  default(vars.redis_exporter_listen, ':9121')
          } }
   # logging: a read-model of the FACT of deployed log-shipping (Slice V-I, ADR-067; symmetric with
-  # monitoring). Version/sink_type/endpoint/log_sources - from essence.vector_* (the same values
+  # monitoring). Version/sink_type/endpoint/log_sources - from vars.vector_* (the same values
   # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
   # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
-  # monitoring password). The defaults duplicate essence/migration 013_to_014 (console - a safe default with no
-  # infra required; version from the essence substrate). The operator sees what's deployed; a repeat apply is idempotent.
+  # monitoring password). The defaults duplicate service vars/migration 013_to_014 (console - a safe default with no
+  # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
   - set: logging
     value: >-
       ${ {
-           'vector_version':       default(essence.vector_version, ''),
-           'vector_sink_type':     default(essence.vector_sink_type, 'console'),
-           'vector_sink_endpoint': default(essence.vector_sink_endpoint, ''),
-           'vector_log_sources':   default(essence.vector_log_sources, [])
+           'vector_version':       default(vars.vector_version, ''),
+           'vector_sink_type':     default(vars.vector_sink_type, 'console'),
+           'vector_sink_endpoint': default(vars.vector_sink_endpoint, ''),
+           'vector_log_sources':   default(vars.vector_log_sources, [])
          } }
   # ── Topology (counts) ──────────────────────────────────────────────────────
   # shards/replicas/sentinel_quorum - from the same input.* that the size-guard/cluster-build/
@@ -812,15 +812,15 @@ state_changes:
            ? register.provision.hosts.map(h, h.sid)
            : [] }
   # provisioned_provider - the FACT provider of created VMs. provider is read as
-  # default(input.provision.provider, essence.provision_provider): the operator usually does NOT set
-  # provider (the provision form is hidden, default-on) → falls back to essence.provision_provider
+  # default(input.provision.provider, vars.provision_provider): the operator usually does NOT set
+  # provider (the provision form is hidden, default-on) → falls back to vars.provision_provider
   # (symmetric with redis-provision.yml::core.cloud.created.params.provider). The input.provision gate
   # (has()-safe) holds the non-provision path: enabled=false / create_from_souls → '' (VMs weren't
   # provisioned by this run). ★ TODO: prod/dev provider switch (ENV keeper / Coven overlay) - a separate ADR.
   - set: provisioned_provider
     value: >-
       ${ (has(input.provision) && input.provision.enabled)
-           ? default(input.provision.provider, essence.provision_provider)
+           ? default(input.provision.provider, vars.provision_provider)
            : '' }
 
   # redis_users - a TYPED array of AclUser (wave 1b, map→array). state stores
@@ -834,24 +834,24 @@ state_changes:
   # not in state (symmetric with cluster, where the plugin lays out the roles).
   - set: redis_hosts
     value: "${ [] }"
-  # redis_sentinel: facts about the monitored master (sentinel mode). master_name - from essence
-  # (essence.sentinel_master_name, default 'master'; there's no more operator field for it).
+  # redis_sentinel: facts about the monitored master (sentinel mode). master_name - from service vars
+  # (vars.sentinel_master_name, default 'master'; there's no more operator field for it).
   # quorum isn't materialized in state (the auto-quorum size/2+1 is computed in apply,
   # size(soulprint.hosts) isn't available in state_changes) → 0. master_ip is no longer written
   # (the sentinel_only mode was removed: the master is picked from the roster, host-variant).
   # ★ Redesign: the former named timings down_after_ms/failover_timeout_ms are absorbed into
   # the generalized per-master dict. The read-model stores the EFFECTIVE map of per-master options
-  # (master_settings = essence.sentinel_master_defaults over input.sentinel_master_settings,
+  # (master_settings = vars.sentinel_master_defaults over input.sentinel_master_settings,
   # last-wins) and the global settings (input.sentinel_settings) - day-2 reads them by name
   # (like install/tls). Outside sentinel mode - an empty object (only cluster remains).
   - set: redis_sentinel
     value: >-
       ${ (input.redis_type == 'sentinel')
            ? {
-               'master_name':     default(essence.sentinel_master_name, 'master'),
+               'master_name':     default(vars.sentinel_master_name, 'master'),
                'quorum':          0,
                'master_settings': merge(
-                                     default(essence.sentinel_master_defaults, {}),
+                                     default(vars.sentinel_master_defaults, {}),
                                      default(input.sentinel_master_settings, {})
                                    ),
                'settings':        default(input.sentinel_settings, {})

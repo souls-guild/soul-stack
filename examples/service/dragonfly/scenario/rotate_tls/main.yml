@@ -73,7 +73,7 @@ validate:
     message: "rotate_tls requires at least one new ref (cert_ref/key_ref/ca_ref)"
 
 # ── Computed scenario vars (compute:) ─────────────────────────────────────────
-# Run-level context (input/essence/incarnation — without soulprint).
+# Run-level context (input/vars/incarnation — without soulprint).
 #
 # ★ DragonFly vs redis (BLOCKER fix): the three CONFIG SET tls_*_file go to the LOCAL instance
 # via a UNIX SOCKET (compute.local_addr), NOT 127.0.0.1:tls_port. DF with --bind=primary_ip does NOT
@@ -83,16 +83,16 @@ validate:
 # handshake over the socket does not go through TLS. This removes the chicken-and-egg problem of "connecting via TLS with the old CA while
 # replacing that very CA".  run_dir is host-invariant; the default duplicates the default.
 compute:
-  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (default_admin redesign): the 3 CONFIG SET tls_*_file connect as this user
   # (requirepass removed). Literal (day-2 outside the covenant).
   admin_user: "${ 'default_admin' }"
-  # ── host layout from essence (v1→v2 migration): conf_dir/data_dir/install no longer in state ──
-  # ★ conf_dir from essence (not state) — day-2 reads the actual layout; PEM is placed in
+  # ── host layout from service vars (v1→v2 migration): conf_dir/data_dir/install no longer in state ──
+  # ★ conf_dir from service vars (not state) — day-2 reads the actual layout; PEM is placed in
   # ${conf_dir}/tls/. install for the rotate read-model without a real reader → package default.
-  conf_dir:   "${ default(essence.conf_dir, '/etc/dragonfly') }"
-  data_dir:   "${ default(essence.data_dir, '/var/lib/dragonfly') }"
-  install:    "${ (default(essence.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(essence.binary_base_url, ''), 'version': default(essence.binary_version, '') } : { 'method': 'package' } }"
+  conf_dir:   "${ default(vars.conf_dir, '/etc/dragonfly') }"
+  data_dir:   "${ default(vars.data_dir, '/var/lib/dragonfly') }"
+  install:    "${ (default(vars.install_method, 'package') == 'binary') ? { 'method': 'binary', 'base_url': default(vars.binary_base_url, ''), 'version': default(vars.binary_version, '') } : { 'method': 'package' } }"
 
   # Effective refs: a new one from input beats the current one from state (fallback — partial rotation).
   # has() chain (default(input, state) would fail no-such-key if input.*_ref were entirely
@@ -131,8 +131,8 @@ tasks:
   #    state.df_config plus adding masteruser/masterauth (dragonfly.conf itself does not
   #    change during rotation; tls_*_file paths stay the same), symmetric to add_user/update_users — otherwise the flagfile
   #    on disk would lose replica→master AUTH → NOAUTH after replica restart.
-  #    version — from state; install/conf_dir/data_dir — from essence (v1→v2). register: tls_certs —
-  #    applier register gating the reload below. ★ users: SYSTEM (from essence, incl. default_admin)
+  #    version — from state; install/conf_dir/data_dir — from service vars (v1→v2). register: tls_certs —
+  #    applier register gating the reload below. ★ users: SYSTEM (from service vars, incl. default_admin)
   #    + operator-extra (state.df_users) — destiny re-renders the whole users.acl, without adding
   #    system users back it would wipe default_admin/replica/... → breaking AUTH/replication (symmetric to redis
   #    rotate_tls). ACL is NOT reloaded here (no ACL LOAD), but the file on disk must carry ALL of them.
@@ -142,8 +142,8 @@ tasks:
       destiny: dragonfly
       input:
         version:  "${ has(incarnation.state.df_version) ? incarnation.state.df_version : '' }"
-        # host layout — from essence (v1→v2, Option A): install/conf_dir/data_dir from compute
-        # (itself from essence). ★ default_admin REDESIGN: apply.input.password REMOVED (destiny
+        # host layout — from service vars (v1→v2, Option A): install/conf_dir/data_dir from compute
+        # (itself from service vars). ★ default_admin REDESIGN: apply.input.password REMOVED (destiny
         # no longer accepts it — requirepass removed); authentication is under the system default_admin
         # from users below.
         install:  "${ compute.install }"
@@ -160,16 +160,16 @@ tasks:
           key_ref:  "${ compute.key_ref }"
           ca_ref:   "${ compute.ca_ref }"
         # ★ SYSTEM + operator-extra (as in the deployment body/redis rotate_tls): destiny re-renders
-        # users.acl too (the same brick) → MUST add the system users from essence.system_acl_users
+        # users.acl too (the same brick) → MUST add the system users from vars.system_acl_users
         # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE them
         # from users.acl → break AUTH/replication. operator-extra (state.df_users — an ARRAY of
-        # AclUser) goes ON TOP (last-wins). System users are NOT in state — added back from essence on every
+        # AclUser) goes ON TOP (last-wins). System users are NOT in state — added back from service vars on every
         # render. Vault password on the same branch secret/dragonfly/<inc>/users/<name>#password.
         users: >-
           ${ merge(
-               merge(default(essence.system_acl_users, {}).map(name, {
+               merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    essence.system_acl_users[name],
+                   'perms':    vars.system_acl_users[name],
                    'state':    'on',
                    'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
                  }

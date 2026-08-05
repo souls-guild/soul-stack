@@ -2,10 +2,10 @@
 # host, size-guard 1 == 1+0; standalone-equivalent). quorum is AUTO in apply =
 # size(soulprint.hosts)/2+1 = 1/2+1 = 1 (CONFIG MONITOR quorum). In state quorum=0
 # (state_changes does not see soulprint.hosts — input-only; auto is computed in apply,
-# see main.yml). master_name comes from essence — default master.
+# see main.yml). master_name comes from service vars — default master.
 #
 # Covers: replicas_per_master=0 boundary of the size-guard (standalone-equivalent);
-# auto-quorum; default master_name (essence); single-host roster (1 sentinel monitors
+# auto-quorum; default master_name (service vars); single-host roster (1 sentinel monitors
 # itself as master).
 name: sentinel create no replicas, auto quorum and default master name
 
@@ -34,9 +34,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method lives in essence (author-context, 2026-06-28): the install method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method lives in service vars (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -56,7 +56,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) aborts render if either
     # set is empty (a silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -103,7 +103,7 @@ assert:
         password: default-admin-secret-pass
 
     # SENTINEL MONITOR: monitor.ip — the only host; auto-quorum = 1/2+1 = 1.
-    # master_name comes from essence — default master. The single active
+    # master_name comes from service vars — default master. The single active
     # community.redis.sentinel.
     - module: community.redis.sentinel
       params_subset:
@@ -126,9 +126,9 @@ assert:
     redis_version: "7.4.1"
     redis_users: []
     redis_hosts: []
-    # auto-quorum does NOT materialize into state → 0; master_name comes from essence (master).
+    # auto-quorum does NOT materialize into state → 0; master_name comes from service vars (master).
     # ★ Redesign: failover timings now live in master_settings (an effective per-master map
-    # of essence.sentinel_master_defaults over input.sentinel_master_settings; here the
+    # of vars.sentinel_master_defaults over input.sentinel_master_settings; here the
     # operator dict is not set → defaults down-after 5000/failover-timeout 60000). settings —
     # global sentinel directives of the operator (not set → {}).
     redis_sentinel:

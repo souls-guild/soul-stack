@@ -181,7 +181,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 
 	in := render.RenderInput{
 		Scenario:    scn,
-		Essence:     orEmptyMap(c.Fixtures.Essence),
+		ServiceVars: orEmptyMap(c.Fixtures.Vars),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures)}, // NIM-58

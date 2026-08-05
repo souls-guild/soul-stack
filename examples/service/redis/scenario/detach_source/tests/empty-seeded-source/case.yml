@@ -24,7 +24,7 @@ fixtures:
   # incarnation.state v9 for a sentinel incarnation that has NEVER gone through
   # migrate_cluster: seeded_from exists (the shape from migration 008_to_009), but
   # source_endpoints is EMPTY. host-layout (conf_dir/data_dir/modules_base_url) was
-  # moved into essence (v11→v12); detach_source does NOT read it (no deploy body) →
+  # moved into service vars (v11→v12); detach_source does NOT read it (no deploy body) →
   # these keys are absent from state v12.
   state:
     redis_type: sentinel

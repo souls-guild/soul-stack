@@ -13,7 +13,7 @@ import (
 
 // TestRenderContext_InputRootPresent — Variant B (ADR-010 §3.2 amendment): the
 // §3.2 root render_context carries an `input` key (resolved operator input)
-// alongside vars/self/role/essence. A template reads `.input.<name>`
+// alongside vars/self/role. A template reads `.input.<name>`
 // directly, without passthrough via `params.vars`. Also checks back-compat:
 // `.vars.*` (author-raised via params.vars) isn't broken — both channels
 // coexist.
@@ -104,8 +104,9 @@ func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
 
 // TestRenderContext_BuildRenderContext_InputOmitted — ★conditional injection
 // (Variant B): injectInput=false → no `input` key in render_context (templates
-// using only `.vars` keep the pre-Variant-B shape {vars,self,role,essence},
-// deep-equal fixtures stay stable). vars/self/role/essence are always present.
+// using only `.vars` keep the pre-Variant-B shape {vars,self,role},
+// deep-equal fixtures stay stable). vars/self/role are always present; the
+// `essence` key is gone with the root (ADR-0082) and must not come back.
 func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 	rc := buildRenderContext(
 		RenderInput{Input: map[string]any{"secret": "x"}},
@@ -113,10 +114,67 @@ func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 	if _, present := rc["input"]; present {
 		t.Fatalf("with injectInput=false, key input must not be present: %#v", rc)
 	}
-	for _, k := range []string{"vars", "self", "role", "essence"} {
+	for _, k := range []string{"vars", "self", "role"} {
 		if _, ok := rc[k]; !ok {
 			t.Errorf("render_context.%s must always be present: %#v", k, rc)
 		}
+	}
+	if _, present := rc["essence"]; present {
+		t.Errorf("render_context.essence is retired (ADR-0082) — a service's vars reach a template as .vars.*: %#v", rc)
+	}
+}
+
+// TestRenderContext_WholeVarsReadGetsTheWholeMap — targeted injection is keyed on
+// the `.vars.<key>` chains the AST can see. A template that names NONE of them —
+// `{{ index .vars "x" }}`, `{{ range $k, $v := .vars }}`, `{{ toYaml .vars }}` —
+// would otherwise render an empty map against a map we are holding: a config file
+// written with a section missing, no error anywhere, and the service restarted
+// onto it. Both spellings ship in examples/ today
+// (`redis.conf.tmpl` uses `index .vars "loadmodules"`, mongo's uses `toYaml`).
+func TestRenderContext_WholeVarsReadGetsTheWholeMap(t *testing.T) {
+	in := RenderInput{ServiceVars: map[string]any{"loadmodules": []any{"a.so"}, "other": 1}}
+
+	for name, content := range map[string]string{
+		"index":  `{{ range (index .vars "loadmodules") }}x{{ end }}`,
+		"toYaml": `{{ .vars }}`,
+		"range":  `{{ range $k, $v := .vars }}{{ $k }}{{ end }}`,
+		"with":   `{{ with .vars }}{{ end }}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			whole, err := templateReadsWholeVars(content)
+			if err != nil {
+				t.Fatalf("templateReadsWholeVars: %v", err)
+			}
+			if !whole {
+				t.Fatalf("a whole-map read must be detected: %q", content)
+			}
+			keys, err := templateVarSubKeys(content)
+			if err != nil {
+				t.Fatalf("templateVarSubKeys: %v", err)
+			}
+			// The point of the pairing: subkey scoping sees nothing here, so
+			// without the whole-map branch the injected map would be empty.
+			if scoped := referencedFileVars(in.ServiceVars, keys); len(scoped) != 0 {
+				t.Fatalf("expected subkey scoping to find nothing, got %#v", scoped)
+			}
+		})
+	}
+
+	// A named-subkey read stays scoped — the bit-for-bit property is not lost.
+	whole, err := templateReadsWholeVars(`{{ .vars.loadmodules }}`)
+	if err != nil {
+		t.Fatalf("templateReadsWholeVars: %v", err)
+	}
+	if whole {
+		t.Fatal("a named-subkey read must NOT be treated as a whole-map read")
+	}
+	keys, err := templateVarSubKeys(`{{ .vars.loadmodules }}`)
+	if err != nil {
+		t.Fatalf("templateVarSubKeys: %v", err)
+	}
+	scoped := referencedFileVars(in.ServiceVars, keys)
+	if len(scoped) != 1 {
+		t.Fatalf("scoped injection must carry exactly the named key, got %#v", scoped)
 	}
 }
 

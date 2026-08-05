@@ -1,7 +1,7 @@
 package api
 
 // Guard tests for GET /v1/services/{name}/telemetry (NIM-87): delivery of the default
-// (per-service, without essence) host-vitals telemetry config + known_collectors for the UI
+// (per-service, without an incarnation) host-vitals telemetry config + known_collectors for the UI
 // + ETag/Cache-Control immutable + 304. Full huma wiring (RequirePermission
 // service.list + huma operation), injectClaims replaces RequireJWT.
 

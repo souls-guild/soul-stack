@@ -598,14 +598,14 @@ Code-invariant (L0): PEM client key does not fall into `ApplyEvent`/connection e
 `tls-cluster yes`) nodes require a client certificate from the one who accesses them
 connects. Scenario of service `redis` in step `cluster` `action: create`
 forwards `tls_cert`/`tls_key` to the plugin (resolved from the same
-`vault(essence.tls_cert_ref/tls_key_ref)`, same as server PEM redis.conf) -
+`vault(vars.tls_cert_ref/tls_key_ref)`, same as server PEM redis.conf) -
 plugin builds mTLS pair (`tls.go`: client-cert is added when **both** are specified
 `tls_cert`+`tls_key`). Without mutual-bus these parameters do not interfere with handshake
 (only used if the server requested them). `cert`/`key` host-invariant
 (one per cluster) → correctly go through `apply.input`.
 
 **Anti-downgrade (IS).** Plugin connections in scenario `redis` are gated to
-`essence.tls_enable`, **not** `tls_only`: when `tls_enable: true` the plugin connects
+`vars.tls_enable`, **not** `tls_only`: when `tls_enable: true` the plugin connects
 via TLS even when the plain port is still open (`tls_only: false`). Otherwise the AUTH password is gone
 over the plaintext network (plaintext-downgrade). Connection port - `tls_port` when
 `tls_enable`, otherwise plain `6379`.

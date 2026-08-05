@@ -18,7 +18,7 @@ import (
 // [NewClaimRunner]; the pool calls [ClaimRunner.Claim] on every poll tick /
 // Summons wake (acolyte.Pool.SetClaim).
 type ClaimDeps struct {
-	// Deps — same dependencies as Runner: Loader/Topology/Essence/Render/
+	// Deps — same dependencies as Runner: Loader/Topology/ServiceVars/Render/
 	// Vault/Audit/Destiny/DB + Outbound (SID-lease routing for SendApply is
 	// already inside). InputDenyPaths/Logger also come from here.
 	Deps Deps
@@ -49,7 +49,7 @@ type ClaimRunner struct {
 // / invalid params — a wire-up programmer error (1.4.4), not a runtime
 // condition.
 func NewClaimRunner(deps ClaimDeps) *ClaimRunner {
-	if deps.Deps.Loader == nil || deps.Deps.Topology == nil || deps.Deps.Essence == nil ||
+	if deps.Deps.Loader == nil || deps.Deps.Topology == nil || deps.Deps.ServiceVars == nil ||
 		deps.Deps.Render == nil || deps.Deps.Outbound == nil || deps.Deps.DB == nil {
 		panic("scenario: NewClaimRunner: required dependency is nil")
 	}
@@ -90,7 +90,7 @@ func (c *ClaimRunner) Claim(ctx context.Context) error {
 // the invariant against double apply (ADR-027 amend S3): once dispatched,
 // recovery-reclaim doesn't touch the row.
 //
-// Invariant A (ADR-027): resolved input/essence/rendered params live only on
+// Invariant A (ADR-027): resolved input/vars/rendered params live only on
 // the RenderForHost stack (in RAM); only the masked form reaches PG/logs/status.
 func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	log := c.logger.With(

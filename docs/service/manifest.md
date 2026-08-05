@@ -9,7 +9,7 @@ This document describes the layout of the service's git repository and the `serv
 
 ## What is a service
 
-Service is a **service type** (Redis HA, PostgreSQL, Vector-collector). One service - one git repository with its own manifest, set of operations (scenarios), default parameters (essence), state migrations and tests.
+Service is a **service type** (Redis HA, PostgreSQL, Vector-collector). One service - one git repository with its own manifest, set of operations (scenarios), default parameters (service vars), state migrations and tests.
 
 The version of the service as an artifact is the git tag under which the manifest is committed ([ADR-007](../adr/0007-versioning-git-ref.md)). The top-level `version:` field in `service.yml` is intentionally missing.
 
@@ -18,20 +18,14 @@ The version of the service as an artifact is the git tag under which the manifes
 ```
 service-<name>/
 ├── service.yml                         # manifest (this document)
-├── essence/                            # parameters in the hierarchy - see architecture.md → Essence
-│   ├── _default.yaml                   # baseline for all incarnation
-│   ├── _stack.yaml                     # OPTS: declarative assembly pipeline
-│   ├── coven/                          # OPT.: parameters by Coven tags
-│   │   ├── prod.yaml
-│   │   └── dev.yaml
-│   └── os/                             # OPC: parameters by soulprint.os.family
-│       ├── ubuntu.yaml
-│       └── debian.yaml
+├── vars/                               # the service's default parameters — ADR-0082
+│   ├── 00-base.yaml                    # the base layer; the name carries its order
+│   ├── 10-tls.yaml                     # OPT.: further layers, merged in lexical order
+│   └── _stack.yaml                     # OPT.: explicit pipeline instead of that order
 ├── scenario/                           # operations; auto-discover from directory
 │   ├── create/
 │   │   ├── main.yml                    # entry point: input + state_changes + tasks
 │   │   ├── install.yml                 # OPTS: include-neighbors main.yml
-│   │   ├── vars.yml                    # OPTS: scenario-locals
 │   │   ├── templates/                  # OPTS: scenario-local templates
 │   │   └── tests/                      # OPT: script tests
 │   ├── add_user/
@@ -178,7 +172,7 @@ certificate_rotation:
 **Semantics:**
 
 - **No section = rotation off.** The Reaper skips certs of a service without a `certificate_rotation` section — **no** fallback to hardcoded `rotate_tls`. `enable: false` behaves the same (section inert).
-- **`threshold` is currently informational.** The field is parsed and validated, but the effective scan threshold `not_after < NOW()+threshold` is taken from the **global** `keeper.yml::reaper.rules.rotate_due_certs.rotate_threshold` (one scan axis per cluster). Per-service `threshold` (+ essence-override) is a follow-up.
+- **`threshold` is currently informational.** The field is parsed and validated, but the effective scan threshold `not_after < NOW()+threshold` is taken from the **global** `keeper.yml::reaper.rules.rotate_due_certs.rotate_threshold` (one scan axis per cluster). Per-service `threshold` is a follow-up.
 - **"What and how" is here; "whether it's enabled and how cautiously" is in keeper.yml.** The manifest declares *what* is rotated, *how* (`scenario`/`pki_role`), and *with what margin* (`threshold`). The cluster-wide caution controls (`enabled`/`dry_run`/`rotate_jitter`/`max_rotations_per_tick`, default OFF+dry_run) live in `keeper.yml::reaper.rules.rotate_due_certs`. Plus a per-cert flag `auto_rotate` (default `true`) in the Warrant registry. Rotation happens when all three gates are true (`enable` x `auto_rotate` x keeper.yml `enabled`).
 - **`scenario`/`pki_role` are not duplicated in `params`.** Their single source is this section: the Reaper takes them on rotation, the keeper-side module `core.cert.issued` takes `pki_role` on issuance. The scenario author does NOT pass the PKI role through a step's `params` (blast-radius: the role comes from the git-reviewed manifest, the PKI-engine mount comes from `keeper.yml::vault.pki_mount`). See [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md) and [keeper/modules.md → `core.cert`](../keeper/modules.md#corecertregistered--corecertissued).
 - **Rotation happens for the whole incarnation at once** (all hosts together), not host by host.
@@ -268,11 +262,19 @@ One `main.yml` copes as long as the script remains visible (~150 lines). If logi
 
 The optional service-level file `types.yml` declares **reusable named input schemes** - section `types:` with map `<PascalCase>` → scheme in the same input-DSL ([`docs/input.md`](../input.md)). The script refers to the type with the `$type: <Name>` directive (as an independent field or `items: {$type: <Name>}` for an array) - this way a complex type (for example, user record `{name, perms, state}`) is not duplicated inline in each script. Resolve - service-level (only this service), with mandatory cycle-detection. The full format, resolution, error classes and MVP boundaries are [`docs/input.md → "Reusable named types"`](../input.md), [ADR-062](../adr/0062-input-types.md). The previous unrealized provision `$ref` for an external JSON-Schema file in `schemas/` has been replaced by it.
 
-## Essence
+## Service vars
 
-Hierarchical assembly of parameters. `essence/_default.yaml` — baseline for all incarnations; optional subdirectories `coven/<label>.yaml` and `os/<family>.yaml` add overlays based on Coven tags and `soulprint.os.family`. Optional `_stack.yaml` - declarative assembly pipeline (complex conditions and iterations).
+A service's own default parameter values ([ADR-0082](../adr/0082-service-vars.md)), read in CEL as `vars.*`.
 
-Full regulatory spec - [`docs/architecture.md → Essence: assembly pipeline`](../architecture.md). Essence - role-agnostic ([ADR-008](../adr/0008-coven-stable-tags.md)): there is NO stage `role/<Y>.yaml` in the pipeline.
+**Default order:** every `*.yaml` / `*.yml` directly inside `vars/`, sorted lexically, deep-merged in that order. Subdirectories are **not** walked (`soul-lint` reports `vars_dir_nested`). The base file is `00-base.yaml` rather than `_default.yaml` because once the directory listing IS the order, the name has to carry the precedence — and `_` sorts at `0x5F`, between `Z` and `a`, so `_default.yaml` would land in the middle of an alphabetical set rather than at its head.
+
+**Explicit order:** `vars/_stack.yaml`, a declarative pipeline of steps (`file:` / `inline:` / `when:` / `optional:` / `foreach:`+`as:`), each with an optional `strategy: deep|replace`. Present, it replaces the lexical order entirely; `_stack.yaml` itself is never a layer. A step sees the `vars.*` accumulated so far plus `incarnation.*` (covens and traits included) and its `foreach` binding — **and nothing else**. `soulprint`, `input`, `register` and `compute` are undeclared in that environment, so naming one is a compile error rather than a silently empty map.
+
+`soulprint.self` is refused deliberately: service vars resolve **once per run** and the result is handed to every host, so a step keyed on one host's facts would apply that host's answer to the whole roster. The layer is host-invariant by construction; host-dependent behaviour belongs in `where:` on a task, a task's own `vars:`/`params:`, or a `.tmpl`.
+
+**No operator override.** There is no incarnation field that overrides these and no successor to one — a fleet needing different defaults forks the service repo and re-pins its `ServiceRef` ([ADR-007](../adr/0007-versioning-git-ref.md)). What an operator supplies is `input:`, and only `input:`.
+
+Service vars are **role-agnostic** ([ADR-008](../adr/0008-coven-stable-tags.md)): there is no `role/<Y>.yaml` stage. The former hard-wired `os/` and `coven/` overlay directories are gone — conditionality is written in `_stack.yaml` or not expressed at all.
 
 ## Migrations state_schema
 

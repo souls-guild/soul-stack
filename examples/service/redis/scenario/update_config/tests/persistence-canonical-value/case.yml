@@ -1,7 +1,7 @@
 # L0 guard (NIM-53 bug #1, positive): update_config with a CANONICAL persistence value
 # (rdb_aof_1sec) — render does NOT fail, the save/appendonly/appendfsync preset makes it into redis_config.
 # Regression (live): update_config's enum contained the old [off,aof,rdb,rdb_aof]; the value rdb_aof
-# was ∉ essence.persistence_presets → essence.persistence_presets[compute.persistence] no-such-key
+# was ∉ vars.persistence_presets → vars.persistence_presets[compute.persistence] no-such-key
 # → render crash → incarnation error_locked. Fix: the enum was synced with presets/covenant
 # (6 values off/aof_1sec/aof_always/rdb/rdb_aof_1sec/rdb_aof_always).
 #
@@ -16,7 +16,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  essence:
+  vars:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
@@ -99,7 +99,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     - module: community.redis.config
       params_subset:

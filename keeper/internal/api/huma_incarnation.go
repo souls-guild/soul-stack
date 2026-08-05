@@ -147,7 +147,7 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.RerunLastTyped(ctx, claims, in.Name, in.Body.Reason)
+		body, err := incH.RerunLastTyped(ctx, claims, in.Name, in.Body.Reason, in.Body.Input)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -300,7 +300,7 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	}
 	huma.Register(humaAPI, incHistoryOperation(), func(ctx context.Context, in *incHistoryInput) (*incHistoryOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.HistoryTyped(ctx, in.Name, in.ApplyID, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
+		reply, err := incH.HistoryTyped(ctx, in.Name, in.ApplyID, in.IncludeTransitions, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
 		if err != nil {
 			return nil, incProblem(err)
 		}

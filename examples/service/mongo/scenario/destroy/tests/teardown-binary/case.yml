@@ -4,7 +4,7 @@
 # What we assert:
 #   1. mongod is stopped (core.service.stopped).
 #   2. mongod is removed via the BINARY branch (core.file.absent /usr/local/bin/mongod + its own unit) —
-#      the binary branch is active (essence.install_method=binary → static gate group-keep).
+#      the binary branch is active (vars.install_method=binary → static gate group-keep).
 #   3. Our config artifacts are removed (core.file.absent mongod.conf + sysctl drop-in).
 #   4. The PACKAGE branch is dropped (group-drop): core.pkg.absent is ABSENT (on a binary incarnation).
 #   5. data_dir/log_dir are NOT touched (data is irreversible — MVP boundary).
@@ -18,11 +18,11 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  essence:
+  vars:
     install_method: binary
     conf_dir: /etc/mongodb
 
-  # incarnation.state (install/conf_dir are in essence, not in state).
+  # incarnation.state (install/conf_dir are in service vars, not in state).
   state:
     mongo_version: "8.0.4"
     mongo_config:

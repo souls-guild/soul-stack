@@ -22,8 +22,8 @@ First acquaintance: understand the dictionary and pick up a demo setup without r
 |---|---|
 | [getting-started.md](getting-started.md) | **Start here.** Quickstart for an external operator: build binaries from sources (`make build`), raise single-keeper + required infrastructure (Postgres / Redis / Vault) locally (`make dev-up` / `dev-provision` / `dev-keeper`), bootstrap the first Archon, onboard one Soul using CSR flow, apply the script `hello-world`. ~30 minutes, with teams. The browser API viewer also shows `GET /docs`. |
 | [install.md](install.md) | **Installing the released binaries.** One section per distribution channel: apt (`apt.soul-stack.com`), Homebrew tap, AUR, winget status, archives from GitHub Releases (+ cosign / SBOM verification), container images, build-from-source. Includes the macOS Gatekeeper / `com.apple.quarantine` note and the Windows SmartScreen note. Use this when you want to *run* Soul Stack; use getting-started when you want to *build* it. |
-| [guides/first-service.md](guides/first-service.md) | **Next step after quickstart.** Step-by-step tutorial: build **your** service from scratch (`service.yml` with state_schema, `scenario/create`, `essence`), offline validation `soul-lint`, registering the service (git-ref as version), creating an incarnation and checking the result on the host. Walk-through on real [`hello-world`](../examples/service/hello-world/) with links to regulatory specifications for depth. Bridge between getting-started and exploitation. |
-| [naming-rules.md](naming-rules.md) | **Dictionary of names** Soul Stack (Keeper / Souls / Destiny / Soulprint / Essence + SoulSeed / Coven / SID / Archon-AID / Reaper). Read before you begin to understand any configs; required before entering **any** new name. |
+| [guides/first-service.md](guides/first-service.md) | **Next step after quickstart.** Step-by-step tutorial: build **your** service from scratch (`service.yml` with state_schema, `scenario/create`, `vars/`), offline validation `soul-lint`, registering the service (git-ref as version), creating an incarnation and checking the result on the host. Walk-through on real [`hello-world`](../examples/service/hello-world/) with links to regulatory specifications for depth. Bridge between getting-started and exploitation. |
+| [naming-rules.md](naming-rules.md) | **Dictionary of names** Soul Stack (Keeper / Souls / Destiny / Soulprint / Service vars + SoulSeed / Coven / SID / Archon-AID / Reaper). Read before you begin to understand any configs; required before entering **any** new name. |
 
 ---
 
@@ -84,7 +84,7 @@ Reference: exact formats, behavior, parameters. The source of truth is here (and
 | [soul/soulprint.md](soul/soulprint.md) | Soulprint typed schema ([ADR-018](adr/0018-soulprint-typed.md)): fields `SoulprintFacts`, canonical CEL form `soulprint.self.<path>`, virtual projection `covens`. |
 | [input.md](input.md) | **Format standard `input:`** for destiny / scenario / module manifest: types, validation keys, formats (hostname / email / semver / ...), examples. The source of truth in discrepancies. |
 | [service/manifest.md](service/manifest.md) | Service repo layout and format `service.yml` (`name` / `state_schema_version` / `state_schema` / `destiny[]` / `modules[]`), prohibited keys, state_schema migrations, `soul-lint validate-service` validation. |
-| [service/manifest.md#essence](service/manifest.md#essence) | **Essence** - hierarchical assembly of incarnation parameters (`essence/_default.yaml` + overlay by Coven / OS-family, opt. `_stack.yaml`-pipeline). Described inside manifest.md; full regulatory pipeline spec - [architecture.md → Essence](architecture.md#essence-assembly-pipeline). |
+| [service/manifest.md#service-vars](service/manifest.md#service-vars) | **Service vars** — a service's own default parameters (`vars/*.yaml` in lexical order, or an explicit `vars/_stack.yaml` pipeline). Not overridable from outside: a fleet forks the service repo ([ADR-0082](adr/0082-service-vars.md)). |
 
 ### Module Reference
 
@@ -110,7 +110,7 @@ The exact summary of "what we think" and the source of truth (registry in the co
 | [soul/](soul/README.md) | Soul-side index folder: identity, bootstrap token onboarding, connection algorithm, `soul.yml` format, module cache on the host. |
 | [keeper/run-flavors.md](keeper/run-flavors.md) | Summary of entry-points for starting work: scenario via agent, batch via Voyage, single-Errand, push via SSH. Which endpoint API for which task. |
 | [observability.md](observability.md) | Regulatory observability spec ([ADR-024](adr/0024-observability.md)): metric prefixes `keeper_*` / `soul_*`, OTel resource-attrs, cardinality control. |
-| [soul-lint.md](soul-lint.md) | Offline linter Destiny / Essence: purpose, list of checks, restrictions. |
+| [soul-lint.md](soul-lint.md) | Offline linter Destiny / service vars: purpose, list of checks, restrictions. |
 
 ---
 
@@ -157,7 +157,7 @@ Full vocabulary and rules - [naming-rules.md](naming-rules.md). Core terms:
 | **Souls** | Managed Agents |
 | **Destiny** | What is applied to the host after the run |
 | **Soulprint** (Prints) | Host System Facts |
-| **Essence** | Parameters/values ​​collected hierarchically on incarnation |
+| **Service vars** | A service's own default parameter values, in `vars/`, read as `vars.*` |
 
 ---
 

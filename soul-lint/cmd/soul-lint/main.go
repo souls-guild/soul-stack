@@ -1,4 +1,4 @@
-// soul-lint is the offline linter for Destiny / Essence / Soul Stack
+// soul-lint is the offline linter for Destiny / service vars / Soul Stack
 // configs, and the scaffold tool for SoulModule plugin authors.
 //
 // MVP subcommand set:

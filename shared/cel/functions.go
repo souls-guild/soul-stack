@@ -93,9 +93,10 @@ var internalIdentGuard = regexp.MustCompile(`(^|\W)__\w`)
 
 // guardUnsupported returns [ErrUnsupported] if the expression contains a construct
 // outside pilot scope. vaultEnabled=true (Engine with a KVReader) lifts the vault()
-// guard — the function is registered and works. essence is NOT rejected by the guard:
-// it's declared as a variable and resolved from Vars.Essence (the effective layer); an
-// empty Essence gives the normal no-such-key, not a panic.
+// guard — the function is registered and works. vars is NOT rejected by the guard:
+// it's declared as a variable and resolved from Vars.Vars (the flat namespace: the
+// service's own vars under the destiny/task locals); an empty map gives the normal
+// no-such-key, not a panic.
 func guardUnsupported(expr string, vaultEnabled bool) error {
 	for _, p := range unsupportedPatterns {
 		if p.re.MatchString(expr) {

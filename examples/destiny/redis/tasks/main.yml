@@ -34,7 +34,7 @@
 #                  NOT redis8. sentinel_only / Redis 8+ → group-drop;
 #
 # Include-gates are static input-predicates (conditional-include requires
-# input./essence./incarnation./vars.; register./soulprint. on include are forbidden).
+# input./vars./incarnation./vars.; register./soulprint. on include are forbidden).
 # All three mode-gates for redis are input-based. The has()-guard in each is a
 # render-safety measure for an absent dict (sentinel in standalone, tls in sentinel_only):
 # when must not fail with no-such-key, even though the corresponding dict is present

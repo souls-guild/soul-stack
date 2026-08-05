@@ -49,7 +49,7 @@ Everything else in the scenario task is exactly the same as in the destiny task,
   apply:
     destiny: redis                 # name destiny from service.yml → destiny:
     input:
-      version:  "${ essence.redis_version }"
+      version:  "${ vars.redis_version }"
       password: "${ input.redis_password }"
 ```
 
@@ -107,14 +107,14 @@ An applier expands into N destiny tasks, so each of its own keys has to be answe
 | `onchanges:` · `onfail:` · `require:` | **Merged into every destiny task of the group**, exactly as a `block:` passes its own down ([destiny/tasks.md §6.5](../destiny/tasks.md)). These are resolved from register **name to task index** over the whole flat plan, so an index means the same thing on both sides of the destiny boundary. |
 | `where:` · `on:` · `run_once:` | **Before the group is rendered** - they select the hosts the whole destiny lands on (§4, §2.2.2). `where:` is the register- and soulprint-capable one: use it for any host-variant condition. |
 | `serial:` | Inherited by every destiny task - the whole destiny rolls as one wave (§2.2.1). |
-| `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `essence.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
+| `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
 | `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
 | `vars:` | **On the caller's side, into `apply.input`** - the applier's own `vars:` plus any a `block:` above merged in are resolved in the scenario env, and only the resulting VALUES cross into the destiny, exactly like every other `apply.input` value. NOT inherited by the children: the destiny renders its own locals from its `vars.yml` ([destiny/vars.md](../destiny/vars.md)) and never sees its caller's. |
 | `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` · `no_log:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
 | `id:` · `loop:` | **Refused** (`id_unsupported_target` / `loop_unsupported_target`) - both are allowed only on a module task in the pilot; an applier is one of the discriminators they already cover. |
 | `output:` | **Accepted, unread.** Not refused - `output:` is unread on every task type today and belongs to the planned output-contract projection (§2.1.1), not to the class below. |
 
-**A `when:` that reads `register.*` or `soulprint.*` on an applier is an error** (`apply_when_dynamic_unsupported`), not a slow path. It cannot be decided at render, and it cannot be handed to the group either: a destiny task's flow context is built in the **isolated destiny env**, where `input.` / `vars.` / `essence.` name different things than in the scenario the predicate was written in - the same text would answer a different question. Until it was refused, the key was dropped and the destiny applied **everywhere, including on the hosts the author had gated off**.
+**A `when:` that reads `register.*` or `soulprint.*` on an applier is an error** (`apply_when_dynamic_unsupported`), not a slow path. It cannot be decided at render, and it cannot be handed to the group either: a destiny task's flow context is built in the **isolated destiny env**, where `input.` and `vars.` name different things than in the scenario the predicate was written in - the same text would answer a different question. Until it was refused, the key was dropped and the destiny applied **everywhere, including on the hosts the author had gated off**.
 
 Both replacements work today and cover the cases in practice:
 
@@ -196,7 +196,7 @@ Two facts decide it. A roster only exists once the incarnation row does (members
 
 | The predicate reads | How the run started | Answered at | A failure looks like |
 |---|---|---|---|
-| `input.` / `essence.` / `incarnation.` only | any | **pre-flight** | **422 `assert-failed`**, nothing created, nothing locked |
+| `input.` / `vars.` / `incarnation.` only | any | **pre-flight** | **422 `assert-failed`**, nothing created, nothing locked |
 | the roster (`soulprint.*`) | explicit run, plan consumes an existing roster | **pre-flight** | **422 `assert-failed`**, the run never starts |
 | the roster | `POST /v1/incarnations` (a `create: true` starter) | render | `error_locked` → `unlock` |
 | the roster | plan builds its own roster (all-keeper, or carries a refresh emitter) | render, **after** the refresh boundary | `error_locked` → `unlock` |
@@ -356,8 +356,8 @@ examples `wait: { condition: C, timeout: T }` → probe step with
 name: create
 compute:
   redis_config: >-
-    ${ merge(essence.redis_config,
-             essence.persistence_presets[input.persistence],
+    ${ merge(vars.redis_config,
+             vars.persistence_presets[input.persistence],
              default(input.redis_settings, {})) }
 state_changes:
   - set: redis_config
@@ -371,13 +371,13 @@ tasks:
 
 **Why.** `apply: input:` and `state_changes` are **different** CEL contexts, and neither of them **sees** the task-level `vars:` (`vars:` is the scope of one task, §10). The general expression (big `merge()` - translation of a simple input into `redis.conf`) would have to be written **twice** and synchronized by hand. `compute:` declares it **once** - drift "state ≡ live config" is removed by the mechanism itself, and not by the author's discipline.
 
-**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `essence.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: reference to `soulprint.*` in a compute expression → CEL no-such-key. The consequence is that `compute.<name>` **is the same for all hosts**, so the same value is correctly sent to both `apply: input:` (resolved on the first target host on `SID`) and to `state_changes` (per-RUN, not per-host). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
+**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: reference to `soulprint.*` in a compute expression → CEL no-such-key. The consequence is that `compute.<name>` **is the same for all hosts**, so the same value is correctly sent to both `apply: input:` (resolved on the first target host on `SID`) and to `state_changes` (per-RUN, not per-host). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
 
-**Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` → no-such-key (like `register.*`/`essence.*` - §10).
+**Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` → no-such-key (like `register.*` - §10). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
 
-**Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`essence`/`vars`/`compute`).
+**Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`vars`/`compute`).
 
 > **Boundary `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)) - local for one task and **visible only in its** `params:`. `compute:` - rune-level, visible in `apply: input:` **and** `state_changes`. If the value is needed in both state and destiny transfer, this is `compute:`; if only within `params:` of one task - `vars:`.
 
@@ -399,7 +399,7 @@ tasks: [ ... ]
 
 **Why.** Covers **cross-field** preconditions "must be X, not Y", not expressed by a single schema key (`enum`/`min`/`max` - about **one** field, the ceiling here is **another** field) and not covered by `required_when` (about **presence** of a field, not about **ratio** of values). Before `validate:`, such an invariant would have had to be fenced off with a keeper-side shell guard (`core.cmd.shell ... || exit 1`) or dropped with an incomprehensible runtime failure after the fact.
 
-**Rule context is INPUT-ONLY.** `that` sees **only `input.*`** (same narrow cel-go-sandbox as `required_when`). Link to `essence.*`/`soulprint.*`/`register.*`/`vault()`/`now()` → CEL error undeclared reference - **structural input-only barrier by undeclaration**, not text guard. Topology/roster checks (`size(soulprint.hosts) == …`) - **not here**, but in `assert:` (§2.3): it has a full scenario context with `soulprint.hosts`.
+**Rule context is INPUT-ONLY.** `that` sees **only `input.*`** (same narrow cel-go-sandbox as `required_when`). Link to `vars.*`/`soulprint.*`/`register.*`/`vault()`/`now()` → CEL error undeclared reference - **structural input-only barrier by undeclaration**, not text guard. Topology/roster checks (`size(soulprint.hosts) == …`) - **not here**, but in `assert:` (§2.3): it has a full scenario context with `soulprint.hosts`.
 
 **When - pre-flight on the request path.** Calculated in the same phase as `required_when` (`scenario.ValidateInput`): AFTER merge defaults / required / type-validation over **merged** input, BEFORE committing incarnation and entering `applying`. Covers both paths - `POST /v1/incarnations` (create) and `POST .../scenarios/{scenario}` (run). Render fail-safe (as in `assert:`) **not needed**: `validate:` is determined from `input.*`, which does not change between the request path and the start of the run (unlike the assert's roster - TOCTOU).
 
@@ -415,7 +415,7 @@ tasks: [ ... ]
 >
 > `validate:` ADDITIONS, does not replace: "is port required?" → `required_when`; "does quorum exceed the number of sentinels?" → `validate:`; "Is the roster suitable for an N-shard cluster?" → `assert:`.
 >
-> **Where a failing `assert:` surfaces.** Only the two input-only mechanisms answer on the request path in every case. A `assert:` that reads the roster is evaluated at RENDER, so its failure is `error_locked` (unlock, then fix and re-run), not a 422 — the create-path pre-flight gate runs BEFORE the incarnation row exists, and since membership FKs that row ([ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) there is no roster there to measure ([ADR-009 amendment 2026-07-28 / NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)). An `assert:` that reads only `input.`/`essence.`/`incarnation.` still answers 422 `assert-failed` pre-flight on create — but if the check fits input-only, `validate:` is the mechanism designed for it and reports on both the create and the run path.
+> **Where a failing `assert:` surfaces.** Only the two input-only mechanisms answer on the request path in every case. A `assert:` that reads the roster is evaluated at RENDER, so its failure is `error_locked` (unlock, then fix and re-run), not a 422 — the create-path pre-flight gate runs BEFORE the incarnation row exists, and since membership FKs that row ([ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) there is no roster there to measure ([ADR-009 amendment 2026-07-28 / NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)). An `assert:` that reads only `input.`/`vars.`/`incarnation.` still answers 422 `assert-failed` pre-flight on create — but if the check fits input-only, `validate:` is the mechanism designed for it and reports on both the create and the run path.
 
 ### 2.6. `name_template:` — composed incarnation name (create only)
 
@@ -439,7 +439,7 @@ tasks: [ ... ]
 
 **Composition is server-side, before the insert.** Rendered by the Keeper in `scenario.ResolveCreatePlan` — the shared path of `POST /v1/incarnations` and `keeper.incarnation.create` — after the input gate and **before** the pre-flight `assert:`, so the assert and the bootstrap run already see the final name. No new run phase, no DB migration. `compute:` (§2.4) is not a candidate: it resolves RUN-LEVEL, i.e. after the row exists.
 
-**Context is INPUT-ONLY.** Each block compiles against the same narrow cel-go sandbox as `required_when` and `validate:` (§2.5): a reference to `essence.*`/`soulprint.*`/`register.*`/`vault()`/`now()` is an undeclared-reference compile error. A name must be a pure function of the request. Unlike ordinary interpolation ([ADR-010 §5(a)](../adr/0010-templating.md)), a single block does **not** yield a native type here — a name is a string, so every block is stringified and concatenated with the literal text; a block evaluating to a list or map is an error.
+**Context is INPUT-ONLY.** Each block compiles against the same narrow cel-go sandbox as `required_when` and `validate:` (§2.5): a reference to `vars.*`/`soulprint.*`/`register.*`/`vault()`/`now()` is an undeclared-reference compile error. A name must be a pure function of the request. Unlike ordinary interpolation ([ADR-010 §5(a)](../adr/0010-templating.md)), a single block does **not** yield a native type here — a name is a string, so every block is stringified and concatenated with the literal text; a block evaluating to a list or map is an error.
 
 **`name` in the request becomes optional — and forbidden when a template exists.** Sending both is **422 `name_not_composable`**: not silently ignored (the RBAC `incarnation=<name>` dimension would then be checked against one name while another is inserted) and not an override (that would defeat the convention). With no template in play, nothing changes — `name` is required exactly as before.
 
@@ -834,7 +834,7 @@ requisites / `on:` / `where:`) **not expanded** - this is an error
 (task-level `vars:` on the include task are visible to the tasks of the connected file; `loop:` on
 `include:` - repeat the file N times) - subsequent slice (see §8).
 
-**Conditional include (`when:` on the include task) - render-phase group-drop ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-24).** On the include task, allow `when:` - then the connected group is included in the plan only if the predicate is true; if false - ALL tasks of the connected file are **physically absent** in the plan (real exception, not placeholder: not issued, index not reserved). The predicate must be **static** (`input.*`/`essence.*`/`incarnation.*`/`vars.*`) because include is expanded **before** stratification when `register:` is not yet collected and per-host `soulprint` is unknown; dynamic include-when (`register.*`/`soulprint.*`) → `include_when_dynamic_unsupported` (catches both expansion and `soul-lint` offline). Full semantics - [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks) (scenario is inherited as is).
+**Conditional include (`when:` on the include task) - render-phase group-drop ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-24).** On the include task, allow `when:` - then the connected group is included in the plan only if the predicate is true; if false - ALL tasks of the connected file are **physically absent** in the plan (real exception, not placeholder: not issued, index not reserved). The predicate must be **static** (`input.*`/`vars.*`/`incarnation.*`) because include is expanded **before** stratification when `register:` is not yet collected and per-host `soulprint` is unknown; dynamic include-when (`register.*`/`soulprint.*`) → `include_when_dynamic_unsupported` (catches both expansion and `soul-lint` offline). Full semantics - [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks) (scenario is inherited as is).
 
 > **This is an override of the rule `include:` from [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks).** In destiny `include:` is strictly a neighbor in the same folder `tasks/`, going beyond it is prohibited. In the scenario, the rule is **different**: `include:` (and resolve `templates/`/`vars.yml`/`tests/`) two-level - locally, then service-level, fallback is done by the engine. `tasks.md §4` **does not change** - the behavior for destiny is described there; the difference in scenario is recorded here.
 
@@ -861,7 +861,7 @@ input:
   redis_type: { type: string, default: standalone, enum: [standalone, sentinel, cluster] }
   password:   { type: string, vault_scope: secret }
 compute:
-  redis_config: "${ merge(essence.redis_config, default(input.redis_settings, {})) }"
+  redis_config: "${ merge(vars.redis_config, default(input.redis_settings, {})) }"
 state_changes:
   - set: redis_type
     value: "${ input.redis_type }"
@@ -954,7 +954,7 @@ Non-string result of CEL (number/bool/list/map) - according to interpolation rul
 [ADR-010](../adr/0010-templating.md) (whole cell = one `${…}` → native type).
 
 **Full context** - `input.*` / `incarnation.*` / `soulprint.self.*` /
-`register.*` / `vars.*` / `essence.*` / `compute.*` (§2.4). On top of it in
+`register.*` / `vars.*` / `compute.*` (§2.4). On top of it in
 `match`/`patch`/`value` **local bindings of the current element are valid
 collections**:
 
@@ -1175,7 +1175,7 @@ separate directory) is not a closed solution.
 visible to tasks of the connected file; `loop:` to `include:` - file repeat) -
 subsequent slice.
 - **Multi-host sandbox (L3-dispatch).** **L0 render-multi-host (`fixtures.hosts`) - closed** (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md)): the list of hosts is driven by a standard harness at the render level. **L3-dispatch** remains open: docker block format `stand:` for multi-host scenario test, `assert.dispatch` (who actually executes the master) and assertions for committed cross-host `incarnation.state` - open Q extension about sandbox from [destiny/testing.md](../destiny/testing.md). Not a closed solution.
-- **Move `role/*.yaml` to destiny-`input:`.** Parameters that previously depended on the role (the essence layer `role/*` has been removed, see [concept.md](concept.md)), are moved to destiny through `input:` by probe-role - a separate implementation task (pilot and a batch of rewriting examples).
+- **Move `role/*.yaml` to destiny-`input:`.** Parameters that previously depended on the role (the `role/*` layer was removed, and with [ADR-0082](../adr/0082-service-vars.md) the whole directory-overlay scheme went with it, see [concept.md](concept.md)), are moved to destiny through `input:` by probe-role - a separate implementation task (pilot and a batch of rewriting examples).
 - **Bootstrap role source on `create` is CLOSED.** On `create` redis more
 is not running, probe is not possible → topology (declared roles + master address)
 is taken from `soulprint.hosts` (declared from the host's Choir Voice, which
@@ -1187,7 +1187,7 @@ step targeting for `create` is not entered; `where:`-invariant
 
 ## 9. See also
 
-- [concept.md](concept.md) - what is a scenario, border with destiny, declared vs actual role, role-agnostic essence.
+- [concept.md](concept.md) - what is a scenario, border with destiny, declared vs actual role, role-agnostic service vars.
 - [destiny/tasks.md](../destiny/tasks.md) - **DSL task core**, inherited by scenario entirely (source of truth according to `module`/`include`/`block`/`async`/`loop`/`register`/requisites/`retry`/`timeout`/`changed_when`/`failed_when`/template context).
 - [architecture.md → ADR-008](../adr/0008-coven-stable-tags.md), [ADR-009](../adr/0009-scenario-dsl.md).
 - [architecture.md → "Targeting and host communication"](../architecture.md) - `on:`/`where:`, resolver contract, probe.

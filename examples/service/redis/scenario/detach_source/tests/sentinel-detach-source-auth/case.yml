@@ -34,7 +34,7 @@ fixtures:
   # PROTECTED source. seeded_from carries REFERENCES to the source's account (Vault
   # PATHS, not secrets). detached=false (source still attached) - detach_source will
   # set it to true.
-  # host-layout was moved to essence (v11->v12); detach_source does NOT read it -> not in state.
+  # host-layout was moved to service vars (v11->v12); detach_source does NOT read it -> not in state.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

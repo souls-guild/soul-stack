@@ -55,7 +55,7 @@ const maxIncludeDepth = 32
 // `include_modifier_unsupported` diagnostic, so scope isn't lost silently.
 //
 // Conditional include (`when:` on an include-task): the include-when MUST be
-// static (input./essence./incarnation./vars. — [IsStaticIncludeWhen]), since
+// static (input./vars./incarnation. — [IsStaticIncludeWhen]), since
 // expansion runs BEFORE the Stratify phase, when register isn't assembled yet and
 // the per-host soulprint is unknown. A dynamic when → `include_when_dynamic_unsupported`.
 // The static when and the group id are stamped into EVERY spliced task
@@ -251,8 +251,8 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 	if task.When != "" {
 		if !IsStaticIncludeWhen(task.When) {
 			e.addError("include_when_dynamic_unsupported",
-				fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) - include expands BEFORE stratification, only a static predicate input./essence./incarnation./vars. is available", name, task.When),
-				"replace with a static predicate (input./essence./incarnation.) or move the condition onto a module task of the included file via when:")
+				fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) - include expands BEFORE stratification, only a static predicate input./vars./incarnation. is available", name, task.When),
+				"replace with a static predicate (input./vars./incarnation.) or move the condition onto a module task of the included file via when:")
 			return nil, false
 		}
 		e.lastGroupID++

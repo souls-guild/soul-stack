@@ -14,8 +14,8 @@
 #     outputs `dir` from data_dir (/srv/redis-data) and `aclfile` from conf_dir
 #     (/opt/redis/users.acl), and NOT the hardcoded /var/lib/redis ÷ /etc/redis/users.acl
 #     (directive B, fix of the dir/aclfile hardcode in redis.conf.tmpl bypassing override);
-#   - the host-layout override travels via essence (conf_dir/data_dir), NOT state —
-#     add_node reads it from essence.conf_dir/data_dir (see the state_changes assert below).
+#   - the host-layout override travels via service vars (conf_dir/data_dir), NOT state —
+#     add_node reads it from vars.conf_dir/data_dir (see the state_changes assert below).
 # version=5:6.2.7 (< 8) → modules active (.so under data_dir is checkable). TLS off
 # (this case is about the FILE paths of destiny tasks). TLS directives in redis.conf under
 # the conf_dir override are covered by a separate case conf-data-dir-override-tls (qa fix of
@@ -47,7 +47,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
@@ -59,13 +59,13 @@ fixtures:
     redis_config:
       maxmemory: "256mb"
 
-    # ★ #2 OVERRIDE host-layout: non-standard conf/data directories via essence
-    # (spec.essence of the incarnation). compute.conf_dir/data_dir read them from here and
+    # ★ #2 OVERRIDE host-layout: non-standard conf/data directories via service vars
+    # (the service vars of the incarnation). compute.conf_dir/data_dir read them from here and
     # push into destiny + persist into state.
     conf_dir: /opt/redis
     data_dir: /srv/redis-data
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) breaks render if either
     # set is empty (silent fail-open is unacceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -149,7 +149,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # users.acl under the conf_dir override. Disambiguator from redis.conf — path.
     - module: core.file.rendered
@@ -206,9 +206,9 @@ assert:
     redis_type: sentinel
     redis_version: "7.4.1"
     modules: [bloom, json, search, timeseries]
-    # ★ conf_dir/data_dir moved out of state into essence (v11→v12, Variant A): the override
+    # ★ conf_dir/data_dir moved out of state into service vars (v11→v12, Variant A): the override
     # no longer persists into state (not present in state_changes — fields not in
-    # state_schema). The host-layout override lives in spec.essence of the incarnation;
-    # add_node reads it from there (default(essence.conf_dir/data_dir, ...)). The destiny
+    # state_schema). The host-layout override lives in the service vars of the incarnation;
+    # add_node reads it from there (default(vars.conf_dir/data_dir, ...)). The destiny
     # tasks above already verify that the override reached the redis.conf/data-dir paths on
     # THIS create run.

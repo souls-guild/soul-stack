@@ -27,10 +27,10 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url — in essence (v11→v12, Option A): moved out of state, a re-run reads
+  # modules_base_url — in service vars (v11→v12, Option A): moved out of state, a re-run reads
   # it from here. The case doesn't assert module paths (guard/add-node plugin), the layout is for
   # fixture fidelity (state v12 shape without layout keys).
-  essence:
+  vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster

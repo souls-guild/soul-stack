@@ -81,9 +81,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -107,7 +107,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # System ACL users of redis-server (1:1 from service vars/_default.yaml). REQUIRED:
     # the create/cluster.yml guard (assert 1b) breaks the render if system_acl_users is empty
     # (silent fail-open is unacceptable — without them replication/health-check would break).
     # ★ REDESIGN default_admin (2026-06-30): default_admin — the full-access system user
@@ -204,7 +204,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.

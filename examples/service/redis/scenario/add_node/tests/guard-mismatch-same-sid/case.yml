@@ -25,9 +25,9 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url — in essence (v11→v12, Variant A). The guard aborts render (same-sid),
+  # modules_base_url — in service vars (v11→v12, Variant A). The guard aborts render (same-sid),
   # the layout is here for fixture fidelity (state v12 form without layout keys).
-  essence:
+  vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster

@@ -12,7 +12,7 @@ description: >-
 
 # ── Input contract ─────────────────────────────────────────────────────────
 # Minimal: only the host identifier (server_name in the nginx config +
-# match in audit events). Everything else — from essence (listen port, default name).
+# match in audit events). Everything else — from service vars (listen port, default name).
 input:
   hostname:
     type: string
@@ -71,7 +71,7 @@ tasks:
       group: root
       vars:
         server_name: "${ input.hostname }"
-        listen_port: "${ essence.nginx_listen_port }"
+        listen_port: "${ vars.nginx_listen_port }"
 
   # 3. nginx systemd unit: enabled + active. After the package is installed the unit is
   # already in place (Debian postinst), we just need to guarantee active+enabled.

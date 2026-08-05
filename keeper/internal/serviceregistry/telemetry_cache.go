@@ -15,13 +15,13 @@ const TelemetryTTL = 60 * time.Second
 
 // TelemetryCatalog - snapshot result of the /telemetry lister: SHA1 of the materialized
 // snapshot (serves as an ETag) + the effective per-service telemetry config (manifest
-// defaults, without essence). Shape of the /telemetry lister result (parity DirectiveCatalog).
+// defaults, without an incarnation's own layer). Shape of the /telemetry lister result (parity DirectiveCatalog).
 type TelemetryCatalog struct {
 	SHA1      string
 	Telemetry *keeperv1.TelemetryConfig
 }
 
-// TelemetryLister - a read surface for the default (per-service, without essence)
+// TelemetryLister - a read surface for the default (per-service, without an incarnation)
 // telemetry config of a service + a snapshot SHA1 (for ETag) from the materialized
 // Service repo snapshot for `(name, ref)`. Parity [DirectiveLister]. When nil,
 // `GET /v1/services/{name}/telemetry` responds 500 "not configured".

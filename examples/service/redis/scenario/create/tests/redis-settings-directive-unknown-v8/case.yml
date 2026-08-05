@@ -1,5 +1,5 @@
 # L0 test for the version-aware validator of redis_settings directive names (assert, #6) —
-# NEGATIVE case for the Redis 8.6 series. essence carries a redis_directives catalog for series 8.6.
+# NEGATIVE case for the Redis 8.6 series. service vars carries a redis_directives catalog for series 8.6.
 # input.version = 8.6.1 (enum of shipped Nexus builds) → series 8.6. redis_settings
 # contains an UNKNOWN name (typo `maxmemoyr` — not in the catalog) → assert false →
 # render aborts on the KEEPER SIDE (422 assert-failed) BEFORE any dispatch.
@@ -34,9 +34,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master

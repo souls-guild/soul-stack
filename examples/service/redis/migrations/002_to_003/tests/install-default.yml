@@ -1,6 +1,6 @@
 name: install-default
 description: >
-  DEFAULT fields (absent in v2-state, essence is unavailable in migration-CEL): install →
+  DEFAULT fields (absent in v2-state, service vars are unavailable in migration-CEL): install →
   {method: package}, modules → [], sysctl_settings → {}, memory_mb → 0 (irreversible).
   Minimal v2-state (only required redis_type+redis_config) — verifies that the
   absence of redis_users/redis_hosts/redis_sentinel does not break the migration.

@@ -371,7 +371,7 @@ var reSoulprintRef = regexp.MustCompile(`\bsoulprint\b`)
 // group-drop, ADR-009 amendment). An include expands into the flat list BEFORE
 // stratification, when previous tasks' register is not yet collected and per-host
 // soulprint is unknown; so only a static predicate is allowed
-// (input./essence./incarnation./vars.). The same two criteria as keeper-side
+// (input./vars./incarnation.). The same two criteria as keeper-side
 // isStaticWhen (register-/soulprint-independence):
 //   - no cross-task register reference (ExtractRegisterRefs — the same canonical parser);
 //   - no soulprint reference (the host-variant layer).
@@ -387,7 +387,7 @@ func IsStaticIncludeWhen(when string) bool {
 // BEFORE dispatch — no cross-task register reference, no soulprint. Those are
 // the two things a render pass does not have: register is accumulated Soul-side
 // within an ApplyRequest, and the host layer is per-host rather than per-plan.
-// Everything else a predicate can read (input./essence./incarnation./vars.) is
+// Everything else a predicate can read (input./vars./incarnation.) is
 // resolved at render.
 //
 // The exported counterpart of keeper-side isStaticWhen, for the offline

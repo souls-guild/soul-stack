@@ -279,25 +279,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 4. Essence (effective layer). render.Pipeline exposes it to CEL as
-	//    `essence.<path>` (slice E2). Uses the first host's OS family as the
-	//    representative (per-host essence is an extension).
-	//
-	//    keeper context (empty roster, provision-from-zero): no representative
-	//    host exists, hosts[0] would panic. Resolve essence WITHOUT a per-host
-	//    overlay — default layer + the incarnation's Coven overlay (root Coven
-	//    label = inc.Name, ADR-008) + spec.essence override. OS-family overlay is
-	//    skipped (OSFamily empty), symmetric to renderKeeperTask, which renders
-	//    keeper tasks without a per-host soulprint. After onboarding the created
-	//    VMs, later Passages get per-host essence the normal way (mid-run
-	//    re-resolve, ADR-0061 §S3).
-	essenceIn := keeperEssenceInput(art.LocalDir, inc)
-	if len(hosts) > 0 {
-		essenceIn = essenceInput(art.LocalDir, inc, hosts[0])
-	}
-	essenceMap, err := r.deps.Essence.Resolve(essenceIn)
+	// 4. Service vars (the service's own layer). render.Pipeline exposes them to
+	//    CEL as `vars.<path>` (slice E2; the root merges into `vars.*` in
+	//    NIM-414). Host-invariant by construction (ADR-0082), so the keeper
+	//    context — empty roster, provision-from-zero, where hosts[0] would panic
+	//    — resolves exactly the same map as a run with a roster.
+	serviceVars, err := r.deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
 	if err != nil {
-		abort("essence_failed", err)
+		abort("service_vars_failed", err)
 		return
 	}
 
@@ -327,9 +316,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//    nil Destiny in Deps → apply:destiny is rejected by the render phase
 	//    (ErrUnsupportedDSL).
 	renderIn := render.RenderInput{
-		Scenario: scn,
-		Essence:  essenceMap,
-		Input:    effectiveInput,
+		Scenario:    scn,
+		ServiceVars: serviceVars,
+		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
 			Name:           inc.Name,
 			Service:        inc.Service,
@@ -1181,6 +1170,7 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 			// change, so the engines that produced it did not change either — the
 			// last successful run's stamp stays (COALESCE).
 			nil,
+			r.runOutcome(spec, failStatus, cause),
 		)
 	})
 	if err != nil {
@@ -1228,7 +1218,7 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 //     Passages' host rows stay success. No sentinel inserted — real rows
 //     exist;
 //   - NO rows exist (early abort: no_hosts / scenario_load_failed /
-//     topology_failed / essence_failed / input_invalid / render_failed, and
+//     topology_failed / service_vars_failed / input_invalid / render_failed, and
 //     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
 //     tasks run BEFORE any host-dispatch) — insert ONE sentinel row
 //     [render.RunSentinelSID] with status=`terminal` and error_summary=reason.
@@ -1364,6 +1354,44 @@ func destroyForce(inc *incarnation.Incarnation) bool {
 	return f
 }
 
+// runOutcome builds the state_history stamp for a terminal: the replayable
+// snapshot of the attempt plus what became of it (NIM-408).
+//
+// The snapshot is an `applyrun.Recipe`, not the bare input, and the difference is
+// the whole point: rendering needs the git coordinates of the code the attempt
+// used, and an upgrade moves the incarnation's pin — so a rerun rebuilt from an
+// input alone renders with the CURRENT service version rather than the one the
+// attempt failed on. `dry_run` is not carried: a Scry pass never reaches these
+// terminals — it has its own path and commits no state. A marshal failure is NOT
+// fatal to the terminal: the run's
+// outcome must be recorded even if its snapshot cannot be, and an unreplayable
+// row is a 422 asking for the input, not a lost terminal.
+func (r *Runner) runOutcome(spec RunSpec, status incarnation.Status, cause error) *incarnation.RunOutcome {
+	out := &incarnation.RunOutcome{
+		Status:     string(status),
+		FinishedAt: time.Now().UTC(),
+	}
+	if cause != nil {
+		out.ErrorSummary = audit.MaskSecrets(map[string]any{"e": cause.Error()})["e"].(string)
+	}
+	snapshot, err := applyrun.MarshalRecipe(&applyrun.Recipe{
+		ServiceRef:   spec.ServiceRef,
+		ScenarioName: spec.ScenarioName,
+		Input:        spec.Input,
+		StartedByAID: startedByPtr(spec.StartedByAID),
+		FromUpgrade:  spec.FromUpgrade,
+	})
+	if err != nil {
+		r.logger.Warn("scenario: run snapshot not recorded — the attempt cannot be replayed from history",
+			slog.String("incarnation", spec.IncarnationName),
+			slog.String("apply_id", spec.ApplyID),
+			slog.Any("error", err))
+		return out
+	}
+	out.Snapshot = snapshot
+	return out
+}
+
 // commitSuccess records a successful run: state_changes are committed into
 // incarnation.state, status → ready, a snapshot goes to state_history. One PG
 // transaction (FOR UPDATE inside UpdateStateFromRun).
@@ -1383,6 +1411,7 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, s
 			startedByPtr(spec.StartedByAID),
 			historyID,
 			engineCompat,
+			r.runOutcome(spec, incarnation.StatusReady, nil),
 		)
 	})
 }

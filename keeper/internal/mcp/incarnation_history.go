@@ -20,6 +20,9 @@ type incarnationHistoryArgs struct {
 	ApplyID string `json:"apply_id"`
 	Offset  *int   `json:"offset"`
 	Limit   *int   `json:"limit"`
+	// IncludeTransitions — parity with the REST query param of the same name:
+	// the rerun-transition markers are excluded by default.
+	IncludeTransitions bool `json:"include_transitions"`
 }
 
 // incarnationHistoryEntry — one element of the history output. Mirrors the
@@ -92,6 +95,9 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 				"field 'apply_id' must be a Crockford-base32 ULID (26 chars)")
 		}
 		filter.ApplyID = a.ApplyID
+	}
+	if a.IncludeTransitions {
+		filter.IncludeTransitions = true
 	}
 
 	// Existence probe + source of coven/service scope: otherwise a

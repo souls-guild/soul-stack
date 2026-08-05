@@ -2,7 +2,7 @@
 #   - persistence: rdb_aof_1sec -> save non-empty + appendonly yes (preset rdb_aof_1sec);
 #   - memory_mb=512 -> computed maxmemory 512*75/100=384 -> "384mb";
 #   - redis_settings.maxmemory="1gb" OVERRIDES computed "384mb" (last-wins on the
-#     COMPUTED layer, not just on the essence default): redis_settings is the rightmost
+#     COMPUTED layer, not just on the service vars default): redis_settings is the rightmost
 #     merge layer, and it beats even computed keys. That's exactly what this guard checks.
 name: rdb_aof_1sec + redis_settings overrides COMPUTED maxmemory (last-wins)
 
@@ -31,9 +31,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method is in essence (author-context, 2026-06-28): the install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method is in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -58,7 +58,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) fails the render if either
     # set is empty (silent fail-open is not acceptable - without them replication/sentinel<->redis
     # AUTH would break).
@@ -97,7 +97,7 @@ fixtures:
     # rdb_aof_always]): RDB snapshots + AOF with fsync everysec. The preset carries save+appendonly.
     persistence: rdb_aof_1sec
     redis_settings:
-      # Overrides the COMPUTED maxmemory (384mb), not just the essence default.
+      # Overrides the COMPUTED maxmemory (384mb), not just the service vars default.
       maxmemory: "1gb"
 
 assert:
@@ -156,7 +156,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   state_changes:
     redis_type: sentinel

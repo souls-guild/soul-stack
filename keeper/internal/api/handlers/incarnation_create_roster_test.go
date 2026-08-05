@@ -294,12 +294,12 @@ func TestCreateRoster_DoesNotWriteSpecHosts(t *testing.T) {
 	if err := json.Unmarshal(specBytes, &spec); err != nil {
 		t.Fatalf("unmarshal spec: %v", err)
 	}
-	if _, has := spec["hosts"]; has {
-		t.Errorf("spec.hosts must not be written — the roster is membership, spec.hosts only names roles; spec=%v", spec)
-	}
-	input, _ := spec["input"].(map[string]any)
-	if input == nil || input["hosts"] == nil {
-		t.Errorf("spec.input must carry the roster the operator submitted, got %v", spec)
+	// Since NIM-408 the create path writes NOTHING into spec — not the roster, and
+	// not the input that used to carry it. The roster is `incarnation_membership`
+	// (bound below), and the input the create ran on lives in that run's history
+	// snapshot, which is what rerun-last replays from.
+	if len(spec) != 0 {
+		t.Errorf("spec = %v, want {} — the create path writes nothing into it", spec)
 	}
 }
 

@@ -9,7 +9,7 @@ The goal is to have "here's what this looks like in practice" on hand while read
 | Folder | What |
 |---|---|
 | [`destiny/redis/`](destiny/redis/) | An atomic destiny brick for "how to install and configure Redis on a host." A separate git repo in real life. Includes `tasks/main.yml` (top-level task list without a wrapper) and [`tests/install-and-ping/case.yml`](destiny/redis/tests/install-and-ping/case.yml) — an illustration of the molecule-style destiny test format. Full format breakdown — in [docs/destiny/](../docs/destiny/README.md). |
-| [`service/redis/`](service/redis/) | A full example of a service repo: `service.yml`, hierarchical `essence/`, a set of scenarios, migrations, tests. |
+| [`service/redis/`](service/redis/) | A full example of a service repo: `service.yml`, a `vars/` layer stack, a set of scenarios, migrations, tests. |
 | [`keeper/keeper.yml`](keeper/keeper.yml) | Config for the central `keeper` instance (HA-clustered, on top of Postgres+Redis+Vault). |
 | [`soul/soul.yml`](soul/soul.yml) | Config for the `soul` agent on a managed host: fallback endpoint list, retry, failback. |
 | [`module/soul-mod-redis-failover/`](module/soul-mod-redis-failover/) | A skeleton of a custom module for Destiny: manifest and interface (no full implementation). |

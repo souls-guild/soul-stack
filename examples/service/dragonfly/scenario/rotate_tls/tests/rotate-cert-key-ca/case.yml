@@ -28,8 +28,8 @@ fixtures:
   # Deployed incarnation.state with TLS ENABLED (rotate precondition). Current refs are OLD;
   # input supplies the new ones. The connection CA (compute.tls_ca) resolves from state.tls.ca_ref (PRE-RUN snapshot)
   # — on THIS run the connection uses the OLD CA, the three CONFIG SET calls swap in the material themselves.
-  # state v2: install/conf_dir/data_dir moved into essence (not in state). rotate_tls's conf_dir
-  # is read from essence (default /etc/dragonfly), and PEM is written there too.
+  # state v2: install/conf_dir/data_dir moved into service vars (not in state). rotate_tls's conf_dir
+  # is read from service vars (default /etc/dragonfly), and PEM is written there too.
   state:
     df_version: "1.39.0"
     tls:
@@ -127,7 +127,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) — onchanges gate
     #    anchor (id-disambiguator). Without it onchanges:[tls_certs] would not resolve.

@@ -1,6 +1,6 @@
 # Soul — concept
 
-The `soul` binary is the agent daemon on a managed host. It receives from Keeper commands of the form "apply such-and-such Destiny with such-and-such Essence", executes module steps, and returns events and Soulprint back. In the Soul Stack vocabulary it is a Soul, a single soul in the `souls` registry.
+The `soul` binary is the agent daemon on a managed host. It receives from Keeper commands of the form "apply such-and-such Destiny with such-and-such parameters", executes module steps, and returns events and Soulprint back. In the Soul Stack vocabulary it is a Soul, a single soul in the `souls` registry.
 
 ## Where Soul sits in the overall picture
 

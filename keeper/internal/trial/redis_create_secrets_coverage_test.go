@@ -124,7 +124,7 @@ func renderCreateReadSet(t *testing.T, caseFile string) (readSet, generatedSet m
 
 	in := render.RenderInput{
 		Scenario:    scn,
-		Essence:     orEmptyMap(c.Fixtures.Essence),
+		ServiceVars: orEmptyMap(c.Fixtures.Vars),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
 		Incarnation: render.IncarnationMeta{Name: scn.Name},

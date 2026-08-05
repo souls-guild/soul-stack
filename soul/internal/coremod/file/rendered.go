@@ -21,9 +21,9 @@ import (
 // symmetric with present):
 //   - template_content: literal text/template template (Keeper read the .tmpl
 //     file as-is after the CEL phase, text/template did NOT render it yet);
-//   - render_context:   the ROOT of the text/template context {vars, self, role,
-//     essence} (templating.md §3.2), assembled Keeper-side per-host; passed to
-//     the engine as the root, so the template sees `.vars.*`/`.self.*`/`.role`/`.essence.*`;
+//   - render_context:   the ROOT of the text/template context {vars, self, role}
+//     (templating.md §3.2), assembled Keeper-side per-host; passed to the
+//     engine as the root, so the template sees `.vars.*`/`.self.*`/`.role`;
 //   - path:             target file (required, read in Apply);
 //   - mode/owner/group: optional, same as present.
 //
@@ -50,7 +50,7 @@ func (m *Module) applyRendered(stream grpc.ServerStreamingServer[pluginv1.ApplyE
 		return util.SendFailed(stream, err.Error())
 	}
 	if renderContext == nil {
-		// render_context is the §3.2 root ({vars,self,role,essence}); without
+		// render_context is the §3.2 root ({vars,self,role}); without
 		// it, templates using `.self.*`/`.vars.*` fail under strict-mode.
 		// Keeper must deliver it (missing handoff is a golden-path prod
 		// blocker, same as template_content was).

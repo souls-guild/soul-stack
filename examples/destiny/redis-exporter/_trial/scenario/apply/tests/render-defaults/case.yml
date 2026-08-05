@@ -64,7 +64,7 @@ assert:
         mode: "0644"
         owner: root
         group: root
-        # The text/template root is render_context {vars,self,role,essence}
+        # The text/template root is render_context {vars,self,role,service vars}
         # (templating.md §3.2, BUG-A fix); the flat params.vars no longer exists.
         render_context:
           vars:
@@ -86,7 +86,7 @@ assert:
             covens: [apply]
             role: ""
           role: ""
-          essence: {}
+          service vars: {}
 
     - module: core.service.running
       params_subset:

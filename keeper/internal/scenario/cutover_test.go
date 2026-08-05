@@ -17,9 +17,9 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -50,7 +50,7 @@ func newAcolyteRunner(t *testing.T, summons SummonsPublisher) *Runner {
 		SoulCap:        stubSoulCap{},
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		Essence:        essence.NewResolver(nil),
+		ServiceVars:    servicevars.NewResolver(nil),
 		Render:         render.NewPipeline(nil, engine, nil, nil),
 		Outbound:       fakeDispatcher{},
 		DB:             integrationPool,
@@ -72,12 +72,12 @@ func newClaimRunner(t *testing.T, disp ApplyDispatcher) *ClaimRunner {
 	}
 	return NewClaimRunner(ClaimDeps{
 		Deps: Deps{
-			Loader:   artifact.NewServiceLoader(t.TempDir(), nil),
-			Topology: topology.NewResolver(integrationPool, nil, nil),
-			Essence:  essence.NewResolver(nil),
-			Render:   render.NewPipeline(nil, engine, nil, nil),
-			Outbound: disp,
-			DB:       integrationPool,
+			Loader:      artifact.NewServiceLoader(t.TempDir(), nil),
+			Topology:    topology.NewResolver(integrationPool, nil, nil),
+			ServiceVars: servicevars.NewResolver(nil),
+			Render:      render.NewPipeline(nil, engine, nil, nil),
+			Outbound:    disp,
+			DB:          integrationPool,
 		},
 		KID:   "keeper-acolyte-test",
 		Lease: 30 * time.Second,
@@ -169,7 +169,7 @@ func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 		SoulCap:        stubSoulCap{},
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		Essence:        essence.NewResolver(nil),
+		ServiceVars:    servicevars.NewResolver(nil),
 		Render:         render.NewPipeline(nil, engine, nil, nil),
 		Outbound:       disp,
 		DB:             integrationPool,
@@ -205,7 +205,7 @@ func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 }
 
 // TestIntegration_RenderForHost_SingleHost — RenderForHost renders a run from a
-// recipe (load→parse→essence→full-roster render) and filters down to its own SID. On
+// recipe (load→parse→service vars→full-roster render) and filters down to its own SID. On
 // a single-host roster, full-roster == single-host; multi-host parity is
 // checked by TestIntegration_TargetingParity_AcolyteVsOldPath.
 func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
@@ -220,12 +220,12 @@ func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	deps := Deps{
-		Loader:   artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology: topology.NewResolver(integrationPool, nil, nil),
-		Essence:  essence.NewResolver(nil),
-		Render:   render.NewPipeline(nil, engine, nil, nil),
-		Outbound: fakeDispatcher{},
-		DB:       integrationPool,
+		Loader:      artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:    topology.NewResolver(integrationPool, nil, nil),
+		ServiceVars: servicevars.NewResolver(nil),
+		Render:      render.NewPipeline(nil, engine, nil, nil),
+		Outbound:    fakeDispatcher{},
+		DB:          integrationPool,
 	}
 	recipe := &applyrun.Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
@@ -262,12 +262,12 @@ func TestIntegration_RenderForHost_HostNotInRoster(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	deps := Deps{
-		Loader:   artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology: topology.NewResolver(integrationPool, nil, nil),
-		Essence:  essence.NewResolver(nil),
-		Render:   render.NewPipeline(nil, engine, nil, nil),
-		Outbound: fakeDispatcher{},
-		DB:       integrationPool,
+		Loader:      artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:    topology.NewResolver(integrationPool, nil, nil),
+		ServiceVars: servicevars.NewResolver(nil),
+		Render:      render.NewPipeline(nil, engine, nil, nil),
+		Outbound:    fakeDispatcher{},
+		DB:          integrationPool,
 	}
 	recipe := &applyrun.Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},

@@ -18,7 +18,7 @@ package trial
 // Case is one trial file `case.yml` ([ADR-023], format is an extension of
 // migration template). Structure is read-only after loading.
 //
-// Fixtures specify the entire hermetic context of the run (input/essence/soulprint/
+// Fixtures specify the entire hermetic context of the run (input/vars/soulprint/
 // vault). Mocks.Register provides register context for probe steps in `where:`/`when:`
 // (in L0 pilot, ready register payload is passed without probe execution).
 // Assert is the expected result; L0 verifies RenderedTasks, StateChanges, and
@@ -71,7 +71,7 @@ type Case struct {
 // cases without apply:destiny — resolver is then not called.
 type Fixtures struct {
 	Input                map[string]any            `yaml:"input,omitempty"`
-	Essence              map[string]any            `yaml:"essence,omitempty"`
+	Vars                 map[string]any            `yaml:"vars,omitempty"`
 	Soulprint            map[string]any            `yaml:"soulprint,omitempty"`
 	Hosts                []HostFixture             `yaml:"hosts,omitempty"`
 	Vault                map[string]map[string]any `yaml:"vault,omitempty"`

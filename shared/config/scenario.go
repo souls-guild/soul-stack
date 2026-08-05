@@ -85,7 +85,7 @@ type ScenarioManifest struct {
 // narrow cel-go sandbox as `required_when` — input_required_when.go). validate:
 // covers INPUT INVARIANTS (cross-field preconditions not expressible by a single
 // schema key — e.g. "`port` is required when `tls` is off"). Referencing
-// essence/soulprint/register/vault in `that` → compile-time undeclared-reference
+// vars/soulprint/register/vault in `that` → compile-time undeclared-reference
 // error (a structural barrier, not a textual guard). Topology/roster checks stay
 // with `assert:` (which has the full scenario CEL context with soulprint.hosts);
 // validate: COMPLEMENTS, it does not replace assert or required_when.
@@ -103,7 +103,7 @@ type ValidateRule struct {
 
 // ComputeBlock holds scenario-level computed variables (`compute:`, ADR-009
 // amendment 2026-06-23). Each entry is `<name>: <CEL-expression>`: Keeper resolves
-// it ONCE per run in the RUN-LEVEL scenario context (input/essence/incarnation/
+// it ONCE per run in the RUN-LEVEL scenario context (input/vars/incarnation/
 // register), then the result is available as `compute.<name>` in both `apply.input`
 // and `state_changes` (cel_render.resolveCompute).
 //
@@ -527,13 +527,13 @@ var stateOpExpectValues = map[string]bool{
 // foreachReservedBindings — names `foreach.as:` must not shadow: the bare as-binding
 // is declared in the merge-time CEL context (render.renderForeach) and would clobber
 // the fixed scenario context OR the collection element's local bindings. Beyond
-// loopReservedNames (input/register/incarnation/soulprint/essence/vars) it adds
+// loopReservedNames (input/register/incarnation/soulprint/vars) it adds
 // elem/key/value — the current element's local bindings in add-match/modify-patch
 // (ADR-057 §b): `as: elem` would shadow the elem binding of a nested add operation
 // (reserved_binding_name).
 var foreachReservedBindings = map[string]bool{
 	"input": true, "register": true, "incarnation": true,
-	"soulprint": true, "essence": true, "vars": true,
+	"soulprint": true, "vars": true,
 	"elem": true, "key": true, "value": true,
 }
 
@@ -670,12 +670,12 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 var reComputeName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // computeReservedNames — names a compute variable must not shadow: the root CEL
-// context names (input/register/incarnation/soulprint/essence/vars) + the `compute`
+// context names (input/register/incarnation/soulprint/vars) + the `compute`
 // root itself. Compute variables live under `compute.<name>`, but the name `compute`
 // as a variable would clobber the whole block — forbidden for self-documentation.
 var computeReservedNames = map[string]bool{
 	"input": true, "register": true, "incarnation": true,
-	"soulprint": true, "essence": true, "vars": true, "compute": true,
+	"soulprint": true, "vars": true, "compute": true,
 }
 
 // validateComputeBlock checks the structure of the `compute:` block (ADR-009
@@ -715,7 +715,7 @@ func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "reserved_binding_name",
 				Message:  fmt.Sprintf("compute.%s shadows a reserved CEL context name", name),
-				Hint:     "reserved: input, register, incarnation, soulprint, essence, vars, compute",
+				Hint:     "reserved: input, register, incarnation, soulprint, vars, compute",
 				YAMLPath: pathPrefix + "." + name,
 			}))
 		case !reComputeName.MatchString(name):
@@ -1017,7 +1017,7 @@ func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "reserved_binding_name",
 			Message:  fmt.Sprintf("foreach.as %q shadows a reserved name (CEL context or per-element binding)", name),
-			Hint:     "reserved: input, register, incarnation, soulprint, essence, vars, elem, key, value",
+			Hint:     "reserved: input, register, incarnation, soulprint, vars, elem, key, value",
 			YAMLPath: path + ".as",
 		}))
 	}

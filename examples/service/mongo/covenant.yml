@@ -17,7 +17,7 @@
 input:
   # ── version: fixed-enum of MongoDB BINARY versions (Nexus) ────────────────────
   # ★ Symmetry with redis: version — ENUM of fixed upstream versions from Nexus
-  # (essence.install_method=binary by default pulls EXACTLY these binaries). required
+  # (vars.install_method=binary by default pulls EXACTLY these binaries). required
   # (needed ALWAYS: binary is the default install method, the version determines the
   # binary path; the package branch pins =version of the distro package of the same
   # series). The set is the current MongoDB series.
@@ -27,12 +27,12 @@ input:
     enum: ["8.0.4", "7.0.15", "6.0.19"]
     description: >-
       MongoDB version (fixed set of binaries from Nexus). The binary install method
-      (essence.install_method, default) pulls the mongod binary of this version from
+      (vars.install_method, default) pulls the mongod binary of this version from
       Nexus; the package method pins =version of the mongodb-org distro package. The
       list is closed — an arbitrary version is not accepted.
 
   # memory_mb: memory budget for MongoDB. WiredTiger cacheSizeGB is computed as a share
-  # of it (essence.memory_reserve_percent). min:256 — mongod with a tiny cache is unstable.
+  # of it (vars.memory_reserve_percent). min:256 — mongod with a tiny cache is unstable.
   # Not set → cacheSizeGB isn't written (mongod uses its own default max(0.5*(RAM-1GB), 256MB)).
   memory_mb:
     type: integer
@@ -40,7 +40,7 @@ input:
     min: 256
     description: >-
       Memory budget for MongoDB on the host, MB. WiredTiger cacheSizeGB is computed as a
-      share of it (essence.memory_reserve_percent — the remainder is reserved for the
+      share of it (vars.memory_reserve_percent — the remainder is reserved for the
       OS/mongod). Not set → cacheSizeGB isn't set (mongod applies its own default).
 
   # wiredtiger_cache_gb: EXPLICIT WiredTiger cache size, GB (overrides the value computed
@@ -85,21 +85,21 @@ input:
     additional_properties: true
 
 # ── Declarative input invariants (validate:, INPUT-ONLY) ────────────────────
-# validate: — cross-field preconditions on INPUT (only input.*; essence/soulprint are
+# validate: — cross-field preconditions on INPUT (only input.*; service vars/soulprint are
 # unavailable — a structural CEL barrier). First failure → 422 validation_failed BEFORE
 # incarnation commit.
 validate:
   # system-users guard (symmetry with redis/dragonfly default_admin): operator-extra
   # (input.users) CANNOT take the name of the SYSTEM user (default_admin is added from
-  # essence.system_users — an operator with the same name would hijack the admin account
-  # used for in-cluster access). INPUT-ONLY (essence isn't available in validate): the
-  # reserved-names list is hardcoded here (= essence.system_users keys). ★ PILOT: only
+  # vars.system_users — an operator with the same name would hijack the admin account
+  # used for in-cluster access). INPUT-ONLY (service vars isn't available in validate): the
+  # reserved-names list is hardcoded here (= vars.system_users keys). ★ PILOT: only
   # default_admin (replica/monitoring/backup — later slices).
   - that: "!has(input.users) || input.users.all(u, u.name != 'default_admin')"
-    message: "the MongoDB username 'default_admin' is reserved for the system admin user: pick another name — default_admin is created automatically from essence"
+    message: "the MongoDB username 'default_admin' is reserved for the system admin user: pick another name — default_admin is created automatically from service vars"
 
 # ── Computed scenario-vars (compute:) ──────────────────────────────────────
-# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input/essence/
+# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input/service vars/
 # incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible as
 # compute.<name> in tasks/apply.input AND in state_changes. Removes duplication of the
 # merge() translation: declared HERE ONCE, both the body and state reference
@@ -117,31 +117,31 @@ compute:
   # the rest, health-runCommand, bootstrap of the first admin via localhost-exception).
   # The body reads compute.admin_user in the plugin calls community.mongo.user/pinged
   # (username/name) and in the Vault path of its password. A literal (not from
-  # input/essence): the system user's name is a service invariant. default_admin's
+  # input/service vars): the system user's name is a service invariant. default_admin's
   # password — secret/mongo/<inc>/users/default_admin#password.
   admin_user: "${ 'default_admin' }"
   # Effective MongoDB version: required enum, ONE for both install methods (binary pulls
   # the binary of this version from Nexus; package pins =version). Declared ONCE (state +
   # plugin + install-URL read it). required guarantees presence → bare input.version.
   mongo_version: "${ input.version }"
-  # install: structure {method, base_url, version, allow_private} from essence.install_method +
-  # essence.binary_base_url + input.version. method always; base_url/version/allow_private when
+  # install: structure {method, base_url, version, allow_private} from vars.install_method +
+  # vars.binary_base_url + input.version. method always; base_url/version/allow_private when
   # method=binary. Symmetry with redis compute.install.
   install: >-
-    ${ (default(essence.install_method, 'binary') == 'binary')
+    ${ (default(vars.install_method, 'binary') == 'binary')
          ? {
              'method':        'binary',
-             'base_url':      default(essence.binary_base_url, ''),
+             'base_url':      default(vars.binary_base_url, ''),
              'version':       input.version,
-             'allow_private': default(essence.binary_allow_private, true)
+             'allow_private': default(vars.binary_allow_private, true)
            }
          : { 'method': 'package' } }
-  # Effective host-layout: conf_dir/data_dir/log_dir/net_port from essence (author-context,
+  # Effective host-layout: conf_dir/data_dir/log_dir/net_port from service vars (author-context,
   # host invariant). The mongod.conf.tmpl template derives dbPath/path/port from them.
-  conf_dir: "${ default(essence.conf_dir, '/etc/mongodb') }"
-  data_dir: "${ default(essence.data_dir, '/var/lib/mongodb') }"
-  log_dir:  "${ default(essence.log_dir, '/var/log/mongodb') }"
-  net_port: "${ int(default(essence.net_port, 27017)) }"
+  conf_dir: "${ default(vars.conf_dir, '/etc/mongodb') }"
+  data_dir: "${ default(vars.data_dir, '/var/lib/mongodb') }"
+  log_dir:  "${ default(vars.log_dir, '/var/log/mongodb') }"
+  net_port: "${ int(default(vars.net_port, 27017)) }"
   # wiredtiger_cache_gb: effective WiredTiger cache size, GB. An explicit
   # input.wiredtiger_cache_gb OVERRIDES the value computed from memory_mb (a ternary —
   # explicit takes priority); otherwise memory_mb*reserve/100 / 1024. Both absent → 0.0 (no
@@ -150,7 +150,7 @@ compute:
     ${ has(input.wiredtiger_cache_gb)
          ? double(input.wiredtiger_cache_gb)
          : (has(input.memory_mb)
-              ? double(int(input.memory_mb) * int(default(essence.memory_reserve_percent, 50)) / 100) / 1024.0
+              ? double(int(input.memory_mb) * int(default(vars.memory_reserve_percent, 50)) / 100) / 1024.0
               : 0.0) }
   # ── mongo_config: FULL mongod.conf object (host-invariant, rendered via toYaml) ─
   # ★ MongoDB vs redis: mongod.conf is nested YAML (net/storage/security/systemLog —
@@ -162,25 +162,25 @@ compute:
   # render (unlike redis's bind primary_ip). Layers are DEEP-merged (manually per section,
   # since CEL's merge() is a SHALLOW last-wins that would wipe out the entire net/storage
   # subtree):
-  #   - net    = essence.mongo_config.net + {bindIp, port} (maxIncomingConnections from essence is preserved);
-  #   - storage= essence.mongo_config.storage + {dbPath, engine} + WiredTiger cache (has-guard);
+  #   - net    = vars.mongo_config.net + {bindIp, port} (maxIncomingConnections from service vars is preserved);
+  #   - storage= vars.mongo_config.storage + {dbPath, engine} + WiredTiger cache (has-guard);
   #   - security = {authorization: enabled} (PILOT: authorization is ALWAYS enabled — access
   #                under default_admin, bootstrap via localhost-exception);
   #   - systemLog = {destination file, path, logAppend} (host-layout log_dir);
-  #   - remaining subtrees of essence.mongo_config (operationProfiling/…) — as-is;
+  #   - remaining subtrees of vars.mongo_config (operationProfiling/…) — as-is;
   #   - input.mongo_settings — passthrough ON TOP (last-wins at the top level of subtrees;
   #     an operator who sets a whole passthrough section takes it over — the typical path is
   #     memory_mb/wiredtiger_cache_gb, not raw storage/net).
   mongo_config: >-
     ${ merge(
-         default(essence.mongo_config, {}),
+         default(vars.mongo_config, {}),
          {
            'net': merge(
-             default(default(essence.mongo_config, {}).net, {}),
+             default(default(vars.mongo_config, {}).net, {}),
              { 'bindIp': '0.0.0.0', 'port': compute.net_port }
            ),
            'storage': merge(
-             default(default(essence.mongo_config, {}).storage, {}),
+             default(default(vars.mongo_config, {}).storage, {}),
              { 'dbPath': compute.data_dir, 'engine': 'wiredTiger' },
              compute.wiredtiger_cache_gb > 0.0
                ? { 'wiredTiger': { 'engineConfig': { 'cacheSizeGB': compute.wiredtiger_cache_gb } } }
@@ -211,9 +211,9 @@ state_changes:
   # wiredtiger_cache_gb: effective cache size (same compute that went into mongo_config).
   - set: wiredtiger_cache_gb
     value: "${ compute.wiredtiger_cache_gb }"
-  # sysctl_settings: applied host tuning (the same essence.sysctl_settings that goes into the render).
+  # sysctl_settings: applied host tuning (the same vars.sysctl_settings that goes into the render).
   - set: sysctl_settings
-    value: "${ default(essence.sysctl_settings, {}) }"
+    value: "${ default(vars.sysctl_settings, {}) }"
   # mongo_users — array of MongoUser (passwords NOT in state, Vault). ★ database/state are
   # added MANUALLY via .map: $type-defaults (types.yml MongoUser) are only added at the
   # top-level input, NOT into nested array-element fields — while state_schema.mongo_users

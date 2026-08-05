@@ -1,5 +1,5 @@
 # L0 trial for the version-aware validator (assert, #6) — NEGATIVE "correct directive,
-# WRONG version". This is a guard on the very essence of version-awareness: directive bgsave-cpulist —
+# WRONG version". This is a guard on the very service vars of version-awareness: directive bgsave-cpulist —
 # a REAL redis.conf directive, but it appeared in Redis 8.x (present in the catalog[8.2], NOT in
 # catalog[7.4]). The operator chose version 7.4.1 (7.4 series, enum of builds shipped to Nexus)
 # -> the assert must reject bgsave-cpulist: on redis 7.4 no such directive exists,
@@ -35,7 +35,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"

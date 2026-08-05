@@ -13,7 +13,7 @@ import (
 // (accumulated in acc).
 //
 // ★ Isolation barrier #2 (compute is host-invariant): the resolve context is
-// run-level only (input/register/incarnation/essence + state from
+// run-level only (input/register/incarnation/vars + state from
 // incarnationVars) — no soulprint.self or soulprint.hosts (AllowHosts=false).
 // A soulprint.* reference in a compute expression hits CEL no-such-key (a
 // structural barrier, not a text guard): compute is host-independent by
@@ -43,7 +43,7 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 		Input:       in.Input,
 		Register:    in.Register,
 		Incarnation: incarnationVars(in, len(in.Hosts)),
-		Essence:     in.Essence,
+		Vars:        in.ServiceVars,
 		Ctx:         in.Ctx,
 	}
 	for _, cv := range block {

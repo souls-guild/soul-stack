@@ -1,6 +1,6 @@
 # L0 test destroy: teardown of an incarnation deployed the BINARY way (upstream-tarball).
 # Render-only, hermetic. Paired with teardown-package — covers the binary branch of the gate on
-# essence.install_method (v1→v2: install method moved out of state into essence).
+# vars.install_method (v1→v2: install method moved out of state into service vars).
 #
 # What we assert:
 #   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
@@ -20,9 +20,9 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # ★ v1→v2: install method and conf_dir are read from essence (install/conf_dir moved out of
-  # state). binary branch of the gate — essence.install_method=binary.
-  essence:
+  # ★ v1→v2: install method and conf_dir are read from service vars (install/conf_dir moved out of
+  # state). binary branch of the gate — vars.install_method=binary.
+  vars:
     install_method: binary
     binary_base_url: "https://artifacts.example.com/dragonfly"
     binary_version: "1.39.0"

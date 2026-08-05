@@ -1021,7 +1021,7 @@ func scopedIncReader() *fakeIncDB {
 		now := time.Now()
 		return staticRow{values: []any{
 			name, "redis", "v1", int(1),
-			[]byte("{}"), []byte("{}"), "ready",
+			[]byte("{}"), "ready",
 			[]byte(nil), any(nil),
 			now, now, []string{coven},
 			[]byte("{}"), // traits

@@ -26,10 +26,10 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # essence substrate: persistence_presets + memory_reserve (to recompute maxmemory
+  # service vars substrate: persistence_presets + memory_reserve (to recompute maxmemory
   # from the saved state.memory_mb) + host-layout (v11→v12: conf_dir/data_dir/
-  # modules_base_url moved from state into essence, Variant A; a repeat run reads them from here).
-  essence:
+  # modules_base_url moved from state into service vars, Variant A; a repeat run reads them from here).
+  vars:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
@@ -117,7 +117,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. HOT-RELOAD: community.redis.config to the live plain instance. addr 6379 (plain),
     #    tls=false, rewrite=false (NIM-53: the file is the render from step 1), config = recomputed

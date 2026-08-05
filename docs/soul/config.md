@@ -1,6 +1,6 @@
 # The soul.yml format
 
-The config of the `soul` agent on a managed host. One file per host, located by convention at `/etc/soul/soul.yml` (the exact path is at the operator's discretion, the binary accepts `--config <path>`). It applies both in the pull daemon and in the push mode — but in push most of the fields are not needed, because Keeper passes the `soul` a rendered run plan (`ApplyRequest` as protojson) through stdin with a single `soul apply` command, not through a long-lived configuration. Raw Destiny/Essence does not reach a push host.
+The config of the `soul` agent on a managed host. One file per host, located by convention at `/etc/soul/soul.yml` (the exact path is at the operator's discretion, the binary accepts `--config <path>`). It applies both in the pull daemon and in the push mode — but in push most of the fields are not needed, because Keeper passes the `soul` a rendered run plan (`ApplyRequest` as protojson) through stdin with a single `soul apply` command, not through a long-lived configuration. Raw Destiny and service vars do not reach a push host.
 
 A working example with all fields is [`examples/soul/soul.yml`](../../examples/soul/soul.yml). This document **normatively types** all fields — the parser is written against it.
 
@@ -328,7 +328,7 @@ Config hot-reload with write-back of the changed value to disk is a cross-cuttin
 ## What does NOT live in soul.yml
 
 - **The `auth:` block.** Soul does not authenticate via JWT — only mTLS / SoulSeed, see [identity.md](identity.md). JWT — for Keeper operators, not for Soul.
-- **Destiny and Essence.** They do not reach the Soul host raw at all — Keeper renders them on its side (`vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)). Soul receives only the ready plan: in pull — `ApplyRequest` over the live stream, in push — `ApplyRequest` (protojson) through stdin. They are not on Soul's disk.
+- **Destiny and service vars.** They do not reach the Soul host raw at all — Keeper renders them on its side (`vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)). Soul receives only the ready plan: in pull — `ApplyRequest` over the live stream, in push — `ApplyRequest` (protojson) through stdin. They are not on Soul's disk.
 - **The SoulSeed token.** Used once in `soul init`: passed by the `--token` flag or via the env `SOUL_BOOTSTRAP_TOKEN` (the flag beats the env; the env form is preferable — the flag shows up in `ps`/shell history; stdin is not read). The file with the token, if the delivery channel put it on disk, is an artifact of the delivery channel, not of the config (see [onboarding.md → On the Soul side](onboarding.md)).
 - **A list of modules or their sources.** The module registry lives on Keeper (the catalog `keeper.yml::plugins.soul_modules[]` + Sigil grants, [ADR-065](../adr/0065-core-module-installed.md)); Soul receives modules via the core module `core.module.installed` (pull, RPC `FetchModule`) or by a bulk transfer in a push session (see [modules.md](modules.md)).
 - **The `version:` field.** The version of the Soul binary is a git ref / SHA of the artifact; it is not duplicated in `soul.yml` (see [ADR-007](../adr/0007-versioning-git-ref.md)).

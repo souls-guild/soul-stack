@@ -44,7 +44,7 @@ fixtures:
       password: admin-user-secret-pass
     secret/redis/create/users/app:
       password: app-user-secret-pass
-  essence:
+  vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -82,7 +82,7 @@ fixtures:
       - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
 
 assert:
-  # users.acl: system (4, from essence) + admin (allkeys +@all) + app (fine-grained).
+  # users.acl: system (4, from service vars) + admin (allkeys +@all) + app (fine-grained).
   # Direct proof that valid "broad" perms passed the pattern and reached
   # render_context.vars.users (deep-compare map) with per-user vault passwords. Disambiguator
   # from redis.conf is path + register anchor.
@@ -129,7 +129,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   # Both users passed the pattern in input validation and ended up in write-model state.
   # redis_users is an ARRAY of AclUser [{name,perms,state}] WITHOUT password (keeper-side vault).

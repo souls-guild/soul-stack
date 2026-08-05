@@ -9,7 +9,7 @@ description: >-
   redis_sentinel are NOT touched (write-model stays as is).
 
   ★ BEST-EFFORT (to be honest): the migration is a pure function of the old state (ADR-019:
-  essence/input/vault are FORBIDDEN in migration-CEL). So the intent
+  service vars/input/vault are FORBIDDEN in migration-CEL). So the intent
   fields are filled in like this:
 
     DERIVABLE from redis_config (reverse-folding the computed result):
@@ -23,9 +23,9 @@ description: >-
       - sentinel_quorum ← redis_sentinel.quorum if present, otherwise 0;
       - replicas        ← number of redis_hosts with role==replica (if the roster is present in state);
 
-    DEFAULT (fundamentally absent from v2-state, and essence is unavailable in migration-CEL):
+    DEFAULT (fundamentally absent from v2-state, and service vars are unavailable in migration-CEL):
       - tls.cert_ref/key_ref/ca_ref ← '' (PEM Vault PATHS were not stored in state; on day-2
-        restart ca_ref is taken from essence.tls_ca_ref — a stable author-context);
+        restart ca_ref is taken from vars.tls_ca_ref — a stable author-context);
       - install ← {method: package} (v2 did not record the install method);
       - modules ← [] (v2 did not record Redis modules);
       - sysctl_settings ← {} (v2 did not record host tuning; it was actually applied on hosts,
@@ -42,7 +42,7 @@ description: >-
   Optional-field idiom (maxmemory_policy): a flat set WITHOUT if: always creates the key,
   so "optional" is expressed by its VALUE, not by presence — we always set it, and when
   the source is missing write '' (empty string), symmetric to the namedfield convention
-  in create (empty = "operator didn't explicitly choose", directive comes from the essence substrate).
+  in create (empty = "operator didn't explicitly choose", directive comes from the service vars substrate).
 
 transform:
   # ── TLS intent from redis_config (reverse-folding) ───────────────────────
@@ -97,7 +97,7 @@ transform:
       path:  state.maxmemory_policy
       value: "${ 'maxmemory-policy' in state.redis_config ? state.redis_config['maxmemory-policy'] : '' }"
 
-  # ── DEFAULT fields (absent in v2-state, essence unavailable) ──────────────────────
+  # ── DEFAULT fields (absent in v2-state, service vars unavailable) ──────────────────────
   - set:
       path:  state.install
       value:

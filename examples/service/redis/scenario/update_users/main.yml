@@ -11,7 +11,7 @@ description: >-
 # The FULL NEW set of operator-extra ACL users (AclUser array, types.yml/ADR-062 $type)
 # - the same type as the create input.users element. The array entirely replaces state.redis_users
 # (bulk-replace). Empty/omitted array = remove ALL operator-extra (system users
-# stay, merged in from essence). Password is NOT in the input (Vault convention) and needs
+# stay, merged in from service vars). Password is NOT in the input (Vault convention) and needs
 # no manual pre-seed either — the first task generates the missing ones (see below).
 #
 # ★ Why an array, not a single user (like add_user): update_users is about the SET ("fix them all"),
@@ -39,23 +39,23 @@ input:
       ENTIRELY replaces incarnation.state.redis_users (bulk-replace): a user missing
       from the array is removed from the ACL. perms is the FULL ACL string (Redis ACL directives as-is),
       validated against the AclUser pattern. System service users are NOT included here (merged in
-      from essence). Empty array = remove all operator-extra. The form opens
+      from service vars). Empty array = remove all operator-extra. The form opens
       pre-filled with the current set (prefill_from_state: state.redis_users).
 
 # ── Declarative input invariants (validate:) ───────────────────────────────────
 # ★ system-ACL-users guard (design d2): no element of input.users may take the name
 # of a SYSTEM user (default/replica/monitoring/sentinel/haproxy). System users are merged
-# into users.acl from essence ON TOP of operator-extra (last-wins) - an operator `replica`
+# into users.acl from service vars ON TOP of operator-extra (last-wins) - an operator `replica`
 # would silently override replication's replica-perms. Caught at INPUT validation (422 BEFORE applying), same as
-# create/add_user. INPUT-ONLY (essence not available): the name list is hardcoded (= create).
+# create/add_user. INPUT-ONLY (service vars not available): the name list is hardcoded (= create).
 # .all() over the ARRAY iterates AclUser elements; the name is field u.name. input.users is required
 # -> no has() wrapper needed (always present in the effective input).
 validate:
   - that: "input.users.all(u, !(u.name in ['default', 'replica', 'monitoring', 'sentinel', 'haproxy']))"
-    message: "ACL user name is reserved for a system user (default/replica/monitoring/sentinel/haproxy): choose a different name - system users are created automatically from essence"
+    message: "ACL user name is reserved for a system user (default/replica/monitoring/sentinel/haproxy): choose a different name - system users are created automatically from service vars"
 
 # ── Computed scenario vars (compute:) ─────────────────────────────────────────
-# Run-level context (input/essence/incarnation - no soulprint). tls_* is the
+# Run-level context (input/vars/incarnation - no soulprint). tls_* is the
 # plugin connection discriminator from state.tls (state_schema v3), identical to add_user/
 # restart/update_config: ACL LOAD connects over TLS if Redis is on TLS.
 compute:
@@ -71,7 +71,7 @@ compute:
   # tls_ca - the PEM CA CONTENT for the connection from the NAMED state.tls.ca_ref (vault() resolves
   # the Vault PATH to PEM), symmetric to tls_port from state.tls.port. After rotate_tls (changes
   # state.tls.ca_ref to a new path) the connection picks up the CURRENT CA - not a stale
-  # essence default.
+  # service vars default.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
 # ── Mutating incarnation.state ─────────────────────────────────────────────────
@@ -127,7 +127,7 @@ tasks:
   #    redis.conf/TLS are NOT touched - update_users changes ONLY the ACL (apply destiny renders
   #    the whole brick, but we only bring the ACL to life in step 2; redis.conf on disk won't change with
   #    the same config - idempotent render). version comes from state; conf_dir/data_dir come from
-  #    essence (v11->v12, host-layout moved into essence, Option A).
+  #    service vars (v11->v12, host-layout moved into service vars, Option A).
   - name: Re-render users.acl with the new ACL user set (full file on disk)
     apply:
       destiny: redis
@@ -138,20 +138,20 @@ tasks:
         # with no repository declared -> core.pkg `apt install redis-server=<version>` against
         # the distro repository, which doesn't carry that version (env exited 100). We assemble
         # the SAME structure as create (deploy-body -> compute.install from
-        # essence.install_method) - a single install method. Difference from covenant.install:
+        # vars.install_method) - a single install method. Difference from covenant.install:
         # version comes from the DEPLOYED state (redis_version), not input.version (a repeat
         # run doesn't reinstall the version).
         install: >-
-          ${ (default(essence.install_method, 'package') == 'binary')
+          ${ (default(vars.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
-                   'base_url':      default(essence.binary_base_url, ''),
+                   'base_url':      default(vars.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, false)
+                   'allow_private': default(vars.binary_allow_private, false)
                  }
-               : default(essence.install_package, {'method': 'package'}) }
-        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
+               : default(vars.install_package, {'method': 'package'}) }
+        conf_dir: "${ default(vars.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(vars.data_dir, '/var/lib/redis') }"
         # ★ REDESIGN default_admin (2026-06-30): apply.input.password is REMOVED (destiny redis
         # no longer accepts it - requirepass was dropped). masteruser/masterauth are MERGED into
         # config as ordinary directives ON TOP of the deployed state.redis_config (it's stored
@@ -167,12 +167,12 @@ tasks:
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
-        modules_base_url: "${ default(essence.modules_base_url, '') }"
-        # ★★ CRITICAL (system-ACL-users d2): the FULL users.acl = SYSTEM users (from essence,
+        modules_base_url: "${ default(vars.modules_base_url, '') }"
+        # ★★ CRITICAL (system-ACL-users d2): the FULL users.acl = SYSTEM users (from service vars,
         # FIRST) + operator-extra (the NEW input.users - an AclUser ARRAY, ON TOP). update_users
         # re-renders the WHOLE file (not an append) -> WITHOUT merging in system users this render would WIPE OUT
         # replica/monitoring/sentinel/haproxy -> breaking replication/sentinel/health-check
-        # on a repeat run. System users are merged in on EVERY render from essence.system_acl_users (they
+        # on a repeat run. System users are merged in on EVERY render from vars.system_acl_users (they
         # are NOT in state - state holds only operator-extra, item 7 of d2). last-wins: operator-
         # extra overrides a same-named system user (but system names are locked out by the validate-guard
         # - there should be no collision). Each one's Vault password is secret/redis/<inc>/users/<name>
@@ -182,9 +182,9 @@ tasks:
         # update_users - maintenance of an already-running instance.
         users: >-
           ${ merge(
-               merge(default(essence.system_acl_users, {}).map(name, {
+               merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    essence.system_acl_users[name],
+                   'perms':    vars.system_acl_users[name],
                    'state':    'on',
                    'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }

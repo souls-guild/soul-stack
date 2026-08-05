@@ -206,7 +206,7 @@ func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 
 // TestValidateInput_AclUserPerms_ValidAccepted — valid Redis ACL strings PASS
 // the pattern: point permissions, broad ones (allkeys +@all), and REAL system
-// strings from essence (replica/monitoring/sentinel/haproxy, with hyphenated
+// strings from the service vars (replica/monitoring/sentinel/haproxy, with hyphenated
 // subcommands like sentinel|is-master-down-by-addr). Closes the guard — the
 // pattern doesn't false-reject.
 func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {

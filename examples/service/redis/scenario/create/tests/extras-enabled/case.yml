@@ -5,7 +5,7 @@
 # no longer a counter-case for "disabled"). Guards that THP + logrotate + sysctl
 # render on default input.
 #
-# Extras are mode-agnostic and host-invariant; sysctl_settings is an essence
+# Extras are mode-agnostic and host-invariant; sysctl_settings is a service-vars
 # data table (not in operator input), reaching destiny via apply.input.
 #
 # Tail indices of destiny (standalone run: mode-guard 0, destiny 1..21, PING 22;
@@ -42,7 +42,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -72,7 +72,7 @@ fixtures:
       vm.swappiness:        "1"
       net.core.somaxconn:   "65535"
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 with essence/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 with service vars/_default.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if
     # either set is empty (silent fail-open is unacceptable - without them replication/sentinel<->redis
     # AUTH would break).
@@ -137,7 +137,7 @@ assert:
     # -- sysctl bulk drop-in (unconditional) --------------------------------------
     # core.sysctl.applied: the module itself writes a deterministic drop-in from a map
     # (sorted keys) + a targeted sysctl -p on change (reload: auto), it does not mark
-    # the change itself. settings come from essence (passed via apply.input). ignore_failures
+    # the change itself. settings come from service vars (passed via apply.input). ignore_failures
     # -> `sysctl -e -p` (container mode). The only core.sysctl.applied in the plan.
     - module: core.sysctl.applied
       params_subset:

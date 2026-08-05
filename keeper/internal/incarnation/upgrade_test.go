@@ -646,8 +646,8 @@ func TestUnlockForRerun_FromErrorLocked(t *testing.T) {
 		// (scenario, apply_id). create path (last==created) → input from
 		// spec.input, no recipe-probe.
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
-			{values: []any{"create", "01HFAILEDRUN0000000000000A"}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked"}},
+			{values: []any{"create", "01HFAILEDRUN0000000000000A", []byte(`{"scenario_name":"create","input":{"version":"8.6.1"}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -718,19 +718,18 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy path: the last
-// failed run was add_user (≠ created `create`), so its input comes from the
-// recipe's apply_run (NOT spec.input) → allowed, Scenario=="add_user",
-// Input=={user:alice}.
+// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy path: the last failed
+// run was add_user, and its input comes from that attempt's OWN history snapshot
+// → allowed, Scenario=="add_user", Input=={user:alice}. One source since
+// NIM-408: no apply_runs probe, and no create-vs-day-2 branch to pick it.
 func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000E"
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			// spec.input carries version — must NOT leak through (day-2 uses the recipe).
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
-			{values: []any{"add_user", "01HFAILEDRUN0000000000000E"}},
-			{values: []any{[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}},
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked"}},
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000E",
+				[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -743,15 +742,15 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 		t.Errorf("Scenario = %q, want add_user (last failed operational run)", res.Scenario)
 	}
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil - recipe.input NOT read (operational regression)")
+		t.Fatal("UnlockResult.Input = nil - the attempt's own snapshot NOT read")
 	}
 	if res.Input["user"] != "alice" {
-		t.Errorf("UnlockResult.Input[user] = %v, want alice (recipe.input)", res.Input["user"])
+		t.Errorf("UnlockResult.Input[user] = %v, want alice (the attempt's snapshot)", res.Input["user"])
 	}
 	if _, leaked := res.Input["version"]; leaked {
-		t.Error("UnlockResult.Input carries spec.input[version] - operational must take recipe.input, not spec")
+		t.Error("UnlockResult.Input carries a value from outside the attempt's own snapshot")
 	}
-	// recipe without from_upgrade → FromUpgrade=false (rerun from scenario/, ADR-0068).
+	// a snapshot without from_upgrade → FromUpgrade=false (rerun from scenario/, ADR-0068).
 	if res.FromUpgrade {
 		t.Error("UnlockResult.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
@@ -764,24 +763,24 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_RecipeNull_FailClosed — day-2, but the recipe is
-// missing (recipe IS NULL / apply_run purged → ErrNoRows): fail-closed with
-// ErrRerunInputUnavailable, transaction not committed (no silent
-// bootstrap-input).
-func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
+// TestUnlockForRerun_SnapshotNull_FailClosed — the attempt is on record but its
+// history row carries no replayable snapshot (a terminal committed without a
+// RunSpec in hand, or a row predating the column): fail-closed with
+// ErrRerunInputUnavailable, transaction not committed. Rerunning on defaults
+// would silently do something the operator did not ask for.
+func TestUnlockForRerun_SnapshotNull_FailClosed(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked", "create", []byte(`{"input":{"version":"8.6.1"}}`)}},
-			{values: []any{"add_user", "01HFAILEDRUN0000000000000F"}},
-			{err: pgx.ErrNoRows}, // recipe-probe: no row (WHERE recipe IS NOT NULL)
+			{values: []any{[]byte(`{"primary":"redis-01"}`), "error_locked"}},
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000F", []byte(nil)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UnlockForRerun(context.Background(), pool, "redis-prod", "x", "archon-alice", "01HRERUNHIST000000000000F", "01HRERUN00000000000000000F")
 	if !errors.Is(err, ErrRerunInputUnavailable) {
-		t.Fatalf("err = %v, want ErrRerunInputUnavailable (recipe unavailable)", err)
+		t.Fatalf("err = %v, want ErrRerunInputUnavailable (no replayable snapshot)", err)
 	}
 	if tx.committed {
 		t.Error("tx committed (fail-closed: rejection without mutation)")
@@ -791,16 +790,18 @@ func TestUnlockForRerun_Day2_RecipeNull_FailClosed(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_BareIncarnation — bare incarnation (created_scenario
-// IS NULL) locked by a day-2 scenario: rerun-last works via the recipe path
-// (created==nil → day-2), Scenario=="add_user", Input from recipe.
+// TestUnlockForRerun_Day2_BareIncarnation — a bare incarnation (no create
+// scenario ever ran) locked by a day-2 scenario. It is no longer a distinct
+// PATH — the branch that asked "was this the creator?" is gone with the two
+// sources — and this holds that the case still resolves: Scenario=="add_user",
+// Input from that attempt's own snapshot.
 func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{}`), "error_locked", nil, []byte(`{}`)}}, // created_scenario = NULL
-			{values: []any{"add_user", "01HFAILEDRUN0000000000000B"}},
-			{values: []any{[]byte(`{"input":{"user":"bob"}}`)}},
+			{values: []any{[]byte(`{}`), "error_locked"}},
+			{values: []any{"add_user", "01HFAILEDRUN0000000000000B",
+				[]byte(`{"scenario_name":"add_user","input":{"user":"bob"}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -820,17 +821,18 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_CustomCreateScenario — incarnation was CREATED via
-// `create_cluster`, last failure = `create_cluster` → create path:
-// Scenario=="create_cluster", input from spec.input (restart of the CREATING
-// scenario with its own values).
+// TestUnlockForRerun_CustomCreateScenario — the incarnation was created via a
+// scenario of its own name, `create_cluster`, and that is what failed. The
+// restart takes its name and its input from that attempt's history row like any
+// other; there is no create-specific path left to take.
 func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000C"
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"shards":3}`), "error_locked", "create_cluster", []byte(`{"input":{"shards":3,"version":"8.6.1"}}`)}},
-			{values: []any{"create_cluster", "01HFAILEDRUN0000000000000C"}},
+			{values: []any{[]byte(`{"shards":3}`), "error_locked"}},
+			{values: []any{"create_cluster", "01HFAILEDRUN0000000000000C",
+				[]byte(`{"scenario_name":"create_cluster","input":{"shards":3}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -843,7 +845,7 @@ func TestUnlockForRerun_CustomCreateScenario(t *testing.T) {
 		t.Errorf("Scenario = %q, want create_cluster (restart of the CREATING scenario)", res.Scenario)
 	}
 	if res.Input == nil {
-		t.Fatal("UnlockResult.Input = nil - spec.input cluster NOT read")
+		t.Fatal("UnlockResult.Input = nil - the attempt's own snapshot NOT read")
 	}
 	if shards, ok := res.Input["shards"].(float64); !ok || shards != 3 {
 		t.Errorf("UnlockResult.Input[shards] = %v (%T), want 3", res.Input["shards"], res.Input["shards"])
@@ -1073,16 +1075,16 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_FromUpgradeRecipe — the failed day-2 run was an
-// upgrade scenario (recipe.from_upgrade=true, ADR-0068): rerun-last returns
+// TestUnlockForRerun_Day2_FromUpgradeRecipe — the failed run was an upgrade
+// scenario (its snapshot carries from_upgrade=true, ADR-0068): rerun-last returns
 // FromUpgrade=true so RunSpec restarts it from upgrade/, not scenario/.
 func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
-			{values: []any{[]byte(`{"v":2}`), "error_locked", "create", []byte(`{}`)}},
-			{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000"}},
-			{values: []any{[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}},
+			{values: []any{[]byte(`{"v":2}`), "error_locked"}},
+			{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000",
+				[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}},
 		},
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
@@ -1092,7 +1094,7 @@ func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 		t.Fatalf("UnlockForRerun day-2 upgrade: %v", err)
 	}
 	if !res.FromUpgrade {
-		t.Error("UnlockResult.FromUpgrade = false, want true (recipe.from_upgrade -> rerun from upgrade/)")
+		t.Error("UnlockResult.FromUpgrade = false, want true (snapshot from_upgrade -> rerun from upgrade/)")
 	}
 	if res.Scenario != "to_v2" {
 		t.Errorf("Scenario = %q, want to_v2", res.Scenario)

@@ -1,8 +1,8 @@
 # L0 trial for create sentinel: TWO aclfiles (system-ACL-users d2 + default_admin redesign).
 #   1. users.acl (redis-server): system default_admin/replica/monitoring/sentinel/haproxy
-#      from essence.system_acl_users, perms 1:1, each with its OWN vault password users/<name>.
+#      from vars.system_acl_users, perms 1:1, each with its OWN vault password users/<name>.
 #   2. sentinel-users.acl (sentinel daemon, SECOND aclfile): system default_admin/monitoring/
-#      sentinel/haproxy from essence.system_acl_users_sentinel (a DIFFERENT perms set —
+#      sentinel/haproxy from vars.system_acl_users_sentinel (a DIFFERENT perms set —
 #      sentinel commands). ★ default_admin REDESIGN: all system users (incl. default_admin) go through
 #      a SINGLE users/<name>#password branch (the old "default → main secret" is removed);
 #      the built-in default is rendered `off`.
@@ -37,9 +37,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -129,7 +129,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # sentinel-users.acl (sentinel daemon, SECOND aclfile): system sentinel users (4, WITH
     # default_admin). ★ default_admin REDESIGN: all system users (incl. default_admin) go through
@@ -173,7 +173,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   state_changes:
     redis_type: sentinel

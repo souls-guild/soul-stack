@@ -9,7 +9,7 @@
 #      ca.crt in /etc/redis/tls/, content = vault(NEW ref), mode 0600 owner redis.
 #   1b. ★ users.acl re-rendered with the system users merged in (core.file.rendered): the
 #      same destiny redis brick renders users.acl too → system users from
-#      essence.system_acl_users (default_admin/replica/monitoring/sentinel/haproxy) are
+#      vars.system_acl_users (default_admin/replica/monitoring/sentinel/haproxy) are
 #      merged in FIRST; without merging them in rotate_tls would WIPE THEM OUT
 #      (apply.input.password removed: requirepass no longer exists).
 #   2. the applier-register tls_certs is MATERIALIZED: the engine emits a terminal
@@ -48,13 +48,13 @@ fixtures:
     os: { arch: amd64 }
 
   # ★ default_admin REDESIGN: system ACL users are merged into users.acl on re-render
-  # (destiny redis re-renders users.acl too). rotate_tls merges them in from essence
+  # (destiny redis re-renders users.acl too). rotate_tls merges them in from service vars
   # FIRST (like the deploy bodies); without them the re-render would WIPE OUT the
   # system users from users.acl.
-  # host-layout (conf_dir/data_dir/modules_base_url) lives in essence (v11→v12,
+  # host-layout (conf_dir/data_dir/modules_base_url) lives in service vars (v11→v12,
   # Variant A): moved out of state, rotate_tls reads it from there (conf_dir sets the
   # PEM/tls-*-file path).
-  essence:
+  vars:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -156,7 +156,7 @@ assert:
 
     # 1b. ★ default_admin REDESIGN: the re-render MUST merge in the system users into
     #     users.acl (the same destiny redis brick that renders the PEM). System users
-    #     from essence.system_acl_users go FIRST (default_admin/replica/monitoring/
+    #     from vars.system_acl_users go FIRST (default_admin/replica/monitoring/
     #     sentinel/haproxy), operator-extra from state.redis_users ON TOP (empty here
     #     → system users only). Passwords come from the vault() users/<name> branch.
     #     Without merging them in, rotate_tls would WIPE OUT the system users.
@@ -202,7 +202,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 1c. ★ GUARD for replica→master AUTH: rotate_tls re-renders the ENTIRE destiny
     #     redis brick (incl. redis.conf), so the config map MUST carry
@@ -252,7 +252,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: a terminal core.noop.run(register=tls_certs):
     #    the onchanges-gate anchor (id disambiguator; register∪id, see

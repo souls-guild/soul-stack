@@ -298,3 +298,47 @@ Normative edits — [`docs/destiny/tasks.md §4`](../destiny/tasks.md) (an inclu
 **Alternatives weighed.** *Refusing the overlap fail-closed* — an error when a group construct carries a requisite **and** a descendant declares its own — was considered, and has the property that it would keep a later move to AND non-breaking. It was not taken: the combination has **no user** (a scan of the tree at `02cedf61` found 0 of 603 YAML files carrying a requisite on any of 31 appliers or 13 blocks), so the gate would only invalidate configurations that were valid in the public beta `v0.1.0-beta.1` without fixing anything real. *Introducing AND* is deferred to **NIM-351** with the design above recorded there; because this amendment fixes OR as normative, that change is a breaking one and must be announced as such.
 
 Normative edits — [`docs/destiny/tasks.md §6.5`](../destiny/tasks.md#65-block---inline-task-group) (the requisite-inheritance bullet corrected — it claimed the whole group is skipped when the condition is not met, which is only true for descendants with no requisite of their own — plus the composition rule), [`docs/scenario/orchestration.md §2.1.2`](../scenario/orchestration.md#212-the-appliers-own-keys---what-reaches-the-group-and-what-decides-before-it) (the union note expanded with a worked example). No code change: `unionNames`, `mergeBlockInheritance`, `mergeApplierInheritance`, `skipOnChanges` and `skipOnFail` already implement this. Guard tests pin the decision so it cannot drift silently — `keeper/internal/render/block_test.go`, `keeper/internal/render/applier_inheritance_test.go` (the union at render, both constructs) and `soul/internal/runtime/applyrunner_test.go` (the OR at the runner, including the widening case: an inherited requisite makes a task run when only the descendant's own source changed).
+
+### Amendment 2026-08-03 (NIM-410, [ADR-0082](0082-service-vars.md)): the scenario context loses the `essence` root — one flat `vars.*`
+
+The scenario template context this ADR fixed listed `essence` beside `input` / `incarnation` /
+`soulprint` / `register` / `vars`. **It no longer does.** A service's own defaults move from
+`essence/` into `vars/` and are read as `vars.*`, at the bottom of one flat namespace:
+
+```
+<service>/vars/*.yaml  →  destiny vars.yml  →  block: vars:  →  task vars:
+```
+
+The file rung exists only in the destiny pass — a scenario has no file layer, since
+`scenario/<name>/vars.yml` is documented but read by nothing. The upper rungs already composed this
+way (`resolveTaskVars` for file-under-task, `mergeBlockInheritance` for a block's); the service
+layer joins the bottom of that stack. A layer may now reference the layers BELOW it, because a task
+var used to reach the service layer as `${ essence.X }` and would otherwise get `var_unknown_ref`
+for the same expression spelled `${ vars.X }`; sideways stays refused. There is no operator rung — `incarnation.spec.essence` is removed with
+no successor, which is what made the merge possible: the one property that distinguished the two
+namespaces was that essence could be overridden from outside and a `vars` local could not.
+
+Consequences inside this ADR's grammar:
+
+- **`essence` leaves four name lists**, and it is worth naming them precisely because they are not
+  all the same kind of list: the reserved bindings for `loop:` `as:`/`index_as:`
+  (`loopReservedNames`, `shared/config/scenario_task.go`) and for a `state_changes` `foreach:`
+  (`foreachReservedBindings`, `scenario.go`); the reserved names for `compute:`
+  (`computeReservedNames`, `scenario.go`); the declared CEL context itself (`contextVars` and
+  `flowControlVars`, `shared/cel/engine.go`); and the roots left unqualified inside a
+  `soulprint.hosts.where(...)` predicate (`predicateContextRoots`, `shared/cel/hosts.go`). There is
+  no reserved-name list for task `vars:` — a task var shadowing a context root was never rejected,
+  which is exactly the gap `vars_shadows_service_var` now WARNs about. `vars` is already present in
+  every one of these, so the set of rejected names shrinks by one and nothing that used to validate
+  starts failing.
+- **A static `when:` predicate** may read `input.` / `vars.` / `incarnation.` as before; the
+  `essence.` form simply ceases to exist. The `include_when_dynamic_unsupported` and
+  `apply_when_dynamic_unsupported` refusals are unchanged in substance.
+- **The `apply:` boundary asymmetry is now visible rather than camouflaged.** In a scenario `vars.*`
+  means service vars plus locals; in a destiny it means that destiny's own `vars.yml` plus its task
+  locals, and nothing crosses except through `apply: input:`. This is the same asymmetry that
+  already forced `apply_when_dynamic_unsupported` (§2.1.2) — one word now names both sides of it,
+  and [`docs/destiny/vars.md`](../destiny/vars.md) states it head-on.
+- **A soul-lint WARNING `vars_shadows_service_var` is to be added (NIM-416)** — a scenario or
+  task var taking over a service var's name. Modelled on the existing `vars_collision`, which reports exactly this shape
+  for the file↔task pair; without it the merge would let one silently win.

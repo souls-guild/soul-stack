@@ -12,7 +12,7 @@
 #
 # What we assert (transfer-acceptance criteria shell->plugin):
 #   1. probe step (community.redis.role) renders connect params (addr localhost,
-#      password from vault, plaintext branch when essence.tls_enable is absent).
+#      password from vault, plaintext branch when vars.tls_enable is absent).
 #   2. block fan-out: 2 descendants (Restart + Wait-PONG) expand into
 #      RenderedTask via cross-cutting indices (block fan-out + serial:1 inheritance
 #      proven by the render assert TargetSIDs/SerialWidth in block_acceptance_test.go).

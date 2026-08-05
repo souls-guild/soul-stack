@@ -257,7 +257,7 @@ In `cluster` mode Redis-pub/sub is a classic broadcast (the message reaches all 
 
 ## Vault
 
-Storage of **all secrets** of the installation: PG DSN, JWT signing-key, mTLS PKI (Keeper-side + SoulSeed), SSH-CA (for `keeper.push` via Vault SSH provider), Sigil signing-key, Essence-secrets of services, credentials of cloud-drivers. **Required dependency** ([requirements.md](../requirements.md), [ADR-014](../adr/0014-operator-identity.md)).
+Storage of **all secrets** of the installation: PG DSN, JWT signing-key, mTLS PKI (Keeper-side + SoulSeed), SSH-CA (for `keeper.push` via Vault SSH provider), Sigil signing-key, service-vars secrets of services, credentials of cloud-drivers. **Required dependency** ([requirements.md](../requirements.md), [ADR-014](../adr/0014-operator-identity.md)).
 
 Vault prod configuration (AppRole + persistent backend + auto-unseal + least-privilege policy) is described in detail in [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md). Here is the operational part.
 
@@ -265,7 +265,7 @@ Vault prod configuration (AppRole + persistent backend + auto-unseal + least-pri
 
 | Engine | Mount | What is stored | Usage |
 |---|---|---|---|
-| KV (v1/v2) | `secret/` | `keeper/postgres` (DSN), `keeper/jwt-signing-key`, `keeper/redis` (password), `keeper/sigil-signing-key`, `keeper/sigil-keys/<key_id>` (R3 multi-anchor), Essence-service secrets | resolve `vault:` ref in the config and in CEL `vault(...)`. The KV mount version is detected automatically (probe), v1 and v2 work; Provisioning below raises v2 as the recommended default. **Sigil multi-anchor (R3, `sigil-keys/<key_id>`) - list/metadata operations, require KV v2.** |
+| KV (v1/v2) | `secret/` | `keeper/postgres` (DSN), `keeper/jwt-signing-key`, `keeper/redis` (password), `keeper/sigil-signing-key`, `keeper/sigil-keys/<key_id>` (R3 multi-anchor), service-vars secrets | resolve `vault:` ref in the config and in CEL `vault(...)`. The KV mount version is detected automatically (probe), v1 and v2 work; Provisioning below raises v2 as the recommended default. **Sigil multi-anchor (R3, `sigil-keys/<key_id>`) - list/metadata operations, require KV v2.** |
 | PKI | `pki/` (or `pki/soulstack/`) | Root + intermediate CA for SoulSeed mTLS | `Bootstrap`-RPC signs Soul Agent CSR via `pki/sign/<pki_role>` |
 | SSH | `ssh/` (optional) | SSH CA for `keeper.push` via `soul-ssh-vault` provider | `keeper.push` requests a signed SSH cert for a specific host before an SSH session |
 | Transit | (optional) | JWT signing without key export | post-MVP, see [ADR-014(b)](../adr/0014-operator-identity.md) |

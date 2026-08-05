@@ -11,11 +11,11 @@
 #
 # What we assert (slice acceptance criteria):
 #   1. COMPUTED maxmemory: memory_mb=1024 * reserve=75 / 100 = 768 → "768mb"
-#      (the computed layer overrode the essence default "256mb").
+#      (the computed layer overrode the service vars default "256mb").
 #   2. save/appendonly from the persistence preset (rdb): save non-empty, appendonly no.
-#   3. LAST-WINS on a CONFLICTING key: timeout exists both in the essence default (300) and
+#   3. LAST-WINS on a CONFLICTING key: timeout exists both in the service vars default (300) and
 #      in the operator's redis_settings (60) → merged is 60 (passthrough beats default).
-#   4. maxmemory-policy from input (volatile-lru) overrode essence (allkeys-lru).
+#   4. maxmemory-policy from input (volatile-lru) overrode service vars (allkeys-lru).
 #   5. passthrough redis_settings (tcp-backlog) made it into merged.
 #   6. users.acl was rendered with the operator's FULL ACL string; the user password —
 #      keeper-side vault() resolve per the convention secret/redis/<inc>/users/<name>.
@@ -55,11 +55,11 @@ fixtures:
       password: haproxy-sys-secret-pass
     secret/redis/create/users/app:
       password: app-user-secret-pass
-  # essence — the translation layer: persistence_presets (data-table),
+  # service vars — the translation layer: persistence_presets (data-table),
   # memory_reserve_percent (OS reserve), redis_config (default-merge substrate).
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -91,7 +91,7 @@ fixtures:
 # Simple typed operator input. memory_mb + persistence + policy + one
 # ACL-user with a full ACL string + passthrough redis_settings with a CONFLICTING
 # key (timeout).
-    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE REQUIRED: the create/sentinel.yml guard (assert 1b) breaks the render if either
     # set is empty (a silent fail-open is not acceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -164,7 +164,7 @@ assert:
         group: redis
         render_context:
           vars:
-            # SYSTEM (4, from essence.system_acl_users, MANDATORY merge — guard 1b)
+            # SYSTEM (4, from vars.system_acl_users, MANDATORY merge — guard 1b)
             # + operator-extra app (last-wins). app doesn't overlap system names.
             users:
               default_admin:
@@ -205,7 +205,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # redis.conf: the RESULT of merge(). This is where the main translation guard lives. Disambiguator
     # from users.acl — register-anchor redis_conf + path.
@@ -236,13 +236,13 @@ assert:
               # over them like any directive → statically survive a restart.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
-              # computed: 1024*75/100=768 → "768mb" (overrode essence "256mb").
+              # computed: 1024*75/100=768 → "768mb" (overrode service vars "256mb").
               maxmemory: "768mb"
-              # input.maxmemory_policy overrode essence allkeys-lru.
+              # input.maxmemory_policy overrode service vars allkeys-lru.
               maxmemory-policy: volatile-lru
-              # essence default, no conflict.
+              # service vars default, no conflict.
               maxclients: 10000
-              # LAST-WINS: redis_settings.timeout (60) overrode essence (300).
+              # LAST-WINS: redis_settings.timeout (60) overrode service vars (300).
               timeout: 60
               # persistence preset rdb.
               save: "900 1 300 10 60 10000"
@@ -261,7 +261,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # redis-server: enabled-at-boot. Disambiguator from the sentinel daemon
     # (core.service.running redis-sentinel — sentinel.yml is also active in
@@ -310,7 +310,7 @@ assert:
       - { name: app, perms: "~app:* +@read +@write -@dangerous", state: "on" }
     redis_hosts: []
     # sentinel single-host (standalone-equivalent). ★ Redesign: failover timings in
-    # master_settings (the effective per-master map of essence.sentinel_master_defaults over
+    # master_settings (the effective per-master map of vars.sentinel_master_defaults over
     # input.sentinel_master_settings; operator dict not set → defaults 5000/60000). settings —
     # global sentinel directives (not set → {}).
     redis_sentinel:

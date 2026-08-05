@@ -242,14 +242,19 @@ func DeleteAfterTeardown(
 
 	// (a) Archive the incarnation row — only if it's in destroying (same guard
 	// as DELETE: if the status already changed, don't archive the wrong row).
+	//
+	// `spec` is no longer copied: the column is gone from `incarnation` (NIM-408).
+	// The archive KEEPS its own `spec` column rather than dropping it — rows
+	// archived before this release hold real data there, and a compliance archive
+	// is the last place to delete history. New rows get its `{}` default.
 	const archiveIncarnationSQL = `
 INSERT INTO incarnation_archive (
     name, service, service_version, state_schema_version,
-    spec, state, status, status_details, created_by_aid,
+    state, status, status_details, created_by_aid,
     created_at, updated_at
 )
 SELECT name, service, service_version, state_schema_version,
-       spec, state, status, status_details, created_by_aid,
+       state, status, status_details, created_by_aid,
        created_at, updated_at
 FROM incarnation
 WHERE name = $1 AND status = 'destroying'

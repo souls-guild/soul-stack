@@ -163,7 +163,7 @@ func applySetValueErr(t *testing.T, valueExpr string) *EvalError {
 	return ee
 }
 
-// TestSet_SandboxForbidsContextVars — register/soulprint/essence/input are
+// TestSet_SandboxForbidsContextVars — register/soulprint/vars/input are
 // forbidden in set.value (a migration is a pure function of the old state, ADR-019):
 // these variables aren't declared in migration-CEL → resolution error. One
 // negative case per forbidden identifier.
@@ -171,7 +171,7 @@ func TestSet_SandboxForbidsContextVars(t *testing.T) {
 	for _, expr := range []string{
 		"${ register.foo }",
 		"${ soulprint.self.os.family }",
-		"${ essence.bar }",
+		"${ vars.bar }",
 		"${ input.baz }",
 	} {
 		t.Run(expr, func(t *testing.T) {

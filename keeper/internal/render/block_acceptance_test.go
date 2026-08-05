@@ -63,8 +63,8 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 	// render params with vault('secret/redis/redis-prod/users/default_admin#password')
 	// (★ default_admin REDESIGN 2026-06-30: restart/main.yml:117,156 — auth under
 	// the system default_admin) — engine built with a fixture KVReader (same pattern as
-	// TestAcceptance_SentinelReplicaExcludesMaster). essence isn't set →
-	// essence.tls_enable is absent → plaintext branch (default false), so
+	// TestAcceptance_SentinelReplicaExcludesMaster). service vars are not set →
+	// vars.tls_enable is absent → plaintext branch (default false), so
 	// vault(incarnation.state.tls.ca_ref) under compute.tls_on is NOT invoked.
 	engine, err := cel.New(cel.WithVault(stubKV{
 		"secret/redis/redis-prod":                     {"password": "fixture-redis-pass-16+"},
@@ -286,11 +286,11 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	// default → set explicitly in the fixture. replicas_per_master=2 — UNIFIED field d1 (2026-
 	// 06-25, formerly `replicas`): the sentinel branch's size guard checks size(hosts)==1+
 	// replicas_per_master (3==1+2). sentinel_quorum/sentinel_master_name were removed from the
-	// contract (quorum is AUTO size/2+1, master_name comes from essence) — no longer set.
+	// contract (quorum is AUTO size/2+1, master_name comes from the service vars) — no longer set.
 	// provision is EXPLICITLY disabled: create carries input.provision DEFAULT-ON ({enabled: true},
 	// decided 2026-06-30) — omitting the section would enable cloud-create + onboarding
 	// (core.cloud.created/registered), which this test (sentinel REPLICAOF master-exclusion)
-	// doesn't need and which would require essence.provision_*. Passing enabled:false so
+	// doesn't need and which would require vars.provision_*. Passing enabled:false so
 	// the merge does NOT apply default-on → the provision body is group-dropped, rendering a clean sentinel branch.
 	effectiveInput, err := config.ResolveInputValues(m.Input, map[string]any{
 		"redis_type":          "sentinel",
@@ -305,7 +305,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	in := RenderInput{
 		Scenario:    m,
 		Input:       effectiveInput,
-		Essence:     redisSentinelEssence(),
+		ServiceVars: redisSentinelVars(),
 		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     redisSentinelResolver{},
@@ -559,9 +559,9 @@ func (k stubKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
 	return nil, errors.New("stubKV: no secret " + path)
 }
 
-// redisSentinelEssence — essence backing for the redis create scenario (persistence
+// redisSentinelVars — service-vars backing for the redis create scenario (persistence
 // presets + reserve + a base redis_config), needed for merge() in apply:input.
-func redisSentinelEssence() map[string]any {
+func redisSentinelVars() map[string]any {
 	return map[string]any{
 		"memory_reserve_percent": 75,
 		"persistence_presets": map[string]any{

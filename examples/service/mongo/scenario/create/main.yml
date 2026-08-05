@@ -76,9 +76,9 @@ tasks:
   # `on: keeper` WITHOUT a roster dependency → Stratify keeps it in passage 0; plugin tasks
   # reading roster (soulprint.self) → passage > 0.
   #
-  # targets are COMPUTED from the SAME essence/input as the read-tasks (drift "what we
+  # targets are COMPUTED from the SAME service vars/input as the read-tasks (drift "what we
   # generate ≡ what we read" = a bug, the user list is NOT hardcoded): system users
-  # (essence.system_users keys — default_admin) + operator-extra input.users. policy
+  # (vars.system_users keys — default_admin) + operator-extra input.users. policy
   # alphanumeric/32 (mongo-password-safe).
   - name: Ensure mongo passwords exist in Vault (generate if absent)
     on: keeper
@@ -87,17 +87,17 @@ tasks:
       policy:
         length: 32
         charset: alphanumeric
-      targets: "${ default(essence.system_users, {}).map(name, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+      targets: "${ default(vars.system_users, {}).map(name, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
 
   # ── 1a. Install MongoDB — BINARY branch (Nexus tarball) ─────────────────────────
-  # Static gate (essence.install_method only → isStaticWhen) → render-phase GROUP-DROP: on a
+  # Static gate (vars.install_method only → isStaticWhen) → render-phase GROUP-DROP: on a
   # package incarnation the whole block is physically excluded from the plan. binary does NOT
   # carry a distro package → it SETS UP the distro user/group mongodb itself + downloads the
   # tarball + lays out mongod + its own systemd unit. arch: soulprint.self.os.arch (GOARCH) →
   # uname-m for the Nexus URL (amd64→x86_64, arm64→aarch64, everything else as-is — mapping
   # from redis vars.redis_arch).
   - name: Install MongoDB from the Nexus binary tarball
-    when: "default(essence.install_method, 'binary') == 'binary'"
+    when: "default(vars.install_method, 'binary') == 'binary'"
     block:
       # distro user/group mongodb (binary does NOT create them — the distro package does).
       # Group BEFORE user. system account without a login shell (mongodb is a service).
@@ -119,7 +119,7 @@ tasks:
 
       # Download the mongod tarball per-host from Nexus. Idempotency is native by SHA-256 of
       # content (core.url.fetched, analogous to If-None-Match). allow_private disables the
-      # SSRF-guard for the internal Nexus (essence.binary_allow_private, default true). URL:
+      # SSRF-guard for the internal Nexus (vars.binary_allow_private, default true). URL:
       # <base_url>/<arch>/mongodb-linux-<arch>-<version>.tgz (arch — uname-m mapping).
       - name: Fetch the MongoDB binary tarball
         module: core.url.fetched
@@ -177,7 +177,7 @@ tasks:
   # =version pin.
   - name: Install MongoDB from the distribution package
     module: core.pkg.installed
-    when: "default(essence.install_method, 'binary') != 'binary'"
+    when: "default(vars.install_method, 'binary') != 'binary'"
     retry: { count: 3, delay: 10s }
     params:
       name: mongodb-org
@@ -235,12 +235,12 @@ tasks:
 
   # ── 4. Host-tuning: sysctl (UNCONDITIONAL, MongoDB production notes) ─────────────────
   # core.sysctl.applied builds the drop-in /etc/sysctl.d/30-mongodb.conf (sorted keys) and
-  # applies sysctl -p on change. settings — essence.sysctl_settings (a host invariant, not an
+  # applies sysctl -p on change. settings — vars.sysctl_settings (a host invariant, not an
   # operator choice: tuning for MongoDB is a recommendation, there's no flag).
   - name: Apply mongo kernel tuning
     module: core.sysctl.applied
     params:
-      settings: "${ default(essence.sysctl_settings, {}) }"
+      settings: "${ default(vars.sysctl_settings, {}) }"
       filename: 30-mongodb
 
   # ── 5. Start mongod (both branches) ─────────────────────────────────────────────────
@@ -261,7 +261,7 @@ tasks:
   # is invariant). daemon-reload is handled by core.service itself.
   - name: Restart mongod because the binary, unit or config changed
     module: core.service.restarted
-    when: "default(essence.install_method, 'binary') == 'binary'"
+    when: "default(vars.install_method, 'binary') == 'binary'"
     onchanges: [mongod_bin, mongod_unit, mongod_conf]
     timeout: 30s
     params:
@@ -287,11 +287,11 @@ tasks:
   # with auth (username=default_admin + password), but the admin DB is empty → the auth
   # attempt fails Unauthorized → the plugin FALLS BACK to a no-auth localhost connection
   # (localhost-exception) and creates the first admin over it. default_admin's roles — from
-  # essence.system_users (root in admin). Password —
+  # vars.system_users (root in admin). Password —
   # secret/mongo/<inc>/users/default_admin#password (vault()-in-cell, seal-masking).
   # Idempotent: a repeat create → default_admin already exists → no-op (plugin usersInfo).
   #
-  # roles: essence.system_users[compute.admin_user] — an array of {role, db} (mongo model).
+  # roles: vars.system_users[compute.admin_user] — an array of {role, db} (mongo model).
   # run_once is NOT needed (standalone — a single host); on a multi-host replica-set this
   # would be run_once on the primary (NEXT slice).
   - name: Bootstrap the default_admin user (localhost-exception)
@@ -303,7 +303,7 @@ tasks:
       name:     "${ compute.admin_user }"
       database: admin
       state:    present
-      roles:    "${ essence.system_users[compute.admin_user] }"
+      roles:    "${ vars.system_users[compute.admin_user] }"
 
   # ── 9. Operator users (after bootstrap default_admin) ────────────────────────────
   # community.mongo.user for EACH input.users. The connection is ALREADY under default_admin

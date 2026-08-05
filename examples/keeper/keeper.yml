@@ -31,7 +31,7 @@ redis:
   addr: "redis-cluster.internal:6379"
   password_ref: vault:secret/keeper/redis
 
-# Vault — for PKI (SoulSeed), Essence secrets, SSH CA, cloud-driver credentials
+# Vault — for PKI (SoulSeed), service-vars secrets, SSH CA, cloud-driver credentials
 vault:
   addr: "https://vault.internal:8200"
   auth: { method: approle, role_id: keeper-prod, secret_id_file: /etc/keeper/vault-secret-id }

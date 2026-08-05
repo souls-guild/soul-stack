@@ -17,7 +17,7 @@
   all authentication (incl. internal: replication/cluster/sentinel/health-PING) goes through the
   SYSTEM user default_admin (`~* &* +@all`). default_admin comes from the MAP .vars.users via
   range, like the other system users (replica/monitoring/sentinel/haproxy) - it is added to
-  essence.system_acl_users, scenario merges it into users with its OWN Vault password. The former
+  vars.system_acl_users, scenario merges it into users with its OWN Vault password. The former
   unconditional line `user default on #<requirepass-hash> ~* &* +@all` is REMOVED (along with
   .vars.password, which fed it - it is no longer passed).
 

@@ -31,7 +31,7 @@ Layout of our `hello-world` (minimum - only `service.yml` and at least one scrip
 ```
 hello-world/
 ├── service.yml                     # manifest: name, state-schema version, structure incarnation.state
-├── essence/
+├── vars/
 │   └── _default.yaml               # baseline parameters for all incarnations (background)
 └── scenario/
     ├── create/
@@ -141,19 +141,19 @@ assert:
 
 Meaning: "at `input.greeting=hi`, exactly one task `core.file.present` with `content: hi` will be rendered." This catches regressions in the render (for example, if someone breaks CEL interpolation). Testing levels - [docs/destiny/testing.md](../destiny/testing.md).
 
-## 5. `essence/_default.yaml` - default parameters
+## 5. `vars/00-base.yaml` - default parameters
 
-Essence - hierarchically collected incarnation parameters. `_default.yaml` — baseline for all incarnations; You can put overlays on top of it using Coven-tags (`essence/coven/<label>.yaml`) and OS-family (`essence/os/<family>.yaml`).
+Service vars are the service's own default parameter values, read in CEL as `vars.*`. Every `*.yaml` directly inside `vars/` is a layer, deep-merged in lexical order — `00-base.yaml` first, because the filename carries the precedence. For conditional layers, write `vars/_stack.yaml` instead ([ADR-0082](../adr/0082-service-vars.md)).
 
-[`examples/service/hello-world/essence/_default.yaml`](../../examples/service/hello-world/essence/_default.yaml):
+[`examples/service/hello-world/vars/00-base.yaml`](../../examples/service/hello-world/vars/00-base.yaml):
 
 ```yaml
 greeting: hello from soul stack
 ```
 
-In our minimal scenario, `essence.greeting` is a **substrate for the future**: `create` itself requires `input.greeting` to be mandatory, so the text comes from the operator. Essence shows how a service could carry default values ​​without requiring them from the operator every time. Full regulatory specification of the essence assembly pipeline (overlays, `_stack.yaml`) - [docs/architecture.md → Essence](../architecture.md).
+In our minimal scenario, `vars.greeting` is a **substrate for the future**: `create` itself requires `input.greeting` to be mandatory, so the text comes from the operator. It shows how a service could carry default values without requiring them from the operator every time. Full spec — [`docs/service/manifest.md` → Service vars](../service/manifest.md#service-vars).
 
-> `input:` vs `essence` - what's the difference. `input:` is a contract **for calling a script** (the operator is passed at startup; validated before execution). `essence` are **incarnation parameters** collected from the git substrate + overlays; they are available as context and can be inserted into tasks. They have different life cycles: input - per-run, essence - per-incarnation.
+> `input:` vs service vars - what's the difference. `input:` is a contract **for calling a scenario** (the operator passes it at startup; validated before execution). Service vars are the **author's defaults**, resolved from the service repo at the version the run is pinned to. They have different life cycles: input is per-run, service vars are per-service-version — and nobody overrides the latter from outside. A fleet that needs different defaults forks the service repo ([ADR-007](../adr/0007-versioning-git-ref.md)).
 
 ## 6. Offline validation
 

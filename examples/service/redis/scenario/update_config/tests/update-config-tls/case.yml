@@ -3,10 +3,10 @@
 # Render-only, hermetic.
 #
 # ★ Invariant (convention §7a, ADR-057 amendment): the TLS discriminator is read from
-# the NAMED incarnation.state.tls (state_schema v3), NOT from essence/redis_config.
+# the NAMED incarnation.state.tls (state_schema v3), NOT from service vars/redis_config.
 # When state.tls.enable=true, the hot-reload step (community.redis.config) must connect
 # over TLS: addr on state.tls.port, tls=true, tls_ca = PEM CA from vault(state.tls.ca_ref)
-# (current after rotate_tls, NOT the essence default). Otherwise a plaintext connect to a TLS-only
+# (current after rotate_tls, NOT the service vars default). Otherwise a plaintext connect to a TLS-only
 # Redis fails CONFIG SET (and plaintext AUTH over an open plain port leaks the password).
 #
 # What we assert:
@@ -25,9 +25,9 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
-  # host-layout (conf_dir/data_dir/modules_base_url) — in essence (v11→v12, Option A):
+  # host-layout (conf_dir/data_dir/modules_base_url) — in service vars (v11→v12, Option A):
   # moved out of state, a re-run reads it from here.
-  essence:
+  vars:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
@@ -123,7 +123,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. HOT-RELOAD OVER TLS: community.redis.config, addr on the tls port (7379), tls=true,
     #    tls_ca = PEM CA, rewrite=false (NIM-53: step 1's redis.conf is the file's source of truth).

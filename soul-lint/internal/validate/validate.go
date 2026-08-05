@@ -124,6 +124,11 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		var svc *config.ServiceManifest
 		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, cfgOpts)
 		diags = append(diags, serviceCompatFloorDiags(opts.Path, svc)...)
+		// vars/ lives next to service.yml and is not reachable from the manifest,
+		// so it needs its own walk: a malformed _stack.yaml, a layer file parked
+		// in a subdirectory the resolver never enters, or the retired directory
+		// still in place (ADR-0082).
+		diags = append(diags, serviceVarsDiags(opts.Path)...)
 	case KindScenario:
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document
@@ -149,6 +154,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// validator at scenario parse time. Also resolves covenant fields
 		// (already merged into scn.Input above).
 		diags = append(diags, typeRefDiagnostics(opts.Path, scn)...)
+		// A scenario or task local taking over one of the service's own var
+		// names. The one cost of merging the two namespaces (ADR-0082): the
+		// shadow is deterministic and sometimes deliberate, so it warns.
+		diags = append(diags, serviceVarShadowDiags(opts.Path, scn)...)
 		// `on: ["${ incarnation.name }"]` is fail-closed (ADR-008 amendment/NIM-124:
 		// incarnation.name is not a Coven). Offline parity with the keeper render
 		// resolver (resolveCovenList) — the literal is visible without CEL eval.

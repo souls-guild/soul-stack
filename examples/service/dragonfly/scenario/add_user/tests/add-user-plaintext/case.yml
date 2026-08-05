@@ -3,7 +3,7 @@
 # the FULL users.acl (alice + previously deployed bob) through the `dragonfly` destiny and RELOADS via
 # community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
 #
-# essence.system_acl_users is NOT set → system top-up = default({}) → vars.users carries
+# vars.system_acl_users is NOT set → system top-up = default({}) → vars.users carries
 # ONLY operator-extra (alice+bob) — a clean assert of the operator layer. (System top-up
 # is checked by a separate case modeled on redis/add_user, here the focus is on the merge of alice+bob.)
 #
@@ -21,7 +21,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved to essence): already has
+  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved to service vars): already has
   # user bob; add_user adds alice.
   state:
     df_version: "1.39.0"
@@ -81,7 +81,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl to the live instance over a LOCAL UNIX socket
     #    (WITHOUT tls/tls_ca — UDS is not a network path). AUTH as default_admin (requirepass removed).

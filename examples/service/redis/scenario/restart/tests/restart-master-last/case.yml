@@ -41,7 +41,7 @@ fixtures:
   # connects as the system default_admin (username → AUTH), password from the users/default_admin
   # branch (the former secret/redis/<inc>#password is DROPPED). state is NOT set in the fixture →
   # has(incarnation.state) false → tls_on false → plaintext connection branch
-  # (the v3 discriminator reads state.tls.enable, not essence).
+  # (the v3 discriminator reads state.tls.enable, not service vars).
   vault:
     secret/redis/restart/users/default_admin:
       password: default-admin-secret-pass

@@ -1,12 +1,12 @@
 # L0 test of the version-aware validator for redis_settings directive names
-# (assert, #6) - POSITIVE case. essence carries a redis_directives catalog for
+# (assert, #6) - POSITIVE case. service vars carries a redis_directives catalog for
 # the 7.4 series (subset of real directives). input.version = 7.4.1 (enum of
 # builds rolled out to Nexus) -> series 7.4. redis_settings contains a VALID
 # directive name (appendfsync in catalog[7.4]) -> assert passes, the run
 # renders normally. Paired with redis-settings-directive-unknown (there an
 # unknown name breaks the render).
 #
-# The catalog in the fixture is a SUBSET (not the full essence/_default.yaml):
+# The catalog in the fixture is a SUBSET (not the full service vars/_default.yaml):
 # the assert checks key membership, for a positive case it's enough that the
 # passed name IS in the series set.
 name: redis_settings with a valid directive name for the chosen version passes the catalog assert
@@ -34,9 +34,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method is in essence (author-context, 2026-06-28): install method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method is in service vars (author-context, 2026-06-28): install method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master

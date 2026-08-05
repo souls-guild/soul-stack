@@ -60,7 +60,7 @@ Push mode reuses the same `soul` binary and the same modules as pull ([architect
 1. Keeper connects to the host through the chosen SSH provider.
 2. Compares by SHA-256 the target version of the `soul` binary with what lies in `/var/lib/soul-stack/bin/`. Matches — copying is skipped, otherwise the binary is delivered.
 3. **All modules registered in Keeper** are transferred (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — copying is skipped. Works thanks to the hot cache.
-4. `soul apply` is launched — the rendered plan (`ApplyRequest`: `apply_id` + `RenderedTask[]` after Keeper-side phases `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) is passed to stdin as protojson and is not written to disk. Raw Destiny/Essence does not reach the push host — Keeper resolves Vault on its side, the Soul only executes the plan. Stdout is read as an NDJSON stream of `TaskEvent` + a final `RunResult`.
+4. `soul apply` is launched — the rendered plan (`ApplyRequest`: `apply_id` + `RenderedTask[]` after Keeper-side phases `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) is passed to stdin as protojson and is not written to disk. Raw Destiny and service vars do not reach the push host — Keeper resolves Vault on its side, the Soul only executes the plan. Stdout is read as an NDJSON stream of `TaskEvent` + a final `RunResult`.
 5. Afterwards — the artifacts remain in the cache; host-side cleanup of stale versions is a separate operation, see [`../soul/modules.md`](../soul/modules.md).
 
 ### Key properties

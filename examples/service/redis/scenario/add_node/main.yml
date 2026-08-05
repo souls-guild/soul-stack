@@ -78,32 +78,32 @@ tasks:
         # core.pkg `apt install redis-server=<version>` with NO repository declared, and the
         # pinned version isn't in the host's distro repository → env exited 100. We assemble
         # the SAME structure as create (deploy-body → compute.install from
-        # essence.install_method) — the new node is installed the same way as the cluster.
+        # vars.install_method) — the new node is installed the same way as the cluster.
         # The binary branch's version — from the DEPLOYED state (the cluster's
         # redis_version), not input.version; the package branch is version-free.
         install: >-
-          ${ (default(essence.install_method, 'package') == 'binary')
+          ${ (default(vars.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
-                   'base_url':      default(essence.binary_base_url, ''),
+                   'base_url':      default(vars.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, false)
+                   'allow_private': default(vars.binary_allow_private, false)
                  }
-               : default(essence.install_package, {'method': 'package'}) }
+               : default(vars.install_package, {'method': 'package'}) }
         # conf_dir/data_dir: host-layout of the new node (directive B) — the SAME paths as
-        # the cluster. Read from essence (v11→v12, Variant A): layout is author-context,
+        # the cluster. Read from service vars (v11→v12, Variant A): layout is author-context,
         # the same source as create's compute.conf_dir/data_dir. The new node must know
         # the same layout, otherwise redis.conf/.so/tls would land in default paths,
         # diverging from the cluster. default(...,'/etc/redis'|'/var/lib/redis') — has()-safe,
-        # if essence doesn't override the layout (default paths). Desync risk accepted: if
-        # the operator changed essence.conf_dir/data_dir after create — the new node gets
+        # if service vars doesn't override the layout (default paths). Desync risk accepted: if
+        # the operator changed vars.conf_dir/data_dir after create — the new node gets
         # the NEW layout.
-        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
+        conf_dir: "${ default(vars.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(vars.data_dir, '/var/lib/redis') }"
         # ★ default_admin REDESIGN (2026-06-30): apply.input.password REMOVED (requirepass
         # dropped — the destiny no longer accepts password). Authentication is under the
         # system default_admin, its password arrives in users below (system users are
-        # added from essence).
+        # added from service vars).
         #
         # ★ STATIC replica→master AUTH in redis.conf — masteruser/masterauth are ADDED on
         # top of incarnation.state.redis_config (the source of truth from create) as
@@ -121,24 +121,24 @@ tasks:
                'masteruser': 'default_admin',
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/default_admin#password')
              }) }
-        # Source of Redis module .so files — from essence (the "modules ALWAYS ALL"
+        # Source of Redis module .so files — from service vars (the "modules ALWAYS ALL"
         # directive): the new cluster node pulls the same module set from the same source
-        # as the cluster. essence.modules_base_url — author-context (v11→v12); default ''
+        # as the cluster. vars.modules_base_url — author-context (v11→v12); default ''
         # if not set (Redis 8+ — modules are built-in, base_url unused).
-        modules_base_url: "${ default(essence.modules_base_url, '') }"
+        modules_base_url: "${ default(vars.modules_base_url, '') }"
         # ★★ CRITICAL (system-ACL-users d2): the new node MUST get the same users.acl as
-        # the cluster — SYSTEM users (from essence, FIRST: replica/monitoring/sentinel/
+        # the cluster — SYSTEM users (from service vars, FIRST: replica/monitoring/sentinel/
         # haproxy) + operator-extra (state.redis_users — an ARRAY of AclUser, wave 1b, ON
         # TOP). WITHOUT the system replica user the new node CANNOT replicate (PSYNC) —
         # the cluster won't accept it as a replica. System users are NOT in state (item 7
-        # d2) — added from essence. Vault password from the same
+        # d2) — added from vars. Vault password from the same
         # secret/redis/<inc>/users/<name>#password branch. operator-extra:
         # .map(u, {u.name: …}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
-               merge(default(essence.system_acl_users, {}).map(name, {
+               merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    essence.system_acl_users[name],
+                   'perms':    vars.system_acl_users[name],
                    'state':    'on',
                    'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }

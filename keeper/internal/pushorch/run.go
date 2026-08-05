@@ -238,7 +238,7 @@ func (r *PushRun) ListRows(ctx context.Context, filter ListFilter, offset, limit
 //  1. MarkRunning;
 //  2. LoadByInventory (filter terminal/onboarding + lease-presence);
 //  3. assemble synthetic ScenarioManifest + pushDestinyResolver, run through
-//     render.Pipeline.Render (destinyIsolated by design — register/state/essence/
+//     render.Pipeline.Render (destinyIsolated by design — register/state/
 //     soulprint.hosts are unavailable);
 //  4. ToProtoTasks + ApplyRequest for each targeted SID;
 //  5. per-host SendApply via SshDispatcher (concurrent, see fanOut);
@@ -292,7 +292,7 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		Input:    req.Input,
 		Hosts:    hosts,
 		Destiny:  resolver,
-		// Essence/Register/RegisterByHost are empty: push run is not tied to
+		// ServiceVars/Register/RegisterByHost are empty: push run is not tied to
 		// an incarnation, scenario-scope is unavailable (same logic as destiny phase
 		// of scenario-runner: render-pipeline itself guarantees destiny isolation).
 		Incarnation: render.IncarnationMeta{Name: syntheticScenarioName},

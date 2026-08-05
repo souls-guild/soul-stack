@@ -22,7 +22,7 @@ package scenario
 // pre-flight never supplied a state-reading assert, so the gap was invisible
 // until day-2 scenarios of a real service ran against a real incarnation.
 //
-// Same shape as NIM-271 (pre-flight resolved essence from a synthetic
+// Same shape as NIM-271 (pre-flight resolved service vars from a synthetic
 // incarnation), and fixed the same way — pre-flight takes the input run() would.
 
 import (
@@ -66,7 +66,7 @@ state_schema:
   type: object
   properties: {}
 `)
-	write("essence/_default.yaml", "base_marker: default\n")
+	write("vars/00-base.yaml", "base_marker: default\n")
 
 	// Bare read: no has() around it. With State absent this is a hard CEL error.
 	write("scenario/verify_bare/main.yml", `name: verify_bare

@@ -12,7 +12,7 @@ import (
 // The merge() CEL function ([templating.md §2.3], [ADR-010 Amendment 2026-06-22]).
 // Merges maps left to right by TOP-level key. Two forms:
 //
-//	${ merge(essence.redis.defaults, input.redis_settings) }   → map  (varargs)
+//	${ merge(vars.redis_defaults, input.redis_settings) }   → map  (varargs)
 //	${ merge(a, b, c) }                                         → map  (varargs)
 //	${ merge(input.users.map(name, {...})) }                   → map  (one list(map))
 //

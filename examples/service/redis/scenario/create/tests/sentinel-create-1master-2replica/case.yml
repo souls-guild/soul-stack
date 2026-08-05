@@ -20,7 +20,7 @@
 #   3. plugin community.redis.replica: addr=127.0.0.1:6379 (per-host invariant,
 #      local), master_addr=10.0.0.1:6379 (master election).
 #   4. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (AUTO:
-#      size(3)/2+1=2). master_name=master (essence default).
+#      size(3)/2+1=2). master_name=master (service vars default).
 #
 # ATTENTION L0 limitation: apply.input is host-invariant in the pilot (resolved on
 # the FIRST targeted host, resolveApplyInput) -> render_context.self in destiny =
@@ -66,9 +66,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method - in essence (author-context, 2026-06-28): the install method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method - in service vars (author-context, 2026-06-28): the install method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -88,7 +88,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server + sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users of redis-server + sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) breaks render if
     # either set is empty (a silent fail-open is not acceptable - without them
     # replication/sentinel<->redis AUTH would break).
@@ -175,7 +175,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # -- REPLICAOF for replicas (community.redis.replica) --------------------
     # addr=127.0.0.1:6379 (per-host local invariant), master_addr - master
@@ -200,7 +200,7 @@ assert:
 
     # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
     # monitor.ip - HOST-INVARIANT master address (master election node-1).
-    # quorum=2 (AUTO: size(3)/2+1). master_name=master (essence default). auth_pass -
+    # quorum=2 (AUTO: size(3)/2+1). master_name=master (service vars default). auth_pass -
     # keeper-side vault() resolve. The only active one.
     # * #7: config carries per-master failover timings (defaults 5000/60000) under keys
     # `sentinel <opt> <master>` - the plugin's classifyConfig sorts them into per-master.

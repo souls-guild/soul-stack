@@ -28,7 +28,7 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-  essence:
+  vars:
     redis_type: cluster
     memory_reserve_percent: 75
     persistence_presets:

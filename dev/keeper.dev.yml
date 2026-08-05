@@ -156,7 +156,7 @@ allow_unsafe_single_path_multi_keeper: false
 # matches keeper-b.dev.yml and the mega-test stand (3x acolytes:2).
 acolytes: 2
 
-# Ceiling on the onboarding-barrier await_timeout (ADR-061): provision run budget = max_await_timeout + 10m deploy -> 20m. fail-fast: a VM usually comes online in ~5m, a large timeout would mask an enroll failure (essence redis: join_wait 10m + await 8m fit within it).
+# Ceiling on the onboarding-barrier await_timeout (ADR-061): provision run budget = max_await_timeout + 10m deploy -> 20m. fail-fast: a VM usually comes online in ~5m, a large timeout would mask an enroll failure (redis service vars: join_wait 10m + await 8m fit within it).
 max_await_timeout: 10m
 
 # VoyageWorker pool (ADR-043): claim+execute for unified Voyage runs

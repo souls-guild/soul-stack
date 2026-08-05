@@ -57,8 +57,8 @@ tasks:
 // TestToolsCall_IncarnationCreate_TraitsProjectedToSpec — top-level `traits`
 // on MCP-create reaches the spec.traits jsonb INSERT arg (source of truth
 // incarnation.traits, projected to souls.traits). REST parity with
-// TestIncarnation_Create_TraitsProjectedToSpec.
-func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
+// TestIncarnation_Create_TraitsGoToTheColumnNotTheSpec.
+func TestToolsCall_IncarnationCreate_TraitsGoToTheColumn(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
@@ -71,25 +71,11 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
 	if len(pool.insertIncArgs) < 11 {
 		t.Fatalf("insertIncArgs len = %d, want ≥11", len(pool.insertIncArgs))
 	}
-	specBytes, ok := pool.insertIncArgs[4].([]byte)
+	// There is no spec argument any more — the column is dropped (NIM-408) and the
+	// traits column is their source of truth. $10 is where they land.
+	traitsBytes, ok := pool.insertIncArgs[9].([]byte)
 	if !ok {
-		t.Fatalf("insertIncArgs[4] spec = %T, want []byte", pool.insertIncArgs[4])
-	}
-	var spec map[string]any
-	if err := json.Unmarshal(specBytes, &spec); err != nil {
-		t.Fatalf("spec not JSON: %v", err)
-	}
-	traits, ok := spec["traits"].(map[string]any)
-	if !ok {
-		t.Fatalf("spec.traits = %v (%T), want object", spec["traits"], spec["traits"])
-	}
-	if traits["team"] != "dba" {
-		t.Errorf("spec.traits.team = %v, want dba", traits["team"])
-	}
-	// traits column ($11) also carries the set (TraitsFromSpec → inc.Traits).
-	traitsBytes, ok := pool.insertIncArgs[10].([]byte)
-	if !ok {
-		t.Fatalf("insertIncArgs[10] traits = %T, want []byte", pool.insertIncArgs[10])
+		t.Fatalf("insertIncArgs[9] traits = %T, want []byte", pool.insertIncArgs[9])
 	}
 	var col map[string]any
 	if err := json.Unmarshal(traitsBytes, &col); err != nil {
@@ -133,7 +119,7 @@ func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	specBytes, _ := pool.insertIncArgs[4].([]byte)
+	specBytes, _ := pool.insertIncArgs[3].([]byte)
 	var spec map[string]any
 	_ = json.Unmarshal(specBytes, &spec)
 	if _, has := spec["traits"]; has {
@@ -319,7 +305,7 @@ func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 
 // TestToolsCall_IncarnationCreate_ExplicitCreate — an explicit
 // create_scenario=create (marked create:true on disk) starts EXACTLY
-// `create`, with the name saved to incarnation.created_scenario ($12).
+// `create`, with the name saved to incarnation.created_scenario ($11).
 // Contrast to bare/required.
 func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
@@ -336,10 +322,10 @@ func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 		t.Errorf("RunSpec.ScenarioName = %q, want create", starter.gotSpec.ScenarioName)
 	}
 	// created_scenario column ($12) = create.
-	if len(pool.insertIncArgs) < 12 {
-		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
+	if len(pool.insertIncArgs) < 11 {
+		t.Fatalf("insertIncArgs len = %d, want ≥11", len(pool.insertIncArgs))
 	}
-	if cs, _ := pool.insertIncArgs[11].(string); cs != "create" {
+	if cs, _ := pool.insertIncArgs[10].(string); cs != "create" {
 		t.Errorf("created_scenario col = %q, want create", cs)
 	}
 }
@@ -398,11 +384,11 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 		t.Errorf("scenario start calls = %d, want 0 (bare, no run)", starter.calls)
 	}
 	// created_scenario col ($12) = NULL (nil).
-	if len(pool.insertIncArgs) < 12 {
-		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
+	if len(pool.insertIncArgs) < 11 {
+		t.Fatalf("insertIncArgs len = %d, want ≥11", len(pool.insertIncArgs))
 	}
-	if pool.insertIncArgs[11] != nil {
-		t.Errorf("created_scenario col = %v, want nil (NULL for bare)", pool.insertIncArgs[11])
+	if pool.insertIncArgs[10] != nil {
+		t.Errorf("created_scenario col = %v, want nil (NULL for bare)", pool.insertIncArgs[10])
 	}
 	// apply_id absent from output (omitempty).
 	var res toolsCallResult

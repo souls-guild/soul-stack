@@ -1,5 +1,5 @@
 # L0 test for the version-aware validator of redis_settings directive names (assert, #6) —
-# NEGATIVE. essence carries a redis_directives catalog for series 7.4. input.version = 7.4.1
+# NEGATIVE. service vars carries a redis_directives catalog for series 7.4. input.version = 7.4.1
 # (enum of builds shipped in Nexus) → series 7.4. redis_settings contains an UNKNOWN name
 # (typo `maxmemoyr` — not in the catalog) → assert false → render aborts on the KEEPER SIDE
 # (422 assert-failed) BEFORE any dispatch, with a clear message. Paired with
@@ -33,7 +33,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"

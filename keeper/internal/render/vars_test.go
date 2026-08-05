@@ -125,6 +125,145 @@ func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
 	}
 }
 
+// TestResolveTaskVars_SeesServiceVarBelow — the merge of ADR-0082 in one test.
+// A task var may reach DOWN into the service's own vars, because before the
+// merge it reached them by spelling `${ essence.X }`, a different root that was
+// always in scope. Refusing `${ vars.X }` now would turn a working scenario into
+// var_unknown_ref for no reason an author could act on.
+func TestResolveTaskVars_SeesServiceVarBelow(t *testing.T) {
+	e := newEngine(t)
+	// base.Vars is the service layer, exactly as hostVars seeds it.
+	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
+
+	got, err := resolveTaskVars(e, nil, map[string]any{
+		"acl_path": "${ vars.conf_dir }/users.acl",
+	}, base)
+	if err != nil {
+		t.Fatalf("a task var must see the service layer below it: %v", err)
+	}
+	if got.Vars["acl_path"] != "/etc/redis/users.acl" {
+		t.Errorf("acl_path = %#v, want /etc/redis/users.acl", got.Vars["acl_path"])
+	}
+	// The service var itself is still there — the task layer adds, it does not
+	// replace the map.
+	if got.Vars["conf_dir"] != "/etc/redis" {
+		t.Errorf("the service layer must survive under the task layer: %#v", got.Vars)
+	}
+}
+
+// TestResolveTaskVars_ShadowsAndDerivesFromTheSameName — the shape ADR-0082 §1
+// sells as the profit of the merge, and the one a naive dependency graph turns
+// into a cycle it cannot explain. A task var may redefine a service var IN TERMS
+// OF the value it is shadowing; under two roots this was `${ essence.conf_dir }`
+// and needed no rule.
+func TestResolveTaskVars_ShadowsAndDerivesFromTheSameName(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
+
+	got, err := resolveTaskVars(e, nil, map[string]any{
+		"conf_dir": "${ vars.conf_dir }/conf.d",
+	}, base)
+	if err != nil {
+		t.Fatalf("a task var must be able to derive from the same name below it: %v", err)
+	}
+	if got.Vars["conf_dir"] != "/etc/redis/conf.d" {
+		t.Fatalf("conf_dir = %#v, want /etc/redis/conf.d", got.Vars["conf_dir"])
+	}
+}
+
+// TestResolveTaskVars_SelfReferenceWithNothingBelowIsACycle — the other half.
+// With no lower layer to read, a var referencing its own name IS a cycle, and
+// must still be reported as one.
+func TestResolveTaskVars_SelfReferenceWithNothingBelowIsACycle(t *testing.T) {
+	e := newEngine(t)
+
+	_, err := resolveTaskVars(e, nil, map[string]any{"x": "${ vars.x }-loop"}, cel.Vars{})
+	if err == nil {
+		t.Fatal("a self-reference with no layer below must be a cycle")
+	}
+	if !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("err = %v, want ErrVarCycle", err)
+	}
+}
+
+// TestResolveTaskVars_MutualCycleStillCaught — shadow-and-derive must not blunt
+// real cycle detection: two task vars referencing each other are still a cycle
+// even when both names also exist below.
+func TestResolveTaskVars_MutualCycleStillCaught(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Vars: map[string]any{"a": "A", "b": "B"}}
+
+	_, err := resolveTaskVars(e, nil, map[string]any{
+		"a": "${ vars.b }-1",
+		"b": "${ vars.a }-2",
+	}, base)
+	if err == nil {
+		t.Fatal("a mutual reference between two task vars is still a cycle")
+	}
+	if !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("err = %v, want ErrVarCycle", err)
+	}
+}
+
+// TestResolveTaskVars_ShadowsServiceVar — the ladder is outermost-first, so a
+// task var of the same name WINS. This is the cost of one flat namespace, and
+// the reason soul-lint warns about it (`vars_shadows_service_var`, NIM-416).
+func TestResolveTaskVars_ShadowsServiceVar(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
+
+	got, err := resolveTaskVars(e, nil, map[string]any{"conf_dir": "/opt/redis"}, base)
+	if err != nil {
+		t.Fatalf("resolveTaskVars: %v", err)
+	}
+	if got.Vars["conf_dir"] != "/opt/redis" {
+		t.Errorf("conf_dir = %#v, want the task value to shadow the service one", got.Vars["conf_dir"])
+	}
+}
+
+// TestResolveTaskVars_ServiceVarUnderFileVarUnderTaskVar — the whole ladder in
+// one assertion: service < file < task. Each layer supplies a key nobody else
+// has, plus the shared name they all claim.
+func TestResolveTaskVars_ServiceVarUnderFileVarUnderTaskVar(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Vars: map[string]any{"who": "service", "only_service": 1}}
+
+	got, err := resolveTaskVars(e,
+		map[string]any{"who": "file", "only_file": 2},
+		map[string]any{"who": "task", "only_task": 3},
+		base)
+	if err != nil {
+		t.Fatalf("resolveTaskVars: %v", err)
+	}
+	if got.Vars["who"] != "task" {
+		t.Errorf("who = %#v, want the innermost layer to win", got.Vars["who"])
+	}
+	for k, want := range map[string]any{"only_service": 1, "only_file": 2, "only_task": 3} {
+		if got.Vars[k] != want {
+			t.Errorf("%s = %#v, want %#v — every layer must contribute", k, got.Vars[k], want)
+		}
+	}
+}
+
+// TestResolveTaskVars_StillCannotSeeFileVarThroughService — the downward opening
+// must not become a sideways one. The service layer is below BOTH, so its
+// presence gives a task var no path to a file var.
+func TestResolveTaskVars_StillCannotSeeFileVarThroughService(t *testing.T) {
+	e := newEngine(t)
+	base := cel.Vars{Vars: map[string]any{"svc": "SERVICE"}}
+
+	_, err := resolveTaskVars(e,
+		map[string]any{"fv": "FILE"},
+		map[string]any{"tv": "${ vars.fv }-from-task"},
+		base)
+	if err == nil {
+		t.Fatal("a task var must still not see a file var, service layer or not")
+	}
+	if !errors.Is(err, ErrVarUnknownRef) {
+		t.Errorf("err = %v, want ErrVarUnknownRef", err)
+	}
+}
+
 // TestResolveTaskVars_Cycle proves a task-var→task-var cycle yields
 // ErrVarCycle with a trace. Guard test (case #2/#4 on the task layer).
 func TestResolveTaskVars_Cycle(t *testing.T) {

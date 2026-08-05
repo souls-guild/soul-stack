@@ -23,7 +23,7 @@ func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, service, "v1", int(1),
-		[]byte("{}"), stateBytes, "ready",
+		stateBytes, "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits

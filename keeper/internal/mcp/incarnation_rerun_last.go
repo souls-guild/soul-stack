@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -17,6 +18,10 @@ import (
 type incarnationRerunLastArgs struct {
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
+	// Input — operator input for the restart, used ONLY when the failed attempt
+	// carries no replayable snapshot (NIM-408). Parity with REST: a recovery path,
+	// not an override.
+	Input map[string]any `json:"input,omitempty"`
 }
 
 // incarnationRerunLastOutput — output of keeper.incarnation.rerun-last
@@ -99,7 +104,11 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	applyID := audit.NewULID()
 
 	// Unlock step under FOR UPDATE: error_locked → applying, skipping ready (race-free).
-	res, err := incarnation.UnlockForRerun(ctx, h.deps.IncarnationDB, a.Name, a.Reason, claims.Subject, applyID, applyID)
+	res, err := incarnation.UnlockForRerunWithInput(ctx, h.deps.IncarnationDB, a.Name, a.Reason, claims.Subject, applyID, applyID, a.Input)
+	if errors.Is(err, incarnation.ErrRerunInputNotNeeded) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'input' is not accepted here: the last failed run is replayable from its own record")
+	}
 	if err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
@@ -123,7 +132,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: a.Name,
-		ServiceRef:      serviceRef,
+		ServiceRef:      incarnation.RerunServiceRef(serviceRef, res),
 		ScenarioName:    res.Scenario,
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,

@@ -683,7 +683,7 @@ func parseHosts(params *structpb.Struct) ([]hostInput, error) {
 
 // parseJoinWait reads optional param `join_wait_timeout` in two forms:
 //   - duration string convention `duration` Soul Stack (`"15m"`/`"90s"`/`"1d"`) —
-//     symmetric to `await_timeout` in core.soul.registered; essence sets it
+//     symmetric to `await_timeout` in core.soul.registered; a service var sets it
 //     (`provision_join_wait_timeout`) via provision scenario;
 //   - number of seconds (float64) — back-compat with ADR-063 (int, seconds).
 //

@@ -1,6 +1,6 @@
 # L0 guard (NIM-53 bug #1, negative): the old persistence value (rdb_aof) is no longer in the enum
 # update_config → rejected at INPUT validation (ResolveInputValues) BEFORE render. Enforces
-# the invariant "old aof/rdb_aof are not accepted": they aren't keys of essence.persistence_presets,
+# the invariant "old aof/rdb_aof are not accepted": they aren't keys of vars.persistence_presets,
 # accepting them would break render with no-such-key → incarnation error_locked (see the positive
 # persistence-canonical-value). The enum must reject them BEFORE applying, with a clear rejection.
 name: update_config rejects a legacy persistence value (rdb_aof) at input validation
@@ -11,7 +11,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  essence:
+  vars:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
     data_dir: /var/lib/redis

@@ -14,8 +14,8 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # host-layout — in essence (v11→v12, Variant A): moved out of state, a re-run reads it from here.
-  essence:
+  # host-layout — in service vars (v11→v12, Variant A): moved out of state, a re-run reads it from here.
+  vars:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -80,7 +80,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl against a live plain instance.
     #    * default_admin REDESIGN: AUTH under default_admin (username + its Vault password).

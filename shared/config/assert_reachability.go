@@ -8,7 +8,7 @@ package config
 // assert is NOT a property of the assert alone; it depends on what the
 // predicate reads and on how the run was started:
 //
-//   - an assert over `input.` / `essence.` / `incarnation.` is answered
+//   - an assert over `input.` / `vars.` / `incarnation.` is answered
 //     pre-flight on BOTH paths — 422, nothing mutated;
 //   - an assert that reads the roster (`soulprint.*`) is answered pre-flight
 //     ONLY where the roster in front of the gate is the one the assert is about:

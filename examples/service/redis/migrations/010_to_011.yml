@@ -8,7 +8,7 @@ description: >-
   redis_hosts/install/topology/provisioned_*/seeded_from) is NOT touched.
 
   ★ BEST-EFFORT (honestly): a migration is a pure function of the old state (ADR-019:
-  essence/input/vault in migration-CEL are FORBIDDEN). Fields not present in v10-state
+  service vars/input/vault in migration-CEL are FORBIDDEN). Fields not present in v10-state
   are filled by back-deriving them from existing ones or with a role default — the exact
   value is restored on the next create-override.
 

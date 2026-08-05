@@ -68,7 +68,7 @@ input:
       node_exporter listen address (--web.listen-address). Defaults to :9100
       (the standard node_exporter port).
 
-  # Textfile hardware collectors for node-exporter. Default [] (from essence): on a VM
+  # Textfile hardware collectors for node-exporter. Default [] (from service vars): on a VM
   # there's no hardware, only the node_exporter core is installed without oneshot collectors.
   node_exporter_collectors:
     type: array

@@ -17,7 +17,7 @@ import (
 	"testing"
 )
 
-// updateUsersSystemUsersCase carries a two-user new set plus the full system set in essence —
+// updateUsersSystemUsersCase carries a two-user new set plus the full system set in the service's vars —
 // every class of secret the render reads.
 const updateUsersSystemUsersCase = "../../../examples/service/redis/scenario/update_users/tests/preserves-system-users/case.yml"
 
@@ -97,7 +97,7 @@ func TestRedisUpdateUsers_GeneratesOnlyOperatorSetSecrets(t *testing.T) {
 	// assertion above is meaningful rather than vacuous.
 	for _, p := range []string{
 		"redis/update_users/users/default_admin", // intra-cluster AUTH + ACL LOAD connect
-		"redis/update_users/users/replica",       // system user from essence
+		"redis/update_users/users/replica",       // system user from the service's vars
 	} {
 		if _, ok := readSet[p]; !ok {
 			t.Errorf("expected pre-existing path %q in read-set, only have: %v", p, sortedSetKeys(readSet))

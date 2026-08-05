@@ -32,9 +32,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method is in essence (author-context, 2026-06-28): the installation method
-    # is NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method is in service vars (author-context, 2026-06-28): the installation method
+    # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -104,7 +104,7 @@ assert:
     redis_users: []
     redis_hosts: []
     # ★ read-model (redesign): operator timings in master_settings (effective
-    # per-master dict = essence defaults overlaid by operator); settings are global (not set).
+    # per-master dict = service vars defaults overlaid by operator); settings are global (not set).
     redis_sentinel:
       master_name: master
       quorum: 0

@@ -7,7 +7,7 @@ description: >-
 # -- Operator input contract (docs/input.md) ────────────────────────────────
 # Simple typed concepts - a mutable subset of the create contract. Not
 # set by the operator -> taken from incarnation.state (substrate), so that a repeat
-# update_config doesn't reset previously deployed directives to the essence default.
+# update_config doesn't reset previously deployed directives to the service vars default.
 input:
   memory_mb:
     type: integer
@@ -51,13 +51,13 @@ input:
   persistence:
     type: string
     required: false
-    # * enum synchronized with essence.persistence_presets / covenant.yml (aof/rdb_aof
+    # * enum synchronized with vars.persistence_presets / covenant.yml (aof/rdb_aof
     # split into _1sec/_always): the old aof/rdb_aof are NOT preset keys -> broke the render with
-    # `no such key` in essence.persistence_presets[persistence] -> incarnation error_locked.
+    # `no such key` in vars.persistence_presets[persistence] -> incarnation error_locked.
     enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
     description: >-
       New persistence mode (translated to save/appendonly/appendfsync via
-      essence.persistence_presets). off - no saving; aof_1sec/aof_always - AOF only
+      vars.persistence_presets). off - no saving; aof_1sec/aof_always - AOF only
       (fsync everysec/always); rdb - snapshots only; rdb_aof_1sec/rdb_aof_always - snapshots
       + AOF. Not set -> the previously deployed incarnation.state.persistence (substrate).
 
@@ -65,7 +65,7 @@ input:
     type: object
     required: false
     # x-directives: redis - validate keys against the service's directive catalog
-    # (essence.redis_directives). Passed through to the DTO input_schema raw (NIM-76).
+    # (vars.redis_directives). Passed through to the DTO input_schema raw (NIM-76).
     x-directives: redis
     description: >-
       Passthrough redis.conf directives (key->value, strings), override defaults/preset
@@ -83,13 +83,13 @@ input:
 
 # -- Declarative input invariants (validate:) ───────────────────────────────────
 # The scenario must have something to update: at least one mutable field. INPUT-ONLY
-# (has() chain, default()/essence unavailable in validate).
+# (has() chain, default()/service vars unavailable in validate).
 validate:
   - that: "has(input.memory_mb) || has(input.maxmemory_policy) || has(input.persistence) || has(input.io_threads) || has(input.redis_settings)"
     message: "update_config requires at least one mutable field (memory_mb/maxmemory_policy/persistence/io_threads/redis_settings)"
 
 # -- Computed scenario-vars (compute:, ADR-009 amendment) ──────────────────────
-# Run-level context (input/essence/incarnation - without soulprint, host-invariant).
+# Run-level context (input/vars/incarnation - without soulprint, host-invariant).
 # Source of truth is incarnation.state (what's DEPLOYED), input is the operator's DELTA.
 #
 # tls_* - the plugin's connection discriminator from the NAMED state.tls (state_schema v3,
@@ -108,7 +108,7 @@ compute:
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   # tls_ca from the NAMED state.tls.ca_ref, symmetric with tls_port from state.tls.port. After
-  # rotate_tls (changes state.tls.ca_ref) the connect uses the CURRENT CA, not the essence default.
+  # rotate_tls (changes state.tls.ca_ref) the connect uses the CURRENT CA, not the service vars default.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
   # -- Effective redis version (for the version-aware redis_settings validator, #6) --
@@ -132,12 +132,12 @@ compute:
   redis_config: >-
     ${ merge(
          incarnation.state.redis_config,
-         essence.persistence_presets[compute.persistence],
+         vars.persistence_presets[compute.persistence],
          merge(
            has(input.memory_mb)
-             ? { 'maxmemory': string(int(input.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+             ? { 'maxmemory': string(int(input.memory_mb) * int(vars.memory_reserve_percent) / 100) + 'mb' }
              : (has(incarnation.state.memory_mb) && int(incarnation.state.memory_mb) >= 64
-                  ? { 'maxmemory': string(int(incarnation.state.memory_mb) * int(essence.memory_reserve_percent) / 100) + 'mb' }
+                  ? { 'maxmemory': string(int(incarnation.state.memory_mb) * int(vars.memory_reserve_percent) / 100) + 'mb' }
                   : {}),
            has(input.maxmemory_policy)
              ? { 'maxmemory-policy': input.maxmemory_policy }
@@ -176,17 +176,17 @@ tasks:
   # from another version -> CONFIG SET rejects it / redis-server fails to restart (a late,
   # confusing failure). The same assert-validator as in create/main.yml: checks EVERY
   # directive NAME of input.redis_settings against the catalog of valid names FOR THE DEPLOYED
-  # version (essence.redis_directives[<series of compute.redis_version>], where
+  # version (vars.redis_directives[<series of compute.redis_version>], where
   # compute.redis_version = incarnation.state.redis_version) - the first unknown key
   # breaks the render (422 assert-failed) BEFORE applying, with a clear message.
   #
-  # WHY assert and not validate: the catalog lives in essence, and the validate context is
-  # INPUT-ONLY (essence unavailable, a structural CEL barrier). essence.redis_directives
+  # WHY assert and not validate: the catalog lives in service vars, and the validate context is
+  # INPUT-ONLY (service vars unavailable, a structural CEL barrier). vars.redis_directives
   # is available ONLY to assert (full scenario context). Run-level, host-invariant.
   #
   # VERSION - compute.redis_version (DEPLOYED, from incarnation.state). A repeat run doesn't
   # change the version -> we validate against the same series that's deployed. EMPTY-CATALOG-SKIP
-  # (!has(essence.redis_directives)) - the catalog is optional (minimal fixtures);
+  # (!has(vars.redis_directives)) - the catalog is optional (minimal fixtures);
   # a version outside the catalog (compute.redis_version == '' or the series is missing) -> skip.
   # The version->series mechanics (no split) are identical to create/main.yml.
   - name: Validate redis_settings directive names against the catalog for the deployed Redis version
@@ -195,14 +195,14 @@ tasks:
       # *ast.StringNode, block-scalar = type_mismatch. Predicate identical to create/main.yml
       # (source is incarnation.state.redis_version instead of input.version).
       that:
-        - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
-      message: "redis_settings contains an unknown redis.conf directive for the deployed Redis version (incarnation.state.redis_version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) - a typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
+        - "!has(vars.redis_directives) || default(input.redis_settings, {}).all(k, vars.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in vars.redis_directives[s]) : true))"
+      message: "redis_settings contains an unknown redis.conf directive for the deployed Redis version (incarnation.state.redis_version): check the name against the catalog of valid directives for this version (vars.redis_directives[<major.minor>]) - a typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
 
   # 1. Re-render redis.conf on disk with the new merged config (the same mode-agnostic
   #    destiny redis as create/add_node). This is the desired state on disk - for the next
   #    process restart (startup-only directives from state.redis_config + new ones). version -
-  #    from state; conf_dir/data_dir - from essence (cluster host-layout, directive B, moved
-  #    into essence v11->v12, Option A); password/users - keeper-side vault(), kept
+  #    from state; conf_dir/data_dir - from service vars (cluster host-layout, directive B, moved
+  #    into service vars v11->v12, Option A); password/users - keeper-side vault(), kept
   #    unchanged (update_config doesn't touch them, but redis.conf is rendered whole).
   #    config - the RECOMPUTED compute.redis_config.
   - name: Re-render redis.conf with the updated config (full file on disk)
@@ -215,21 +215,21 @@ tasks:
         # core.pkg `apt install redis-server=<version>` with NO repository declared, and the
         # pinned version isn't in the host's distro repository -> env exited 100. We assemble
         # the SAME structure as create (deploy-body -> compute.install from
-        # essence.install_method) - a single install method. Differs from covenant.install:
+        # vars.install_method) - a single install method. Differs from covenant.install:
         # the binary branch's version comes from the DEPLOYED state (redis_version), not
         # input.version (a repeat run doesn't reinstall the version); the package branch is
         # version-free (compute.install_package).
         install: >-
-          ${ (default(essence.install_method, 'package') == 'binary')
+          ${ (default(vars.install_method, 'package') == 'binary')
                ? {
                    'method':        'binary',
-                   'base_url':      default(essence.binary_base_url, ''),
+                   'base_url':      default(vars.binary_base_url, ''),
                    'version':       default(incarnation.state.redis_version, ''),
-                   'allow_private': default(essence.binary_allow_private, false)
+                   'allow_private': default(vars.binary_allow_private, false)
                  }
-               : default(essence.install_package, {'method': 'package'}) }
-        conf_dir: "${ default(essence.conf_dir, '/etc/redis') }"
-        data_dir: "${ default(essence.data_dir, '/var/lib/redis') }"
+               : default(vars.install_package, {'method': 'package'}) }
+        conf_dir: "${ default(vars.conf_dir, '/etc/redis') }"
+        data_dir: "${ default(vars.data_dir, '/var/lib/redis') }"
         # * default_admin REDESIGN (2026-06-30): apply.input.password REMOVED (destiny redis
         # no longer accepts it - requirepass dropped). masteruser/masterauth are TOPPED UP into
         # config as plain directives ON TOP of the recomputed compute.redis_config. CRITICAL:
@@ -246,20 +246,20 @@ tasks:
                'masteruser': compute.admin_user,
                'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
              }) }
-        modules_base_url: "${ default(essence.modules_base_url, '') }"
+        modules_base_url: "${ default(vars.modules_base_url, '') }"
         # ** CRITICAL (system-ACL-users d2): this task's redis.conf render also re-renders
-        # users.acl (the same destiny `redis` brick) -> MUST top up the system ones from essence,
+        # users.acl (the same destiny `redis` brick) -> MUST top up the system ones from service vars,
         # otherwise update_config WOULD WIPE OUT replica/monitoring/sentinel/haproxy (like add_user).
         # System ones FIRST, operator-extra (state.redis_users - an ARRAY of AclUser, wave 1b)
-        # ON TOP (last-wins). System ones are NOT in state (item 7 d2) - topped up from essence on
+        # ON TOP (last-wins). System ones are NOT in state (item 7 d2) - topped up from service vars on
         # every render. The has() guard on state.redis_users is back-compat (incarnations without
         # operator-extra). Vault password from the same branch secret/redis/<inc>/users/<name>#password.
         # operator-extra: .map(u, {u.name: ...}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
-               merge(default(essence.system_acl_users, {}).map(name, {
+               merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
-                   'perms':    essence.system_acl_users[name],
+                   'perms':    vars.system_acl_users[name],
                    'state':    'on',
                    'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                  }

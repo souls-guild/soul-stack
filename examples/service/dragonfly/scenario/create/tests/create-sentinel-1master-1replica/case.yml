@@ -54,7 +54,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     sentinel_master_name: master
     memory_reserve_percent: 75
     df_config:
@@ -113,7 +113,7 @@ assert:
 
     # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ──
     # monitor.ip — HOST-INVARIANT master address (node-1). quorum=2 (AUTO size(2)/2+1).
-    # redis_version — the sentinel DAEMON version (essence.sentinel_redis_version, default
+    # redis_version — the sentinel DAEMON version (vars.sentinel_redis_version, default
     # 7.2.4), NOT df_version (1.39.0). Gates version-aware sentinel plugin features.
     - module: community.redis.sentinel
       params_subset:

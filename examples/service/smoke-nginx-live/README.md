@@ -13,7 +13,7 @@ soul-stub.
   install nginx`) inside the container.
 - `core.file.rendered` — rendering `/etc/nginx/sites-available/default` from
   the template `templates/nginx-default.conf.tmpl` with variables from
-  `input.hostname` and `essence.nginx_listen_port`.
+  `input.hostname` and `vars.nginx_listen_port`.
 - `core.service.running name=nginx enabled=true` — bringing up the systemd unit.
 - `core.service.restarted onchanges: [nginx_default_conf]` — a reactive
   restart only when the config changes (idempotency of a repeated apply).

@@ -65,4 +65,4 @@ assert:
             role: ""
             sid: trial-host
           role: ""
-          essence: {}
+          service vars: {}

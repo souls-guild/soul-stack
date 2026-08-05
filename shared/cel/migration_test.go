@@ -29,7 +29,7 @@ func TestMigration_StateAccessible(t *testing.T) {
 	}
 }
 
-// TestMigration_ContextVarsUndeclared — register/soulprint/essence/input/
+// TestMigration_ContextVarsUndeclared — register/soulprint/vars/input/
 // incarnation/vars are NOT declared in the migration env: access → compile-error
 // undeclared reference (sandbox by undeclaration, ADR-019).
 func TestMigration_ContextVarsUndeclared(t *testing.T) {
@@ -37,7 +37,7 @@ func TestMigration_ContextVarsUndeclared(t *testing.T) {
 	for _, expr := range []string{
 		"register.foo",
 		"soulprint.self.os.family",
-		"essence.bar",
+		"vars.bar",
 		"input.baz",
 		"incarnation.name",
 		"vars.qux",

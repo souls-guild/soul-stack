@@ -5,7 +5,7 @@
 # (community.redis.acl) must connect over TLS (addr on state.tls.port, tls=true,
 # tls_ca = PEM CA from vault(state.tls.ca_ref)) — otherwise a plaintext connect to
 # TLS-only Redis fails ACL LOAD. CA comes from the NAMED state.tls.ca_ref (current after
-# rotate_tls), NOT from the essence default.
+# rotate_tls), NOT from the service vars default.
 #
 # What we assert:
 #   1. users.acl re-rendered with the new set {alice} (bulk-replace, no system users in state).
@@ -20,8 +20,8 @@ fixtures:
     network: { primary_ip: 10.0.0.6 }
     os: { arch: amd64 }
 
-  # host-layout — in essence (v11→v12, Option A): moved out of state, re-run reads it from there.
-  essence:
+  # host-layout — in service vars (v11→v12, Option A): moved out of state, re-run reads it from there.
+  vars:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -90,7 +90,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # HOT-RELOAD ACL OVER TLS: addr on the tls port, tls=true, tls_ca = PEM CA.
     # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).

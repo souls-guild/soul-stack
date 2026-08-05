@@ -42,7 +42,7 @@ input:
     type: string
     secret: true
 compute:
-  base: "${ merge(essence.cfg, {}) }"
+  base: "${ merge(vars.cfg, {}) }"
 state_changes:
   - set: provisioned
     value: "${ true }"

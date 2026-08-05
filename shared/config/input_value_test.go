@@ -157,11 +157,11 @@ func TestResolveInputValues_ExprValueSkipsPattern(t *testing.T) {
   type: string
   pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
 `)
-	got, err := ResolveInputValues(schema, map[string]any{"redis_version": "${ essence.version }"})
+	got, err := ResolveInputValues(schema, map[string]any{"redis_version": "${ vars.version }"})
 	if err != nil {
 		t.Fatalf("an expression must not be validated against pattern: %v", err)
 	}
-	if got["redis_version"] != "${ essence.version }" {
+	if got["redis_version"] != "${ vars.version }" {
 		t.Errorf("got=%#v", got)
 	}
 }
@@ -310,11 +310,11 @@ func TestResolveInputValues_EnumExprValueSkipped(t *testing.T) {
   type: string
   enum: [debug, info, warn]
 `)
-	got, err := ResolveInputValues(schema, map[string]any{"level": "${ essence.log_level }"})
+	got, err := ResolveInputValues(schema, map[string]any{"level": "${ vars.log_level }"})
 	if err != nil {
 		t.Fatalf("an expression must not be validated against enum: %v", err)
 	}
-	if got["level"] != "${ essence.log_level }" {
+	if got["level"] != "${ vars.log_level }" {
 		t.Errorf("got=%#v", got)
 	}
 }
@@ -783,7 +783,7 @@ func TestResolveInputValues_RequiredWhenDefaultMaterialized(t *testing.T) {
 func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 	cases := []struct{ name, expr string }{
 		{"syntax", "input.x =="},
-		{"undeclared_essence", "essence.mode == 'x'"},
+		{"undeclared_service_var", "vars.mode == 'x'"},
 		{"undeclared_soulprint", "soulprint.self.os.family == 'debian'"},
 	}
 	for _, tc := range cases {

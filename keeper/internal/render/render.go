@@ -67,7 +67,7 @@ const KeeperTargetSID = "keeper"
 // RunSentinelSID — run-level terminal marker for apply_runs when a scenario run
 // aborts BEFORE the dispatch phase and there are no real hosts (BAG-1,
 // ADR-043/027/009). An early abort (no_hosts / scenario_load_failed /
-// topology_failed / essence_failed / input_invalid / render_failed /
+// topology_failed / service_vars_failed / input_invalid / render_failed /
 // keeper_dispatch_failed) never manages to insert a single apply_runs row:
 // dispatch hasn't started yet. The Voyage awaiter
 // (PgIncarnationAwaiter.pollOutcome) polls until all run rows reach terminal
@@ -109,10 +109,13 @@ type IncarnationMeta struct {
 
 // RenderInput — input for one render pipeline run.
 //
-// Essence — the effective essence layer of the incarnation (host-invariant),
-// available in CEL as `essence.<path>` in all scenario vars (params/where/when/
-// loop items). NOT forwarded in the destiny pass (renderApplyDestiny) — destiny
-// sees essence only via apply: input: (isolation, slice A). Register —
+// ServiceVars — the service's own vars (`<service>/vars/`, host-invariant,
+// ADR-0082). They are the BOTTOM of the flat `vars.*` namespace: render layers
+// the destiny's `vars.yml`, a `block:`'s and the task's own `vars:` over them,
+// outermost first, so a task reads `vars.<key>` without knowing which layer
+// supplied it. NOT forwarded in the destiny pass (renderApplyDestiny) — a
+// destiny's `vars.*` is its own alone, and it sees the caller's values only via
+// apply: input: (isolation, slice A). Register —
 // register-context from already-executed tasks (register-name → payload),
 // supplied by the orchestrator (.g) during per-task render; empty in pilot
 // (cross-task chaining within Render is future work).
@@ -144,7 +147,7 @@ type IncarnationMeta struct {
 // not the service snapshot.
 type RenderInput struct {
 	Scenario       *config.ScenarioManifest
-	Essence        map[string]any
+	ServiceVars    map[string]any
 	Input          map[string]any
 	Register       map[string]any
 	RegisterByHost map[string]map[string]any
@@ -175,7 +178,7 @@ type RenderInput struct {
 	// DestinyVarsResolved — resolved destiny-local `vars.yml` values (Variant A,
 	// docs/destiny/vars.md), per host: sid → name→value. Filled ONCE per destiny
 	// pass (renderApplyDestiny resolves vars.yml over destiny-env
-	// input+soulprint.self+incarnation, isolated from scenario register/essence
+	// input+soulprint.self+incarnation, isolated from scenario register/vars
 	// and without visibility between vars), then used as the BASE `vars.*` layer
 	// when rendering each destiny task (resolveTaskVars merges task-level
 	// `vars:` on top — task overrides same-named file-vars). Invariant across
@@ -186,7 +189,7 @@ type RenderInput struct {
 
 	// Compute — resolved scenario-level `compute:` variables (ADR-009 amendment
 	// 2026-06-23): name→value, computed ONCE per run in the run-level context
-	// (input/register/incarnation/essence — WITHOUT soulprint, a structural
+	// (input/register/incarnation/vars — WITHOUT soulprint, a structural
 	// host-invariance barrier). Filled by [Pipeline.resolveCompute] at the start
 	// of [Pipeline.Render] and [Pipeline.RenderStateOps]; placed into every
 	// per-host context (hostVars) and into the state_changes context
@@ -334,7 +337,7 @@ type RenderedTask struct {
 	RetryDelay string
 
 	// FlowContext — a literal per-host snapshot of the non-register part of the
-	// flow-control predicates' CEL context: { input, vars, essence, incarnation,
+	// flow-control predicates' CEL context: { input, vars, incarnation,
 	// self }. Same as what's built for rendering params (hostVars), MINUS
 	// soulprint.hosts and loop. Soul reads it as DATA (binds soulprint.self ←
 	// flow_context.self), doesn't do external lookups. Host-variant (self
@@ -476,7 +479,7 @@ type RenderedTask struct {
 // last-wins by SID.
 //
 // Context — a per-RUN snapshot of the scenario context (input/register/
-// incarnation/soulprint.self/essence/vars), last-wins by SID (output.md).
+// incarnation/soulprint.self/vars), last-wins by SID (output.md).
 // Needed at merge time to evaluate modify-Match/Patch and remove-Match, which
 // see the full sets context on top of the element bindings (ADR-057 §b). nil
 // for set/add (their Value/Key are already computed render-side; add-Match is a
@@ -507,7 +510,7 @@ type StateMatchFunc func(predicate string, elem, value any) (bool, error)
 // StateOpEvalFunc — CEL evaluator for modify/remove at merge time (see
 // [Pipeline.EvalStateOpExpr]). Unlike [StateMatchFunc] (isolated elem/value for
 // add dedup), here the predicate/value sees the FULL run-scenario context (ctx
-// — a snapshot of input/register/incarnation/soulprint.self/essence/vars) PLUS
+// — a snapshot of input/register/incarnation/soulprint.self/vars) PLUS
 // the current collection element's bindings (binds — elem/key/value). Used per
 // matched element: match predicate → bool (boolOut=true), patch value → any
 // (boolOut=false). This way a modify-match `key == input.username` sees both

@@ -12,11 +12,11 @@
 #      redis-cli/redis-benchmark from Nexus by the DEPLOYED version (incarnation.state.
 #      redis_version = 8.6.1), NOT by input.version (absent on re-run). URL per-host:
 #      <base_url>/<arch>/Debian/<distro_ver>/<version>/redis-*. allow_private
-#      is passed through from essence.binary_allow_private.
+#      is passed through from vars.binary_allow_private.
 #   2. package branch is DISABLED: core.pkg.installed redis-server ABSENT from the plan.
 #
 # The install-structure source is the same as create (deploy-body redis-deploy-*.yml
-# passes compute.install from essence.install_method): author-context essence, a single
+# passes compute.install from vars.install_method): author-context service vars, a single
 # install method for both create and maintenance. version on re-run is taken from state (deployed),
 # not from input (re-run doesn't reinstall the version).
 name: update_config honors the deployed binary install method (no package fallback)
@@ -28,12 +28,12 @@ fixtures:
     # os.version is needed for the binary-URL (.../Debian/<distro_ver>/...) — Debian 12.
     os: { arch: amd64, version: "12" }
 
-  essence:
+  vars:
     memory_reserve_percent: 75
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
-    # ★ install_method — author-context (essence, not operator-input). binary is the default;
+    # ★ install_method — author-context (service vars, not operator-input). binary is the default;
     # on re-run apply.input.install builds the binary structure from this field (symmetry with
     # covenant.install / deploy-body). This case guards the binary branch, so it's set
     # explicitly (even though binary is the default — to make the regression obvious).
@@ -88,7 +88,7 @@ assert:
     # ★ binary branch is ACTIVE: THREE core.url.fetched pull binaries from Nexus by the DEPLOYED
     # version (incarnation.state.redis_version = 8.6.1) — NOT input.version (re-run doesn't
     # carry it). URL per-host: <base_url>/x86_64/Debian/12/8.6.1/redis-* (amd64→x86_64).
-    # allow_private:true — passed through from essence.binary_allow_private. Regression "re-run falls
+    # allow_private:true — passed through from vars.binary_allow_private. Regression "re-run falls
     # into package" → these tasks would be absent (placeholder-skip), core.pkg below present.
     - module: core.url.fetched
       params_subset:

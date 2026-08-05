@@ -1,17 +1,17 @@
-# L0 test for add_node — has()-SAFE, host-layout from ESSENCE (v11→v12, Variant A).
-# Guard: add_node reads conf_dir/data_dir/modules_base_url from essence via
-# default(essence.<x>, '<default>'). When essence does NOT override host-layout
-# (essence without these keys), default catches the missing leaf and does NOT fail with
-# "no such key", returning the default paths. Regression "bare essence.conf_dir" = render fail
-# no-such-key on essence without a host-layout override. Migration from incarnation.state to
-# essence: host layout moved out of state into essence (v11→v12), a re-run reads it from there.
+# L0 test for add_node — has()-SAFE, host-layout from service vars (v11→v12, Variant A).
+# Guard: add_node reads conf_dir/data_dir/modules_base_url from service vars via
+# default(vars.<x>, '<default>'). When service vars does NOT override host-layout
+# (service vars without these keys), default catches the missing leaf and does NOT fail with
+# "no such key", returning the default paths. Regression "bare vars.conf_dir" = render fail
+# no-such-key on service vars without a host-layout override. Migration from incarnation.state to
+# service vars: host layout moved out of state into service vars (v11→v12), a re-run reads it from there.
 #
-# essence is INTENTIONALLY without conf_dir/data_dir/modules_base_url (layout not overridden).
+# service vars is INTENTIONALLY without conf_dir/data_dir/modules_base_url (layout not overridden).
 # Expected:
 #   - render does NOT fail no-such-key (render succeeds, plan is built);
 #   - destiny gets the DEFAULT paths: redis.conf → /etc/redis, modules-dir → /var/lib/redis;
 #   - the add-node plugin builds endpoints from the roster as usual.
-name: add_node tolerates essence without conf_dir/data_dir/modules_base_url override
+name: add_node tolerates service vars without conf_dir/data_dir/modules_base_url override
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -32,9 +32,9 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # essence WITHOUT conf_dir/data_dir/modules_base_url: host-layout is NOT overridden
-  # by the operator → a re-run reads it via the default paths (default(essence.<x>, '<default>')).
-  # The essence block is omitted entirely (empty essence) — checking has()-safe for the absence
+  # service vars WITHOUT conf_dir/data_dir/modules_base_url: host-layout is NOT overridden
+  # by the operator → a re-run reads it via the default paths (default(vars.<x>, '<default>')).
+  # The service vars block is omitted entirely (empty service vars) — checking has()-safe for the absence
   # of all three keys at once. redis_version 7.4.1 — < 8 → modules
   # go through the default paths).
   state:
@@ -55,19 +55,19 @@ fixtures:
 
 assert:
   task_present:
-    # redis.conf under the DEFAULT conf_dir (essence without conf_dir → default /etc/redis):
-    # proves default(essence.conf_dir, '/etc/redis') worked, render didn't fail.
+    # redis.conf under the DEFAULT conf_dir (service vars without conf_dir → default /etc/redis):
+    # proves default(vars.conf_dir, '/etc/redis') worked, render didn't fail.
     # Disambiguator — path.
     - module: core.file.rendered
       params_subset:
         path: /etc/redis/redis.conf
-    # data-dir under the DEFAULT data_dir (essence without data_dir → default /var/lib/redis):
-    # proves default(essence.data_dir, '/var/lib/redis') worked has()-safe on
-    # essence without an override. Disambiguator — path. An UNCONDITIONAL install.yml task
+    # data-dir under the DEFAULT data_dir (service vars without data_dir → default /var/lib/redis):
+    # proves default(vars.data_dir, '/var/lib/redis') worked has()-safe on
+    # service vars without an override. Disambiguator — path. An UNCONDITIONAL install.yml task
     # (data-dir is created in both install branches, not gated) — always present.
     # ★ NOT modules-dir (/var/lib/redis/modules): after the "modules ALWAYS ALL" redesign
     # (2026-06-25) the modules group is gated on vars.redis_modules_enabled, which requires
-    # a NON-EMPTY modules_base_url; essence without the key → default(essence.modules_base_url,'')
+    # a NON-EMPTY modules_base_url; service vars without the key → default(vars.modules_base_url,'')
     # = '' → vanilla redis → modules.yml group-drop (no modules-dir in the plan — correct).
     # We prove the data_dir default via the unconditional data-dir task.
     - module: core.directory.present

@@ -53,7 +53,7 @@ validate:
     message: "tls.enable requires a cert_ref"
 ```
 
-**Input-only, by construction.** The `that` predicate's CEL environment declares a single variable — `input`. A reference to `essence` / `soulprint` / `register` / `vault()` / `now()` is a **compile error**, not a silent read: the sandbox comes from the name being undeclared. This fits destiny isolation exactly ([ADR-009](../adr/0009-scenario-dsl.md)) — a destiny sees only its own input anyway.
+**Input-only, by construction.** The `that` predicate's CEL environment declares a single variable — `input`. A reference to `vars` / `soulprint` / `register` / `vault()` / `now()` is a **compile error**, not a silent read: the sandbox comes from the name being undeclared. This fits destiny isolation exactly ([ADR-009](../adr/0009-scenario-dsl.md)) — a destiny sees only its own input anyway.
 
 **`validate:` complements `assert:`, it does not replace it.** `validate:` covers pure input invariants. Anything needing topology, the run roster or a task register stays an `assert:` task in the scenario — note that render-time `assert:` is a **scenario** construct; inside a destiny's `tasks/main.yml` it is not supported.
 
@@ -66,7 +66,7 @@ validate:
 When strict validation landed, two contract drifts in `examples/` failed immediately — both worth recognizing, because they are the typical shapes:
 
 - **An unconditional object-level `required:` that was meant to be conditional.** `examples/destiny/redis` declared `tls: { required: [cert_ref, key_ref, ca_ref] }`, but every TLS-off caller legitimately passes the dict with empty refs. An object-level `required` cannot express "only when `enable` is true" — the invariant moved into `validate:`, gated on `input.tls.enable`.
-- **A caller degrading a mandatory field to an empty string.** The create scenario passed `sha256: "${ default(essence.redis_exporter_sha256, '') }"` into a destiny declaring `sha256` required. An empty string counts as "not passed" ([`docs/input.md` → "Empty strings"](../input.md)), so the mandatory tarball checksum was silently absent — the fix belongs on the caller's side (supply the value), not in the contract.
+- **A caller degrading a mandatory field to an empty string.** The create scenario passed `sha256: "${ default(vars.redis_exporter_sha256, '') }"` into a destiny declaring `sha256` required. An empty string counts as "not passed" ([`docs/input.md` → "Empty strings"](../input.md)), so the mandatory tarball checksum was silently absent — the fix belongs on the caller's side (supply the value), not in the contract.
 
 If a destiny of yours starts failing, read the message: it names the field or quotes the rule. Fix the caller if it passes something the contract forbids; relax the contract only if the contract was wrong.
 
@@ -130,7 +130,7 @@ Scenario also has a `input:` block (same format). But these are **different** co
 - Scenario `input:` - what the operator passed when running the scenario (`keeper.incarnation.run scenario=add_user inputs={...}`).
 - Destiny `input:` - that scenario passed destiny through `apply: { destiny: ..., input: { ... } }`.
 
-Scenario calculates destiny-`input:` from its scenario-`input:`, `vars` (essence) and `state` - and passes it to destiny. Inside destiny scenario-`input:` **not visible** - destiny knows only what came to its `input:`.
+Scenario calculates destiny-`input:` from its scenario-`input:`, `vars` (the service's own) and `state` - and passes it to destiny. Inside destiny scenario-`input:` **not visible** - destiny knows only what came to its `input:`.
 
 ## See also
 

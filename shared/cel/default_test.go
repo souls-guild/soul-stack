@@ -13,7 +13,7 @@ import (
 func TestDefault_PresentSelect(t *testing.T) {
 	e := newEngine(t)
 
-	out, err := e.EvalExpression(`default(essence.tls_enable, false)`, Vars{Essence: map[string]any{
+	out, err := e.EvalExpression(`default(vars.tls_enable, false)`, Vars{Vars: map[string]any{
 		"tls_enable": true,
 	}})
 	if err != nil {
@@ -25,14 +25,14 @@ func TestDefault_PresentSelect(t *testing.T) {
 }
 
 // TestDefault_AbsentSelect — ★ KEY test: CEL eagerness is bypassed.
-// default(essence.tls_enable, false) with an ABSENT key does not throw
+// default(vars.tls_enable, false) with an ABSENT key does not throw
 // "no such key" (as a plain function would under eager arg eval), but returns
 // the fallback. This is the whole point of the macro mechanism (compile-time
 // rewrite to has(x)?x:y before eval).
 func TestDefault_AbsentSelect(t *testing.T) {
 	e := newEngine(t)
 
-	out, err := e.EvalExpression(`default(essence.tls_enable, false)`, Vars{Essence: map[string]any{}})
+	out, err := e.EvalExpression(`default(vars.tls_enable, false)`, Vars{Vars: map[string]any{}})
 	if err != nil {
 		t.Fatalf("eval (missing key must NOT throw - strict-check bypassed by macro): %v", err)
 	}
@@ -47,7 +47,7 @@ func TestDefault_AbsentSelect(t *testing.T) {
 func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 	e := newEngine(t)
 
-	out, err := e.EvalExpression(`default(essence.a.b.c, "fb")`, Vars{Essence: map[string]any{
+	out, err := e.EvalExpression(`default(vars.a.b.c, "fb")`, Vars{Vars: map[string]any{
 		"a": map[string]any{"b": map[string]any{}},
 	}})
 	if err != nil {
@@ -58,7 +58,7 @@ func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 	}
 
 	// Final key present → its value.
-	out, err = e.EvalExpression(`default(essence.a.b.c, "fb")`, Vars{Essence: map[string]any{
+	out, err = e.EvalExpression(`default(vars.a.b.c, "fb")`, Vars{Vars: map[string]any{
 		"a": map[string]any{"b": map[string]any{"c": "real"}},
 	}})
 	if err != nil {
@@ -69,13 +69,13 @@ func TestDefault_NestedAbsentFinalKey(t *testing.T) {
 	}
 }
 
-// TestDefault_IntWrap — int(default(essence.tls_port, 7379)): the int() wrapper
+// TestDefault_IntWrap — int(default(vars.tls_port, 7379)): the int() wrapper
 // around default() works (use-site cluster.yml: tls_port). Absent → default
 // 7379; present → the value.
 func TestDefault_IntWrap(t *testing.T) {
 	e := newEngine(t)
 
-	out, err := e.EvalExpression(`int(default(essence.tls_port, 7379))`, Vars{Essence: map[string]any{}})
+	out, err := e.EvalExpression(`int(default(vars.tls_port, 7379))`, Vars{Vars: map[string]any{}})
 	if err != nil {
 		t.Fatalf("eval (absent): %v", err)
 	}
@@ -83,7 +83,7 @@ func TestDefault_IntWrap(t *testing.T) {
 		t.Fatalf("int(default(absent)) = %v, want 7379", got)
 	}
 
-	out, err = e.EvalExpression(`int(default(essence.tls_port, 7379))`, Vars{Essence: map[string]any{
+	out, err = e.EvalExpression(`int(default(vars.tls_port, 7379))`, Vars{Vars: map[string]any{
 		"tls_port": int64(6380),
 	}})
 	if err != nil {
@@ -198,11 +198,11 @@ func TestDefault_UndeclaredInMigration(t *testing.T) {
 
 // TestDefault_SecretMaskedSameAsDirectVault — ★ masking guard (like merge's
 // TestMerge_SecretMaskedSameAsDirectVault): a secret injected via
-// default(essence.x, vault('…#password')) under a sensitively-named key is
+// default(vars.x, vault('…#password')) under a sensitively-named key is
 // masked by the output layer (shared/audit.MaskSecrets) IDENTICALLY to a direct
 // ${ vault(...) }. default() is sugar over has()?:, and does not rename the
 // destination key, so it neither widens nor narrows the masking boundary. Proves
-// both sides: the fallback branch (essence.x absent → vault) and identity with
+// both sides: the fallback branch (vars.x absent → vault) and identity with
 // direct vault; non-secret values pass without over-masking.
 func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{
@@ -223,11 +223,11 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 		t.Fatal("baseline: the direct vault secret is NOT masked - the masking layer is broken")
 	}
 
-	// Same secret via default(essence.admin_password, vault(...)): the essence
+	// Same secret via default(vars.admin_password, vault(...)): the service-vars
 	// key is absent → the vault branch is taken, result under the `password` key.
 	resolved, err := e.EvalInterpolation(
-		"${ default(essence.admin_password, vault('secret/redis/admin#password')) }",
-		Vars{Essence: map[string]any{}},
+		"${ default(vars.admin_password, vault('secret/redis/admin#password')) }",
+		Vars{Vars: map[string]any{}},
 	)
 	if err != nil {
 		t.Fatalf("eval default+vault: %v", err)
@@ -246,7 +246,7 @@ func TestDefault_SecretMaskedSameAsDirectVault(t *testing.T) {
 	}
 
 	// A non-secret value via default is NOT over-masked.
-	nonSecret, err := e.EvalInterpolation(`${ default(essence.maxmemory, "256mb") }`, Vars{Essence: map[string]any{}})
+	nonSecret, err := e.EvalInterpolation(`${ default(vars.maxmemory, "256mb") }`, Vars{Vars: map[string]any{}})
 	if err != nil {
 		t.Fatalf("eval non-secret default: %v", err)
 	}

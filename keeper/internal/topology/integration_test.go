@@ -98,7 +98,6 @@ func seedIncarnation(t *testing.T, name string, spec map[string]any) {
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
-		Spec:               spec,
 		Status:             incarnation.StatusReady,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {

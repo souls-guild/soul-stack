@@ -154,7 +154,7 @@ func (r memberIncRow) Scan(dest ...any) error {
 	// last_drift_summary, created_scenario, applying_apply_id.
 	vals := []any{
 		r.name, "redis", "v1.0.0", 1,
-		[]byte(`{}`), []byte(`{}`), "ready", []byte(`{}`),
+		[]byte(`{}`), "ready", []byte(`{}`),
 		(*string)(nil), time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC(),
 		[]string{}, []byte(`{}`), (*time.Time)(nil), []byte(`{}`),
 		(*string)(nil), (*string)(nil),

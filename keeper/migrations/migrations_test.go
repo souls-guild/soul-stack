@@ -247,6 +247,12 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"108_drop_incarnation_spec_hosts.up.sql",
 		"109_drop_permission_update_hosts.down.sql",
 		"109_drop_permission_update_hosts.up.sql",
+		"110_drop_incarnation_spec_essence.down.sql",
+		"110_drop_incarnation_spec_essence.up.sql",
+		"111_state_history_run.down.sql",
+		"111_state_history_run.up.sql",
+		"112_drop_incarnation_spec.down.sql",
+		"112_drop_incarnation_spec.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

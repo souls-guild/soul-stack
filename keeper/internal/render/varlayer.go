@@ -36,15 +36,28 @@ var ErrVarCycle = errors.New("render: var_cycle")
 // touches strings, symmetric with renderValue/resolveCompute); they contribute no
 // edges.
 //
-// ISOLATION (CRITICAL): var→var is allowed ONLY within its own layer. base
-// carries the resolve context (input/soulprint.self/incarnation for file-vars;
-// see the callers), and base.Vars MUST be empty at the start of the layer —
-// otherwise a `vars.<X>` reference into a foreign layer (a file-var from the
-// task layer or vice versa) would resolve instead of failing with an isolation
-// error. CEL activation only gets the `vars` key (this layer's accumulator); the
-// restricted env (register/soulprint.hosts) is NOT relaxed — it's determined by
-// base itself, which the caller builds isolated.
-func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map[string]any, error) {
+// ISOLATION (CRITICAL): var→var reaches its own layer and the layers BELOW it,
+// never sideways or upward. `lower` carries the already-resolved layers this one
+// sits on top of — for a task's `vars:` that is the SERVICE's own vars
+// (ADR-0082), which are the bottom of the flat `vars.*` ladder; nil for a
+// destiny's `vars.yml`, which sits on nothing.
+//
+// Downward references are what makes the merged namespace usable: before
+// ADR-0082 a task var reached the service layer by spelling it `${ vars.X }`,
+// a different root that was always in scope. With one root the same expression
+// is `${ vars.X }`, and refusing it would turn a working scenario into
+// var_unknown_ref for no reason an author could act on.
+//
+// SIDEWAYS is still refused, unchanged: a task-var cannot see a file-var and
+// vice versa ([destiny/vars.md]), because `lower` for the task layer is the
+// service layer alone — the file layer is merged in by the CALLER, after this
+// returns. base carries the rest of the resolve context
+// (input/soulprint.self/incarnation); the restricted env
+// (register/soulprint.hosts) is NOT relaxed — it is determined by base itself,
+// which the caller builds isolated.
+//
+// [destiny/vars.md]: docs/destiny/vars.md
+func resolveVarLayer(engine *cel.Engine, raw map[string]any, lower map[string]any, base cel.Vars) (map[string]any, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -61,12 +74,32 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 		if err != nil {
 			return nil, fmt.Errorf("render: vars.%s: %w", name, err)
 		}
+		var sameLayer []string
 		for _, ref := range refs {
-			if _, exists := raw[ref]; !exists {
-				return nil, fmt.Errorf("%w: vars.%s references vars.%s, which is not in the layer", ErrVarUnknownRef, name, ref)
+			_, below := lower[ref]
+
+			// SHADOW-AND-DERIVE. A var that references ITS OWN name is reading the
+			// layer below — it is redefining that name in terms of the value it is
+			// shadowing, which is the single most natural way to use a merged
+			// namespace (`conf_dir: "${ vars.conf_dir }/conf.d"`). Under the two-root
+			// world it was spelled `${ essence.conf_dir }` and needed no rule at all.
+			// Treating it as a same-layer edge cannot ever resolve, and reports a
+			// var_cycle naming one node — an error about a cycle the author cannot
+			// find, on the exact shape the merge exists to enable.
+			if ref == name && below {
+				continue
 			}
+
+			if _, exists := raw[ref]; exists {
+				sameLayer = append(sameLayer, ref) // an edge: resolve order matters
+				continue
+			}
+			if below {
+				continue // already resolved, no edge to order against
+			}
+			return nil, fmt.Errorf("%w: vars.%s references vars.%s, which is in neither this layer nor the one below it", ErrVarUnknownRef, name, ref)
 		}
-		deps[name] = refs
+		deps[name] = sameLayer
 	}
 
 	order, cycle := topoSort(raw, deps)
@@ -74,13 +107,20 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 		return nil, fmt.Errorf("%w: %s", ErrVarCycle, strings.Join(cycle, " → "))
 	}
 
+	// visible = the layers below + this layer's accumulator. A var in topo order
+	// sees both the lower layers and the earlier-computed vars of its own.
+	visible := make(map[string]any, len(lower)+len(raw))
+	for k, v := range lower {
+		visible[k] = v
+	}
 	acc := make(map[string]any, len(raw))
-	base.Vars = acc // this layer's accumulator; a var in topo order sees earlier-computed ones
+	base.Vars = visible
 	for _, name := range order {
 		val := raw[name]
 		s, ok := val.(string)
 		if !ok {
 			acc[name] = val // literal — passes through
+			visible[name] = val
 			continue
 		}
 		r, err := engine.EvalInterpolation(s, base)
@@ -88,7 +128,9 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 			return nil, fmt.Errorf("render: vars.%s: %w", name, err)
 		}
 		acc[name] = r
+		visible[name] = r
 	}
+	// Only this layer's own names: the caller decides how they stack.
 	return acc, nil
 }
 

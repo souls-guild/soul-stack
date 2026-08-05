@@ -197,9 +197,10 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return forUpdateIncRow{inc: inc, withVersion: contains(sql, "state_schema_version")}
 	}
-	// rerun-last last-run probe: SELECT scenario, apply_id FROM state_history …
+	// rerun-last last-run probe: SELECT scenario, apply_id, run FROM state_history …
 	// LIMIT 1. Checked BEFORE the general `FROM state_history`/COUNT (that one
-	// requires a COUNT token).
+	// requires a COUNT token). ONE source since NIM-408 — the attempt's own
+	// snapshot; the apply_runs recipe probe below is no longer on this path.
 	if contains(sql, "SELECT scenario") && contains(sql, "FROM state_history") {
 		name := args[0].(string)
 		const dummyApplyID = "01HFAILEDRUN00000000000000"
@@ -208,7 +209,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			if err != nil {
 				return errRow{err: err}
 			}
-			return staticRow{values: []any{s, dummyApplyID}}
+			return staticRow{values: []any{s, dummyApplyID, f.rerunSnapshotFor(s)}}
 		}
 		// Default: "last failed = creator". created_scenario is taken from the
 		// incFn row (if set), else the canonical `create`.
@@ -218,9 +219,11 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 				last = *inc.CreatedScenario
 			}
 		}
-		return staticRow{values: []any{last, dummyApplyID}}
+		return staticRow{values: []any{last, dummyApplyID, f.rerunSnapshotFor(last)}}
 	}
 	// rerun-last day-2 recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
+	// No longer reached from rerun-last (NIM-408): its input is the history
+	// snapshot whichever branch produced the run.
 	if contains(sql, "FROM apply_runs") && contains(sql, "recipe IS NOT NULL") {
 		if f.recipeFn != nil {
 			b, err := f.recipeFn(args[0].(string))
@@ -438,14 +441,6 @@ func (r rerunForUpdateRow) Scan(dest ...any) error {
 	*dest[1].(*string) = string(r.inc.Status)
 	// created_scenario NULLABLE → **string (NULL=bare incarnation).
 	*dest[2].(**string) = r.inc.CreatedScenario
-	// spec jsonb (B1): serializes inc.Spec; nil → `{}` (incarnation.InputFromSpec
-	// extracts spec.input when present).
-	spec := []byte("{}")
-	if r.inc.Spec != nil {
-		b, _ := json.Marshal(r.inc.Spec)
-		spec = b
-	}
-	*dest[3].(*[]byte) = spec
 	return nil
 }
 
@@ -608,6 +603,20 @@ func (r *recordingAudit) Write(_ context.Context, ev *audit.Event) error {
 }
 
 // contains — substring check without strings (avoids a dependency in the test fake).
+// rerunSnapshotFor returns the replayable snapshot a terminal would have stamped
+// for the named scenario: what rerun-last reads instead of the two former
+// sources. A test that cares about the input supplies it through recipeFn, which
+// now feeds the SNAPSHOT rather than an apply_runs recipe.
+func (f *fakePool) rerunSnapshotFor(scenario string) []byte {
+	if f.recipeFn != nil {
+		if b, err := f.recipeFn(scenario); err == nil {
+			return b
+		}
+		return nil
+	}
+	return []byte(`{"scenario_name":"` + scenario + `","input":{}}`)
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
 }

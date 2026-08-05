@@ -56,9 +56,9 @@ fixtures:
       password: haproxy-sys-secret-pass
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
-  essence:
-    # install_method — in essence (author-context): the install method is NOT operator-input
-    # (covenant.compute.install reads default(essence.install_method, 'binary')).
+  vars:
+    # install_method — in service vars (author-context): the install method is NOT operator-input
+    # (covenant.compute.install reads default(vars.install_method, 'binary')).
     install_method: package
     redis_type: cluster
     sentinel_master_name: master

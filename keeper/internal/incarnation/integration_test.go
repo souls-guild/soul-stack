@@ -107,7 +107,6 @@ func TestIntegration_Create_AndSelect(t *testing.T) {
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
-		Spec:               map[string]any{"replicas": 3, "tls": true},
 		State:              map[string]any{"primary": "redis-prod-01"},
 		Status:             StatusReady,
 		CreatedByAID:       &creator,
@@ -128,9 +127,6 @@ func TestIntegration_Create_AndSelect(t *testing.T) {
 	}
 	if got.CreatedByAID == nil || *got.CreatedByAID != "archon-alice" {
 		t.Errorf("CreatedByAID = %v", got.CreatedByAID)
-	}
-	if got.Spec["replicas"] != float64(3) {
-		t.Errorf("Spec.replicas = %v", got.Spec["replicas"])
 	}
 	if got.State["primary"] != "redis-prod-01" {
 		t.Errorf("State.primary = %v", got.State["primary"])
@@ -640,7 +636,6 @@ func seedDestroyable(t *testing.T, name string) {
 	inc := &Incarnation{
 		Name: name, Service: "redis", ServiceVersion: "v1.2.3",
 		StateSchemaVersion: 1,
-		Spec:               map[string]any{"replicas": 3},
 		State:              map[string]any{"primary": name + "-01"},
 		Status:             StatusDestroying,
 		StatusDetails:      map[string]any{"force": false},
@@ -705,14 +700,23 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	}
 
 	// Archive incarnation survived cascade with key columns.
+	//
+	// `spec` is deliberately NOT among them. The column was dropped from
+	// `incarnation` (NIM-408), so a row archived from here on has no spec to
+	// copy and takes the archive column's `{}` default. The archive KEEPS that
+	// column rather than dropping it with the source: rows archived before this
+	// release hold real data there, and a compliance archive is the last place
+	// to delete history. So the assertion is the empty object — filling it again
+	// would mean something started writing a spec, and dropping the column would
+	// mean the historical rows went with it.
 	var (
 		archName, archService, archVersion, archStatus string
-		archReplicas                                   float64
+		archSpec                                       map[string]any
 	)
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT name, service, service_version, status, (spec->>'replicas')::float
+		`SELECT name, service, service_version, status, spec
 		 FROM incarnation_archive WHERE name = 'redis-prod'`).
-		Scan(&archName, &archService, &archVersion, &archStatus, &archReplicas); err != nil {
+		Scan(&archName, &archService, &archVersion, &archStatus, &archSpec); err != nil {
 		t.Fatalf("select incarnation_archive: %v", err)
 	}
 	if archName != "redis-prod" || archService != "redis" || archVersion != "v1.2.3" {
@@ -721,8 +725,8 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	if archStatus != "destroying" {
 		t.Errorf("archive status = %q, want destroying (snapshot at delete)", archStatus)
 	}
-	if archReplicas != 3 {
-		t.Errorf("archive spec.replicas = %v, want 3", archReplicas)
+	if len(archSpec) != 0 {
+		t.Errorf("archive spec = %v, want the empty default — nothing writes a spec any more", archSpec)
 	}
 
 	// Archive state_history survived cascade.
@@ -1040,7 +1044,7 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
 	hist := "01HEPOCHHIST00000000001"
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		map[string]any{"primary": name + "-01"}, stateAfter,
-		StatusReady, nil, nil, hist, nil); err != nil {
+		StatusReady, nil, nil, hist, nil, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 
@@ -1074,7 +1078,7 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 	stateBefore := map[string]any{"primary": name + "-01"}
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		stateBefore, stateBefore, // state not changed on failure
-		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002", nil); err != nil {
+		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, "01HEPOCHHIST00000000002", nil, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun (fail): %v", err)
 	}
 

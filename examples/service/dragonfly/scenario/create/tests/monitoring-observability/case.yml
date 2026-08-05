@@ -1,7 +1,7 @@
 # L0 test for create: MANDATORY observability of the data plane (Slice II + V-I, dragonfly).
 # After the deploy branch (DF + sentinel plane + health gates) create UNCONDITIONALLY (no when-gate)
 # deploys, as a COMPOSITION of reusable standalone-destiny via apply:destiny:
-#   - node-exporter — host metrics (version/listen from essence, arch — soulprint.self);
+#   - node-exporter — host metrics (version/listen from service vars, arch — soulprint.self);
 #     ★ node-exporter-ONLY: DragonFly natively exposes ITS OWN metrics → there is no redis_exporter analog;
 #   - vector        — log shipping (BOTH planes: DragonFly glog + sentinel redis daemon).
 #
@@ -37,7 +37,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     sentinel_master_name: master
     memory_reserve_percent: 75
     df_config:
@@ -54,7 +54,7 @@ fixtures:
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
-    # ★ essence observability keys (Slice II + V-I): node_exporter version/port; vector version/
+    # ★ service-vars observability keys (Slice II + V-I): node_exporter version/port; vector version/
     # checksum/sink/sources. console sink (default) — endpoint/auth not needed.
     node_exporter_version: "1.8.2"
     node_exporter_listen: ":9100"

@@ -3,7 +3,7 @@
 // and MCP-tool `keeper.push.apply`:
 //
 //   - render: synthetic single-task scenario with apply: destiny (destinyIsolated
-//     by design — register/state/essence/soulprint.hosts unavailable), run through
+//     by design — register/state/soulprint.hosts unavailable), run through
 //     the same [render.Pipeline] as scenario-runner;
 //   - hosts: read-only from souls registry (topology.Resolver.LoadByInventory),
 //     without incarnation-spec phase (Role="" for all);

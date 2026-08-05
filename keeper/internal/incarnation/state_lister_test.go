@@ -87,7 +87,6 @@ func (r stateCountRow) Scan(dest ...any) error {
 // traits, last_drift_check_at, last_drift_summary, created_scenario).
 func incToStaticRow(inc *Incarnation) staticRow {
 	stateBytes, _ := json.Marshal(inc.State)
-	specBytes := []byte("{}")
 	now := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 	// nil columns are passed as an untyped nil: assign distinguishes NULL by
 	// `src == nil` (a typed nil pointer in interface{} != nil).
@@ -96,7 +95,6 @@ func incToStaticRow(inc *Incarnation) staticRow {
 		inc.Service,
 		"v1",
 		1,
-		specBytes,
 		stateBytes,
 		string(StatusReady),
 		nil, // status_details

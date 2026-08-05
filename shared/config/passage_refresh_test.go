@@ -516,7 +516,7 @@ func TestAssertReadsRoster(t *testing.T) {
         - "size(soulprint.hosts) == int(input.shards)"
       message: "topology mismatch"
 `
-	// The redis directive-catalog guard: input + essence only, no roster.
+	// The redis directive-catalog guard: input + service vars only, no roster.
 	const inputOnly = `  - name: Guard directives are known
     assert:
       that:

@@ -97,7 +97,7 @@ description: >-
 #     leaves are removed (delete). cluster (redis_sentinel {}) — sentinel branch no-op.
 #     Forward-only (no down:; recovery — state_history).
 #   - 011_to_012 (migrations/011_to_012.yml): moving install + host-layout (conf_dir/
-#     data_dir/modules_base_url) out of state into essence (Option A) — four deletes (no-op on
+#     data_dir/modules_base_url) out of state into service vars (Option A) — four deletes (no-op on
 #     incarnations without the fields).
 #   - 012_to_013 (migrations/012_to_013.yml): mandatory data-plane monitoring
 #     (Slice I). state is AUGMENTED WITH the monitoring read-model (versions/listen of node_exporter+
@@ -114,8 +114,8 @@ description: >-
 #   - named fields (tls/persistence/...) — the operator's INTENT in simple
 #     typed terms (read-model). Day-2 scenarios read them by name
 #     (restart — state.tls, update_config — state.persistence/memory_mb). install and
-#     host-layout (conf_dir/data_dir/modules_base_url) moved into essence (v11→v12,
-#     Option A): install — a read-model without readers, layout — day-2 reads essence.
+#     host-layout (conf_dir/data_dir/modules_base_url) moved into service vars (v11→v12,
+#     Option A): install — a read-model without readers, layout — day-2 reads vars.
 # BOTH representations are filled from a SINGLE create compute pass (compute.*): namedfields
 # and redis_config are computed from the same compute.tls_*/input.* — no drift between them.
 state_schema:
@@ -131,7 +131,7 @@ state_schema:
       enum: [sentinel, cluster]
     redis_version:
       type: string
-    # The final redis.conf config (merged default→preset→user from essence). Goes both
+    # The final redis.conf config (merged default→preset→user from service vars). Goes both
     # into the `redis` destiny render, and into community.redis.config (CONFIG SET to a live Redis).
     redis_config:
       type: object
@@ -183,7 +183,7 @@ state_schema:
       type: integer
       minimum: 64
     # Eviction policy. From input.maxmemory_policy; if not set → an empty string
-    # (the directive is taken from the essence merge base — namedfields marks it
+    # (the directive is taken from the service vars merge base — namedfields marks it
     # as "operator made no explicit choice").
     maxmemory_policy:
       type: string
@@ -195,7 +195,7 @@ state_schema:
       items:
         type: string
         enum: [search, json, timeseries, bloom]
-    # Applied kernel parameters for Redis (host tuning). From essence.sysctl_settings
+    # Applied kernel parameters for Redis (host tuning). From vars.sysctl_settings
     # (the same map that went into destiny via apply.input). key→value (strings).
     sysctl_settings:
       type: object
@@ -204,7 +204,7 @@ state_schema:
 
     # ── Data-plane monitoring (read-model, v13, Slice I) ──────────────────
     # FACT of deployed metrics exporters: create UNCONDITIONALLY installs node_exporter +
-    # redis_exporter on every host (AFTER deploy). Versions/listen ports — from essence
+    # redis_exporter on every host (AFTER deploy). Versions/listen ports — from service vars
     # (node_exporter_*/redis_exporter_*, the same values that went into apply.input for both
     # destinies). Symmetric to the install/tls read-model: the operator sees what's deployed, and
     # a repeated apply is idempotent. The monitoring ACL user's password/username are NOT written HERE —
@@ -223,7 +223,7 @@ state_schema:
     # ── Data-plane log-shipping (read-model, v14, Slice V-I, ADR-067) ──────
     # FACT of a deployed log-shipping agent: create UNCONDITIONALLY installs vector on
     # every host (AFTER deploy+exporters). version/sink_type/endpoint/log_sources —
-    # from essence.vector_* (the same values that went into the vector destiny's apply.input).
+    # from vars.vector_* (the same values that went into the vector destiny's apply.input).
     # ★ sink_auth_ref (the collector token) is NOT written HERE — the secret lives in Vault
     # (like tls.*_ref and the monitoring password). Symmetric to the monitoring read-model: the operator
     # sees what's deployed. For v≤13 incarnations (log-shipping not yet deployed) —

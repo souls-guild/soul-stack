@@ -1050,6 +1050,11 @@ type incTestDB struct {
 	selectByName  func(name string) pgx.Row
 	unlockSelect  func() pgx.Row
 	soulsExisting map[string]struct{}
+	// seenSQL records every statement the handler issued. Some behaviour is only
+	// observable in the SQL: a filter that never reaches the WHERE clause returns
+	// the same rows from a fake as one that does, so a body assertion would pass
+	// either way.
+	seenSQL []string
 }
 
 func (f *incTestDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -1060,6 +1065,7 @@ func (f *incTestDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comman
 }
 
 func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	f.seenSQL = append(f.seenSQL, sql)
 	switch {
 	case strings.Contains(sql, "INSERT INTO incarnation"):
 		if f.insertRow != nil {
@@ -1077,8 +1083,11 @@ func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return errRow2{pgx.ErrNoRows}
 	case strings.Contains(sql, "SELECT scenario") && strings.Contains(sql, "FROM state_history"):
-		return incStaticRow{values: []any{"create", "01HFAILEDRUN00000000000000"}}
+		return incStaticRow{values: []any{"create", "01HFAILEDRUN00000000000000",
+			[]byte(`{"scenario_name":"create","input":{}}`)}}
 	case strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL"):
+		// No longer on the rerun path (NIM-408) — kept so an unexpected probe is
+		// visible as ErrNoRows rather than as an unexpected-SQL panic.
 		return errRow2{pgx.ErrNoRows}
 	case strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at"):
 		return staticRow1Time(time.Now().UTC())
@@ -1094,6 +1103,7 @@ func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 }
 
 func (f *incTestDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	f.seenSQL = append(f.seenSQL, sql)
 	if strings.Contains(sql, "FROM souls WHERE sid = ANY") {
 		sids, _ := args[0].([]string)
 		var found []string
@@ -1146,7 +1156,7 @@ func incRow(name, status, state string) pgx.Row {
 	now := time.Now()
 	return incStaticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte(state), status,
+		[]byte(state), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
@@ -1163,7 +1173,7 @@ func incRowBare(name, status, state string) pgx.Row {
 	now := time.Now()
 	return incStaticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte(state), status,
+		[]byte(state), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
@@ -1311,4 +1321,61 @@ type incTestScoper struct{ unrestricted bool }
 
 func (s incTestScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 	return rbac.Purview{Unrestricted: s.unrestricted}
+}
+
+// TestHumaIncarnation_History_IncludeTransitions — the query parameter reaches the
+// SQL, at the layer where it can fail to.
+//
+// This is the shape a unit test on HistorySelectByName cannot see. That test
+// passes a HistoryFilter it constructed itself, so it proves the predicate is
+// built correctly from the filter and says nothing about whether any caller can
+// set the filter. For a while none could: the field existed, defaulted to false,
+// and was declared on no surface — so the exclusion was unconditional and the
+// documented opt-in was unreachable. It took a live curl against a running
+// keeper to notice, because everything below the transport was green.
+//
+// The assertion is therefore on the SQL the handler ends up issuing, not on the
+// response body: the fake returns the same rows either way, and a body check
+// would pass with the parameter still going nowhere.
+func TestHumaIncarnation_History_IncludeTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		query         string
+		wantPredicate bool
+	}{
+		{"default excludes the markers", "", true},
+		{"opt-in drops the predicate", "?include_transitions=true", false},
+		{"explicit false still excludes", "?include_transitions=false", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &incTestDB{selectByName: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{},
+				&incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+				incTestScoper{unrestricted: true}, nil)
+			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v1/incarnations/redis-prod/history"+tc.query, http.NoBody))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+
+			var sawHistorySQL bool
+			for _, sql := range db.seenSQL {
+				if !strings.Contains(sql, "FROM state_history") {
+					continue
+				}
+				sawHistorySQL = true
+				got := strings.Contains(sql, "scenario <>")
+				if got != tc.wantPredicate {
+					t.Errorf("scenario <> predicate present = %v, want %v; SQL=%q",
+						got, tc.wantPredicate, sql)
+				}
+			}
+			if !sawHistorySQL {
+				t.Fatal("no state_history query was issued — the assertion above proved nothing")
+			}
+		})
+	}
 }

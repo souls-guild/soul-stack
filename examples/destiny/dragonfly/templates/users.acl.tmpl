@@ -20,7 +20,7 @@
   (including internal: replication/sentinel/health-PING) goes through the SYSTEM user
   default_admin (`~* &* +@all`). default_admin comes from the .vars.users MAP via range,
   like the other system users (replica/monitoring/sentinel/haproxy) - it's added to
-  essence.system_acl_users, and the scenario adds it to users with its OWN Vault password.
+  vars.system_acl_users, and the scenario adds it to users with its OWN Vault password.
 
   ★ The built-in DragonFly `default` user → `off`, IF the operator did NOT declare it in
   input.users: the built-in default is no longer needed (its role is taken by default_admin),

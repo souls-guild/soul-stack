@@ -73,12 +73,12 @@ fixtures:
     # vault(input.source.password_ref) - password_ref = below in input.
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
-  essence:
-    # install_method is in essence (author-context): install method is NOT
+  vars:
+    # install_method is in service vars (author-context): install method is NOT
     # operator-input (covenant.compute.install reads
-    # default(essence.install_method, 'binary')). package explicitly - distro
+    # default(vars.install_method, 'binary')). package explicitly - distro
     # pin =version, as the case checked before the covenant rollout (the field
-    # moved input->essence together with migrate, catching up with the
+    # moved input->service vars together with migrate, catching up with the
     # create redesign 2026-06-28).
     install_method: package
     redis_type: sentinel
@@ -116,12 +116,12 @@ fixtures:
     redis_type: sentinel
     # * version - enum of builds rolled out to Nexus (redesign). 7.4.1 (major
     # 7 < 8 -> module version-gate not active, .so's load). install_method
-    # moved to essence (above) - NOT operator-input after the covenant rollout.
+    # moved to service vars (above) - NOT operator-input after the covenant rollout.
     version: "7.4.1"
     replicas_per_master: 1
     # connection_mode omitted -> plain (default): TLS off, plain port.
     # sentinel_settings/sentinel_master_settings omitted ->
-    # compute.sentinel_directives = essence defaults
+    # compute.sentinel_directives = service vars defaults
     # (down-after-milliseconds=5000/failover-timeout=60000).
     # * External source: coordinates + Vault PATH to the password (under pattern-guard).
     source:
@@ -181,7 +181,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # -- deploy body: IN-cluster REPLICAOF (community.redis.replica) --------------
     # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379
@@ -259,7 +259,7 @@ assert:
     redis_hosts: []
     # * Redesign: redis_sentinel carries GENERALIZED maps (master_settings/settings)
     # instead of named down_after_ms/failover_timeout_ms. master_settings =
-    # essence defaults (input.sentinel_master_settings not set) ->
+    # service vars defaults (input.sentinel_master_settings not set) ->
     # down-after-milliseconds=5000/failover-timeout=60000; settings={}
     # (sentinel_settings not set). quorum=0 (AUTO).
     redis_sentinel:

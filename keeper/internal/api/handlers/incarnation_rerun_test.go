@@ -41,7 +41,7 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun bootstrap verified")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun bootstrap verified", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -101,15 +101,18 @@ func TestRerunLast_202_FromErrorLocked(t *testing.T) {
 // NOT defaults). Regression: RunSpec without Input → nil → the restart fails on required
 // validation (version/shards) or applies defaults.
 func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
-	specJSON := []byte(`{"input":{"version":"8.6.1","shards":3,"connection_mode":"cluster"}}`)
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
-		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowSpec("error_locked", specJSON) },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"create", "01HFAILEDCREATE000000000000",
+				[]byte(`{"scenario_name":"create","input":{"version":"8.6.1","shards":3,"connection_mode":"cluster"}}`)}}
+		},
 	}
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-cluster-prod", "rerun cluster bootstrap")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-cluster-prod", "rerun cluster bootstrap", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -121,7 +124,7 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil {
-		t.Fatal("RunSpec.Input = nil - stored spec.input NOT threaded through (create-path regression)")
+		t.Fatal("RunSpec.Input = nil - the attempt's own snapshot NOT threaded through")
 	}
 	if gotInput["version"] != "8.6.1" {
 		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
@@ -135,16 +138,23 @@ func TestRerunLast_ReusesStoredInput_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_NoStoredInput_NilInput_202 — create-path contrast: an incarnation WITHOUT
-// stored input (spec.input absent) → RunSpec.Input nil (input was not
-// set), the run starts normally. Regression = an empty spec yields `{}` input or
-// panics on extraction.
+// TestRerunLast_NoStoredInput_NilInput_202 — the contrast: an attempt whose
+// snapshot carries no input → RunSpec.Input nil (the scenario takes none), and the
+// run starts normally. Regression = an inputless snapshot yields `{}` or panics on
+// extraction.
 func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
-	db := rerunDB("error_locked") // makeUnlockSelectRow → spec=`{}` (no input)
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"create", "01HFAILEDCREATE000000000000",
+				[]byte(`{"scenario_name":"create"}`)}}
+		},
+	}
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun no-input bootstrap")
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun no-input bootstrap", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v", err)
 	}
@@ -152,33 +162,31 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.Input != nil {
-		t.Errorf("RunSpec.Input = %v, want nil (spec without input)", starter.gotSpec.Input)
+		t.Errorf("RunSpec.Input = %v, want nil (a snapshot without input)", starter.gotSpec.Input)
 	}
 }
 
 // TestRerunLast_Day2_ReusesRecipeInput_202 — day-2 happy-path: the last failed one
-// — add_user (≠ created `create`), its input is taken from the recipe apply_run → 202,
-// RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (not spec.input),
+// — add_user (≠ created `create`), its input is taken from its own history snapshot → 202,
+// RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (not the incarnation spec),
 // reply.Scenario=="add_user", audit scenario=="add_user".
 func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
-		// spec.input carries version — it must NOT leak onto the day-2 path.
+		// The incarnation spec carries version — it must NOT leak into the rerun.
 		unlockSelectRow: func(_ string) pgx.Row {
 			return makeUnlockSelectRowSpec("error_locked", []byte(`{"input":{"version":"8.6.1"}}`))
 		},
 		lastScenarioRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{"add_user", "01HFAILEDADDUSER0000000000"}}
-		},
-		recipeRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}}
+			return staticRow{values: []any{"add_user", "01HFAILEDADDUSER0000000000",
+				[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}}
 		},
 	}
 	starter := &fakeStarter{}
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped day-2 err = %v", err)
 	}
@@ -193,10 +201,10 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil || gotInput["user"] != "alice" {
-		t.Fatalf("RunSpec.Input = %v, want {user:alice} (recipe.input)", gotInput)
+		t.Fatalf("RunSpec.Input = %v, want {user:alice} (the attempt's own snapshot)", gotInput)
 	}
 	if _, leaked := gotInput["version"]; leaked {
-		t.Error("RunSpec.Input carries spec.input[version] - operation must take recipe.input")
+		t.Error("RunSpec.Input carries the incarnation spec - the rerun must take the attempt's own snapshot")
 	}
 	var ev *audit.Event
 	for _, e := range aw.events {
@@ -209,12 +217,12 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	}
 	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false (restart from scenario/).
 	if starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = true, want false (recipe without from_upgrade)")
+		t.Error("RunSpec.FromUpgrade = true, want false (snapshot without from_upgrade)")
 	}
 }
 
 // TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last of
-// a run whose recipe.from_upgrade=true (a failed auto-started upgrade scenario)
+// a run whose snapshot carries from_upgrade=true (a failed auto-started upgrade scenario)
 // must pass FromUpgrade=true into RunSpec — otherwise the restart looks for scenario/<slug>/
 // (which does not exist, §3) and fails with 500. Checks the wiring UnlockResult.FromUpgrade →
 // RunSpec.FromUpgrade at the HANDLER level (the DB layer does not catch it).
@@ -225,17 +233,15 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 			return makeUnlockSelectRowSpec("error_locked", []byte(`{}`))
 		},
 		lastScenarioRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000"}}
-		},
-		recipeRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}}
+			return staticRow{values: []any{"to_v2", "01HFAILEDUPGRADE0000000000",
+				[]byte(`{"scenario_name":"to_v2","from_upgrade":true,"input":{}}`)}}
 		},
 	}
 	starter := &fakeStarter{}
 	aw := &fakeAuditWriter{}
 	h := newRerunHandler(db, starter, aw)
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped day-2 upgrade err = %v", err)
 	}
@@ -246,7 +252,7 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if !starter.gotSpec.FromUpgrade {
-		t.Error("RunSpec.FromUpgrade = false, want true (recipe.from_upgrade -> rerun from upgrade/)")
+		t.Error("RunSpec.FromUpgrade = false, want true (snapshot from_upgrade -> rerun from upgrade/)")
 	}
 	if !starter.gotSpec.FromLocked {
 		t.Error("RunSpec.FromLocked = false, want true (applying reserved)")
@@ -254,23 +260,21 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 }
 
 // TestRerunLast_Day2_BareIncarnation_202 — a bare incarnation (created_scenario IS
-// NULL) locked by a day-2 scenario → rerun-last is applicable via the recipe path (was:
-// 409). ScenarioName from last-run, Input from recipe.
+// NULL) locked by a day-2 scenario → rerun-last is applicable from the history snapshot (was:
+// 409). ScenarioName and Input both from the last history row.
 func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowBare("error_locked") },
 		lastScenarioRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{"update_acl", "01HFAILEDACL00000000000000"}}
-		},
-		recipeRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{[]byte(`{"input":{"acl":"readonly"}}`)}}
+			return staticRow{values: []any{"update_acl", "01HFAILEDACL00000000000000",
+				[]byte(`{"input":{"acl":"readonly"}}`)}}
 		},
 	}
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare day-2")
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare day-2", nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped bare day-2 err = %v", err)
 	}
@@ -281,30 +285,162 @@ func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.Input["acl"] != "readonly" {
-		t.Errorf("RunSpec.Input[acl] = %v, want readonly (recipe.input)", starter.gotSpec.Input["acl"])
+		t.Errorf("RunSpec.Input[acl] = %v, want readonly (the attempt's snapshot)", starter.gotSpec.Input["acl"])
 	}
 }
 
-// TestRerunLast_Day2_RecipeUnavailable_409 — day-2, but the recipe is absent (recipe
-// IS NULL / apply_run purged → ErrNoRows): fail-closed 409 rerun-input-unavailable
-// (a distinct problem-type from incarnation-locked — a machine-readable difference from
-// "status is not error_locked"), the run does NOT start (no silent bootstrap-input).
-func TestRerunLast_Day2_RecipeUnavailable_409(t *testing.T) {
+// TestRerunLast_SnapshotUnavailable_409 — the history row records the attempt but
+// carries no replayable snapshot (a terminal recorded without a RunSpec, or a row
+// predating the migration): fail-closed 409 rerun-input-unavailable, a distinct
+// problem-type from incarnation-locked, and the run does NOT start on defaults.
+func TestRerunLast_SnapshotUnavailable_409(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
 		lastScenarioRow: func(_ string) pgx.Row {
-			return staticRow{values: []any{"add_user", "01HFAILEDADDUSER0000000000"}}
+			// A history row with NO snapshot: the attempt happened but cannot be
+			// replayed from it.
+			return staticRow{values: []any{"add_user", "01HFAILEDADDUSER0000000000", []byte(nil)}}
 		},
-		// recipeRow nil → the recipe probe returns ErrNoRows (fail-closed).
 	}
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user")
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user", nil)
 	wantProblem(t, err, problem.TypeRerunInputUnavailable)
 	if starter.calls != 0 {
-		t.Errorf("scenario start calls = %d, want 0 (fail-closed recipe unavailable)", starter.calls)
+		t.Errorf("scenario start calls = %d, want 0 (fail-closed, no replayable snapshot)", starter.calls)
+	}
+}
+
+// TestRerunLast_ReplaysTheRefTheAttemptUsed — the headline guard of NIM-408, and
+// the reason the history snapshot is a Recipe rather than a bare input.
+//
+// An upgrade moves the incarnation's pin. A rerun of a failure that happened
+// BEFORE it must replay against the code the attempt actually ran, not against
+// whatever the incarnation is pinned to now — otherwise the operator asks "run
+// that again" and silently gets something else. Before this the handler did
+// exactly that: `serviceRef.Ref = inc.ServiceVersion`.
+func TestRerunLast_ReplaysTheRefTheAttemptUsed(t *testing.T) {
+	db := &fakeIncDB{
+		// The incarnation has since been upgraded — its current pin is v2.0.0.
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"add_user", "01HFAILEDBEFOREUPGRADE0000",
+				[]byte(`{"scenario_name":"add_user","input":{"user":"alice"},` +
+					`"service_ref":{"name":"redis","git":"file:///srv/redis","ref":"v1.0.0"}}`)}}
+		},
+	}
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun the pre-upgrade failure", nil); err != nil {
+		t.Fatalf("RerunLastTyped err = %v", err)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if got := starter.gotSpec.ServiceRef.Ref; got != "v1.0.0" {
+		t.Errorf("ServiceRef.Ref = %q, want v1.0.0 — the rerun must replay the ref the ATTEMPT used, "+
+			"not the incarnation's current pin", got)
+	}
+	if got := starter.gotSpec.ServiceRef.Git; got != "file:///srv/redis" {
+		t.Errorf("ServiceRef.Git = %q, want the snapshot's URL", got)
+	}
+}
+
+// TestRerunLast_FallsBackToTheCurrentPin — the other half. A snapshot without a
+// service_ref (a terminal recorded without one, or a row predating the column)
+// falls back to the incarnation's current pin, which is the old behaviour kept as
+// the answer of last resort rather than the rule.
+func TestRerunLast_FallsBackToTheCurrentPin(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"add_user", "01HFAILEDNOREF000000000000",
+				[]byte(`{"scenario_name":"add_user","input":{}}`)}}
+		},
+	}
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun without a pinned ref", nil); err != nil {
+		t.Fatalf("RerunLastTyped err = %v", err)
+	}
+	if starter.gotSpec.ServiceRef.Ref == "v1.0.0" {
+		t.Error("a snapshot with no service_ref must not invent one")
+	}
+	if starter.gotSpec.ServiceRef.Name == "" {
+		t.Error("the fallback must still carry the registry's coordinates")
+	}
+}
+
+// TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput — the recovery path, and
+// the only reason the body takes an input at all.
+//
+// Before NIM-408 a day-2 rerun became impossible once apply_runs.recipe was
+// purged at 30 days: ErrRerunInputUnavailable with nothing the operator could do.
+// Now the refusal is answerable — they send the input and the restart proceeds.
+func TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput(t *testing.T) {
+	newDB := func() *fakeIncDB {
+		return &fakeIncDB{
+			selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+			unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+			lastScenarioRow: func(_ string) pgx.Row {
+				// On record, but with no replayable snapshot.
+				return staticRow{values: []any{"add_user", "01HFAILEDNOSNAP00000000000", []byte(nil)}}
+			},
+		}
+	}
+
+	// Without an input the refusal stands — the run must not start on defaults.
+	starter := &fakeStarter{}
+	h := newRerunHandler(newDB(), starter, &fakeAuditWriter{})
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun", nil)
+	wantProblem(t, err, problem.TypeRerunInputUnavailable)
+	if starter.calls != 0 {
+		t.Fatalf("scenario start calls = %d, want 0 without an input", starter.calls)
+	}
+
+	// With one, the same request succeeds and the run gets exactly what was sent.
+	starter = &fakeStarter{}
+	h = newRerunHandler(newDB(), starter, &fakeAuditWriter{})
+	if _, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun",
+		map[string]any{"user": "carol"}); err != nil {
+		t.Fatalf("RerunLastTyped with a supplied input: %v", err)
+	}
+	if starter.calls != 1 {
+		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
+	}
+	if got := starter.gotSpec.Input["user"]; got != "carol" {
+		t.Errorf("RunSpec.Input[user] = %v, want carol (the operator's own input)", got)
+	}
+}
+
+// TestRerunLast_SuppliedInputOnAReplayableAttemptIsRefused — the boundary, and it
+// is a REFUSAL rather than a silent preference. "Rerun that" and "run this
+// instead" are different requests; an input that quietly replaced a recorded one
+// would make rerun-last a way to run something else under the name of a retry.
+// The refusal happens before any Exec, so the incarnation stays locked as it was.
+func TestRerunLast_SuppliedInputOnAReplayableAttemptIsRefused(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
+		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
+		lastScenarioRow: func(_ string) pgx.Row {
+			return staticRow{values: []any{"add_user", "01HFAILEDWITHSNAP000000000",
+				[]byte(`{"scenario_name":"add_user","input":{"user":"alice"}}`)}}
+		},
+	}
+	starter := &fakeStarter{}
+	h := newRerunHandler(db, starter, &fakeAuditWriter{})
+
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun",
+		map[string]any{"user": "mallory"})
+	wantProblem(t, err, problem.TypeValidationFailed)
+	if starter.calls != 0 {
+		t.Errorf("scenario start calls = %d, want 0 — the refusal must leave the incarnation as it was", starter.calls)
 	}
 }
 
@@ -317,7 +453,7 @@ func TestRerunLast_RejectNonErrorLocked(t *testing.T) {
 			starter := &fakeStarter{}
 			h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-			_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "x")
+			_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "x", nil)
 			wantProblem(t, err, problem.TypeIncarnationLocked)
 			if starter.calls != 0 {
 				t.Errorf("status=%s: scenario start calls = %d, want 0", status, starter.calls)
@@ -334,7 +470,7 @@ func TestRerunLast_NotFound_404(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "ghost", "x")
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "ghost", "x", nil)
 	wantProblem(t, err, problem.TypeNotFound)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0", starter.calls)
@@ -347,7 +483,7 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "")
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "", nil)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (rejected before start)", starter.calls)
@@ -357,7 +493,7 @@ func TestRerunLast_EmptyReason_422(t *testing.T) {
 // TestRerunLast_InvalidName_422 — invalid name in path → 422.
 func TestRerunLast_InvalidName_422(t *testing.T) {
 	h := newRerunHandler(rerunDB("error_locked"), &fakeStarter{}, &fakeAuditWriter{})
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "Bad_Name", "x")
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "Bad_Name", "x", nil)
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -369,7 +505,7 @@ func TestRerunLast_ReasonAtMax_202(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen)
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v (reason exactly %d is allowed)", err, incarnation.ReasonMaxLen)
 	}
@@ -389,7 +525,7 @@ func TestRerunLast_ReasonOverMax_422(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen+1)
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (reason over max -> rejected before start)", starter.calls)
@@ -410,7 +546,7 @@ func TestRerunLast_ReasonMultibyteAtMax_202(t *testing.T) {
 		t.Fatalf("test precondition violated: %d bytes does not exceed limit %d - case does not distinguish bytes/runes",
 			len(reason), incarnation.ReasonMaxLen)
 	}
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
 	if err != nil {
 		t.Fatalf("RerunLastTyped err = %v (ReasonMaxLen runes in Cyrillic is allowed - we count runes, not bytes)", err)
 	}
@@ -430,7 +566,7 @@ func TestRerunLast_ReasonMultibyteOverMax_422(t *testing.T) {
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
 	reason := strings.Repeat("я", incarnation.ReasonMaxLen+1)
-	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason)
+	_, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", reason, nil)
 	wantProblem(t, err, problem.TypeValidationFailed)
 	if starter.calls != 0 {
 		t.Errorf("scenario start calls = %d, want 0 (reason over max in runes -> rejected before start)", starter.calls)

@@ -48,7 +48,7 @@ keeper.profile.create
 
 Profile parameters are validated against `profile_schema`, which driver publishes via RPC `Schema()` ([plugins.md](plugins.md)).
 
-**Default essence in git as a substrate.** The default service parameters are in the `essence/` service repo (see [architecture.md → Essence: build pipeline](../architecture.md)); operator overrides them in `incarnation.spec` via the API. The Provider/Profile themselves are runtime-state, and therefore in Postgres, and not in git ([architecture.md → Soul Stack Artifacts](../architecture.md)).
+**Service defaults live in git.** The default service parameters are in the service repo's `vars/` ([ADR-0082](../adr/0082-service-vars.md)); they are not overridable through the API — a fleet that needs different ones forks the service repo and re-pins its `ServiceRef`. The Provider/Profile themselves are runtime-state, and therefore in Postgres, and not in git ([architecture.md → Soul Stack Artifacts](../architecture.md)).
 
 ## Cloud-create as script step
 

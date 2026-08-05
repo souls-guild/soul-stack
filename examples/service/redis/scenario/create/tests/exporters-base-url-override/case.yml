@@ -1,13 +1,13 @@
-# L0 test for create: essence override of the download root for ALL three observability agents
+# L0 test for create: service vars override of the download root for ALL three observability agents
 # (node-exporter / redis-exporter / vector) to an internal mirror/nexus-proxy.
 #
 # Hosts without access to github.com (air-gapped) pull releases through the Nexus raw-proxy,
-# mirroring the github path 1:1. We prove: essence.{node_exporter,redis_exporter,vector}_base_url
+# mirroring the github path 1:1. We prove: vars.{node_exporter,redis_exporter,vector}_base_url
 # make it through apply:input to core.url.fetched of each sub-destiny; without an override
 # the default remains GitHub Releases (back-compat, see the other cases).
 #
 # Substrate — monitoring-exporters (sentinel, 1 host, provision off).
-name: create fetches all exporters from essence base_url mirror override
+name: create fetches all exporters from service vars base_url mirror override
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -30,7 +30,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"

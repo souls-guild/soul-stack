@@ -1,12 +1,12 @@
 // Package scenario is the top-level orchestrator for scenario runs on the
 // Keeper side (architect-recon slice .g). It wires together the git-artifact
-// loader, topology resolver, essence pipeline, render pipeline, gRPC
+// loader, topology resolver, service-vars resolver, render pipeline, gRPC
 // outbound, and incarnation/applyrun CRUD into one async run.
 //
 // Run lifecycle (see [Runner.Start] → run-goroutine in run.go):
 //
 //	SelectByName → status=applying → Load(service) → ParseScenario →
-//	LoadIncarnationHosts → Resolve(essence) → Render → dispatch(per-task
+//	LoadIncarnationHosts → Resolve(service vars) → Render → dispatch(per-task
 //	cross-host barrier) → UpdateStateFromRun(commit | error_locked)
 //
 // Pilot DSL scope (PM decision): sequential tasks + per-host fan-out +
@@ -39,8 +39,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
@@ -233,6 +233,16 @@ type RunSpec struct {
 	StartedByAID    string
 	TerminalMode    TerminalMode
 
+	// Covens / Traits — the labels the request will write onto the incarnation
+	// row. Read by ONE caller and for one reason: on the create path the row does
+	// not exist yet, so [Runner.PreflightAssert] synthesises an incarnation, and a
+	// `vars/_stack.yaml` keyed on `incarnation.covens` would otherwise resolve
+	// fewer layers at the gate than the create run resolves a moment later — the
+	// NIM-271 divergence, reappearing on the one path that still has no row.
+	// Empty on every other path, where the real row is read instead.
+	Covens []string
+	Traits map[string]any
+
 	// inputSnapshot — the masked operator-input snapshot (maskedInputSnapshot of
 	// Input), computed once at run start and written to apply_runs.input on every
 	// row (migration 101). Unexported: set by run(), not by the API caller.
@@ -396,11 +406,11 @@ type ChangedTaskReader interface {
 // (nil → discard) and Destiny (nil → apply:destiny unsupported,
 // ErrUnsupportedDSL).
 type Deps struct {
-	Loader   *artifact.ServiceLoader
-	Topology *topology.Resolver
-	Essence  *essence.Resolver
-	Render   *render.Pipeline
-	Outbound ApplyDispatcher
+	Loader      *artifact.ServiceLoader
+	Topology    *topology.Resolver
+	ServiceVars *servicevars.Resolver
+	Render      *render.Pipeline
+	Outbound    ApplyDispatcher
 	// Destiny — source of destiny artifacts for apply:destiny
 	// (default_destiny_source + DestinyLoader). nil → apply:destiny in a
 	// scenario is rejected at render phase (ErrUnsupportedDSL).
@@ -575,7 +585,7 @@ type Runner struct {
 // NewRunner assembles a Runner. Panics on nil required dependencies — a
 // wire-up bug (main), not a runtime condition.
 func NewRunner(deps Deps) *Runner {
-	if deps.Loader == nil || deps.Topology == nil || deps.Essence == nil ||
+	if deps.Loader == nil || deps.Topology == nil || deps.ServiceVars == nil ||
 		deps.Render == nil || deps.Outbound == nil || deps.DB == nil {
 		panic("scenario: NewRunner: required dependency is nil")
 	}

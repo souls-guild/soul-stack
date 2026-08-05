@@ -1,4 +1,4 @@
-# L0 test for create — persistence: aof_always. The essence.persistence_presets
+# L0 test for create — persistence: aof_always. The vars.persistence_presets
 # [aof_always] preset = {save:"", appendonly:"yes", appendfsync:"always"} merges into
 # redis_config (fsync on EVERY write — max durability). The case pins the invariant
 # "aof_always → appendfsync:always + appendonly:yes + save:"" in redis.conf AND state".
@@ -29,9 +29,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master

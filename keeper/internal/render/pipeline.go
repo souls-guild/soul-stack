@@ -205,7 +205,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// only on activation (per-action validation). Not masking a bug: the
 		// task is physically never executed, so the guard is never reached.
 		// isStaticWhen/staticWhenSkips are register-/soulprint-independent and
-		// build flow_context from input/vars/essence/incarnation/self, not DSL
+		// build flow_context from input/vars/incarnation/self, not DSL
 		// fields, so calling them before the guard is safe.
 		if skipped, serr := p.emitStaticWhenSkip(ctx, in, task, &tasks, &plans, &idx); serr != nil {
 			return nil, nil, serr
@@ -439,7 +439,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// 'apply'` under a different action) that read an optional input which
 	// isn't present would otherwise hit no-such-key → render_failed during
 	// eager render. The skip collects only flow_context (Soul reads it for
-	// evalWhen — built from input/vars/essence/incarnation/self, never from
+	// evalWhen — built from input/vars/incarnation/self, never from
 	// the failing params — so it's safe) and leaves a complete RenderedTask
 	// (Index/Passage/Register/When/requisites kept, params empty). The
 	// decision is deterministic (static-when is host-invariant) — taken on
@@ -475,6 +475,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	var templateContent string
 	var injectInput bool
 	var fileVarKeys map[string]bool
+	var wholeVars bool
 	if isRendered {
 		content, uses, terr := p.resolveTemplateUsesInput(in, resolved)
 		if terr != nil {
@@ -492,6 +493,14 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, kerr)
 		}
 		fileVarKeys = keys
+
+		// A whole-map read gets the whole map: scoping by subkeys cannot serve a
+		// template that names none.
+		whole, werr := templateReadsWholeVars(templateContent)
+		if werr != nil {
+			return nil, fmt.Errorf("render: task %q: %w", task.Name, werr)
+		}
+		wholeVars = whole
 
 		// seal S-1 (ADR-010 §7.4, Variant B): mark sealed paths of
 		// render_context.input.<secret> per schema, gated the same as the
@@ -534,7 +543,11 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
-			fileVars := referencedFileVars(fileVarsForHost(in, h), fileVarKeys)
+			available := mergeVars(in.ServiceVars, fileVarsForHost(in, h))
+			fileVars := referencedFileVars(available, fileVarKeys)
+			if wholeVars {
+				fileVars = available
+			}
 			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
 				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 			}
@@ -545,7 +558,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 				rt.RenderContextBySID[h.SID] = st.Fields[paramRenderContext].GetStructValue()
 			}
 		}
-		// flow_context (ADR-012(d)): per-host snapshot {input,vars,essence,
+		// flow_context (ADR-012(d)): per-host snapshot {input,vars,
 		// incarnation,self} for Soul-side flow-control predicates. Built from
 		// the same vars as params (minus soulprint.hosts/loop, see
 		// buildFlowContext). Host-variant (self per host) — like
@@ -1124,7 +1137,7 @@ func flowControlEngine() (*cel.Engine, error) {
 // b). Static means a non-empty when that depends on neither register.*
 // (prior tasks' results, known only to Soul) nor soulprint (the host-variant
 // layer). Such a predicate is deterministic on Keeper from flow_context
-// (input/vars/essence/incarnation), and its false outcome is the same on
+// (input/vars/incarnation), and its false outcome is the same on
 // every host of the run.
 //
 // Reuses the canonical parsers (no regex duplication):
@@ -1201,7 +1214,6 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 	return cel.Vars{
 		Input:         flowSection("input"),
 		Vars:          flowSection("vars"),
-		Essence:       flowSection("essence"),
 		Incarnation:   flowSection("incarnation"),
 		SoulprintSelf: flowSection(flowContextSelfKey),
 		Register:      register,
@@ -1227,7 +1239,7 @@ func hasFlowControl(task config.Task) bool {
 //
 // Single-host (len==1): flow_context.self is correct for the one host →
 // soulprint.self in the predicate is fine (golden-path redis single-host).
-// Multi-host with a host-INVARIANT predicate (register.*/input.*/essence.*/
+// Multi-host with a host-INVARIANT predicate (register.*/input.*/vars.*/
 // incarnation.*) → OK, one predicate for the whole group is correct.
 //
 // Generalized to all three fields at once: changed_when/failed_when will
@@ -1286,8 +1298,8 @@ func stripPerHostKeys(s *structpb.Struct) *structpb.Struct {
 // predicate text). A proto diff of the snapshots with only the `self` key
 // subtracted.
 //
-// flow_context = {input, vars, essence, incarnation, self}
-// (buildFlowContext). input/essence/incarnation are host-INVARIANT by
+// flow_context = {input, vars, incarnation, self}
+// (buildFlowContext). input/vars/incarnation are host-INVARIANT by
 // construction (shared run context); self is ALWAYS host-VARIANT (per-host
 // facts) and already covered by the predicate-text regex guard, so it's
 // excluded here. That leaves vars: task-level `vars:` CAN be host-variant
@@ -1441,6 +1453,22 @@ func templateVarSubKeys(content string) (map[string]bool, error) {
 	return engine.RootFieldSubKeys(content, templateVarField)
 }
 
+// templateReadsWholeVars reports whether the template reads `.vars` AS A MAP
+// (`index .vars "x"`, `range .vars`, `toYaml .vars`, `with .vars`) rather than
+// through named subkeys. Targeted injection is keyed on the subkeys the AST can
+// see, so such a template would otherwise render an empty map against a map we
+// hold — a config file written with a section missing, and no error anywhere.
+func templateReadsWholeVars(content string) (bool, error) {
+	if content == "" {
+		return false, nil
+	}
+	engine, err := usesFieldEngine()
+	if err != nil {
+		return false, fmt.Errorf("building the tmpl engine: %w", err)
+	}
+	return engine.UsesWholeRootField(content, templateVarField)
+}
+
 // referencedFileVars filters the resolved destiny locals (vars.yml) down to
 // just the keys the template actually reads as `.vars.<key>` (keys). This
 // way render_context.vars gets EXACTLY the needed file-vars, not the whole
@@ -1473,7 +1501,7 @@ func usesInputField(content string) (bool, error) {
 }
 
 // setRenderContext places the assembled render-context into params under
-// the render_context key (structpb conversion of {vars,self,role,essence};
+// the render_context key (structpb conversion of {vars,self,role};
 // input is conditional).
 func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	rcStruct, err := structpb.NewStruct(rc)
@@ -1520,7 +1548,7 @@ func (p *Pipeline) RenderStateChanges(in RenderInput) (map[string]any, error) {
 //
 // CEL context: input/incarnation/soulprint.self + this host's register
 // (slice 2: register from the run's probe tasks, in.RegisterByHost[sid]);
-// vars/essence/state/soulprint.hosts belong to the future full grammar, not
+// vars/state/soulprint.hosts belong to the future full grammar, not
 // available in pilot.
 //
 // Cross-host folding is last-wins by SID order: each operation's Value
@@ -1792,7 +1820,7 @@ func patchMapFromAny(v any) (map[string]any, error) {
 // stateContextSnapshot builds a per-run scenario-context snapshot
 // (last-wins by SID) as a flat map for merge-time evaluation of
 // modify/remove match/patch. Contains input/register/incarnation/self/
-// essence/vars plus the folded-in foreach binding (loopBind). Uses the last
+// vars plus the folded-in foreach binding (loopBind). Uses the last
 // host's context by SID — register/self are host-variant, last-wins
 // (output.md, mirrors set/add).
 func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFacts, loopBind map[string]any) map[string]any {
@@ -1807,7 +1835,6 @@ func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFa
 	putIfSet("input", vars.Input)
 	putIfSet("register", vars.Register)
 	putIfSet("incarnation", vars.Incarnation)
-	putIfSet("essence", vars.Essence)
 	putIfSet("vars", vars.Vars)
 	putIfSet("compute", vars.Compute)
 	if vars.SoulprintSelf != nil {
@@ -1856,7 +1883,7 @@ func (p *Pipeline) EvalStateMatch(predicate string, elem, value any) (bool, erro
 // EvalStateOpExpr is the merge-time CEL evaluator for modify/remove (see
 // [StateOpEvalFunc]). Unlike EvalStateMatch (isolated elem/value for
 // add-dedup), expr here sees the FULL scenario run context (ctx — a
-// snapshot of input/register/incarnation/soulprint.self/essence/vars, built
+// snapshot of input/register/incarnation/soulprint.self/vars, built
 // by stateContextSnapshot) PLUS the current element's bindings (binds —
 // elem/key/value). boolOut=true → match predicate
 // (EvalExpression→bool); boolOut=false → patch value
@@ -1888,7 +1915,6 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 		Input:       asMap("input"),
 		Register:    asMap("register"),
 		Incarnation: asMap("incarnation"),
-		Essence:     asMap("essence"),
 		Vars:        asMap("vars"),
 		Compute:     asMap("compute"),
 	}
@@ -1901,7 +1927,7 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 	loop := map[string]any{}
 	for k, val := range ctx {
 		switch k {
-		case "input", "register", "incarnation", "essence", "vars", "compute", "soulprint":
+		case "input", "register", "incarnation", "vars", "compute", "soulprint":
 			continue
 		}
 		loop[k] = val
@@ -1974,7 +2000,7 @@ func guardPilotDSL(task config.Task, idx int) error {
 // What is refused is the other form — a `when:` reading `register.*` or
 // `soulprint.*`. It cannot be decided at render, and it cannot be pushed onto
 // the group either: a child's flow context is built in the ISOLATED destiny env,
-// where `input.`/`vars.`/`essence.` name different things than in the scenario
+// where `input.` and `vars.` name different things than in the scenario
 // the predicate was written in, so inheriting the text would evaluate a
 // different question. Until NIM-245 the key was simply dropped and the destiny
 // applied everywhere — including on hosts the author had gated off, which is

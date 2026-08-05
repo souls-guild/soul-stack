@@ -7,7 +7,7 @@ package config
 // The evaluator DELIBERATELY reuses the narrow `required_when` cel-go sandbox
 // (input_required_when.go): every `${ … }` block is compiled against inputEnv with
 // the single variable `input`. Composing a name is a pure function of the resolved
-// input — a reference to essence/soulprint/register/vault/now is an
+// input — a reference to vars/soulprint/register/vault/now is an
 // undeclared-reference compile error, the same structural barrier as
 // required_when/validate. No second CEL engine, and shared/config keeps its
 // deliberate independence from shared/cel.
@@ -340,7 +340,7 @@ func validateNameTemplateAgainstInputKeys(root *ast.MappingNode, tmpl string, cr
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "name_template_invalid",
 				Message: fmt.Sprintf("name_template block %q does not compile as CEL over input.*: %v", s.text, cerr),
-				Hint:    "a name is composed from input only (no essence/soulprint/register/vault/now)",
+				Hint:    "a name is composed from input only (no vars/soulprint/register/vault/now)",
 			}))
 		}
 	}

@@ -61,7 +61,7 @@ var ErrAssertFailed = render.ErrAssertFailed
 //     written for, and it is reached through the explicit-run path (bind
 //     members, then run — ADR-008 amendment 2026-07-28/NIM-209).
 //
-//   - Asserts reading only input/essence/incarnation always evaluate: nothing
+//   - Asserts reading only input/vars/incarnation always evaluate: nothing
 //     about the roster changes their verdict, so they keep their
 //     422-before-mutation on both paths.
 //
@@ -71,12 +71,14 @@ var ErrAssertFailed = render.ErrAssertFailed
 //     already validated by ValidateInput upstream, so value validation here
 //     is guaranteed to pass).
 //
-//   - essence is resolved from the SAME input run() step 4 would use for this
-//     run, so an `essence.*` predicate cannot answer one way here and another
-//     at render ([Runner.resolvePreflightEssence], NIM-271). On the create path
-//     there is no row and no host, so the os overlay is genuinely unknowable —
-//     a property of creating something that does not exist yet, not a gap to
-//     paper over.
+//   - service vars are resolved from the SAME input run() step 4 would use for
+//     this run, so a `vars.*` predicate cannot answer one way here and another at
+//     render ([Runner.resolvePreflightServiceVars], NIM-271). They are
+//     host-invariant (ADR-0082), so the roster cannot make the two disagree. On
+//     the create path there is no row, and the gate resolves against an
+//     incarnation synthesised from the request — labels included, so a
+//     `vars/_stack.yaml` step keyed on `incarnation.covens` sees what the create
+//     run will see.
 //
 //   - EvalAsserts emits ONLY assert predicates (shared [render.evalAssertTask]
 //     — same source as the render branch): first false → ErrAssertFailed.
@@ -86,7 +88,7 @@ var ErrAssertFailed = render.ErrAssertFailed
 // (ValidateInput already loaded one too; the loader's shared snapshot cache
 // makes the repeat Load cheap).
 //
-// Snapshot load / parse / roster / essence errors are NOT wrapped as
+// Snapshot load / parse / roster / service-vars errors are NOT wrapped as
 // ErrAssertFailed — the caller maps those to 500 (internal pre-flight
 // failure), while ErrAssertFailed maps to 422 (model precondition not met).
 func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
@@ -113,7 +115,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	scn.Tasks = expanded
 
 	// Fast path: no assert tasks (the common case) — skip resolving
-	// roster/essence/input for nothing.
+	// roster/vars/input for nothing.
 	if !hasAssertTask(scn.Tasks) {
 		return nil
 	}
@@ -125,7 +127,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	// answer "empty" for reasons that have nothing to do with topology.
 	//
 	// The row is READ, not merely counted: when it exists it is also the source
-	// of the essence layers below (NIM-271), so one lookup answers both.
+	// of the service's own vars below (NIM-271), so one lookup answers both.
 	// `inc == nil` means "no row" — the create path.
 	inc, err := r.preflightIncarnation(ctx, spec.IncarnationName)
 	if err != nil {
@@ -173,15 +175,15 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		return fmt.Errorf("preflight: input %s/%s: %w", spec.IncarnationName, spec.ScenarioName, err)
 	}
 
-	essenceMap, err := r.resolvePreflightEssence(art, spec, inc, hosts)
+	serviceVars, err := r.resolvePreflightServiceVars(art, spec, inc)
 	if err != nil {
-		return fmt.Errorf("preflight: essence %s: %w", spec.IncarnationName, err)
+		return fmt.Errorf("preflight: service vars %s: %w", spec.IncarnationName, err)
 	}
 
 	in := render.RenderInput{
-		Scenario: scn,
-		Essence:  essenceMap,
-		Input:    effectiveInput,
+		Scenario:    scn,
+		ServiceVars: serviceVars,
+		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
 			Name:           spec.IncarnationName,
 			Service:        spec.ServiceRef.Name,
@@ -202,7 +204,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		// failure silent.
 		//
 		// nil on the create path is correct and stays: there is no row yet, so
-		// there is no state to read (NIM-124). Same shape as the essence fix of
+		// there is no state to read (NIM-124). Same shape as the service-vars fix of
 		// NIM-271 — pre-flight takes the input run() would, not a poorer one.
 		State: incarnationState(inc),
 	}
@@ -237,43 +239,32 @@ func (r *Runner) preflightIncarnation(ctx context.Context, name string) (*incarn
 	return inc, nil
 }
 
-// resolvePreflightEssence resolves the essence layers an assert will read,
-// choosing the SAME input run() step 4 would choose for this run (NIM-271):
+// resolvePreflightServiceVars resolves the service vars an assert will read, from
+// the SAME input run() step 4 uses for this run (NIM-271).
 //
-//   - a real incarnation with a roster → [essenceInput] over the first host, so
-//     the os overlay is the one the run will render against;
-//   - a real incarnation with an empty roster → [keeperEssenceInput], the
-//     keeper-context form: no representative host, so no os overlay, and the
-//     coven overlay comes from the incarnation's own `covens[]`. Taking the
-//     zero-value host instead would drop the coven layer entirely and make the
-//     gate disagree with the render of the very same run;
-//   - no row at all (create) → a synthetic incarnation built from the request.
-//     The os overlay is genuinely unknowable there — no host has reported yet —
-//     and that is a property of the create path, not a defect to work around.
-//
-// On the first branch the coven overlay survives for a second reason worth
-// naming, because it is easy to break by accident: since ADR-080 the roster
-// query unions each host's own `souls.coven[]` with the covens (and name) of
-// every incarnation it belongs to, so `hosts[0].Coven` ALREADY carries this
-// incarnation's declared tags. The essence a pre-flight assert sees therefore
-// matches render's — verified, not assumed (preflight_essence_integration_test.go).
-func (r *Runner) resolvePreflightEssence(
+// Since ADR-0082 that agreement is structural rather than argued: service vars
+// are host-invariant, so there is one resolve input and no roster-dependent
+// branch left to get wrong. What survives is the create path — with no row at
+// all, the input is built from a synthetic incarnation carrying the request's
+// own values, so an `input` an operator sent on the create IS in front of
+// the gate (preflight_service_vars_integration_test.go).
+func (r *Runner) resolvePreflightServiceVars(
 	art *artifact.ServiceArtifact,
 	spec RunSpec,
 	inc *incarnation.Incarnation,
-	hosts []*topology.HostFacts,
 ) (map[string]any, error) {
 	if inc == nil {
+		// No row yet (create). Build the incarnation the request is ABOUT to
+		// insert, labels included — a step keyed on `incarnation.covens` must see
+		// what the create run will see, not an empty list.
 		inc = &incarnation.Incarnation{
 			Name:    spec.IncarnationName,
 			Service: art.Manifest.Name,
-			Spec:    incarnationSpecFromInput(spec.Input),
+			Covens:  spec.Covens,
+			Traits:  spec.Traits,
 		}
 	}
-	if len(hosts) > 0 {
-		return r.deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
-	}
-	return r.deps.Essence.Resolve(keeperEssenceInput(art.LocalDir, inc))
+	return r.deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
 }
 
 // partitionRosterAsserts splits an expanded task list into the tasks pre-flight
@@ -328,17 +319,4 @@ func hasAssertTask(tasks []config.Task) bool {
 		}
 	}
 	return false
-}
-
-// incarnationSpecFromInput builds the spec of a synthetic Incarnation for the
-// pre-flight essence override layer: places operator input under key `input`
-// (as CreateTyped does). essence reads its override from spec.essence, which
-// is absent here (pre-flight at create only sees input, not an
-// essence-override), so the override is empty; base essence resolves from
-// the snapshot. nil input → empty spec.
-func incarnationSpecFromInput(input map[string]any) map[string]any {
-	if input == nil {
-		return map[string]any{}
-	}
-	return map[string]any{"input": input}
 }

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
-	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -1098,40 +1097,6 @@ func TestDeepCopyMap(t *testing.T) {
 	nested["k"] = "changed"
 	if src["nested"].(map[string]any)["k"] != "v" {
 		t.Errorf("deep copy is not deep: original mutated")
-	}
-}
-
-func TestOSFamilyOf(t *testing.T) {
-	h := &topology.HostFacts{Soulprint: map[string]any{
-		"os": map[string]any{"family": "debian"},
-	}}
-	if got := osFamilyOf(h); got != "debian" {
-		t.Errorf("osFamilyOf = %q, want debian", got)
-	}
-
-	// No facts → "".
-	if got := osFamilyOf(&topology.HostFacts{}); got != "" {
-		t.Errorf("osFamilyOf(empty) = %q, want \"\"", got)
-	}
-	// os present, family absent.
-	h2 := &topology.HostFacts{Soulprint: map[string]any{"os": map[string]any{}}}
-	if got := osFamilyOf(h2); got != "" {
-		t.Errorf("osFamilyOf(no family) = %q", got)
-	}
-}
-
-func TestSpecEssence(t *testing.T) {
-	inc := &incarnation.Incarnation{Spec: map[string]any{
-		"essence": map[string]any{"redis_version": "7.2"},
-	}}
-	got := specEssence(inc)
-	if got["redis_version"] != "7.2" {
-		t.Errorf("specEssence = %+v", got)
-	}
-
-	// No spec.essence → nil.
-	if specEssence(&incarnation.Incarnation{}) != nil {
-		t.Errorf("specEssence(empty) != nil")
 	}
 }
 

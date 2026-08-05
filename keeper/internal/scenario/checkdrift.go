@@ -144,7 +144,7 @@ type CheckDriftSpec struct {
 //
 // Flow (parity with [Runner.run] up to dispatch):
 //  1. SelectByName + render pipeline: ServiceLoader → parseScenario(converge) →
-//     ExpandIncludes → topology.LoadIncarnationHosts → essence.Resolve →
+//     ExpandIncludes → topology.LoadIncarnationHosts → servicevars.Resolve →
 //     resolveDriftInput (state ∪ override merge before vault resolve) →
 //     ResolveInputValuesVault → render.Pipeline.Render.
 //  2. dispatch (work queue, ADR-027): InsertPlanned for EVERY roster host with
@@ -243,7 +243,7 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 			slog.Any("modules", names))
 	}
 
-	// 2. Roster + essence (same as run.go).
+	// 2. Roster + service vars (same as run.go).
 	hosts, err := r.deps.Topology.LoadIncarnationHosts(ctx, spec.IncarnationName)
 	if err != nil {
 		span.RecordError(err)
@@ -252,10 +252,10 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 	if len(hosts) == 0 {
 		return nil, fmt.Errorf("scenario: check-drift incarnation %q has no connected hosts", spec.IncarnationName)
 	}
-	essenceMap, err := r.deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
+	serviceVars, err := r.deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
 	if err != nil {
 		span.RecordError(err)
-		return nil, fmt.Errorf("scenario: check-drift essence: %w", err)
+		return nil, fmt.Errorf("scenario: check-drift service vars: %w", err)
 	}
 
 	// 3. Resolve drift input (auto-from-state + override + vault). By name
@@ -282,9 +282,9 @@ func (r *Runner) CheckDrift(ctx context.Context, spec CheckDriftSpec) (*DriftRep
 
 	// 4. Render the full roster (same as run-goroutine).
 	renderIn := render.RenderInput{
-		Scenario: scn,
-		Essence:  essenceMap,
-		Input:    effectiveInput,
+		Scenario:    scn,
+		ServiceVars: serviceVars,
+		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
 			Name:           inc.Name,
 			Service:        inc.Service,

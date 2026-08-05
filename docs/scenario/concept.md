@@ -34,7 +34,7 @@ All three "yes" → take it to destiny, call via `apply: { destiny: … }`. Othe
 | **Level** | one host | one cluster (one incarnation) |
 | **Knows about other hosts?** | no | yes (via `on:`/`where:` and `soulprint.where`) |
 | **Writes state to the database?** | no | yes (`state_changes`) |
-| **Access `essence.*` in templates** | no (`input:` only) | yes (merged essence after pipeline) |
+| **Access to the SERVICE's `vars.*`** | no — a destiny's `vars.*` is its own `vars.yml` and nothing else | yes — the resolved `vars/` sits at the bottom of the scenario's `vars.*` |
 | **Task DSL** | [destiny/tasks.md](../destiny/tasks.md) | same core + orchestration delta ([orchestration.md](orchestration.md)) |
 | **Version** | git ref destiny-repo | git ref service-repo |
 | **Testing** | molecule on an ephemeral stand (one host) | your own mechanism: multi-host stand + topology assertions/`incarnation.state` ([orchestration.md](orchestration.md), [destiny/testing.md](../destiny/testing.md)) |
@@ -43,18 +43,18 @@ All three "yes" → take it to destiny, call via `apply: { destiny: … }`. Othe
 
 The role of the host (master / replica) in the Soul Stack is **not Coven** ([ADR-008](../adr/0008-coven-stable-tags.md)). There are two conceptually different roles:
 
-- **declared-role** - declared by the operator, lives **only** in the host's Choir Voice (`incarnation_choir_voices.role`; the former `incarnation.spec.hosts[].role` was removed by [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role), NIM-330). Used in the bootstrap operation `create`, when Redis is not yet running and there is nothing to probe: the create scenario writes the Voices itself with a keeper-side `core.choir.present` step, and the first master / first replicas are read back from them. Also serves for topology and auditing. essence **does not consume it** (see below). In the scenario declared-run topology is available by the accessor `soulprint.hosts` (list of hosts with stable facts, scenario-only; specification - [orchestration.md §4.1](orchestration.md#41-soulprinthosts---list-of-run-hosts-scenario-only-accessor)); destiny receives it only through an explicit `apply: input:`.
+- **declared-role** - declared by the operator, lives **only** in the host's Choir Voice (`incarnation_choir_voices.role`; the former `incarnation.spec.hosts[].role` was removed by [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role), NIM-330). Used in the bootstrap operation `create`, when Redis is not yet running and there is nothing to probe: the create scenario writes the Voices itself with a keeper-side `core.choir.present` step, and the first master / first replicas are read back from them. Also serves for topology and auditing. Service vars **do not consume it** (see below). In the scenario declared-run topology is available by the accessor `soulprint.hosts` (list of hosts with stable facts, scenario-only; specification - [orchestration.md §4.1](orchestration.md#41-soulprinthosts---list-of-run-hosts-scenario-only-accessor)); destiny receives it only through an explicit `apply: input:`.
 - **actual-role** - the actual role at the moment (who is now the real master of `redis-cli role`). **Volatile**, changes during failover. It is not stored anywhere stably: it is obtained by a **live probe step** immediately before use (`module: core.exec.run` + `register:`), the targeting of the next step follows `where:` from this `register:` ([orchestration.md](orchestration.md)). After failover - just a new probe, no cache or freshness mechanism.
 
 > Volatile (role) **does not live in Soulprint**. Soulprint - only stable and slowly changing host facts. There are no volatile soulprint facts, no role collector, no freshness mechanism. This is a consequence of [ADR-008](../adr/0008-coven-stable-tags.md) and was recorded there.
 
-## Essence role-agnostic
+## Service vars are role-agnostic
 
-Essence layer by role **removed**: the pipeline hierarchy no longer **contains** the `role/<Y>.yaml` stage. The build order is `default → os → coven → incarnation.spec` (see [architecture.md → "Essence: build pipeline"](../architecture.md)). essence does not consume the declared role and does not layer by role at all.
+There is no `role/<Y>.yaml` stage, and since [ADR-0082](../adr/0082-service-vars.md) there are no hard-wired stages at all: `vars/` is every `*.yaml` directly inside it in lexical order, or the explicit pipeline in `vars/_stack.yaml`. The service's vars do not consume the declared role and do not layer by role.
 
-Parameters that previously depended on the role (what was in `role/master.yaml` / `role/replica.yaml`) move to **destiny** and are passed through `input:` as a result of the probe role. That is, the scenario first probes the actual role, then calls `apply: { destiny: …, input: { … } }` with different values ​​for the master and replica hosts - rather than putting them through the essence layer.
+Parameters that previously depended on the role (what was in `role/master.yaml` / `role/replica.yaml`) move to **destiny** and are passed through `input:` as a result of the probe role. That is, the scenario first probes the actual role, then calls `apply: { destiny: …, input: { … } }` with different values for the master and replica hosts — rather than putting them through a per-role layer.
 
-> Transferring specific values ​​of `role/*.yaml` to destiny-`input:` is a separate implementation task, see the mention in [orchestration.md](orchestration.md). Here only the model is fixed: essence role-agnostic, the role-dependency moves to destiny using probe.
+> Transferring specific values of `role/*.yaml` to destiny-`input:` is a separate implementation task, see the mention in [orchestration.md](orchestration.md). Here only the model is fixed: service vars are role-agnostic, and the role-dependency moves to destiny using probe.
 
 ## See also
 

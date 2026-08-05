@@ -146,7 +146,8 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// bareNoScenario — service without `create: true` (ready without a run,
 	// created_scenario=NULL); autoCreate — lifecycle.auto_create policy
 	// (default true): false → ready without a run, but created_scenario is non-empty.
-	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.Name, serviceRef, a.CreateScenario, a.Input, claims.Subject)
+	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.Name, serviceRef, a.CreateScenario, a.Input, claims.Subject,
+		scenario.WithIncarnationLabels(a.Covens, a.Traits))
 	if perr != nil {
 		return h.createPlanToolError(req, toolName, a.Name, a.Service, perr)
 	}
@@ -194,19 +195,11 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// Write spec.input only when input is non-empty — otherwise scenario-runner
 	// would see `"input": null` (key present) instead of "operator didn't pass
 	// input", which CEL can't distinguish (parity with REST).
-	spec := map[string]any{}
-	if a.Input != nil {
-		spec["input"] = a.Input
-	}
-	if a.Traits != nil {
-		spec["traits"] = a.Traits
-	}
-
-	// Trait per-incarnation (ADR-060 amend R1, parity with REST CreateTyped):
-	// operator-set traits from spec.traits are extracted into column
-	// incarnation.traits (source of truth, projected into souls.traits). An
-	// invalid set (key/value format) → validation-failed BEFORE insert.
-	traits, err := incarnation.TraitsFromSpec(spec)
+	// Trait per-incarnation (ADR-060 amend R1, parity with REST CreateTyped): the
+	// request's traits are validated and go straight into the incarnation.traits
+	// column, their source of truth since migration 088. An invalid set →
+	// validation-failed BEFORE the insert.
+	traits, err := incarnation.ValidateCreateTraits(a.Traits)
 	if err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 	}
@@ -225,7 +218,6 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		Service:            a.Service,
 		ServiceVersion:     serviceRef.Ref,
 		StateSchemaVersion: 1,
-		Spec:               spec,
 		State:              nil,
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,

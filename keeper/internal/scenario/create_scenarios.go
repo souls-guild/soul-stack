@@ -143,6 +143,33 @@ type CreatePlanLoader interface {
 	ReadFile(art *artifact.ServiceArtifact, file string) ([]byte, error)
 }
 
+// createOptions — what a caller may add to ResolveCreatePlan beyond its
+// positional arguments. Variadic so the ~20 existing call sites (mostly tests
+// that do not exercise the gate) stay as they are.
+type createOptions struct {
+	covens []string
+	traits map[string]any
+}
+
+// CreateOption customises [ResolveCreatePlan].
+type CreateOption func(*createOptions)
+
+// WithIncarnationLabels supplies the covens and traits the request will write
+// onto the incarnation row.
+//
+// Only the pre-flight gate reads them, and only on the create path: with no row
+// to read it synthesises the incarnation, and a `vars/_stack.yaml` step keyed on
+// `incarnation.covens` resolves against whatever it is handed. Omitting them
+// makes the gate see zero coven layers where the create run a moment later sees
+// however many the request declared — the NIM-271 divergence, on the one path
+// that still has no row to resolve from.
+func WithIncarnationLabels(covens []string, traits map[string]any) CreateOption {
+	return func(o *createOptions) {
+		o.covens = covens
+		o.traits = traits
+	}
+}
+
 // AssertPreflighter is the narrow scenario.Runner surface for the `assert:`
 // pre-flight gate ([Runner.PreflightAssert], ADR-009/ADR-027 amendment
 // 2026-06-23, form A). *Runner satisfies it; ScenarioStarter fakes lacking the
@@ -245,7 +272,12 @@ func ResolveCreatePlan(
 	chosenScenario string,
 	input map[string]any,
 	startedByAID string,
+	opts ...CreateOption,
 ) (CreatePlan, error) {
+	var o createOptions
+	for _, apply := range opts {
+		apply(&o)
+	}
 	// Default: stub mode / loader not configured — legacy `create`, not bare,
 	// auto_create=true (as both handlers behaved with a nil loader).
 	plan := CreatePlan{CreateScenario: CreateScenarioName, AutoCreate: true}
@@ -311,6 +343,8 @@ func ResolveCreatePlan(
 				ScenarioName:    plan.CreateScenario,
 				Input:           input,
 				StartedByAID:    startedByAID,
+				Covens:          o.covens,
+				Traits:          o.traits,
 			}); err != nil {
 				return CreatePlan{}, err
 			}

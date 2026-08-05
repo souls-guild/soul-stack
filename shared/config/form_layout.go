@@ -286,7 +286,7 @@ func validateFormSection(
 // validateFormShowWhen is the schema-time check of the optional `show_when` key
 // (section or field): if present, it is a non-empty CEL string over `input.*` that
 // compiles via [compileRequiredWhen] (the same input-only sandbox as
-// required_when). Referencing essence/soulprint/register/vault/now →
+// required_when). Referencing vars/soulprint/register/vault/now →
 // undeclared-reference compile error → form_show_when_invalid (mirror of
 // input_required_when_invalid).
 //
@@ -316,7 +316,7 @@ func validateFormShowWhen(kv *ast.MappingValueNode, path string) []diag.Diagnost
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "form_show_when_invalid",
 			Message:  fmt.Sprintf("show_when does not compile as CEL over input.*: %v", err),
-			Hint:     "predicate may reference only input.* (no essence/soulprint/register/vault/now)",
+			Hint:     "predicate may reference only input.* (no vars/soulprint/register/vault/now)",
 			YAMLPath: path + ".show_when",
 		})}
 	}

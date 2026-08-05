@@ -1156,7 +1156,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				// /directives — catalog of valid redis.conf directives by version
-				// (essence.redis_directives) for the redis_settings UI editor.
+				// (vars.redis_directives) for the redis_settings UI editor.
 				// permission service.list. ETag=snapshot SHA1 + immutable. 502 →
 				// the loader failed.
 				r.With(
@@ -1165,7 +1165,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaServiceDirectives(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// /telemetry — default (per-service, no essence) host-vitals
+				// /telemetry — default (per-service, without an incarnation's own layer) host-vitals
 				// telemetry config + allowed collector set (known_collectors)
 				// for the UI (ADR-042 backend-driven, ADR-072). permission
 				// service.list. ETag=snapshot SHA1. 502 → loader failed. Not to

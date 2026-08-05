@@ -44,15 +44,15 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-    # TLS PEM material (via essence.tls_*_ref) — destiny reads it with vault() in the content cell.
+    # TLS PEM material (via vars.tls_*_ref) — destiny reads it with vault() in the content cell.
     secret/services/dragonfly/tls:
       cert: "-----BEGIN CERTIFICATE-----\nDFCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nDFKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nDFCA\n-----END CERTIFICATE-----"
-  essence:
+  vars:
     sentinel_master_name: master
     memory_reserve_percent: 75
-    # TLS is enabled (input.tls_enabled flag), Vault refs — author-context essence.
+    # TLS is enabled (input.tls_enabled flag), Vault refs — author-context vars.
     tls_cert_ref: "secret/services/dragonfly/tls#cert"
     tls_key_ref:  "secret/services/dragonfly/tls#key"
     tls_ca_ref:   "secret/services/dragonfly/tls#ca"

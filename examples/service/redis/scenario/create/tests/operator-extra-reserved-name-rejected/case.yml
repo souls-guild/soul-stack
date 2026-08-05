@@ -1,9 +1,9 @@
 # L0-test for the validate-guard (system-ACL-users d2): operator-extra (input.users) is
 # NOT allowed to take a SYSTEM user's name. The operator sets input.users.replica — this
-# name is reserved for the system user (topped up from essence.system_acl_users with
+# name is reserved for the system user (topped up from vars.system_acl_users with
 # last-wins OVER the system one → an operator `replica` would silently override the
 # replication replica-perms). The validate-rule in create/main.yml catches this at
-# INPUT-validation (422 BEFORE applying) with a clear rejection. INPUT-ONLY (essence is
+# INPUT-validation (422 BEFORE applying) with a clear rejection. INPUT-ONLY (service vars is
 # not available in validate): the list of names is hardcoded. Rule false →
 # expect_render_error by a substring of the message.
 name: operator extra user with reserved system name aborts at input validation
@@ -18,7 +18,7 @@ fixtures:
   vault:
     secret/redis/create:
       password: s3cr3t-redis-pass-create
-  essence:
+  vars:
     redis_type: sentinel
     memory_reserve_percent: 75
     persistence_presets:

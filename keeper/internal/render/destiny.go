@@ -81,7 +81,7 @@ type DestinyResolver interface {
 //
 // Isolation (CRITICAL): the destiny sees ONLY its own input: (resolved
 // apply.input), not scenario input/vars/register/soulprint. This is a
-// structural boundary — a separate RenderInput with empty Register/Essence.
+// structural boundary — a separate RenderInput with empty Register/ServiceVars.
 // SoulprintSelf of the host is preserved (per-host facts are a stable layer
 // available to any step), but the parent's scenario scope (input, register,
 // vars) never reaches the destiny env.
@@ -158,7 +158,7 @@ func (p *Pipeline) renderApplyDestiny(
 	}
 
 	// Isolated destiny RenderInput: only input + roster + incarnation meta.
-	// Register/Essence/RegisterByHost are empty — destiny doesn't see scenario
+	// Register/ServiceVars/RegisterByHost are empty — destiny doesn't see scenario
 	// scope. destinyIsolated=true: soulprint.hosts/soulprint.where inside a
 	// destiny is an isolation error (orchestration.md §4.1); the host
 	// projection isn't passed into a destiny.
@@ -170,6 +170,14 @@ func (p *Pipeline) renderApplyDestiny(
 		Templates:       resolved.Templates, // .tmpl from THIS destiny's own snapshot
 		Ctx:             ctx,                // vault() in destiny params: cancel/timeout for ReadKV
 		destinyIsolated: true,
+		// ServiceVars stays nil ON PURPOSE, and it is load-bearing rather than an
+		// omission: hostVars seeds cel.Vars.Vars from it, resolveTaskVars takes the
+		// task layer's `lower` from that, so a nil here is what stops a destiny's
+		// task vars reaching the caller's service layer at all. Copying parentIn's
+		// value — the shape a `destinyIn := parentIn` refactor would produce —
+		// opens the whole service layer to every destiny task var.
+		// Guarded by TestRender_ApplyDestiny_ServiceVarsNotLeaked.
+		ServiceVars: nil,
 		// seal (ADR-010 §7.4): same run-wide accumulator — destiny params with
 		// `${ vault(...) }` get marked sealed just like scenario ones. The
 		// destiny-input secret flag is only detected when ResolvedDestiny
@@ -182,9 +190,9 @@ func (p *Pipeline) renderApplyDestiny(
 	// destiny locals from vars.yml (Option A, vars.md): resolved ONCE per
 	// pass, per host, over the destiny env (destiny input + soulprint.self +
 	// incarnation), isolated from scenario scope. resolveDestinyVars builds
-	// its own base env with empty Register/Essence/Vars and AllowHosts=false —
-	// `vars.<other>`/`register.*`/`essence.*`/`soulprint.hosts` in a vars.yml
-	// value is an isolation error.
+	// its own base env with empty Register/Vars and AllowHosts=false, so in a
+	// vars.yml value `register.*` and `soulprint.hosts` are isolation errors and
+	// `vars.<other>` reaches only a file-var of the SAME layer.
 	destinyVars, verr := p.resolveDestinyVars(destinyIn, resolved.Vars, targeted)
 	if verr != nil {
 		return nil, nil, verr
@@ -350,14 +358,14 @@ func (p *Pipeline) renderApplyDestiny(
 // value.
 //
 // Isolation (CRITICAL): the base env is built by hostVars over destinyIn —
-// the isolated destiny RenderInput (Register/Essence empty,
+// the isolated destiny RenderInput (Register/ServiceVars empty,
 // destinyIsolated=true → AllowHosts=false). Available: input.* (destiny
-// input, not scenario), soulprint.self.*, incarnation.*;
-// `register.*`/`essence.*`/`soulprint.hosts` are isolation errors. base.Vars
-// is empty at the START of the layer (resolveVarLayer accumulates it) — a
-// `vars.<other>` reference only resolves against a file-var of the SAME
-// layer (var→var allowed, eager-topological); a reference to another
-// layer/register/soulprint.hosts is an isolation error.
+// input, not scenario), soulprint.self.*, incarnation.*; `register.*` and
+// `soulprint.hosts` are isolation errors. The file layer sits on NOTHING
+// (resolveVarLayer is called with a nil lower layer) and its accumulator starts
+// empty, so a `vars.<other>` reference resolves only against a file-var of the
+// SAME layer (var→var allowed, eager-topological) — never against the caller's
+// service vars, and never against a task-var.
 //
 // var→var (vars.md, ADR-009/ADR-010 amendment 2026-06-24): a file-var can
 // reference another file-var via `${ vars.<other> }`; resolveVarLayer builds
@@ -381,7 +389,7 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 	out := make(map[string]map[string]any, len(hosts))
 	for _, host := range hosts {
 		base := hostVars(destinyIn, host, len(targeted)) // base.Vars empty — start of layer
-		resolved, err := resolveVarLayer(p.cel, raw, base)
+		resolved, err := resolveVarLayer(p.cel, raw, nil, base)
 		if err != nil {
 			return nil, fmt.Errorf("render: destiny %q (vars.yml, host %s): %w", destinyIn.Scenario.Name, host.SID, err)
 		}

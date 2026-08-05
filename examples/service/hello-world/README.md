@@ -15,8 +15,8 @@ host -> cross-host barrier -> commit state to Postgres.
 ```
 hello-world/
 ├── service.yml                       # manifest: state_schema_version=1, state_schema with the greeting_file field
-├── essence/
-│   └── _default.yaml                 # baseline essence: greeting (fallback)
+├── service vars/
+│   └── _default.yaml                 # baseline service vars: greeting (fallback)
 └── scenario/
     └── create/
         └── main.yml                  # input.greeting -> core.file.present -> state_changes.sets.greeting_file
@@ -60,5 +60,5 @@ Both should give exit 0 and `OK: <path>`.
 - `templates/` — `content` is passed inline via `${ input.greeting }`, no `.tmpl` file.
 - `on:` / `where:` — deliberately absent: an omitted `on:` means "the whole
   incarnation" ([orchestration.md §3](../../../docs/scenario/orchestration.md)).
-- `essence.greeting` as a fallback — for the pilot `input.greeting` is required
-  (`required: true`); essence remains a substrate for future scenarios.
+- `vars.greeting` as a fallback — for the pilot `input.greeting` is required
+  (`required: true`); service vars remains a substrate for future scenarios.

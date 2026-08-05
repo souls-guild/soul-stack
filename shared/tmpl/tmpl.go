@@ -4,7 +4,7 @@
 // The engine is isolated: a template sees only variables from the passed `vars`
 // plus the built-in Go text/template functions and a closed sprig allowlist (see
 // [allowedSprig] in sprig.go). The template has no direct access to
-// essence/input/register/soulprint — the author must explicitly lift the needed
+// vars/input/register/soulprint — the author must explicitly lift the needed
 // values into `vars` on the CEL phase ([templating.md §6]).
 //
 // The sandbox is built from three barriers ([templating.md §7.2]):

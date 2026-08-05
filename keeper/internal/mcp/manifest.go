@@ -244,7 +244,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.get",
-			Description:  "Reads spec + state + status of an Incarnation by name. Permission: incarnation.get.",
+			Description:  "Reads the state + status of an Incarnation by name. Permission: incarnation.get.",
 			InputSchema:  schemaIncarnationGetInput,
 			OutputSchema: schemaIncarnationGetOutput,
 		},
@@ -1426,6 +1426,8 @@ var (
 "required":["name"],
 "properties":{
 "name":{"type":"string"},
+"apply_id":{"type":"string"},
+"include_transitions":{"type":"boolean"},
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"maximum":1000}}}`)
 
@@ -1445,7 +1447,8 @@ var (
 "required":["name","reason"],
 "properties":{
 "name":{"type":"string"},
-"reason":{"type":"string","minLength":1,"maxLength":500,"description":"Free-form operator confirmation text; written to audit incarnation.rerun_last."}}}`)
+"reason":{"type":"string","minLength":1,"maxLength":500,"description":"Free-form operator confirmation text; written to audit incarnation.rerun_last."},
+"input":{"type":"object","description":"Operator input for the restart. Used ONLY when the failed attempt carries no replayable snapshot in its history row (a terminal recorded without one, or a row predating NIM-408); with a snapshot present the snapshot wins. A recovery path, not an override."}}}`)
 
 	schemaIncarnationRerunLastOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

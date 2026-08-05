@@ -142,7 +142,7 @@ type Deps struct {
 	ServiceDependencies handlers.ServiceDependenciesLister
 
 	// ServiceDirectives — a TTL cache of the catalog of valid redis.conf directives by version
-	// (essence.redis_directives) for `GET /v1/services/{name}/directives` (the UI
+	// (vars.redis_directives) for `GET /v1/services/{name}/directives` (the UI
 	// redis_settings editor). Optional: when nil the /directives endpoint answers
 	// 500 (feature not configured); service CRUD itself stays functional.
 	// The production wire-up in `keeper run` passes *serviceregistry.DirectivesCache
@@ -150,14 +150,14 @@ type Deps struct {
 	// *artifact.ServiceLoader.Load → artifact.LoadDirectiveCatalog.
 	ServiceDirectives handlers.ServiceDirectivesLister
 
-	// ServiceTelemetry — TTL cache of the default (per-service, no essence) host-vitals
+	// ServiceTelemetry — TTL cache of the default (per-service, without an incarnation's own layer) host-vitals
 	// telemetry config (manifest `telemetry:` -> effective defaults) + the allowed
 	// set of collectors for `GET /v1/services/{name}/telemetry` (UI editor,
 	// ADR-042/072). Optional: when nil the /telemetry endpoint responds 500 (feature not
 	// configured); service-CRUD itself stays operational. Production wire-up
 	// in `keeper run` passes *serviceregistry.TelemetryCache over TelemetryListerFunc,
 	// resolving `(name,gitURL,ref)` via *artifact.ServiceLoader.Load →
-	// essence.ResolveEffectiveTelemetry.
+	// servicevars.ResolveEffectiveTelemetry.
 	ServiceTelemetry handlers.ServiceTelemetryLister
 
 	// ServiceCompat — TTL cache of the engine-compat contributions of a Service
@@ -575,7 +575,7 @@ const maxHeaderBytes = 16 * 1024
 // endpoints accept compact JSON (POST /v1/operators ~200 bytes, revoke ~80,
 // issue-token — empty body); 1 MiB closes the "multi-gigabyte payload" DoS
 // with plenty of headroom for future incarnation endpoints
-// (essence-yaml in spec.fragments + module-list). Exceeding it → MaxBytesError
+// (vars-yaml in spec.fragments + module-list). Exceeding it → MaxBytesError
 // at Decode → 400 problem+json (TypeMalformedRequest).
 const v1RequestBodyLimit = 1 << 20
 

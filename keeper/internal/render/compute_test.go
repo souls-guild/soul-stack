@@ -15,23 +15,23 @@ import (
 // eliminated).
 
 // resolveCompute: a chain (compute references an earlier compute) plus a
-// run-level input/essence context. Declaration order matters.
+// run-level input/vars context. Declaration order matters.
 func TestResolveCompute_ChainAndContext(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
 		Compute: config.ComputeBlock{
-			{Name: "base", Value: "${ merge(essence.defaults, default(input.over, {})) }"},
+			{Name: "base", Value: "${ merge(vars.defaults, default(input.over, {})) }"},
 			{Name: "full", Value: "${ merge(compute.base, { 'extra': 'yes' }) }"},
 			{Name: "n", Value: int64(7)},
 		},
 	}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
-		Scenario: manifest,
-		Essence:  map[string]any{"defaults": map[string]any{"a": "1", "b": "2"}},
-		Input:    map[string]any{"over": map[string]any{"b": "9"}},
-		Hosts:    []*topology.HostFacts{host("h1", []string{"create"}, nil)},
-		Ctx:      context.Background(),
+		Scenario:    manifest,
+		ServiceVars: map[string]any{"defaults": map[string]any{"a": "1", "b": "2"}},
+		Input:       map[string]any{"over": map[string]any{"b": "9"}},
+		Hosts:       []*topology.HostFacts{host("h1", []string{"create"}, nil)},
+		Ctx:         context.Background(),
 	}
 	got, err := p.resolveCompute(in)
 	if err != nil {
@@ -39,7 +39,7 @@ func TestResolveCompute_ChainAndContext(t *testing.T) {
 	}
 	base, _ := got["base"].(map[string]any)
 	if base["a"] != "1" || base["b"] != "9" {
-		t.Fatalf("compute.base = %#v, want {a:1, b:9} (input.over.b beats essence)", got["base"])
+		t.Fatalf("compute.base = %#v, want {a:1, b:9} (input.over.b beats the service var)", got["base"])
 	}
 	full, _ := got["full"].(map[string]any)
 	if full["a"] != "1" || full["b"] != "9" || full["extra"] != "yes" {
@@ -83,7 +83,7 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
 		Compute: config.ComputeBlock{
-			{Name: "cfg", Value: "${ merge(essence.base, { 'maxmemory': string(int(input.mb)) + 'mb' }) }"},
+			{Name: "cfg", Value: "${ merge(vars.base, { 'maxmemory': string(int(input.mb)) + 'mb' }) }"},
 		},
 		StateChanges: &config.StateChanges{
 			IsList: true,
@@ -104,7 +104,7 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Essence:     map[string]any{"base": map[string]any{"appendonly": "yes"}},
+		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
 		Input:       map[string]any{"mb": int64(512)},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("h1", []string{"create"}, nil)},
@@ -173,12 +173,12 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 	// A NON-empty compute: on the parent — it resolves in scenario-scope, but is
 	// NOT forwarded into destiny.
 	scenario.Compute = config.ComputeBlock{
-		{Name: "cfg", Value: "${ merge(essence.base, {}) }"},
+		{Name: "cfg", Value: "${ merge(vars.base, {}) }"},
 	}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    scenario,
-		Essence:     map[string]any{"base": map[string]any{"appendonly": "yes"}},
+		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,

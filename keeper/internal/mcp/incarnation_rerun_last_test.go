@@ -9,6 +9,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -51,6 +52,8 @@ func incLocked(covens []string, createdScenario string) func(string) (*incarnati
 // (created_scenario) with a shared apply_id; response {_apply_id,
 // incarnation, scenario}; audit incarnation.rerun_last (source=mcp,
 // correlation_id=apply_id) with reason + previous_status + scenario.
+var errNoSnapshot = errors.New("no snapshot")
+
 func TestToolsCall_IncarnationRerunLast_Success(t *testing.T) {
 	pool := &fakePool{incFn: incLocked(nil, "create")}
 	starter := &mcpStarter{}
@@ -129,24 +132,23 @@ func incLockedSpec(spec map[string]any) func(string) (*incarnation.Incarnation, 
 		return &incarnation.Incarnation{
 			Name: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
-			State: map[string]any{}, Spec: spec,
-			CreatedScenario: &cs,
-			CreatedAt:       now, UpdatedAt: now,
+			State: map[string]any{}, CreatedScenario: &cs,
+			CreatedAt: now, UpdatedAt: now,
 		}, nil
 	}
 }
 
 // TestToolsCall_IncarnationRerunLast_ReusesStoredInput — create-path GUARD
-// (REST parity with TestRerunLast_ReusesStoredInput_202): rerun-last on an
-// incarnation with operator input stored in spec.input → input propagates
-// into RunSpec.Input for the restarted bootstrap run (NOT nil, NOT defaults).
+// (REST parity with TestRerunLast_ReusesStoredInput_202): rerun-last takes the
+// input from the failed attempt's OWN history snapshot → it propagates into
+// RunSpec.Input for the restarted bootstrap run (NOT nil, NOT defaults).
 func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
-	spec := map[string]any{"input": map[string]any{
-		"version":         "8.6.1",
-		"shards":          float64(3), // jsonb number
-		"connection_mode": "cluster",
-	}}
-	pool := &fakePool{incFn: incLockedSpec(spec)}
+	pool := &fakePool{
+		incFn: incLocked(nil, "create"),
+		recipeFn: func(string) ([]byte, error) {
+			return []byte(`{"scenario_name":"create","input":{"version":"8.6.1","shards":3,"connection_mode":"cluster"}}`), nil
+		},
+	}
 	starter := &mcpStarter{}
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
@@ -160,7 +162,7 @@ func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	}
 	gotInput := starter.gotSpec.Input
 	if gotInput == nil {
-		t.Fatal("RunSpec.Input = nil - stored spec.input NOT propagated (create-path regression)")
+		t.Fatal("RunSpec.Input = nil - the attempt's own snapshot NOT propagated")
 	}
 	if gotInput["version"] != "8.6.1" {
 		t.Errorf("RunSpec.Input[version] = %v, want 8.6.1 (stored)", gotInput["version"])
@@ -173,11 +175,16 @@ func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput — create-path
-// contrast: an incarnation without spec.input → RunSpec.Input nil, run
-// starts normally.
+// TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput — the contrast: an
+// attempt whose snapshot carries no input → RunSpec.Input nil, run starts
+// normally.
 func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
-	pool := &fakePool{incFn: incLocked(nil, "create")} // Spec=nil → spec=`{}`
+	pool := &fakePool{
+		incFn: incLocked(nil, "create"),
+		recipeFn: func(string) ([]byte, error) {
+			return []byte(`{"scenario_name":"create"}`), nil
+		},
+	}
 	starter := &mcpStarter{}
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
@@ -190,7 +197,7 @@ func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
 	if starter.gotSpec.Input != nil {
-		t.Errorf("RunSpec.Input = %v, want nil (spec without input)", starter.gotSpec.Input)
+		t.Errorf("RunSpec.Input = %v, want nil (a snapshot without input)", starter.gotSpec.Input)
 	}
 }
 
@@ -317,7 +324,8 @@ func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLocked(nil, "create"),
 		lastScenarioFn: func(string) (string, error) { return "add_user", nil },
-		// recipeFn nil → recipe-probe returns ErrNoRows (fail-closed).
+		// The attempt is on record but carries no replayable snapshot.
+		recipeFn: func(string) ([]byte, error) { return nil, errNoSnapshot },
 	}
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
@@ -325,7 +333,7 @@ func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
 		`{"name":"redis-prod","reason":"rerun add_user"}`)
 	if resp.Error == nil {
-		t.Fatal("expected rerun-input-unavailable (recipe unavailable)")
+		t.Fatal("expected rerun-input-unavailable (no replayable snapshot)")
 	}
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeRerunInputUnavailable {
 		t.Errorf("data.code = %q, want rerun-input-unavailable", data.Code)

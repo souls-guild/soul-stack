@@ -53,7 +53,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create_from_souls/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -160,7 +160,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # ── cluster-build (community.redis.cluster) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.

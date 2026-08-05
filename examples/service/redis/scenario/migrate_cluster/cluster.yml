@@ -32,7 +32,7 @@
 #       the old cluster with the same username=default_admin + password — all cluster steps read
 #       secret/redis/<inc>/users/default_admin#password (migrate.go holds a SINGLE
 #       username/password for the new nodes AND the source-seed). The B3 pilot migrates onto a cluster of the same
-#       essence (source == new cluster, same default_admin), so the alignment is
+#       service vars (source == new cluster, same default_admin), so the alignment is
 #       natural. If the operator didn't align it — join will fail on AUTH (outside the
 #       scenario's responsibility).
 #   (3) Graceful failover does NOT lose the data tail WHILE the old master is ALIVE: CLUSTER

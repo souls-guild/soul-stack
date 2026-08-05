@@ -1252,7 +1252,7 @@ func registerStruct(self map[string]any) *structpb.Struct {
 }
 
 // evalFlowPredicate evaluates changed_when/failed_when with the sandboxed
-// flow-control engine. Activation is flow_context (input/vars/essence/
+// flow-control engine. Activation is flow_context (input/vars/
 // incarnation/self) + register (prior tasks + register.self of the fresh
 // result). Symmetric to evalWhen.
 func (r *ApplyRunner) evalFlowPredicate(expr string, task *keeperv1.RenderedTask, reg map[string]any) (bool, error) {
@@ -1281,7 +1281,7 @@ func flowControlErrorEvent(applyID string, idx int32, code string, task *keeperv
 // Soul-side sandboxed cel-go engine. Empty when → (true, nil) (unconditional).
 //
 // Activation is built from RenderedTask.flow_context (a literal per-host
-// snapshot { input, vars, essence, incarnation, self } assembled by Keeper in
+// snapshot { input, vars, incarnation, self } assembled by Keeper in
 // the CEL phase) + register (registerByName — prior tasks' payload by register
 // name, built by Soul itself). soulprint binds to {self: flow_context.self} —
 // the canonical soulprint.self.<path> form; soulprint.hosts/where are
@@ -1300,7 +1300,7 @@ func (r *ApplyRunner) evalWhen(task *keeperv1.RenderedTask, registerByName map[s
 
 // flowControlVars builds cel.Vars from the flow_context snapshot and the
 // accumulated registerByName. flow_context is Keeper's data (input/vars/
-// essence/incarnation/self); register is prior tasks' results (built by
+// incarnation/self); register is prior tasks' results (built by
 // Soul). nil/missing sections → empty maps (a normal CEL no-such-key, not a
 // panic).
 func flowControlVars(flowCtx *structpb.Struct, registerByName map[string]any) cel.Vars {
@@ -1311,7 +1311,6 @@ func flowControlVars(flowCtx *structpb.Struct, registerByName map[string]any) ce
 	return cel.Vars{
 		Input:         flowSection(fc, "input"),
 		Vars:          flowSection(fc, "vars"),
-		Essence:       flowSection(fc, "essence"),
 		Incarnation:   flowSection(fc, "incarnation"),
 		SoulprintSelf: flowSection(fc, "self"),
 		Register:      registerByName,

@@ -12,20 +12,70 @@ import (
 // the feature's source of truth.
 const redisServiceRoot = "../../../examples/service/redis"
 
-// requireRedisExamples skips the test if the source tree has no examples/
-// (custom build), otherwise returns the ABSOLUTE root of the redis service
+// requireRedisExamples returns the ABSOLUTE root of the redis service
 // (securejoin requires an absolute base, like the production
-// ServiceArtifact.LocalDir). Parity with the committed-spec-guard skip.
+// ServiceArtifact.LocalDir).
+//
+// It distinguishes two things a single Stat cannot. "No examples/ at all" is a
+// custom build and skips, in parity with the committed-spec guard. "examples/
+// is here but the base vars file is not" is a LAYOUT mismatch — a rename that
+// went half-way — and fails, because a skip there is precisely how six guards
+// went quiet for a whole release train without anyone noticing.
 func requireRedisExamples(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs(redisServiceRoot)
 	if err != nil {
 		t.Fatalf("filepath.Abs: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, essenceDefaultFile)); err != nil {
-		t.Skipf("examples/service/redis/essence/_default.yaml unavailable (%v); guard skipped", err)
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("examples/service/redis unavailable (%v); guard skipped", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "vars")); err != nil {
+		t.Fatalf("examples/service/redis exists but its vars/ directory does not (%v) — the service "+
+			"layout and this package disagree about where a service keeps its vars; skipping here "+
+			"would silence every guard below", err)
 	}
 	return root
+}
+
+// TestLoadDirectiveCatalog_ReadsTheWholeVarsDirectory — the catalog is wherever
+// its author put it. Reading one hard-coded file answered a narrower question
+// than the service declares: a repo that keeps `redis_directives` in a later
+// `NN-*.yaml`, or names its base file something else, would have been seen as
+// having no catalog at all — an empty editor in the UI while the run validates
+// fine against the same data.
+func TestLoadDirectiveCatalog_ReadsTheWholeVarsDirectory(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "vars", "00-base.yaml"), "conf_dir: /etc/redis\n")
+	writeFile(t, filepath.Join(root, "vars", "50-catalog.yaml"),
+		"redis_directives:\n  \"7.0\":\n    - maxmemory\n    - appendonly\n")
+
+	cat, err := LoadDirectiveCatalog(root, "")
+	if err != nil {
+		t.Fatalf("LoadDirectiveCatalog: %v", err)
+	}
+	if got := cat["7.0"]; len(got) != 2 {
+		t.Fatalf("a catalog in a non-base file must be found: %#v", cat)
+	}
+}
+
+// TestLoadDirectiveCatalog_LaterFileWins — the assembly is lexical, so a later
+// file overrides the series an earlier one declared, exactly as it would for any
+// other var.
+func TestLoadDirectiveCatalog_LaterFileWins(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "vars", "00-base.yaml"),
+		"redis_directives:\n  \"7.0\":\n    - old\n")
+	writeFile(t, filepath.Join(root, "vars", "90-override.yaml"),
+		"redis_directives:\n  \"7.0\":\n    - new\n")
+
+	cat, err := LoadDirectiveCatalog(root, "")
+	if err != nil {
+		t.Fatalf("LoadDirectiveCatalog: %v", err)
+	}
+	if got := cat["7.0"]; len(got) != 1 || got[0] != "new" {
+		t.Fatalf("the later file must win: %#v", cat)
+	}
 }
 
 // TestLoadDirectiveCatalog_FullRealCatalog — guard #1: the real catalog
@@ -111,12 +161,12 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 }
 
 // TestLoadDirectiveCatalog_NoCatalog — guard #3 (the loader half): a service
-// without redis_directives (and without an essence file) → an empty non-nil
+// without redis_directives (and without a vars file) → an empty non-nil
 // map + nil error.
 func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
-	// (a) essence/_default.yaml exists, but without redis_directives.
+	// (a) vars/00-base.yaml exists, but without redis_directives.
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "essence", "_default.yaml"), "conf_dir: /etc/redis\nmemory_reserve_percent: 75\n")
+	writeFile(t, filepath.Join(root, "vars", "00-base.yaml"), "conf_dir: /etc/redis\nmemory_reserve_percent: 75\n")
 	cat, err := LoadDirectiveCatalog(root, "")
 	if err != nil {
 		t.Fatalf("LoadDirectiveCatalog: %v", err)
@@ -128,14 +178,14 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 		t.Errorf("catalog %v, want empty", keysOf(cat))
 	}
 
-	// (b) essence file is absent entirely → also an empty catalog, no error.
+	// (b) the vars file is absent entirely → also an empty catalog, no error.
 	empty := t.TempDir()
 	cat2, err := LoadDirectiveCatalog(empty, "8.2.2")
 	if err != nil {
 		t.Fatalf("LoadDirectiveCatalog(no file): %v", err)
 	}
 	if cat2 == nil || len(cat2) != 0 {
-		t.Errorf("catalog without essence file = %v, want empty non-nil", cat2)
+		t.Errorf("catalog without a vars file = %v, want empty non-nil", cat2)
 	}
 }
 
@@ -143,7 +193,7 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 // (defensive: the generator might have returned an unsorted list).
 func TestLoadDirectiveCatalog_SortsNames(t *testing.T) {
 	root := t.TempDir()
-	writeFile(t, filepath.Join(root, "essence", "_default.yaml"),
+	writeFile(t, filepath.Join(root, "vars", "00-base.yaml"),
 		"redis_directives:\n  \"8.2\":\n    - zebra\n    - alpha\n    - maxmemory\n")
 	cat, err := LoadDirectiveCatalog(root, "")
 	if err != nil {

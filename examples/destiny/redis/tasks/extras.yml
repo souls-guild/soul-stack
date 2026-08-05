@@ -49,7 +49,7 @@
 # ignore_failures gives `sysctl -e -p` (--ignore suppresses read-only/nonexistent
 # keys, without failing the run).
 # sysctl_settings — map kernel-parameter→value, the service scenario passes it
-# through apply.input (defaults — essence.sysctl_settings).
+# through apply.input (defaults — vars.sysctl_settings).
 - name: Apply redis sysctl kernel parameters
   module: core.sysctl.applied
   params:

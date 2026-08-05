@@ -28,7 +28,7 @@ const nodeExporterTemplatesDir = "../../../examples/destiny/node-exporter/templa
 // past tests this way and hard-failed core.file.rendered on the host. This
 // test runs EVERY .tmpl through the same engine as Soul (shared/tmpl.Engine,
 // strict missingkey=error), with the §3.2 context root
-// {vars,self,role,essence}. A Parse/Execute failure catches a "template
+// {vars,self,role}. A Parse/Execute failure catches a "template
 // doesn't parse/render" regression at the unit-test level, before E2E.
 func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(nodeExporterTemplatesDir, "*.tmpl"))
@@ -46,7 +46,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	}
 
 	// core.file.rendered's text/template context root (templating.md §3.2,
-	// Option B): {vars, input, self, role, essence}. vars are destiny locals
+	// Option B): {vars, input, self, role}. vars are destiny locals
 	// from vars.yml (bin_dir/bin_path), read by the template as
 	// `.vars.<file_var>` DIRECTLY (no params.vars passthrough); input is the
 	// pass's operator input (user/group/listen/textfile_dir + daemon prod
@@ -78,7 +78,7 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 }
 
 // nodeExporterRenderVars is the render root for content assertions (Option
-// B, templating.md §3.2): {vars, input, self, role, essence}. vars are
+// B, templating.md §3.2): {vars, input, self, role}. vars are
 // destiny locals from vars.yml (bin_dir/bin_path), read by the template as
 // `.vars.<file_var>` DIRECTLY; input is the pass's operator input
 // (user/group/listen/textfile_dir + daemon prod params), read by the
@@ -120,8 +120,7 @@ var nodeExporterRenderVars = map[string]any{
 		"os":      map[string]any{"family": "debian"},
 		"network": map[string]any{"primary_ip": "10.0.0.1"},
 	},
-	"role":    "",
-	"essence": map[string]any{},
+	"role": "",
 }
 
 // renderNodeExporterTmpl renders one node-exporter destiny .tmpl through the
@@ -272,11 +271,10 @@ func renderNodeExporterServiceWithVars(t *testing.T, overrides map[string]any) s
 		input[k] = v
 	}
 	root := map[string]any{
-		"vars":    nodeExporterRenderVars["vars"],
-		"input":   input,
-		"self":    nodeExporterRenderVars["self"],
-		"role":    nodeExporterRenderVars["role"],
-		"essence": nodeExporterRenderVars["essence"],
+		"vars":  nodeExporterRenderVars["vars"],
+		"input": input,
+		"self":  nodeExporterRenderVars["self"],
+		"role":  nodeExporterRenderVars["role"],
 	}
 	body, err := os.ReadFile(filepath.Join(nodeExporterTemplatesDir, "node_exporter.service.tmpl"))
 	if err != nil {

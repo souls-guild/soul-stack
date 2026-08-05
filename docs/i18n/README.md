@@ -13,7 +13,7 @@ translations kept in sync with it.
 1. Copy the root [`README.md`](../../README.md) to `docs/i18n/README.<lang>.md`, using
    the ISO 639-1 code (`de`, `zh`, `fr`, …).
 2. Translate the prose. Keep the domain vocabulary untranslated — **Keeper**, **Souls**,
-   **Destiny**, **Soulprint**, **Essence**, **Archon**, **Coven**, **SoulSeed** — as
+   **Destiny**, **Soulprint**, **Archon**, **Coven**, **SoulSeed** — as
    well as the binary names (`keeper` / `soul` / `soul-lint`), code, and commands.
 3. Fix the relative links for this folder: root files become `../../<file>` (for example
    `../../LICENSE`) and `docs/` files become `../<file>` (for example

@@ -98,7 +98,7 @@ assert:
     # (default) — proof that sources/sinks are built from input (Option B, ADR-010).
     # render_context is checked IN FULL (deep-compare every key): input — all fields after
     # defaults (sink_auth_ref="" is not stripped when empty), vars is empty (config reads
-    # only .input, does not use file-vars), self — synthetic L0 host, essence is empty
+    # only .input, does not use file-vars), self — synthetic L0 host, service vars is empty
     # (sub-destiny isolation, ADR-009). Disambiguator vs unit is path (/etc/vector/vector.yaml).
     - module: core.file.rendered
       params_subset:
@@ -133,7 +133,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # systemd-unit. render_context.vars carries file-vars (bin_path/config_path) + sink_token
     # (the collector's resolved secret — empty in this case, sink has no auth). input — all
@@ -175,7 +175,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     - module: core.service.running
       params_subset:

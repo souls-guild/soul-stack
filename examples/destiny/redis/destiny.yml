@@ -168,7 +168,7 @@ input:
       # core.url.fetched task of the install.yml binary branch. Optional (only-add,
       # forward-compat): not passed → has()-guard in vars gives false (destiny's strict
       # default — the guard stays up). scenario create sets it from
-      # essence.binary_allow_private (default false: the guard stays up for a public base).
+      # vars.binary_allow_private (default false: the guard stays up for a public base).
       allow_private:
         type: boolean
         description: >-
@@ -249,7 +249,7 @@ input:
     description: >-
       Sentinel daemon system ACL users (map name→{perms, state, password}).
       Rendered into ${conf_dir}/sentinel-users.acl (aclfile in sentinel.conf). The set is
-      service-side from essence.system_acl_users_sentinel (default/monitoring/sentinel/
+      service-side from vars.system_acl_users_sentinel (default/monitoring/sentinel/
       haproxy with sentinel commands). password — a keeper-side resolved secret
       (masked); its sha256 hash is written to the file. Sentinel mode only.
     properties: {}
@@ -343,7 +343,7 @@ input:
   # Nexus (resolves to RFC1918) → fetching .so would trip the core.url SSRF guard. This field
   # is forwarded into every core.url.fetched task of modules.yml. Optional (only-add):
   # not passed → has()-guard in vars gives false (strict default). scenario create
-  # sets it from essence.modules_allow_private (default true).
+  # sets it from vars.modules_allow_private (default true).
   modules_allow_private:
     type: boolean
     description: >-
@@ -363,7 +363,7 @@ input:
     description: >-
       Kernel parameters for Redis (map name→value), rendered into
       /etc/sysctl.d/30-redis.conf. Values are STRINGS (multi-value parameters
-      space-separated). Passed by the service scenario (defaults — essence.sysctl_settings).
+      space-separated). Passed by the service scenario (defaults — vars.sysctl_settings).
     properties: {}
     additional_properties: true
 

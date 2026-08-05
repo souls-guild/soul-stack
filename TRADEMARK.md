@@ -18,7 +18,7 @@ that misrepresents affiliation or origin.
 - The name **"Soul Stack"** (and the wordmark **soul-stack**).
 - The Soul Stack **logo**.
 - The component names used as identity — **Keeper**, **Souls**, **Destiny**,
-  **Soulprint**, **Essence** — when used to designate the official project.
+  **Soulprint** — when used to designate the official project.
 - The designations **"official"**, **"certified"**, and **"official managed"** in
   connection with Soul Stack.
 

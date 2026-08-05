@@ -1592,7 +1592,7 @@ state_changes:
 // reserved_binding_name. ---
 
 func TestLoadScenarioManifest_StateChangesForeachReservedAs(t *testing.T) {
-	for _, name := range []string{"input", "register", "vars", "essence", "incarnation", "soulprint", "elem", "key", "value"} {
+	for _, name := range []string{"input", "register", "vars", "incarnation", "soulprint", "elem", "key", "value"} {
 		src := `name: x
 tasks: []
 state_changes:

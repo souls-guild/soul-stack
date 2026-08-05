@@ -63,7 +63,7 @@ In production, Keeper runs under a narrow policy, not under root. A template wit
 
 | Path | Capabilities | Why |
 |---|---|---|
-| `secret/data/keeper/*` | `read` | Reading Keeper's KV secrets (jwt-signing-key, postgres/redis, providers/credentials of cloud drivers, essence secrets). Read only — Keeper does not write them. |
+| `secret/data/keeper/*` | `read` | Reading Keeper's KV secrets (jwt-signing-key, postgres/redis, providers/credentials of cloud drivers, service-vars secrets). Read only — Keeper does not write them. |
 | `pki/issue/soul-seed` | `update` | Signing the SoulSeed CSR during onboarding (Bootstrap-RPC, ADR-012(b)). `update` (POST) is the only thing the issue endpoint needs. |
 | `secret/metadata/keeper/sigil-keys/*` | `list`, `read` | Reaper rule `reap_orphan_vault_keys` (ADR-026(h)) — report-only reconcile of orphaned Sigil signing keys: only names (`list`) + `created_time` (metadata). **NO `delete`, NO data path** — Reaper deletes nothing and does not read private-key values. |
 | `auth/token/renew-self` | `update` | TokenRenewer renews Keeper's own client token. Without the right to create/revoke other tokens. |

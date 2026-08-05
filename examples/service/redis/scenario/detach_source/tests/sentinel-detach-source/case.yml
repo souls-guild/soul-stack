@@ -33,7 +33,7 @@ fixtures:
 
   # Deployed incarnation.state v9: a sentinel incarnation seeded by migrate_cluster.
   # seeded_from.detached=false (source still attached) — detach_source will set it to true.
-  # host-layout moved into essence (v11→v12); detach_source does NOT read it → absent from state.
+  # host-layout moved into service vars (v11→v12); detach_source does NOT read it → absent from state.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"

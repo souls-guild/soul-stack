@@ -47,9 +47,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method - in essence (author-context, 2026-06-28): the install method is
-    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method - in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -148,7 +148,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # -- modules-dir is created (include modules.yml active) --
     # Disambiguator from systemd-dropin-dir (same core.directory.present) - path.
@@ -203,7 +203,7 @@ assert:
     redis_users: []
     redis_hosts: []
     # star read-model (redesign): timings in master_settings (effective per-master
-    # dict = essence.sentinel_master_defaults over the operator dict, unset -> defaults);
+    # dict = vars.sentinel_master_defaults over the operator dict, unset -> defaults);
     # settings are the global sentinel directives (unset -> {}).
     redis_sentinel:
       master_name: master

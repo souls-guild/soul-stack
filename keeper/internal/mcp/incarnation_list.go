@@ -119,7 +119,6 @@ func (h *Handler) callIncarnationList(ctx context.Context, claims *jwt.Claims, r
 			Service:            inc.Service,
 			ServiceVersion:     inc.ServiceVersion,
 			StateSchemaVersion: inc.StateSchemaVersion,
-			Spec:               audit.MaskSecrets(inc.Spec),
 			State:              audit.MaskSecrets(inc.State),
 			Status:             string(inc.Status),
 			StatusDetails:      inc.StatusDetails,

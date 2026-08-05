@@ -23,7 +23,7 @@
 #       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
 #   Also read from the includer's context: input.version (opt., package pin)/
 #   input.users (opt.)/input.replicas_per_master (CLUSTER-BUILD replicas_per_shard),
-#   essence.system_acl_users/sysctl_settings, incarnation.name (Vault paths),
+#   vars.system_acl_users/sysctl_settings, incarnation.name (Vault paths),
 #   soulprint.hosts (nodes-MAP). Omitting/renaming any compute.<name> in the
 #   includer is NOT caught statically (cross-file drift is invisible to soul-lint) - it
 #   will surface as a render failure. Source of truth for the set and semantics is create/main.yml::compute.
@@ -52,13 +52,13 @@
   apply:
     destiny: redis
     input:
-      # version: distro pin (package). Binary version is in state from essence.binary_version
+      # version: distro pin (package). Binary version is in state from vars.binary_version
       # (compute.redis_version); destiny doesn't install a distro package -> has()-guard ''.
       version:  "${ has(input.version) ? input.version : '' }"
       # install: install method {method, base_url, version} - compute.install from
-      # install_method + essence.binary_* (#1). as-is into the destiny dispatcher install.yml.
+      # install_method + vars.binary_* (#1). as-is into the destiny dispatcher install.yml.
       install:  "${ compute.install }"
-      # conf_dir/data_dir: host layout from essence (#2). compute.conf_dir/data_dir
+      # conf_dir/data_dir: host layout from service vars (#2). compute.conf_dir/data_dir
       # (default = current path, back-compat). HOST-INVARIANT -> apply.input.
       conf_dir: "${ compute.conf_dir }"
       data_dir: "${ compute.data_dir }"
@@ -92,10 +92,10 @@
              'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
            }) }
       # * SYSTEM + operator-extra (system-ACL-users, design d2 Variant A): service
-      # default_admin/replica/monitoring/sentinel/haproxy from essence.system_acl_users
+      # default_admin/replica/monitoring/sentinel/haproxy from vars.system_acl_users
       # FIRST, operator-extra (input.users - AclUser ARRAY, wave 1b) ON TOP (last-wins).
       # * default_admin (redesign) - a SYSTEM user with full access (~* &* +@all), comes
-      # from essence.system_acl_users like all others: intra-cluster AUTH runs under it (replaced
+      # from vars.system_acl_users like all others: intra-cluster AUTH runs under it (replaced
       # requirepass-default - which is removed from redis.conf). Without the system users, replication (replica),
       # cluster MEET/REPLICATE (default_admin) and health-check would break. Vault password -
       # secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: ...}) (name
@@ -103,9 +103,9 @@
       # folds them into one map (templating §2.3); argument order = priority.
       users: >-
         ${ merge(
-             merge(default(essence.system_acl_users, {}).map(name, {
+             merge(default(vars.system_acl_users, {}).map(name, {
                name: {
-                 'perms':    essence.system_acl_users[name],
+                 'perms':    vars.system_acl_users[name],
                  'state':    'on',
                  'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
                }
@@ -122,22 +122,22 @@
            ) }
       # Redis modules - the SET is NO LONGER passed (directive "modules ALWAYS ALL"): destiny
       # deploys the full set from vars.redis_modules itself, the version-guard for Redis 8+ is also
-      # in destiny. scenario only supplies the .so source (compute.modules_base_url from essence),
+      # in destiny. scenario only supplies the .so source (compute.modules_base_url from service vars),
       # host-invariant -> apply.input; destiny builds the archive URL per-host, .so files are downloaded via
       # content idempotency (without verify).
       modules_base_url: "${ compute.modules_base_url }"
       # * SSRF-guard for fetching .so modules: modules_base_url can be an internal Nexus
       # (resolving to RFC1918) -> core.url.fetched blocks private IPs. compute.modules_allow_private
-      # (from essence.modules_allow_private, default true). as-is into destiny modules.yml.
+      # (from vars.modules_allow_private, default true). as-is into destiny modules.yml.
       modules_allow_private: "${ compute.modules_allow_private }"
       # Host-tuning extras (role concept), mode-agnostic. THP/logrotate/sysctl
       # are UNCONDITIONAL (Redis recommendation / hardening) - there are no operator flags,
-      # destiny `redis` tasks are always active. sysctl_settings - essence, host-invariant -> apply.input.
-      sysctl_settings:  "${ default(essence.sysctl_settings, {}) }"
+      # destiny `redis` tasks are always active. sysctl_settings - service vars, host-invariant -> apply.input.
+      sysctl_settings:  "${ default(vars.sysctl_settings, {}) }"
       # TLS - a single dict (enable/only/port + cert_ref/key_ref/ca_ref). HOST-INVARIANT ->
       # apply.input. enable/only/port - compute vars (2 flags tls_enabled/tls_keep_plain
-      # + port from essence, #5). cert_ref/key_ref/ca_ref - Vault PATHS (destiny reads the PEM
-      # via vault() in the content cell, seal masking); refs come only from essence.tls_*_ref.
+      # + port from service vars, #5). cert_ref/key_ref/ca_ref - Vault PATHS (destiny reads the PEM
+      # via vault() in the content cell, seal masking); refs come only from vars.tls_*_ref.
       tls:
         enable:   "${ compute.tls_on }"
         only:     "${ compute.tls_only_on }"

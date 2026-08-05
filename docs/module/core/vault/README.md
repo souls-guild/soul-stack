@@ -224,7 +224,7 @@ special characters would break parsing).
     policy:
       length: 32
       charset: alphanumeric
-    # targets are calculated from the same essence/input as the reading deployment tasks
+    # targets are calculated from the same vars/input as the reading deployment tasks
     # (drift "what we generate ≡ what we read" = bug): main secret/redis/<inc>#password
     # + per-user secret/redis/<inc>/users/<name>#password.
     targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + ... }"
@@ -233,7 +233,7 @@ special characters would break parsing).
 > In a real scenario, `targets` is a one-liner CEL-`${…}` (not block-scalar
 > `>-`): module.params type-check skips CEL wrapper for string only
 > scalar; block-scalar would be parsed as a literal and would reject list-param. List
-> users are not hardcoded - compiled from `essence.system_acl_users` ∪
+> users are not hardcoded - compiled from `vars.system_acl_users` ∪
 > `system_acl_users_sentinel` + `input.users`.
 
 > **Passage-invariant.** This step must be executed (write to Vault) **before**

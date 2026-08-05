@@ -46,8 +46,8 @@
 # RFC1918) — same as binary_base_url in install.yml. core.url.fetched blocks dialing
 # private IPs by default → .so fetch would fail. allow_private: ${ vars.redis_modules_allow_private }
 # lifts the guard (vars normalizes the flag from apply.input.modules_allow_private ←
-# essence.modules_allow_private, default true). The relaxation is SCOPED to .so fetch, deliberately
-# (essence), not a global opt-out.
+# vars.modules_allow_private, default true). The relaxation is SCOPED to .so fetch, deliberately
+# (service vars), not a global opt-out.
 - name: Fetch the redisbloom module shared object
   module: core.url.fetched
   params:

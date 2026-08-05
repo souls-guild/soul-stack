@@ -19,10 +19,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// TestIncarnation_Create_TraitsProjectedToSpec — top-level `traits` on create
-// reaches spec.traits (and from there TraitsFromSpec → column incarnation.traits →
-// sync hook into souls.traits). We check the jsonb spec arg ($5) of the INSERT.
-func TestIncarnation_Create_TraitsProjectedToSpec(t *testing.T) {
+// TestIncarnation_Create_TraitsGoToTheColumn — the request's traits are validated
+// and go straight into the `incarnation.traits` column ($10), which has been their
+// source of truth since migration 088. The detour through a freeform `spec` map
+// existed only because `spec` was where the request used to be persisted; that
+// copy went stale the moment a day-2 `PUT .../traits` edited the column, and the
+// column itself is gone (NIM-408).
+func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
@@ -33,23 +36,24 @@ func TestIncarnation_Create_TraitsProjectedToSpec(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if len(db.insertArgs) < 5 {
-		t.Fatalf("insertArgs len = %d, want ≥5", len(db.insertArgs))
+	if len(db.insertArgs) < 10 {
+		t.Fatalf("insertArgs len = %d, want ≥10", len(db.insertArgs))
 	}
-	specBytes, ok := db.insertArgs[4].([]byte)
+
+	traitsBytes, ok := db.insertArgs[9].([]byte)
 	if !ok {
-		t.Fatalf("insertArgs[4] spec = %T, want []byte", db.insertArgs[4])
+		t.Fatalf("insertArgs[9] traits = %T, want []byte", db.insertArgs[9])
 	}
-	var spec map[string]any
-	if err := json.Unmarshal(specBytes, &spec); err != nil {
-		t.Fatalf("spec not JSON: %v", err)
-	}
-	traits, ok := spec["traits"].(map[string]any)
-	if !ok {
-		t.Fatalf("spec.traits = %v (%T), want object", spec["traits"], spec["traits"])
+	var traits map[string]any
+	if err := json.Unmarshal(traitsBytes, &traits); err != nil {
+		t.Fatalf("traits not JSON: %v", err)
 	}
 	if traits["team"] != "dba" {
-		t.Errorf("spec.traits.team = %v, want dba", traits["team"])
+		t.Errorf("traits.team = %v, want dba (the column is the source of truth)", traits["team"])
+	}
+	owners, ok := traits["owners"].([]any)
+	if !ok || len(owners) != 2 {
+		t.Errorf("traits.owners = %v, want a two-element list", traits["owners"])
 	}
 }
 

@@ -34,7 +34,7 @@ Division of responsibilities (ADR-009):
 chain (ADR-019):
 
 - [`001_to_002`](migrations/001_to_002.yml) - `install` + host layout (`conf_dir`/`data_dir`)
-  moved out of state into `essence` (a read-model with no readers / day-2 operations read essence
+  moved out of state into `service vars` (a read-model with no readers / day-2 operations read service vars
   directly). DragonFly has **no** `modules_base_url` (redis modules don't apply to DF) - three
   fields are dropped, not four;
 - [`002_to_003`](migrations/002_to_003.yml) - cloud-provision read-model: `provisioned_vm_ids`
@@ -57,7 +57,7 @@ chain (ADR-019):
 | `df_config` | object | **translation result** - merged flagfile map `dragonfly.conf` (keys are DF flags, underscore form) |
 | `tls` | object `{enable, cert_ref, key_ref, ca_ref}` | TLS intent + Vault **paths** to the PEM (not the PEM itself). ★ No `only`/`port`: DF terminates TLS on the **main** port |
 | `memory_mb` | integer | memory budget for DragonFly, MB (from `input.memory_mb`; not set -> 0) |
-| `sysctl_settings` | map string→string | applied kernel parameters (host tuning, from essence) |
+| `sysctl_settings` | map string→string | applied kernel parameters (host tuning, from service vars) |
 | `monitoring` | object `{node_exporter_version, node_exporter_listen}` | **(v5)** read-model of the deployed node_exporter (Slice II). ★ No redis_exporter - DF exposes metrics natively |
 | `logging` | object `{vector_version, vector_sink_type, vector_sink_endpoint, vector_log_sources}` | **(v6)** read-model of the deployed vector (Slice V-I). ★ No `sink_auth_ref` - secret stays in Vault |
 | `replicas` | integer | replicas per master (from `input.replicas_per_master`) |
@@ -74,7 +74,7 @@ structural input (Named Dict):
 
 | field | type | meaning |
 |---|---|---|
-| `install_method` | enum `package`/`binary`, default `package` | `package` - distro deb `dragonfly` (`=version` pin); `binary` - upstream tarball (URL/version from `essence.binary_base_url`/`binary_version`, filename `dragonfly-<arch>.tar.gz` built by destiny from `soulprint.self.os.arch`) |
+| `install_method` | enum `package`/`binary`, default `package` | `package` - distro deb `dragonfly` (`=version` pin); `binary` - upstream tarball (URL/version from `vars.binary_base_url`/`binary_version`, filename `dragonfly-<arch>.tar.gz` built by destiny from `soulprint.self.os.arch`) |
 | `version` | string, `required_when` `install_method==package` | distro-native pin of the `dragonfly` package (`^([0-9]+:)?[0-9]…`). Not used with `binary` |
 | `memory_mb` | integer, optional, min `64` | memory budget for DragonFly, MB; `maxmemory` is a share of it. The `min 64` floor isn't arbitrary: too small a value would truncate to `"0mb"` (unlimited) |
 | `replicas_per_master` | integer, optional, default `0`, min `0` | replicas per master. roster = `1 + replicas_per_master` (sentinel daemon on every host). `0` - standalone-equivalent |
@@ -82,31 +82,31 @@ structural input (Named Dict):
 | `sentinel_failover_timeout_ms` | integer, optional, default `60000` | timeout for a single failover attempt (`sentinel failover-timeout`) |
 | `users` | array `AclUser` | operator-extra ACL users (`[{name, perms, state}]`, [`types.yml`](types.yml), ADR-062). `perms` is a full Redis ACL string (DragonFly accepts it), validated with a re2 pattern. The name **cannot** collide with a system account (see ["System ACL users"](#system-acl-users)) |
 | `df_settings` | object (passthrough, key→value strings) | arbitrary DF flags for `dragonfly.conf` (underscore form) layered on top of defaults/computed values (last-wins). ★ PILOT: names are **not** validated against a catalog - a typo shows up when DF starts, not at render time |
-| `tls_enabled` | boolean, optional, default `false` | enable TLS for DragonFly. ★ TLS is placed on the **main** port 6379 (flag `--tls`; DF has no separate TLS port -> no `tls_keep_plain`/"TLS-only"). Vault paths for the PEM come from `essence.tls_*_ref` |
+| `tls_enabled` | boolean, optional, default `false` | enable TLS for DragonFly. ★ TLS is placed on the **main** port 6379 (flag `--tls`; DF has no separate TLS port -> no `tls_keep_plain`/"TLS-only"). Vault paths for the PEM come from `vars.tls_*_ref` |
 | `provision` | object, optional, **default-on** `{enabled: true}` | bring up VMs for the topology within the same create run (see ["Cloud-provision"](#cloud-provision)) |
 
-**What is not in the input contract** (essence parameters or auto-computed):
+**What is not in the input contract** (service vars parameters or auto-computed):
 
 - `maxmemory_policy` - DragonFly has **no** such flag (the name is a derived `INFO`/`CONFIG`
   field from the bool `--cache_mode`). DF doesn't translate per-policy redis names (`lru`/`lfu`/…) -
   eviction is out of PILOT scope;
 - `sentinel_quorum` - **auto** `size(hosts)/2+1` (computed in apply);
-- `sentinel_master_name` - `essence.sentinel_master_name` (default `master`);
-- `conf_dir` / `data_dir` / `run_dir` - `essence` (author context, host layout);
-- Vault paths for TLS (`tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`) - `essence`;
-- `binary_base_url` / `binary_version` - `essence` (when `install_method: binary`).
+- `sentinel_master_name` - `vars.sentinel_master_name` (default `master`);
+- `conf_dir` / `data_dir` / `run_dir` - `service vars` (author context, host layout);
+- Vault paths for TLS (`tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`) - `service vars`;
+- `binary_base_url` / `binary_version` - `service vars` (when `install_method: binary`).
 
 **Cross-field invariant** ([`create/main.yml → validate:`](scenario/create/main.yml),
 input-only, 422 before applying): the name `input.users` must **not** be one of
 `[default_admin, replica, monitoring, sentinel, haproxy]` - operator-extra entries cannot take
-a system account's name (an essence top-up would silently overwrite it).
+a system account's name (a service-vars top-up would silently overwrite it).
 
 ## Translating simple input into df_config
 
 `compute.df_config` merges layers via `merge()` (SHALLOW last-wins, left to right;
 [templating §2.3](../../../docs/templating.md)):
 
-1. `essence.df_config` - author defaults (`maxmemory: "256mb"`, `maxclients: 10000`);
+1. `vars.df_config` - author defaults (`maxmemory: "256mb"`, `maxclients: 10000`);
 2. computed `maxmemory` (has-guard) - `memory_mb * memory_reserve_percent / 100` (MB,
    25% reserved for the OS); e.g. `memory_mb: 1024` -> `maxmemory: "768mb"`;
 3. `input.df_settings` - operator passthrough;
@@ -115,7 +115,7 @@ a system account's name (an essence top-up would silently overwrite it).
 
 **No** persistence preset (deferred), **no** cluster directives (sentinel-only), **no**
 `maxmemory_policy` (DF has no such flag - `absl` FATALs on an unknown one). The merge base and
-data tables are in [`essence/_default.yaml`](essence/_default.yaml).
+data tables are in [`service vars/_default.yaml`](service vars/_default.yaml).
 
 ## Host-tuning extras
 
@@ -124,14 +124,14 @@ disabling Transparent Huge Pages (drop-in `disable-thp.service`), logrotate
 (`/var/log/dragonfly/*.log`), sysctl (`core.sysctl.applied` -> `/etc/sysctl.d/30-dragonfly.conf`).
 The sysctl parameter set is reused from the `redis` service (same in-memory-store recommendations:
 overcommit/swappiness/network buffers/backlogs), data table -
-[`essence/_default.yaml → sysctl_settings`](essence/_default.yaml).
+[`service vars/_default.yaml → sysctl_settings`](service vars/_default.yaml).
 
 ## System ACL users
 
 Besides operator-extra accounts (`input.users`), the service **always** tops up system ACL users:
 `default_admin` (full permissions `~* &* +@all`), `replica` (PSYNC replication), `monitoring`
 (metrics), `sentinel` (AUTH sentinel↔df), `haproxy` (health-check). perms live in
-[`essence/_default.yaml`](essence/_default.yaml) as two sets -> **two** aclfiles: `users.acl`
+[`service vars/_default.yaml`](service vars/_default.yaml) as two sets -> **two** aclfiles: `users.acl`
 (DragonFly, `system_acl_users`) and `sentinel-users.acl` (sentinel daemon, `system_acl_users_sentinel`).
 
 **★ `default_admin` redesign** (symmetry with redis). `requirepass` was removed from the
@@ -141,8 +141,8 @@ connects as `username=default_admin`. The built-in DragonFly `default` user is r
 (absent from the sets) until the operator declares it in `input.users`.
 
 In every task that renders `users.acl` (create + day-2 `add_user`/`update_users`), the set
-is assembled by a double `merge()`: system accounts from essence (bottom layer) + operator-extra
-(on top, last-wins). System accounts are **not stored in state** - they are re-added from essence
+is assembled by a double `merge()`: system accounts from service vars (bottom layer) + operator-extra
+(on top, last-wins). System accounts are **not stored in state** - they are re-added from service vars
 on **every** render, otherwise a re-render would wipe `replica`/`sentinel` and break day-2 replication.
 
 ## Scenarios
@@ -167,7 +167,7 @@ body is inline. Steps:
    so local calls go over the socket;
 6. **`apply: destiny: redis` (sentinel_only)** - sentinel daemon (`deploy_redis: false`) over the
    DragonFly master; `version` is the distro pin of the `redis-server` package
-   (`essence.sentinel_redis_package_version`);
+   (`vars.sentinel_redis_package_version`);
 7. **REPLICAOF** (`community.redis.replica`, `where:` excludes the master by SID) - replicas
    follow the elected master (`soulprint.hosts[0]`);
 8. **SENTINEL MONITOR** (`community.redis.sentinel`, on every host);
@@ -187,7 +187,7 @@ token over SSH (`core.bootstrap.delivered`,
 [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)), (c) a blocking wait for onboarding
 (`core.soul.registered` `await_online` + `refresh_soulprint`) -> the roster is re-resolved, so
 size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fall back to
-`essence.provision_*`; the section is hidden from the Run form. To roll out onto an
+`vars.provision_*`; the section is hidden from the Run form. To roll out onto an
 **already-provisioned** roster - set `provision: {enabled: false}` explicitly.
 
 ### Day-2 scenarios
@@ -197,7 +197,7 @@ size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fal
   renders the full `users.acl`;
 - **[`update_users`](scenario/update_users/main.yml)** - **bulk-replace** of the entire
   operator-extra set (a user missing from the new array is removed). System accounts are
-  untouched (re-added from essence);
+  untouched (re-added from service vars);
 - **[`restart`](scenario/restart/main.yml)** - rolling-restart with no config change. Each
   host's role is taken from a live probe (`community.redis.role`), replicas one at a time
   (`serial: 1`), master last. Only the DragonFly data plane restarts (`core.service.restarted`
@@ -217,14 +217,14 @@ size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fal
 Both surfaces are a **mandatory invariant of the data service**, not an operator choice: `create`
 deploys them **unconditionally** (no `when` gate) on **every** host at the end of the run,
 composed from reusable standalone destinies via `apply: destiny` (isolated render,
-ADR-009). Versions/ports are author context in `essence` (the operator can override in
-`spec.essence`); destiny derives `arch` from `soulprint.self.os.arch`.
+ADR-009). Versions/ports are author context in `vars/` (a fleet that needs different ones forks this
+repo and edits them there, ADR-0082); destiny derives `arch` from `soulprint.self.os.arch`.
 
 ### node-exporter (host metrics, pull - Slice II)
 
 Step 6 of the deploy (**after** the deploy branch) unconditionally installs
 [`node-exporter`](../../destiny/node-exporter/) ([ADR-024](../../../docs/adr/0024-observability.md)).
-essence: `node_exporter_version` (`1.8.2`), `node_exporter_listen` (`:9100`),
+service vars: `node_exporter_version` (`1.8.2`), `node_exporter_listen` (`:9100`),
 `node_exporter_base_url` (an internal Nexus raw-proxy), `node_exporter_allow_private` (`true` - SSRF-guard
 opt-out for private-resolve mirrors). Read-model - `state.monitoring`
 (`node_exporter_version`/`node_exporter_listen`), mirroring `apply.input` of the node-exporter destiny.
@@ -237,9 +237,9 @@ opt-out for private-resolve mirrors). Read-model - `state.monitoring`
 
 Step 7 of the deploy (**after** the exporter) unconditionally installs
 [`vector`](../../destiny/vector/) ([ADR-067](../../../docs/adr/0067-vector-log-shipping.md)) -
-the log-shipping agent, adding a log plane alongside the metrics plane. essence: `vector_version`
+the log-shipping agent, adding a log plane alongside the metrics plane. service vars: `vector_version`
 (`0.40.0`), `vector_sha256` (★ placeholder - the real operator **must** supply the checksum
-for the `(version, arch)` pair in `spec.essence`, otherwise it fails closed), `vector_base_url`
+for the `(version, arch)` pair in `vars/`, otherwise it fails closed), `vector_base_url`
 (an internal Nexus), `vector_allow_private` (`true`), `vector_sink_type`/`vector_sink_endpoint`/
 `vector_sink_auth_ref`, `vector_log_sources`. Read-model - `state.logging`
 (`vector_version`/`vector_sink_type`/`vector_sink_endpoint`/`vector_log_sources`) **without**
@@ -250,9 +250,9 @@ for the `(version, arch)` pair in `spec.essence`, otherwise it fails closed), `v
 - `/var/log/dragonfly/*.log` - DragonFly itself (glog, `dragonfly` destiny, `--log_dir`);
 - `/var/log/redis/*.log` - the sentinel daemon (distro `redis-server`, `redis` destiny).
 
-**Sink - Option A** (essence per-incarnation): default `sink_type: console` (safe, no
+**Sink - Option A** (service vars per-incarnation): default `sink_type: console` (safe, no
 external infra needed), `sink_endpoint`/`sink_auth_ref` empty - the operator sets a real
-collector (loki/elasticsearch/vector) in `spec.essence`. Agent naming follows **Slice V-I vector /
+collector (loki/elasticsearch/vector) in `vars/`. Agent naming follows **Slice V-I vector /
 [naming-rules.md](../../../docs/naming-rules.md) §15** (upstream product name Vector.dev, like
 `node-exporter`).
 
@@ -300,5 +300,5 @@ go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/destroy/tests
 
 The [`monitoring-observability`](scenario/create/tests/monitoring-observability/case.yml) case
 checks that the plan includes the unconditional `apply: destiny node-exporter` and
-`apply: destiny vector` (steps 6/7) with the versions/sources from essence, and that the
+`apply: destiny vector` (steps 6/7) with the versions/sources from service vars, and that the
 `monitoring`/`logging` read-model made it into `state_changes`.

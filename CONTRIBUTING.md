@@ -79,7 +79,7 @@ without `protoc`.
   site is translated separately.)
 - **Names come from the dictionary.** Use the Soul Stack vocabulary
   ([docs/naming-rules.md](docs/naming-rules.md)) — Keeper, Souls, Destiny, Soulprint,
-  Essence. A brand-new name or concept is proposed and
+  Service vars. A brand-new name or concept is proposed and
   agreed before it lands (see the ADR process).
 - **Design goes through ADRs.** Architectural decisions live in
   [docs/adr/](docs/adr/README.md) (one file per ADR) with an overview in

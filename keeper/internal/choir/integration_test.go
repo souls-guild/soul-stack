@@ -102,7 +102,6 @@ func seedIncarnation(t *testing.T, name, creator string) {
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
-		Spec:               map[string]any{},
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,
 	}

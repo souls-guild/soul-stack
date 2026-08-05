@@ -18,7 +18,7 @@
 // ([cel.NewMigration]), the project's only sandbox with root `state` (ADR-019).
 // Semantically, state predicate is a pure function of state, exactly matching
 // migration-CEL sandbox: only `state.<path>` is declared; other roots
-// (register/soulprint/essence/input/incarnation/vars) are undeclared (compile
+// (register/soulprint/input/incarnation/vars) are undeclared (compile
 // error undeclared reference), vault()/now() are cut by guards. Same approach as
 // rbac.soulprint (S2b) with [cel.NewFlowControl].
 package statepredicate
@@ -41,7 +41,7 @@ type Resolver interface {
 	// before run). Empty/blank predicate is rejected.
 	//
 	// Errors are compile phase: broken CEL, access to forbidden root/function
-	// (vault/now/register/soulprint/input/incarnation/essence). Actual absence
+	// (vault/now/register/soulprint/input/incarnation/vars). Actual absence
 	// of state fact at runtime is NOT a Compile error (a concrete incarnation may
 	// have the fact).
 	Compile(predicate string) error

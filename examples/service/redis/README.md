@@ -127,7 +127,7 @@ migration chain (ADR-019):
 - [`010_to_011.yml`](migrations/010_to_011.yml) - **redesign of the `create` input
   contract** (`connection_mode` + `io_threads` + extended `persistence` + restructured
   sentinel timings). Four independent state transformations (best-effort - a migration
-  is a pure function of the old state, ADR-019: `essence`/`input`/`vault` are forbidden
+  is a pure function of the old state, ADR-019: `service vars`/`input`/`vault` are forbidden
   in migration-CEL):
   (1) **persistence REMAP** of the old enum `[off, aof, rdb, rdb_aof]` into the new one -
   `aof → aof_1sec`, `rdb_aof → rdb_aof_1sec` (the old `aof`/`rdb_aof` were fsync
@@ -155,9 +155,9 @@ installation, and so a repeated apply stays idempotent:
 | `connection_mode` | enum `tls`/`tls_plain`/`plain` | **(v11)** network channel mode: `plain` - plain port only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain closed, `port 0`). Day-2 read-model (replaced the boolean `tls_enabled`/`tls_keep_plain`) |
 | `io_threads` | integer | **(v11)** number of Redis I/O threads (`io-threads` directive). `0` - single-threaded I/O (directive not written) |
 | `redis_config` | object | **the translation result** - merged `redis.conf` config (default → preset → computed → passthrough; for `cluster` - plus `cluster-*` directives) |
-| `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** Redis ACL users (operator-created only). Element is a typed `AclUser` (`name` + `perms` required, `state` defaults to `on`) from [`types.yml`](types.yml), reusable via `$type: AclUser` in scenario `input:` (ADR-062). Prior to state_schema v6 this was a map `username → {perms, state}` - migration [`005_to_006.yml`](migrations/005_to_006.yml) folded map→array (name key → `name` field). `perms` is the full ACL string (passwords are NOT in state - keeper-side Vault). **System** service users (`replica`/`monitoring`/`sentinel`/`haproxy`, etc.) are **NOT** written here - they're merged into `users.acl` from `essence.system_acl_users` on every render (see [System ACL users](#system-acl-users)) |
+| `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** Redis ACL users (operator-created only). Element is a typed `AclUser` (`name` + `perms` required, `state` defaults to `on`) from [`types.yml`](types.yml), reusable via `$type: AclUser` in scenario `input:` (ADR-062). Prior to state_schema v6 this was a map `username → {perms, state}` - migration [`005_to_006.yml`](migrations/005_to_006.yml) folded map→array (name key → `name` field). `perms` is the full ACL string (passwords are NOT in state - keeper-side Vault). **System** service users (`replica`/`monitoring`/`sentinel`/`haproxy`, etc.) are **NOT** written here - they're merged into `users.acl` from `vars.system_acl_users` on every render (see [System ACL users](#system-acl-users)) |
 | `redis_hosts` | array `{sid, role}` | topology hosts (written as `[]`; the exact `primary`/`replica`/`sentinel` roles for cluster/sentinel are laid out on the apply side - not recorded in state) |
-| `redis_sentinel` | object `{master_name, quorum, master_settings, settings}` | sentinel-mode facts: monitored master name (from `essence.sentinel_master_name`, default `master`) + quorum + `master_settings` (effective per-master sentinel directive dict = `essence.sentinel_master_defaults` overridden by `input.sentinel_master_settings`, `map<string,string>`; defaults `down-after-milliseconds`=`5000`/`failover-timeout`=`60000`) + `settings` (global passthrough `sentinel.conf` directives from `input.sentinel_settings`). `quorum` is always `0` (the auto `size/2+1` is computed in apply, not materialized in state). **(v11 restruct)**: the former named `down_after_ms`/`failover_timeout_ms` (v5) are folded into `master_settings`. Outside `sentinel` mode - an empty object |
+| `redis_sentinel` | object `{master_name, quorum, master_settings, settings}` | sentinel-mode facts: monitored master name (from `vars.sentinel_master_name`, default `master`) + quorum + `master_settings` (effective per-master sentinel directive dict = `vars.sentinel_master_defaults` overridden by `input.sentinel_master_settings`, `map<string,string>`; defaults `down-after-milliseconds`=`5000`/`failover-timeout`=`60000`) + `settings` (global passthrough `sentinel.conf` directives from `input.sentinel_settings`). `quorum` is always `0` (the auto `size/2+1` is computed in apply, not materialized in state). **(v11 restruct)**: the former named `down_after_ms`/`failover_timeout_ms` (v5) are folded into `master_settings`. Outside `sentinel` mode - an empty object |
 | `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider vm-ids of VMs raised **by this** create run via `core.cloud.created` (from `register.provision.vm_ids`). Day-2 teardown reads them for `core.cloud.destroyed`. Without provision (`input.provision` omitted/`enabled:false`) - `[]` (hosts are a declared roster, not provisioned by the service). See [Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1) |
 | `provisioned_provider` | string | **(v7)** cloud Provider name in the registry (used by the same `destroy` call; from `input.provision.provider`). Without provision - `''` |
 | `provisioned_sids` | array string | **(v8)** Keeper-side SID/FQDN of VMs raised **by this** run. `destroy` reads them to cascade-clean the `souls`/`soul_seeds`/`bootstrap_tokens` registries (read **paired** with `provisioned_vm_ids` - lengths must match, otherwise orphan; `destroy` carries an `assert` guard on the pairing). Without provision - `[]` |
@@ -182,8 +182,8 @@ text:
 | field | type | meaning |
 |---|---|---|
 | `redis_type` | enum `sentinel`/`cluster`, default `sentinel` | mode; selects the dispatcher branch. `sentinel` - master-replica + sentinel daemon (with `replicas_per_master: 0` - the standalone equivalent); `cluster` - honest hash-slot Redis Cluster. A value outside the enum is rejected by Keeper input validation BEFORE rendering |
-| `version` | string, **required**, enum `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21` | Redis version from a fixed set of upstream releases (the free-form distro pin was replaced with a closed enum - redesign). Every value is published by the official Redis apt repository (`essence.install_package.repo_uri`), so all of them install out of the box. `install_method=package` (default) pins the package to this version; `install_method=binary` downloads binaries of this version. An arbitrary version is not accepted |
-| `install_method` | enum `package`/`binary`, default `package` | redis install method. `package` (DEFAULT) - the `redis-server` package (`=version` pin) from the apt repository named by `essence.install_package.repo_uri`, by default the official Redis one, which publishes every version of the `version` enum; an empty `repo_uri` falls back to the host's own distro repository. `binary` - standalone `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries (`essence.binary_base_url` + per-host `arch`/`Debian`/`distro_ver`/`version` from `soulprint.self.os`; downloaded with SHA-256 content-idempotency, without integrity verification), for a fleet that publishes such builds itself. Neither the repository nor the binary URL is operator input: both live in `essence` (`install_package`, `binary_base_url`/`binary_version`, author context), the operator overrides them in `spec.essence`. The former object-input `install` was collapsed into a single enum field |
+| `version` | string, **required**, enum `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21` | Redis version from a fixed set of upstream releases (the free-form distro pin was replaced with a closed enum - redesign). Every value is published by the official Redis apt repository (`vars.install_package.repo_uri`), so all of them install out of the box. `install_method=package` (default) pins the package to this version; `install_method=binary` downloads binaries of this version. An arbitrary version is not accepted |
+| `install_method` | enum `package`/`binary`, default `package` | redis install method. `package` (DEFAULT) - the `redis-server` package (`=version` pin) from the apt repository named by `vars.install_package.repo_uri`, by default the official Redis one, which publishes every version of the `version` enum; an empty `repo_uri` falls back to the host's own distro repository. `binary` - standalone `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` binaries (`vars.binary_base_url` + per-host `arch`/`Debian`/`distro_ver`/`version` from `soulprint.self.os`; downloaded with SHA-256 content-idempotency, without integrity verification), for a fleet that publishes such builds itself. Neither the repository nor the binary URL is operator input: both live in `service vars` (`install_package`, `binary_base_url`/`binary_version`, author context) — a fleet that needs a different source forks this repo and edits `vars/`. The former object-input `install` was collapsed into a single enum field |
 | `memory_mb` | integer, optional, min `64` | memory budget for Redis on the host, MB; `maxmemory` is a fraction of it |
 | `io_threads` | integer, optional, default `0`, min `0` | number of Redis I/O threads (`io-threads` directive). `0` (default) - single-threaded I/O (directive not written); `>0` - Redis parallelizes socket handling (typically = core count − 1). Written to `redis.conf` only when `>0` |
 | `persistence` | enum `off`/`aof_1sec`/`aof_always`/`rdb`/`rdb_aof_1sec`/`rdb_aof_always`, default `rdb` | durability mode; translated into `save`/`appendonly`/`appendfsync`. `off` - no persistence; `aof_1sec`/`aof_always` - AOF only (fsync `everysec` / `always`); `rdb` - snapshots only; `rdb_aof_1sec`/`rdb_aof_always` - snapshots + AOF (dual durability). Extended from `[off, aof, rdb, rdb_aof]` (redesign: explicit choice of fsync frequency `1sec`/`always`) |
@@ -194,29 +194,30 @@ text:
 | `cluster_topology` | array of array of string, optional | **(cluster)** explicit shard layout: a list of shards, each shard a list of SIDs `[master, replica, …]` (the first is the master). The operator distributes VMs across zones / encodes anti-affinity themselves. If not set → the plugin lays out roles automatically by sorting SIDs (behavior identical to before the feature). Each SID must appear exactly once among the targeted souls; all roster hosts must be covered |
 | `users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** ACL users; element is a typed `AclUser` ([`types.yml`](types.yml), ADR-062 `$type`): `name` + `perms` required, `state` ∈ `on`/`off` (default `on`). `perms` is the full Redis ACL string, validated by the re2 `AclUser` pattern (token-shape filter). The name **cannot** collide with a system service user (`default`/`replica`/`monitoring`/`sentinel`/`haproxy`) - the collision is rejected by input validation (422, see [System ACL users](#system-acl-users)). Merged **on top of** the system users (last-wins) into `users.acl` |
 | `redis_settings` | object (passthrough, key→value strings) | arbitrary `redis.conf` key→value directives; **override everything** in the final merge. Directive **names** are version-aware validated with an `assert` against the valid-directive catalog for the chosen Redis version (see [redis_settings directive-name validator](#redis_settings-directive-name-validator)) - a typo / a directive from a different version fails the run at render time (422) BEFORE applying |
-| `connection_mode` | enum `tls`/`tls_plain`/`plain`, default `plain` | **(network channel)** Redis channel mode (replaced the boolean `tls_enabled`/`tls_keep_plain` - redesign). `plain` (default) - plain port 6379 only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain port closed, `port 0`). The enum **structurally** excludes "no listener at all". Technical TLS parameters (port, Vault paths `cert`/`key`/`ca`) are NOT operator input: they live in `essence` (`tls_port`/`tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`, author context). destiny reads the PEM via `vault(ref)` in the `content` cell (seal masking) |
+| `connection_mode` | enum `tls`/`tls_plain`/`plain`, default `plain` | **(network channel)** Redis channel mode (replaced the boolean `tls_enabled`/`tls_keep_plain` - redesign). `plain` (default) - plain port 6379 only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain port closed, `port 0`). The enum **structurally** excludes "no listener at all". Technical TLS parameters (port, Vault paths `cert`/`key`/`ca`) are NOT operator input: they live in `service vars` (`tls_port`/`tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`, author context). destiny reads the PEM via `vault(ref)` in the `content` cell (seal masking) |
 | `sentinel_settings` | object (passthrough, key→value strings), optional | **(sentinel)** global (not per-master) passthrough `sentinel.conf` directives (`resolve-hostnames`, `announce-port`, …), not covered by `sentinel_master_settings`. Merged into `sentinel.conf` alongside the per-master directives. No version validation (there is no sentinel catalog). New field (redesign) |
-| `sentinel_master_settings` | object (passthrough, key→value strings), optional | **(sentinel)** per-master Sentinel directives: key is the `SENTINEL SET` option name without the prefix and master name (`down-after-milliseconds`, `failover-timeout`, `parallel-syncs`, …); value is a string. Overrides the `essence.sentinel_master_defaults` defaults (`down-after-milliseconds`=`5000`, `failover-timeout`=`60000`). **Absorbed** the former named fields `sentinel_down_after_ms`/`sentinel_failover_timeout_ms` (redesign) |
-| `provision` | object `{enabled, provider, profile, ssh_provider, await_timeout}`, optional | **★ keeper-side implemented, live awaits C1** ([Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1)): provision VMs for the topology in the **same** create run ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Option A). `enabled: true` → cloud-create + token delivery + onboarding barrier, then the redis role on the newly created hosts; omitted / `enabled: false` → run against the existing roster (behavior bit-for-bit identical to without the feature). `provider`/`profile` - names in the `providers`/`profiles` registries; `ssh_provider` - the SshProvider plugin name for token delivery (`core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)); `await_timeout` (`<N>{s\|m\|h}`) - ceiling for onboarding wait (unset → `essence.provision_await_timeout`, default `10m`). **There is no VM count field in `provision`** - it's derived from the topology (`shards`/`replicas_per_master`). **Live provisioning awaits slice C1** (cloud-init CA-signed host key) + live-e2e - see the section |
-**What's missing from the input contract (essence parameters or auto-computed):**
+| `sentinel_master_settings` | object (passthrough, key→value strings), optional | **(sentinel)** per-master Sentinel directives: key is the `SENTINEL SET` option name without the prefix and master name (`down-after-milliseconds`, `failover-timeout`, `parallel-syncs`, …); value is a string. Overrides the `vars.sentinel_master_defaults` defaults (`down-after-milliseconds`=`5000`, `failover-timeout`=`60000`). **Absorbed** the former named fields `sentinel_down_after_ms`/`sentinel_failover_timeout_ms` (redesign) |
+| `provision` | object `{enabled, provider, profile, ssh_provider, await_timeout}`, optional | **★ keeper-side implemented, live awaits C1** ([Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1)): provision VMs for the topology in the **same** create run ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Option A). `enabled: true` → cloud-create + token delivery + onboarding barrier, then the redis role on the newly created hosts; omitted / `enabled: false` → run against the existing roster (behavior bit-for-bit identical to without the feature). `provider`/`profile` - names in the `providers`/`profiles` registries; `ssh_provider` - the SshProvider plugin name for token delivery (`core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)); `await_timeout` (`<N>{s\|m\|h}`) - ceiling for onboarding wait (unset → `vars.provision_await_timeout`, default `10m`). **There is no VM count field in `provision`** - it's derived from the topology (`shards`/`replicas_per_master`). **Live provisioning awaits slice C1** (cloud-init CA-signed host key) + live-e2e - see the section |
+**What's missing from the input contract (service vars parameters or auto-computed):**
 
 - `sentinel_quorum` - **auto** `size(hosts)/2+1` (majority), computed in apply.
   There is no longer an operator field for it (removed 2026-06-25).
-- `sentinel_master_name` - moved to `essence.sentinel_master_name` (author context,
-  default `master`; the operator overrides it in `spec.essence`, not in the Run form).
+- `sentinel_master_name` - moved to `vars.sentinel_master_name` (author context,
+  default `master`; a fleet that names its master differently forks this repo and edits
+  `vars/`, it is not in the Run form).
 - `sentinel_down_after_ms` / `sentinel_failover_timeout_ms` - **absorbed** into the
   `sentinel_master_settings` dict (keys `down-after-milliseconds` / `failover-timeout`);
-  their defaults `5000`/`60000` moved to `essence.sentinel_master_defaults` (the base
+  their defaults `5000`/`60000` moved to `vars.sentinel_master_defaults` (the base
   layer under that dict). Redesign: named fields replaced by a passthrough dict.
-- `conf_dir` / `data_dir` - moved to `essence` (`conf_dir`=`/etc/redis`,
-  `data_dir`=`/var/lib/redis`, author context; the operator overrides the layout in
-  `spec.essence` for their own storage layout, not in the Run form). They remain in
+- `conf_dir` / `data_dir` - moved to `service vars` (`conf_dir`=`/etc/redis`,
+  `data_dir`=`/var/lib/redis`, author context; a fleet with a different storage layout forks
+  this repo and edits `vars/`, it is not in the Run form). They remain in
   `state` (day-2 `add_node` reads the layout from `incarnation.state`) - the source of
-  the edit shifted input→essence, the state shape is unchanged.
+  the edit shifted input→service vars, the state shape is unchanged.
 - technical TLS parameters (`tls_port`, Vault paths `tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`)
-  - in `essence` (author context), not operator input: the operator only chooses the
-  channel mode via `connection_mode`, while port `7379` and the PEM paths are
-  overridden in `spec.essence`.
+  - in `service vars` (author context), not operator input: the operator only chooses the
+  channel mode via `connection_mode`, while port `7379` and the PEM paths are changed by
+  forking this repo and editing `vars/`.
 - `tls_enabled` / `tls_keep_plain` - the boolean flags were **removed**, replaced by the
   enum `connection_mode` (`tls`/`tls_plain`/`plain`); `compute.tls_on`/`tls_only_on` are
   derived from the enum.
@@ -224,11 +225,11 @@ text:
   "modules are **always all**" - destiny deploys the full set from its own
   `vars.redis_modules` on Redis < 8; on Redis 8+ the modules are built in (`.so` files
   are not downloaded). A subset cannot be selected.
-- `modules_base_url` (source of `.so` files) - moved to `essence.modules_base_url`
-  (author context, default `""`; the operator overrides it in `spec.essence` for their
-  own mirror). On Redis < 8 without a configured source, destiny won't be able to build
+- `modules_base_url` (source of `.so` files) - moved to `vars.modules_base_url`
+  (author context, default `""`; a fleet with its own mirror forks this repo and edits
+  `vars/`). On Redis < 8 without a configured source, destiny won't be able to build
   the `.so` URL (surfaces softly at destiny render time, not at input validation -
-  the `validate` context is input-only, essence is unavailable there).
+  the `validate` context is input-only, service vars are unavailable there).
 - `master_ip` / `master_port` - belonged to the removed `sentinel_only` mode (an
   external master). In `sentinel`, the master is chosen from the roster.
 
@@ -245,9 +246,9 @@ and BEFORE applying):
 > listener" (`tls.only` required `tls.enable`) - the `connection_mode` enum
 > `[tls, tls_plain, plain]` **structurally** excludes "no listener at all" (you can't
 > pick "TLS off + plain closed"). (2) "`install.method=binary` requires `base_url`/
-> `version`" - the binary URL and version moved from operator input into `essence`
+> `version`" - the binary URL and version moved from operator input into `service vars`
 > (`binary_base_url`/`binary_version`, author context), and the `validate` context is
-> input-only (essence is unavailable); an empty `binary_base_url` with
+> input-only (service vars are unavailable); an empty `binary_base_url` with
 > `install_method=binary` surfaces at destiny render time, not at input validation.
 
 There are **no** `logrotate_enable` / `sysctl_enable` / `thp_disable` parameters in the
@@ -325,28 +326,28 @@ The operator declares **only the counter** `replicas_per_master` (1 master + 2
 replicas). Master election (who is master) - the first host by SID; the apply side
 handles role layout and replica/sentinel binding. `sentinel_quorum` auto = the
 majority `size(hosts)/2+1`, there is no operator field for it; `sentinel_master_name`
-comes from `essence.sentinel_master_name` (default `master`).
+comes from `vars.sentinel_master_name` (default `master`).
 
 ## Translating simple input into redis_config
 
 The service merges four layers via `merge()` (SHALLOW last-wins, left to right - the
 right side overrides the left by top-level key):
 
-1. `essence.redis_config` - author defaults (role defaults);
-2. `essence.persistence_presets[persistence]` - `save`/`appendonly` for the chosen mode;
+1. `vars.redis_config` - author defaults (role defaults);
+2. `vars.persistence_presets[persistence]` - `save`/`appendonly` for the chosen mode;
 3. computed `maxmemory` + `maxmemory-policy` - derived from `memory_mb` / input;
 4. `input.redis_settings` - operator passthrough (overrides everything).
 
-The translation data tables live in [`essence/_default.yaml`](essence/_default.yaml):
+The translation data tables live in [`service vars/_default.yaml`](service vars/_default.yaml):
 `persistence_presets`, `memory_reserve_percent`, the `redis_config` merge base layer.
 
 Translation walked through one field at a time:
 
-- **`persistence: rdb`** → `essence.persistence_presets["rdb"]` =
+- **`persistence: rdb`** → `vars.persistence_presets["rdb"]` =
   `{save: "900 1 300 10 60 10000", appendonly: "no"}` - RDB snapshots enabled, AOF disabled.
 - **`memory_mb: 1024`** → `maxmemory = 1024 * memory_reserve_percent(75) / 100 = 768`
   → directive `maxmemory: "768mb"` (25% reserve - for the OS/overhead). If unset,
-  `maxmemory` is taken from the `essence.redis_config` merge base layer.
+  `maxmemory` is taken from the `vars.redis_config` merge base layer.
 
 Layer 3 only materializes the keys that were actually set (a has-guard): an empty
 `memory_mb` won't produce the string `"0mb"`, a missing `maxmemory_policy` won't
@@ -376,7 +377,7 @@ choice): there are no operator flags, the tasks are **always** rendered.
   parameters are a **fixed Redis-tuning set**
   (memory/fork overcommit, swappiness, network buffers, backlogs, the TCP stack); the
   source of the values is the data table
-  [`essence/_default.yaml → sysctl_settings`](essence/_default.yaml) (not in operator
+  [`service vars/_default.yaml → sysctl_settings`](service vars/_default.yaml) (not in operator
   input - this is Redis-specific tuning, not an operational choice). The former
   `sysctl_enable` opt-out flag no longer **exists**. The role's `tcp_bbr` block was
   **not** ported (depends on the `tcp_bbr` kernel module, not loaded by default on
@@ -390,25 +391,25 @@ Besides operator-extra (`input.users`), the service **always merges in** a set o
 **system** ACL users into `users.acl`, without which the cluster won't work: `replica`
 (`PSYNC` replication), `monitoring` (metrics exporter), `sentinel` (AUTH
 sentinel↔redis), `haproxy` (load balancer health-check). Each one's perms are a fixed
-set and live in [`essence/_default.yaml`](essence/_default.yaml) (`system_acl_users` - for
+set and live in [`service vars/_default.yaml`](service vars/_default.yaml) (`system_acl_users` - for
 `redis-server`; `system_acl_users_sentinel` - for the sentinel daemon). The operator
 does **not set** and does **not see** them in the input form - this is author-context
-essence.
+vars.
 
 ### Merge: system users at the bottom, operator-extra on top
 
 In **all** tasks that render `users.acl` (create cluster/sentinel + day-2
 `add_user`/`update_config`/`add_node`), `apply.input.users` is assembled with a double
-`merge()`: **first** the system users from `essence.system_acl_users` (bottom layer,
+`merge()`: **first** the system users from `vars.system_acl_users` (bottom layer,
 `state: on`, password from Vault), **on top** - operator-extra (`input.users` on
 create / `state.redis_users` on day-2 / `compute.users_new` in `add_user`). The order
 of `merge()` arguments sets priority: last-wins, so operator-extra would override a
 system user of the same name - but the name collision is closed off by the
 validate-guard (below), so the layers never actually overlap.
 
-The set is accessed via `default(essence.system_acl_users, {})`: **back-compat** -
-incarnations with old essence that lacks this field do NOT get the system users (the
-feature is enabled by **updating essence**, not by scenario code).
+The set is accessed via `default(vars.system_acl_users, {})`: **back-compat** -
+incarnations with old service vars that lacks this field do NOT get the system users (the
+feature is enabled by **updating service vars**, not by scenario code).
 
 ### ★ Re-merging on day-2 (invariant)
 
@@ -417,7 +418,7 @@ append) with the same destiny brick. So each of these tasks **must** re-merge th
 system users - otherwise the re-render would **wipe out**
 `replica`/`monitoring`/`sentinel`/`haproxy` and break replication / sentinel↔redis /
 health-check on day-2. The system users are **not stored in state** (state only holds
-operator-extra), so they're merged in from `essence` on **every** render. `add_node` is
+operator-extra), so they're merged in from `service vars` on **every** render. `add_node` is
 especially critical: without the system `replica`, a new node won't be able to
 `PSYNC` - the cluster won't accept it as a replica.
 
@@ -439,7 +440,7 @@ regular redis commands), so it's written into a **second** aclfile -
 [`sentinel-users.acl`](../../destiny/redis/templates/sentinel-users.acl.tmpl) (pointed
 to by `aclfile` in `sentinel.conf`). Only in `sentinel` mode does the scenario pass
 destiny a new additive field `input.sentinel_users` (from
-`essence.system_acl_users_sentinel`); operator-extra is **not** merged in here
+`vars.system_acl_users_sentinel`); operator-extra is **not** merged in here
 (sentinel access is service-internal). Passwords: `default` → the primary
 `secret/redis/<incarnation>#password`; the rest (`monitoring`/`sentinel`/`haproxy`) →
 the branch `secret/redis/<incarnation>/users/<name>#password`. For the full render
@@ -456,7 +457,7 @@ caught by input validation (`validate:`, [create](scenario/create/main.yml) +
 - **422 `validation_failed` BEFORE applying**, rather than a silent override (an
 operator `replica` with `~* +@all` would silently grant extra privileges and break
 replication's replica perms). The guard is **input-only**: the name list is hardcoded
-in each scenario (essence is unavailable in the `validate` context - a structural CEL
+in each scenario (service vars are unavailable in the `validate` context - a structural CEL
 barrier).
 
 ## Scenarios
@@ -615,7 +616,7 @@ possible at create - redis isn't up yet), the first host by SID = master
    cluster directives). `sentinel.master_ip` - the host-invariant master address
    (master election `soulprint.hosts[0]`), resolved `run_once` and identical for all →
    correctly passed via `apply.input`. `sentinel.master_name` - from
-   `essence.sentinel_master_name` (default `master`). `announce-ip` - rendered
+   `vars.sentinel_master_name` (default `master`). `announce-ip` - rendered
    per-host in `sentinel.conf.tmpl` from `.self.network.primary_ip`.
 2. **health-gate PING** (`community.redis.command`, `retry`) - every node must respond
    to `PING` on `:6379` BEFORE binding replicas/configuring sentinel.
@@ -741,7 +742,7 @@ from a different version) fails the run at render time (**422 `assert_failed`**)
 **BEFORE applying**, with a clear message - rather than a late `redis-server` failure
 on the host.
 
-- **The catalog - `essence.redis_directives`** ([`essence/_default.yaml`](essence/_default.yaml)).
+- **The catalog - `vars.redis_directives`** ([`service vars/_default.yaml`](service vars/_default.yaml)).
   ★ The name `redis_directives` is a working name (proposed in this epic). Structure:
   key = Redis `major.minor` series, value = a flat list of valid directive names for
   that series. **Six** series are covered: `6.2` / `7.0` / `7.2` / `7.4` / `8.0` / `8.2`.
@@ -750,7 +751,7 @@ on the host.
   commented-out directive examples). The catalog is **committed** (there's no network
   on the render path); regeneration when adding a version -
   [`scripts/gen-redis-catalog.sh`](../../../scripts/gen-redis-catalog.sh) (from the repo
-  root), the output is pasted into `essence`.
+  root), the output is pasted into `service vars`.
 - **MVP - names only**, directive values are not validated.
 - **Series-skip:** `input.version` (enum `8.6.1`/`8.4.0`/`8.2.2`/`8.0.3`/`7.4.1`/`6.2.21`)
   → the `X.Y` series is extracted with a regex; if the series **is not** in the catalog
@@ -758,10 +759,10 @@ on the host.
   blocked). The catalog covers `6.2`/`7.0`/`7.2`/`7.4`/`8.0`/`8.2`; the `8.6`/`8.4`
   series aren't in the catalog yet → for versions `8.6.1`/`8.4.0` the validator does a
   series-skip (adding the series means regenerating the catalog). **Empty-catalog-skip:**
-  no `essence.redis_directives` (old essence) → the check is skipped (back-compat).
-- **Why `assert` and not `validate`:** the catalog lives in `essence`, and the
-  `validate` context is **input-only** (essence is unavailable, a structural CEL
-  barrier); `assert` can see `essence`+`input`+`compute`.
+  no `vars.redis_directives` (old service vars) → the check is skipped (back-compat).
+- **Why `assert` and not `validate`:** the catalog lives in `service vars`, and the
+  `validate` context is **input-only** (service vars are unavailable, a structural CEL
+  barrier); `assert` can see `service vars`+`input`+`compute`.
 - **Only in `create`:** day-2 `update_config` (which also accepts `redis_settings`)
   doesn't carry this validator yet - a follow-up extension.
 
@@ -783,7 +784,7 @@ are built from it. Four steps:
    - install + render `redis.conf` (cluster directives from
    `incarnation.state.redis_config` - the **source of truth**, fixed by `create`, not
    recomputed → no drift) + systemd. The new node's `users.acl` merges in the
-   **system users** from `essence.system_acl_users` on top of `state.redis_users` -
+   **system users** from `vars.system_acl_users` on top of `state.redis_users` -
    without the system `replica` user, the node won't be able to `PSYNC` and the
    cluster won't accept it as a replica (see [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)).
 3. **health-gate PING** on the new node - it must respond BEFORE joining the cluster.
@@ -857,15 +858,15 @@ rolling invariant "master last"). Replica health-gate -
 just `PONG`); restarting the daemon itself - `core.service.restarted`. `state` is
 unchanged - only a record in `state_history`.
 
-> **★ Day-2 source of truth = `incarnation.state`, not `essence`** ([production-conventions §7a](../../../docs/destiny/production-conventions.md)).
+> **★ Day-2 source of truth = `incarnation.state`, not `service vars`** ([production-conventions §7a](../../../docs/destiny/production-conventions.md)).
 > The plugin's connection TLS discriminator (whether TLS or plaintext, on which port)
 > is taken from the deployed `incarnation.state.redis_config` (`'tls-port' in
-> incarnation.state.redis_config`), and **not** from `essence.tls_*`: at create time
+> incarnation.state.redis_config`), and **not** from `vars.tls_*`: at create time
 > the operator chose the channel mode via `input.connection_mode`
 > (`tls`/`tls_plain`/`plain`), and that deployed configuration is only recorded in
-> `state`. Looking at `essence` would give a plaintext connection against a TLS-only
+> `state`. Looking at `service vars` would give a plaintext connection against a TLS-only
 > Redis (a failed health-gate). The CA secret is not stored in `state` (security) -
-> it's resolved via `vault(essence.tls_ca_ref)`, only the path to the PEM on the host
+> it's resolved via `vault(vars.tls_ca_ref)`, only the path to the PEM on the host
 > is materialized in `state`.
 
 A live failover (`SENTINEL FAILOVER` / `CLUSTER FAILOVER` before restarting the
@@ -895,7 +896,7 @@ Two steps:
 1. **re-render** `redis.conf` to disk with the new merged config (a full file - the
    desired state for the next process restart). The same destiny brick also
    re-renders `users.acl`, so the task **re-merges the system users** from
-   `essence.system_acl_users` on top of `state.redis_users` - otherwise the
+   `vars.system_acl_users` on top of `state.redis_users` - otherwise the
    hot-reload pass would wipe out the service users (see
    [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)).
 2. **hot-reload** (`community.redis.config`, `CONFIG SET` + `CONFIG REWRITE`): the
@@ -930,7 +931,7 @@ editing of the **entire** operator-extra set is a separate scenario
    `secret/redis/<incarnation>/users/<name>#password` - crypto-random, **only if
    absent** (details below).
 1. **re-render** `users.acl` to disk with the new set: the **system** service users
-   (from `essence.system_acl_users`) + operator-extra (`state.redis_users` plus the
+   (from `vars.system_acl_users`) + operator-extra (`state.redis_users` plus the
    one being added, upsert by name). The re-render writes the **whole** file, so
    re-merging the system users is mandatory - otherwise the re-render would wipe out
    `replica`/`monitoring`/`sentinel`/`haproxy` (see
@@ -998,13 +999,13 @@ operator-extra users - `input.users` (an array of `AclUser`, the same
   `input.users: []` removes **all** operator-extra users;
 - **system users are untouched** - `replica`/`monitoring`/`sentinel`/`haproxy` are
   **not** in `state.redis_users` (state only holds operator-extra), they're merged
-  into `users.acl` from `essence.system_acl_users` on **every** render (see
+  into `users.acl` from `vars.system_acl_users` on **every** render (see
   [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)). Bulk-replacing operator-extra
   removes it; a system name in `input.users` is rejected by the `validate`-guard (422).
 
 The same three steps as `add_user`: **generate** the missing passwords
 (`core.vault.kv-present`, see [★ Password generation and re-runs](#-password-generation-and-re-runs))
-+ **re-render** the full `users.acl` (system users from essence +
++ **re-render** the full `users.acl` (system users from service vars +
 operator-extra = `input.users` entirely, per-user passwords from Vault) + **hot-reload**
 (`community.redis.acl`, `ACL LOAD` - the live instance re-reads `aclfile`; users removed from
 the set disappear from `ACL LIST`). `state.redis_users` is mutated **entirely**
@@ -1233,7 +1234,7 @@ Both files are `mode 0640`, owner/group `redis` (readable only by the service). 
 
 **TLS PEM - Vault PATHS, not a literal PEM.** The operator supplies `tls.cert_ref` /
 `tls.key_ref` / `tls.ca_ref` - Vault **paths** (form `<mount>/<path>#<field>`,
-overriding the essence defaults `essence.tls_*_ref`), **not** the PEM itself. destiny
+overriding the service vars defaults `vars.tls_*_ref`), **not** the PEM itself. destiny
 reads the PEM with the CEL function `vault(ref)` **directly in the `content` cell** of
 the `core.file.present` task (not a `.tmpl` stub, not passing an already-resolved PEM
 through `apply.input`): the seal detector marks the cell as sealed by the vault layer
@@ -1306,7 +1307,7 @@ Sentinel cases under [`scenario/create/tests/`](scenario/create/tests/):
   `size/2+1`), `redis_sentinel` in state.
 - [`sentinel-no-replicas-auto-quorum`](scenario/create/tests/sentinel-no-replicas-auto-quorum/case.yml)
   - `replicas_per_master=0` (standalone equivalent, a single host): auto-quorum
-  `size/2+1`, the default `master_name` from essence.
+  `size/2+1`, the default `master_name` from vars.
 
 TLS and install cases under [`scenario/create/tests/`](scenario/create/tests/):
 
@@ -1316,8 +1317,8 @@ TLS and install cases under [`scenario/create/tests/`](scenario/create/tests/):
 - [`tls-enabled-no-only`](scenario/create/tests/tls-enabled-no-only/case.yml)
   - `connection_mode: tls_plain`: the TLS port is open, the plain port remains
   (no `port 0`).
-- [`tls-essence-refs`](scenario/create/tests/tls-essence-refs/case.yml)
-  - `connection_mode: tls`, technical TLS parameters from essence (a non-standard
+- [`tls-vars-refs`](scenario/create/tests/tls-vars-refs/case.yml)
+  - `connection_mode: tls`, technical TLS parameters from service vars (a non-standard
   `tls_port` 7400, refs `secret/ops/redis/tls`) - the operator only sets the channel
   mode.
 - [`tls-disabled`](scenario/create/tests/tls-disabled/case.yml)
@@ -1337,10 +1338,10 @@ TLS and install cases under [`scenario/create/tests/`](scenario/create/tests/):
   - the full set of Redis modules: `.so` files downloaded with content-idempotency
   (no integrity verification).
 - [`empty-modules-base-url`](scenario/create/tests/empty-modules-base-url/case.yml)
-  - an empty `essence.modules_base_url` → vanilla redis (modules.yml group-drop, no
+  - an empty `vars.modules_base_url` → vanilla redis (modules.yml group-drop, no
   `loadmodule`/`.so` fetch).
 - [`with-modules-base-url`](scenario/create/tests/with-modules-base-url/case.yml)
-  - a non-empty `essence.modules_base_url` on Redis < 8 → the full set of `.so` files
+  - a non-empty `vars.modules_base_url` on Redis < 8 → the full set of `.so` files
   is downloaded.
 
 add_node cases under [`scenario/add_node/tests/`](scenario/add_node/tests/):
@@ -1379,7 +1380,7 @@ redis-consolidation epic (**not yet implemented** in this service):
   reshard) / `replica` / `sentinel` already exist);
 - TLS for the sentinel daemon (`:26379`): the redis-server TLS data plane is already
   implemented (operator enum `connection_mode` ∈ `tls`/`tls_plain`/`plain`; technical
-  parameters live in essence), TLS for the sentinel daemon is a follow-up;
+  parameters live in service vars), TLS for the sentinel daemon is a follow-up;
 - **cloud-provision (`input.provision`) - keeper-side implemented, live awaits C1**:
   bootstrap-token delivery is implemented keeper-side (module
   `core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md),

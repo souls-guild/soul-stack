@@ -5,7 +5,8 @@
 //   - Expression-key form: the whole string is CEL ([EvalExpression]).
 //   - `${ … }` interpolation in string contexts ([EvalInterpolation]).
 //   - Context variables: input, register, incarnation, soulprint.self,
-//     essence, vars (task-level `vars:`, filled by render per-task).
+//     vars (the flat `vars.*` namespace: service vars + destiny/task locals,
+//     filled by render per-task).
 //   - Compile-cache keyed by the normalized expression.
 //
 // Implemented:
@@ -42,7 +43,7 @@ import (
 )
 
 // contextVars — context variables known to the CEL env. All DynType: typing from
-// YAML schemas (input/essence/state_schema) is backlog ([templating.md §2.4],
+// YAML schemas (input/state_schema) is backlog ([templating.md §2.4],
 // open type Q); until it lands, nodes get dyn.
 //
 // soulprint is declared as a variable (access `soulprint.self.<path>`);
@@ -52,14 +53,13 @@ var contextVars = []string{
 	"register",
 	"incarnation",
 	"soulprint",
-	"essence",
 	"vars",
 	"compute",
 }
 
 // migrationVars — context variables of migration mode ([NewMigration],
 // [ADR-019]). ONLY `state` is declared (the incarnation.state root, mutated as
-// operations proceed). Other names (`register`/`soulprint`/`essence`/`input`/
+// operations proceed). Other names (`register`/`soulprint`/`input`/
 // `incarnation`/`vars`) are NOT declared — referencing them is a compile-time
 // undeclared-reference error, so the migration-CEL sandbox is enforced by
 // non-declaration, not a textual guard ([docs/migrations.md § "Forbidden in
@@ -72,7 +72,7 @@ var migrationVars = []string{
 // flowControlVars — variables of the Soul-side flow-control sandbox
 // ([NewFlowControl], [ADR-012(d)]). Same name set as the ordinary
 // scenario/destiny pass ([contextVars]): register/input/incarnation/soulprint/
-// essence/vars. Kept as a separate variable for self-documentation: the context
+// vars. Kept as a separate variable for self-documentation: the context
 // of flow-control predicates (when:/changed_when:/failed_when:) is register.*
 // (the Soul builds it from prior-task results) plus a flow_context snapshot
 // (delivered by the Keeper). `state` is NOT declared (migration-only).
@@ -84,7 +84,6 @@ var flowControlVars = []string{
 	"register",
 	"incarnation",
 	"soulprint",
-	"essence",
 	"vars",
 }
 
@@ -189,7 +188,7 @@ func NewFlowControl(opts ...Option) (*Engine, error) {
 // NewMigration builds an Engine in migration mode ([ADR-019],
 // [docs/migrations.md]): ONLY the `state` variable is declared ([migrationVars]).
 // The sandbox is enforced by non-declaration of the other context names
-// (register/soulprint/essence/input/incarnation/vars → undeclared-reference
+// (register/soulprint/input/incarnation/vars → undeclared-reference
 // compile error); `vault()`/`now()` by the existing guards (functions.go).
 // Activation is built from Vars.State.
 //
@@ -198,6 +197,33 @@ func NewFlowControl(opts ...Option) (*Engine, error) {
 // and should be rejected higher up the stack.
 func NewMigration(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{migration: true}, migrationVars, opts...)
+}
+
+// serviceVarsVars — the context of a `vars/_stack.yaml` step ([ADR-0082] §3).
+// Only two names, and the SHORTNESS is the point: a service's vars are resolved
+// ONCE per run and handed to every host, so a step keyed on one host's facts
+// would apply that host's answer to the whole roster. Leaving `soulprint`
+// declared-but-empty is not a refusal — `has(soulprint.self.os)` would compile,
+// evaluate false and silently skip the step. Non-declaration makes the same
+// expression an undeclared-reference compile error, which is what the ADR
+// promises by "refused outright".
+//
+// [ADR-0082]: docs/adr/0082-service-vars.md
+var serviceVarsVars = []string{
+	"incarnation",
+	"vars",
+}
+
+// NewServiceVars builds an Engine for `vars/_stack.yaml` steps: `incarnation.*`
+// (the row's own fields, covens and traits included) and the `vars.*` accumulated
+// by earlier steps, plus whatever name a `foreach:` binds. Everything else —
+// `soulprint`, `input`, `register`, `compute` — is undeclared and therefore a
+// compile error rather than an empty map.
+//
+// [WithVault] is not meaningful here: service vars are assembled before the input
+// gate and before any secret is resolved.
+func NewServiceVars(opts ...Option) (*Engine, error) {
+	return buildEngine(engineMode{}, serviceVarsVars, opts...)
 }
 
 // engineMode — mutually exclusive special Engine modes (zero-value = ordinary

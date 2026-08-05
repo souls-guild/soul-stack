@@ -19,7 +19,7 @@ fixtures:
     secret/mongo/create/users/appuser:
       password: appuser-secret-pass
 
-  essence:
+  vars:
     install_method: binary
     binary_base_url: "https://nexus.example/mongodb"
     binary_allow_private: true

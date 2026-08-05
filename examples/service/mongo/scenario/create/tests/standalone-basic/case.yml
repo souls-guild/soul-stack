@@ -2,7 +2,7 @@
 # hermetic. Covers: binary-install (Nexus tarball + mongod + its own systemd unit),
 # rendering mongod.conf (toYaml — security.authorization enabled + dbPath/port), sysctl drop-in,
 # health-gate (community.mongo.pinged without auth), bootstrap default_admin via the localhost
-# exception (community.mongo.user for default_admin from essence.system_users).
+# exception (community.mongo.user for default_admin from vars.system_users).
 name: mongo create standalone (binary install + mongod.conf + bootstrap default_admin)
 
 fixtures:
@@ -19,7 +19,7 @@ fixtures:
     secret/mongo/create/users/default_admin:
       password: mongoadmin-create-pass
 
-  essence:
+  vars:
     install_method: binary
     binary_base_url: "https://nexus.example/mongodb"
     binary_allow_private: true
@@ -90,7 +90,7 @@ assert:
       params_subset:
         addr: "127.0.0.1:27017"
     # ★★ BOOTSTRAP default_admin: localhost-exception. username/name = default_admin,
-    # password from the Vault branch, roles root@admin from essence.system_users.
+    # password from the Vault branch, roles root@admin from vars.system_users.
     - module: community.mongo.user
       params_subset:
         addr: "127.0.0.1:27017"

@@ -129,8 +129,8 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 		t.Errorf("starter.calls = %d, want 0 (bare without a run)", starter.calls)
 	}
 	// created_scenario col ($12) = NULL (nil) — bare carries NULL, not 'create'.
-	if db.insertArgs[11] != nil {
-		t.Errorf("INSERT created_scenario ($12) = %v, want nil (NULL for bare)", db.insertArgs[11])
+	if db.insertArgs[10] != nil {
+		t.Errorf("INSERT created_scenario ($11) = %v, want nil (NULL for bare)", db.insertArgs[10])
 	}
 	// apply_id is absent from JSON (bare without a run).
 	var raw map[string]any
@@ -167,12 +167,12 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	if starter.gotSpec.ScenarioName != "restore" {
 		t.Errorf("RunSpec.ScenarioName = %q, want restore (chosen, NOT the default create)", starter.gotSpec.ScenarioName)
 	}
-	// created_scenario — $12 of the INSERT (insertArgs[11]); see insertSQL crud.go.
-	if len(db.insertArgs) < 12 {
-		t.Fatalf("insertArgs len = %d, want ≥12", len(db.insertArgs))
+	// created_scenario — $12 of the INSERT (insertArgs[10]); see insertSQL crud.go.
+	if len(db.insertArgs) < 11 {
+		t.Fatalf("insertArgs len = %d, want ≥11", len(db.insertArgs))
 	}
-	if got, _ := db.insertArgs[11].(string); got != "restore" {
-		t.Errorf("INSERT created_scenario ($12) = %q, want restore", got)
+	if got, _ := db.insertArgs[10].(string); got != "restore" {
+		t.Errorf("INSERT created_scenario ($11) = %q, want restore", got)
 	}
 }
 
@@ -229,8 +229,8 @@ func TestIncarnation_Create_ExplicitCreate_Starts(t *testing.T) {
 	if starter.gotSpec.ScenarioName != "create" {
 		t.Errorf("RunSpec.ScenarioName = %q, want create", starter.gotSpec.ScenarioName)
 	}
-	if got, _ := db.insertArgs[11].(string); got != "create" {
-		t.Errorf("INSERT created_scenario ($12) = %q, want create", got)
+	if got, _ := db.insertArgs[10].(string); got != "create" {
+		t.Errorf("INSERT created_scenario ($11) = %q, want create", got)
 	}
 }
 

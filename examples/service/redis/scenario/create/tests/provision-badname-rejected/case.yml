@@ -44,7 +44,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/9redis/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master

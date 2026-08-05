@@ -18,6 +18,11 @@
 //     read as the effective union, so a Rite scoped to an incarnation reaches
 //     its members.
 //
+// The label half of the TELEMETRY axis is expressed differently since ADR-0082:
+// a service's vars have no hard-wired coven dimension, so the claim is proved
+// over a `vars/_stack.yaml` foreach step — the mechanism that replaced the
+// deleted hard-wired `coven/<label>.yaml` overlay.
+//
 // Live PG rather than the unit fakes: the defect was in which relation the SQL
 // touched, and every fixture below turns on hosts that differ ONLY by a
 // membership row.
@@ -31,9 +36,9 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -110,18 +115,27 @@ func bindCovenAxisMember(t *testing.T, ctx context.Context, sid string) {
 
 // newCovenAxisTelemetry assembles a live-PG telemetry source over a service
 // snapshot in a temp dir: manifest cadence 45s, plus an optional coven overlay
-// that drops it to 15s so an inherited label is observable in the result.
+// (declared by a `vars/_stack.yaml` foreach step, ADR-0082) that drops it to 15s
+// so an inherited label is observable in the result.
 func newCovenAxisTelemetry(t *testing.T, covenOverlay string) TelemetrySource {
 	t.Helper()
 	dir := t.TempDir()
 	if covenOverlay != "" {
-		covenDir := filepath.Join(dir, "essence", "coven")
+		covenDir := filepath.Join(dir, "vars", "coven")
 		if err := os.MkdirAll(covenDir, 0o755); err != nil {
-			t.Fatalf("mkdir essence/coven: %v", err)
+			t.Fatalf("mkdir vars/coven: %v", err)
 		}
 		if err := os.WriteFile(filepath.Join(covenDir, covenOverlay+".yaml"),
 			[]byte("telemetry_interval: 15s\n"), 0o644); err != nil {
 			t.Fatalf("write coven overlay: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "vars", "_stack.yaml"), []byte(`stack:
+  - foreach: "${ incarnation.covens }"
+    as: coven
+    file: "coven/${ coven }.yaml"
+    optional: true
+`), 0o644); err != nil {
+			t.Fatalf("write _stack.yaml: %v", err)
 		}
 	}
 	manifest := &config.ServiceManifest{
@@ -132,7 +146,7 @@ func newCovenAxisTelemetry(t *testing.T, covenOverlay string) TelemetrySource {
 		integrationPool,
 		telemetryFakeResolver{ref: artifact.ServiceRef{Name: covenAxisSvc, Git: "file:///srv/redis"}, ok: true},
 		&telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: dir, Manifest: manifest}},
-		essence.NewResolver(discardLogger(t)),
+		servicevars.NewResolver(discardLogger(t)),
 		discardLogger(t),
 	)
 }
@@ -188,12 +202,13 @@ func TestIntegration_TelemetryStopsWhenMemberUnbound(t *testing.T) {
 	}
 }
 
-// TestIntegration_TelemetryInheritsIncarnationCovenIntoEssence — the other half
-// of the split. Membership decides WHICH service config the host is owed;
-// effective labels decide which coven overlays of that config apply. The tag
+// TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars — the other
+// half of the split. Membership decides WHICH service config the host is owed;
+// the incarnation's labels decide which overlays of that config apply. The tag
 // lives on the incarnation and on no host, so a delivery reading only
-// `souls.coven[]` would serve the manifest's 45s instead of the overlay's 15s.
-func TestIntegration_TelemetryInheritsIncarnationCovenIntoEssence(t *testing.T) {
+// `souls.coven[]` — or one that dropped the incarnation's covens on the way to
+// the resolver — would serve the manifest's 45s instead of the overlay's 15s.
+func TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars(t *testing.T) {
 	ctx := context.Background()
 	seedCovenAxis(t, ctx, []string{"cache"})
 	bindCovenAxisMember(t, ctx, covenAxisMember)
@@ -204,7 +219,7 @@ func TestIntegration_TelemetryInheritsIncarnationCovenIntoEssence(t *testing.T) 
 		t.Fatal("a bound host must be served a config")
 	}
 	if cfg.GetIntervalSec() != 15 {
-		t.Errorf("interval_sec = %d, want 15 — the incarnation's tag must reach its members' essence",
+		t.Errorf("interval_sec = %d, want 15 — the incarnation's tag must reach its members' service vars",
 			cfg.GetIntervalSec())
 	}
 }

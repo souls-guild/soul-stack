@@ -15,7 +15,7 @@ fixtures:
     secret/mongo/create/users/default_admin:
       password: mongoadmin-create-pass
 
-  essence:
+  vars:
     install_method: package
     conf_dir: /etc/mongodb
     data_dir: /var/lib/mongodb

@@ -29,21 +29,22 @@ func TestFlowControl_RegisterAccessible(t *testing.T) {
 	}
 }
 
-// TestFlowControl_ContextVarsAccessible — input/vars/essence/incarnation +
+// TestFlowControl_ContextVarsAccessible — input/vars/incarnation +
 // soulprint.self are available (the flow_context snapshot delivered by Keeper).
 func TestFlowControl_ContextVarsAccessible(t *testing.T) {
 	e := newFlowControlEngine(t)
 	vars := Vars{
-		Input:         map[string]any{"do_restart": true},
-		Vars:          map[string]any{"n": 3},
-		Essence:       map[string]any{"redis": map[string]any{"maxmemory": "512mb"}},
+		Input: map[string]any{"do_restart": true},
+		// One flat namespace since ADR-0082: a service var (redis.*) and a task
+		// local (n) live side by side under vars.*.
+		Vars:          map[string]any{"n": 3, "redis": map[string]any{"maxmemory": "512mb"}},
 		Incarnation:   map[string]any{"name": "redis-prod"},
 		SoulprintSelf: map[string]any{"os": map[string]any{"family": "debian"}},
 	}
 	for _, expr := range []string{
 		"input.do_restart",
 		"vars.n == 3",
-		"essence.redis.maxmemory == '512mb'",
+		"vars.redis.maxmemory == '512mb'",
 		"incarnation.name == 'redis-prod'",
 		"soulprint.self.os.family == 'debian'",
 	} {

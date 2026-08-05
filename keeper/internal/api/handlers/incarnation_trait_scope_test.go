@@ -36,7 +36,7 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 	}
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte("{}"), "ready",
+		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		traitsBytes,
@@ -137,7 +137,7 @@ func TestIncarnation_Get_TraitOR_CovenMatch_200(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row {
 			// traits.env=stage (does not match scope env=prod), but coven=prod matches.
 			r := incTraitRow(name, map[string]any{"env": "stage"})
-			r.values[11] = []string{"prod"} // covens (index 11)
+			r.values[10] = []string{"prod"} // covens (index 10 since the spec column went)
 			return r
 		},
 	}

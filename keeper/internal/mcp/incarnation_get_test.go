@@ -49,7 +49,6 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		inc.Service,
 		inc.ServiceVersion,
 		inc.StateSchemaVersion,
-		mustJSON(inc.Spec),
 		mustJSON(inc.State),
 		string(inc.Status),
 		statusDetails,
@@ -138,7 +137,6 @@ func TestToolsCall_IncarnationGet_Success(t *testing.T) {
 				Service:            "redis",
 				ServiceVersion:     "v1.2.0",
 				StateSchemaVersion: 3,
-				Spec:               map[string]any{"replicas": float64(2)},
 				State:              map[string]any{"leader": "redis-01"},
 				Status:             incarnation.StatusReady,
 				CreatedByAID:       &creator,
@@ -175,9 +173,6 @@ func TestToolsCall_IncarnationGet_Success(t *testing.T) {
 	}
 	if out.CreatedByAID == nil || *out.CreatedByAID != creator {
 		t.Errorf("CreatedByAID = %v", out.CreatedByAID)
-	}
-	if out.Spec["replicas"] != float64(2) {
-		t.Errorf("Spec.replicas = %v", out.Spec["replicas"])
 	}
 	if out.State["leader"] != "redis-01" {
 		t.Errorf("State.leader = %v", out.State["leader"])
@@ -254,10 +249,6 @@ func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 				StateSchemaVersion: 1,
 				// `password` is a sensitive-key; `tls_cert` is a regular key but
 				// its value contains a vault:secret/ marker.
-				Spec: map[string]any{
-					"password": "hunter2",
-					"replicas": float64(1),
-				},
 				State: map[string]any{
 					"tls_cert": "vault:secret/redis/tls",
 					"leader":   "redis-01",
@@ -283,12 +274,6 @@ func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
 
-	if out.Spec["password"] != masked {
-		t.Errorf("spec.password = %v, want %q (sensitive-key not masked)", out.Spec["password"], masked)
-	}
-	if out.Spec["replicas"] != float64(1) {
-		t.Errorf("spec.replicas = %v, must remain unmasked", out.Spec["replicas"])
-	}
 	if out.State["tls_cert"] != masked {
 		t.Errorf("state.tls_cert = %v, want %q (vault-ref not masked)", out.State["tls_cert"], masked)
 	}

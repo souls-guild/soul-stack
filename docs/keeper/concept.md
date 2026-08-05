@@ -8,7 +8,7 @@ Keeper is the central server of Soul Stack. The control node to which Souls conn
 - **Destiny directory.** Pulls Destiny / Service / Module git repositories by `ref:` from the config ([config.md](config.md)), validates and renders steps before distribution. See [architecture.md → Soul Stack Artifacts](../architecture.md).
 - **Distributing runs.** In pull mode, sends Souls commands via a live gRPC bidi stream over mTLS ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)). In push mode, it itself navigates via SSH through the module `keeper.push` ([push.md](push.md)).
 - **Soulprint aggregation.** Souls sends prints (facts about the host) - Keeper adds them to Postgres, sends them through the API with an RBAC filter.
-- **Integration with Vault.** Full client: Essence secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, cloud driver credentials ([config.md](config.md) → block `vault:`).
+- **Integration with Vault.** Full client: service-vars secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, cloud driver credentials ([config.md](config.md) → block `vault:`).
 
 ## HA cluster, stateless
 

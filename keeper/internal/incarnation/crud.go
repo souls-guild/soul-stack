@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -53,7 +54,7 @@ var (
 	// does a plain unlock and runs the scenario manually with explicit input.
 	// The create path (last-failed == created_scenario) never hits this sentinel:
 	// its input comes from incarnation.spec.input. Handler maps to 409.
-	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last cannot recover the failed run's input (recipe unavailable — use unlock + manual run with explicit input)")
+	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last has no run snapshot to replay (the attempt failed before dispatch, or predates the snapshot) — pass the input to run with, or unlock and start the scenario yourself")
 	ErrIncarnationBusy       = errors.New("incarnation: run in progress (applying)")
 	ErrIncarnationLocked     = errors.New("incarnation: locked — unlock required before upgrade")
 	ErrDowngradeUnsupported  = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
@@ -100,16 +101,16 @@ var (
 const insertSQL = `
 INSERT INTO incarnation (
     name, service, service_version, state_schema_version,
-    spec, state, status, status_details, created_by_aid, covens, traits,
+    state, status, status_details, created_by_aid, covens, traits,
     created_scenario
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING created_at, updated_at
 `
 
 // selectByNameSQL — SELECT all columns by PK.
 const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
-       spec, state, status, status_details, created_by_aid,
+       state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary, created_scenario,
        applying_apply_id
@@ -319,10 +320,6 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		return fmt.Errorf("incarnation: state_schema_version must be > 0, got %d", inc.StateSchemaVersion)
 	}
 
-	specBytes, err := marshalJSONB(inc.Spec)
-	if err != nil {
-		return fmt.Errorf("incarnation: marshal spec: %w", err)
-	}
 	stateBytes, err := marshalJSONB(inc.State)
 	if err != nil {
 		return fmt.Errorf("incarnation: marshal state: %w", err)
@@ -369,7 +366,6 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		inc.Service,
 		inc.ServiceVersion,
 		inc.StateSchemaVersion,
-		specBytes,
 		stateBytes,
 		string(inc.Status),
 		statusDetailsArg,
@@ -411,7 +407,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	var (
 		inc                Incarnation
 		statusStr          string
-		specBytes          []byte
 		stateBytes         []byte
 		statusDetailsBytes []byte
 		createdByAID       *string
@@ -423,7 +418,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&inc.Service,
 		&inc.ServiceVersion,
 		&inc.StateSchemaVersion,
-		&specBytes,
 		&stateBytes,
 		&statusStr,
 		&statusDetailsBytes,
@@ -445,9 +439,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	}
 	inc.Status = Status(statusStr)
 	inc.CreatedByAID = createdByAID
-	if inc.Spec, err = unmarshalJSONB(specBytes); err != nil {
-		return nil, fmt.Errorf("incarnation: unmarshal spec: %w", err)
-	}
 	if inc.State, err = unmarshalJSONB(stateBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: unmarshal state: %w", err)
 	}
@@ -516,7 +507,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 
 	// Items with offset/limit, appended to the same args.
 	listSQL := `SELECT name, service, service_version, state_schema_version,
-       spec, state, status, status_details, created_by_aid,
+       state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary, created_scenario,
        applying_apply_id
@@ -800,6 +791,30 @@ var finalizableStatuses = map[Status]struct{}{
 //     destroying: another committer won finalization (no-op, NOT panic —
 //     caller logs and continues). Transaction rolls back (caller
 //     via pgx.BeginFunc), orphaned state_history snapshot doesn't remain.
+//
+// RunOutcome — what an attempt WAS and what became of it, stamped into the
+// state_history row that already records the attempt (NIM-408, migration 111).
+//
+// Snapshot is a marshalled `applyrun.Recipe`: the operator's input AS-IS plus the
+// git coordinates of the code it rendered with. Bytes rather than the struct
+// because `applyrun`'s in-package tests import this package, so importing it back
+// is a cycle in the test binary; the caller marshals, which it is positioned to do
+// — it holds the RunSpec the recipe is built from.
+//
+// A nil Snapshot means "this attempt is not replayable from history" and is a
+// legitimate state, not an omission: the rerun-transition marker rows write no
+// snapshot, and rows predating the migration have none. rerun-last answers that
+// with a 422 asking for the input rather than a dead end.
+//
+// A nil *RunOutcome writes all four columns as NULL — the shape every caller
+// outside a run terminal uses.
+type RunOutcome struct {
+	Snapshot     []byte
+	Status       string
+	FinishedAt   time.Time
+	ErrorSummary string
+}
+
 func UpdateStateFromRun(
 	ctx context.Context,
 	tx ExecQueryRower,
@@ -810,6 +825,7 @@ func UpdateStateFromRun(
 	changedByAID *string,
 	historyID string,
 	engineCompat *EngineCompat,
+	outcome *RunOutcome,
 ) error {
 	if !ValidName(name) {
 		return fmt.Errorf("incarnation: invalid name %q", name)
@@ -855,15 +871,41 @@ func UpdateStateFromRun(
 		engineCompatArg = b
 	}
 
+	// The attempt's replayable snapshot and its outcome (NIM-408). All four are
+	// NULL without an outcome — including on the marker rows rerun-last writes,
+	// which record a transition rather than an attempt.
+	var (
+		runArg          any
+		runStatusArg    any
+		finishedAtArg   any
+		errorSummaryArg any
+	)
+	if outcome != nil {
+		if len(outcome.Snapshot) > 0 {
+			runArg = outcome.Snapshot
+		}
+		if outcome.Status != "" {
+			runStatusArg = outcome.Status
+		}
+		if !outcome.FinishedAt.IsZero() {
+			finishedAtArg = outcome.FinishedAt
+		}
+		if outcome.ErrorSummary != "" {
+			errorSummaryArg = outcome.ErrorSummary
+		}
+	}
+
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
-    changed_by_aid, apply_id, engine_compat
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    changed_by_aid, apply_id, engine_compat,
+    run, run_status, finished_at, error_summary
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
 		historyID, name, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
 		engineCompatArg,
+		runArg, runStatusArg, finishedAtArg, errorSummaryArg,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert state_history: %w", err)
 	}
@@ -955,11 +997,70 @@ type UnlockResult struct {
 	HistoryID      string
 	Scenario       string
 	Input          map[string]any
-	// FromUpgrade — failed run was upgrade scenario (recipe.from_upgrade,
-	// ADR-0068): rerun-last must rerun it from upgrade/<slug>/, not
-	// scenario/<slug>/. Filled only by day-2 path [UnlockForRerun] (create
-	// never upgrade → false). Caller passes to RunSpec.FromUpgrade.
+	// FromUpgrade — the failed run was an upgrade scenario
+	// (`run.from_upgrade`, ADR-0068): rerun-last must rerun it from
+	// `upgrade/<slug>/`, not `scenario/<slug>/`. Caller passes it to
+	// RunSpec.FromUpgrade.
 	FromUpgrade bool
+	// ServiceRefGit / ServiceRefRef — the git coordinates the failed attempt
+	// RENDERED WITH, read from its history snapshot (NIM-408).
+	//
+	// Empty means the snapshot carried none and the caller falls back to the
+	// incarnation's current pin. That fallback is what the whole rerun path did
+	// before this: `serviceRef.Ref = inc.ServiceVersion`. It is wrong whenever an
+	// upgrade has moved the pin since the failure — the rerun then replays the
+	// attempt with code it never ran — so it is a fallback, not the rule.
+	ServiceRefGit string
+	ServiceRefRef string
+}
+
+// RerunServiceRef chooses the git coordinates a rerun renders with: the ones the
+// FAILED ATTEMPT used, if its history snapshot carried them, and otherwise the
+// incarnation's current pin.
+//
+// The distinction is the point of NIM-408. An upgrade moves the pin
+// (`UPDATE incarnation SET service_version = …`), so a rerun that took the
+// current one would replay a failure against code that never produced it — the
+// operator asks "run that again" and gets something else, silently. The fallback
+// stays for rows written before the snapshot existed, and for terminals recorded
+// without a RunSpec in hand; it is the old behaviour, kept as the answer of last
+// resort rather than the rule.
+//
+// Only a ref that is fully specified is honoured: a snapshot missing either half
+// would otherwise splice a stale ref onto a current URL, or the reverse.
+func RerunServiceRef(current artifact.ServiceRef, res *UnlockResult) artifact.ServiceRef {
+	if res == nil || res.ServiceRefGit == "" || res.ServiceRefRef == "" {
+		return current
+	}
+	pinned := current
+	pinned.Git = res.ServiceRefGit
+	pinned.Ref = res.ServiceRefRef
+	return pinned
+}
+
+// ServiceRefFromRunSnapshot reads the git coordinates an attempt ran with out of
+// its `state_history.run` snapshot.
+//
+// It decodes through the SAME type the writer marshals rather than reaching into
+// the object by hand-spelled key. [artifact.ServiceRef] declares no json tags, so
+// its wire spelling is an accident of the Go field names, and a map lookup for
+// "Git" is a literal copy of that accident. Give the struct tags later, or write
+// a snapshot through a different marshaller, and the lookup misses in silence —
+// the rerun then falls back to the incarnation's CURRENT pin, which is precisely
+// the substitution the snapshot exists to prevent. It cost a red test to find
+// once already, from a fixture that spelled the keys in lower case.
+//
+// A zero value means "no usable ref in this snapshot"; the caller falls back
+// (see [RerunServiceRef]). Malformed json is the same answer as absent — the
+// caller has already decided what an unreadable snapshot means.
+func ServiceRefFromRunSnapshot(raw []byte) artifact.ServiceRef {
+	var envelope struct {
+		ServiceRef artifact.ServiceRef `json:"service_ref"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return artifact.ServiceRef{}
+	}
+	return envelope.ServiceRef
 }
 
 // InputFromSpec extracts `input` key from freeform jsonb object: either
@@ -1265,6 +1366,13 @@ WHERE name = $1 AND status = 'applying'
 // scenario, its trace in history differs from normal manual unlock.
 const rerunLastScenarioLabel = "rerun-last"
 
+// ErrRerunInputNotNeeded — rerun-last was given an input, but the failed attempt
+// carries a replayable snapshot of its own. Refused rather than ignored: the
+// snapshot is what "rerun that" means, and silently preferring the caller's input
+// would turn a retry into a different run under the same name. The caller answers
+// 422; the incarnation is left locked, unchanged.
+var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not needed, the attempt is replayable")
+
 // UnlockForRerun — unlock portion of rerun-last (architecture.md → "Atomicity and
 // error_locked"). Atomically releases error_locked and transitions incarnation
 // error_locked → applying BYPASSING ready: window where concurrent run could slip
@@ -1313,6 +1421,27 @@ const rerunLastScenarioLabel = "rerun-last"
 // reason written to audit-payload by caller (state_history-schema MVP doesn't carry
 // metadata-columns); previous_status returned in [UnlockResult].
 func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByAID, historyID, applyID string) (*UnlockResult, error) {
+	return UnlockForRerunWithInput(ctx, pool, name, reason, rerunByAID, historyID, applyID, nil)
+}
+
+// UnlockForRerunWithInput is [UnlockForRerun] with an operator-supplied input for
+// the case where the failed attempt carries no replayable snapshot.
+//
+// It is a RECOVERY path, not an override, and the difference is ENFORCED: when the
+// history row does carry a snapshot, a supplied input is [ErrRerunInputNotNeeded]
+// — refused before the transaction commits, not silently discarded. "Rerun that"
+// and "run this instead" are different requests, and the second has its own
+// endpoint; an input that quietly replaced a recorded one would make rerun-last a
+// way to run something else under the name of a retry.
+//
+// The recovery exists because before NIM-408 a day-2 rerun became impossible once
+// `apply_runs.recipe` was purged at 30 days, with nothing the operator could do.
+//
+// Note what it cannot recover: the service ref the attempt used. Without a
+// snapshot there is no record of it, so the caller falls back to the incarnation's
+// current pin — the pre-NIM-408 behaviour, and the reason this path is a last
+// resort rather than an equal one.
+func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, name, reason, rerunByAID, historyID, applyID string, fallbackInput map[string]any) (*UnlockResult, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("incarnation: invalid name %q", name)
 	}
@@ -1332,24 +1461,21 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// read spec under same FOR UPDATE-snapshot (column at end — order of state,
-	// status, created_scenario NOT shifted, plain Unlock/Destroy scan first
-	// two, as before): on create-path extract saved operator-
-	// input from spec.input for passing to restarted bootstrap-run (rerun-last
-	// recovers failure with same version/shards/…, not defaults).
+	// State and status only. `created_scenario` and `spec` are no longer read
+	// here: the create-vs-day-2 branch they served is gone, because the failed
+	// attempt's input now comes from its own history row whichever path produced
+	// it (NIM-408).
 	const selectForUpdateSQL = `
-SELECT state, status, created_scenario, spec
+SELECT state, status
 FROM incarnation
 WHERE name = $1
 FOR UPDATE
 `
 	var (
-		stateBytes      []byte
-		statusStr       string
-		createdScenario *string
-		specBytes       []byte
+		stateBytes []byte
+		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr, &createdScenario, &specBytes); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1366,18 +1492,23 @@ FOR UPDATE
 	// authoritative correlation with recipe (day-2 input), more precise than matching by
 	// scenario name. Same FOR UPDATE-tx: read serialized relative to
 	// concurrent scenario-runner.
+	// The last row that records an ATTEMPT. The rerun-transition markers this
+	// function writes itself are excluded: they record a status change, carry no
+	// snapshot and name no scenario anybody can run, so a second rerun would
+	// otherwise read one and try to start a scenario called "rerun-last".
 	const lastRunSQL = `
-SELECT scenario, apply_id
+SELECT scenario, apply_id, run
 FROM state_history
-WHERE incarnation_name = $1
+WHERE incarnation_name = $1 AND scenario <> $2
 ORDER BY history_id DESC
 LIMIT 1
 `
 	var (
 		lastScenario string
 		lastApplyID  string
+		lastRun      []byte
 	)
-	if err := tx.QueryRow(ctx, lastRunSQL, name).Scan(&lastScenario, &lastApplyID); err != nil {
+	if err := tx.QueryRow(ctx, lastRunSQL, name, rerunLastScenarioLabel).Scan(&lastScenario, &lastApplyID, &lastRun); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// error_locked without single snapshot — unachievable normally (lockIncarnation
 			// always writes state_history on failure). Fail-closed: without trace of failed
@@ -1387,48 +1518,54 @@ LIMIT 1
 		return nil, fmt.Errorf("incarnation: rerun-last last-run probe: %w", err)
 	}
 
-	// Recovery of failed run's input: create-path vs day-2-path.
-	// fromUpgrade — day-2 only (recipe.from_upgrade); create-path always false.
+	// The failed attempt's replayable snapshot, from the history row that already
+	// pointed at it (NIM-408). ONE source: before this, the create path read
+	// `incarnation.spec.input` and the day-2 path read `apply_runs.recipe` by
+	// apply_id, and the two have different lifetimes — spec was forever, recipe is
+	// purged at 30 days — so a day-2 rerun died in ErrRerunInputUnavailable with no
+	// way back. History is kept for a year and is read in this same transaction.
+	//
+	// A row with no snapshot is not an error here: it is an attempt that cannot be
+	// replayed from history (a terminal recorded without a RunSpec, or a row
+	// predating the migration). The caller answers that by asking the operator for
+	// the input rather than refusing outright.
 	var (
 		rerunInput  map[string]any
 		fromUpgrade bool
+		refGit      string
+		refRef      string
 	)
-	if createdScenario != nil && lastScenario == *createdScenario {
-		// create-path: last failed == bootstrap creator. Operator input
-		// stored in incarnation.spec.input (read under same FOR UPDATE):
-		// null/malformed spec jsonb — not consistency error (spec freeform;
-		// unmarshal returns nil-map), input — nil if key absent.
-		spec, _ := unmarshalJSONB(specBytes)
-		rerunInput = InputFromSpec(spec)
-	} else {
-		// day-2-path (including bare-incarnation, created_scenario IS NULL): failed
-		// day-2-run input lives only in apply_run recipe. Read recipe by
-		// apply_id of last snapshot (any passage/sid-row of run — recipe
-		// one per run). Recipe unavailable → fail-closed
-		// [ErrRerunInputUnavailable] (reasons — see sentinel), tx NOT committed.
-		const recipeSQL = `
-SELECT recipe
-FROM apply_runs
-WHERE apply_id = $1 AND recipe IS NOT NULL
-LIMIT 1
-`
-		var recipeBytes []byte
-		if err := tx.QueryRow(ctx, recipeSQL, lastApplyID).Scan(&recipeBytes); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, ErrRerunInputUnavailable
-			}
-			return nil, fmt.Errorf("incarnation: rerun-last recipe probe: %w", err)
-		}
-		recipe, uerr := unmarshalJSONB(recipeBytes)
-		if uerr != nil {
-			// Malformed recipe-jsonb — inconsistent with invariant A (recipe written
-			// by json.Marshal). Fail-closed, not silent bootstrap-input.
+	if len(lastRun) == 0 {
+		// The attempt is on record but not replayable from it: a terminal
+		// committed without a RunSpec in hand (the RunResult path closes runs
+		// started by another goroutine, possibly on another Keeper), or a row
+		// written before the snapshot column existed.
+		//
+		// Fail-closed unless the operator supplied the input themselves —
+		// rerunning on defaults would silently do something they did not ask for,
+		// while rerunning on what they just typed is exactly what they asked for.
+		if len(fallbackInput) == 0 {
 			return nil, ErrRerunInputUnavailable
 		}
-		rerunInput = InputFromSpec(recipe)
-		// recipe.FromUpgrade as freeform-jsonb string (like InputFromSpec): upgrade-
-		// run restarts from upgrade/, not scenario/ (ADR-0068).
-		fromUpgrade, _ = recipe["from_upgrade"].(bool)
+		rerunInput = fallbackInput
+	} else {
+		if len(fallbackInput) > 0 {
+			// The attempt IS replayable. Refuse rather than choose for the
+			// operator — and refuse here, inside the transaction and before any
+			// Exec, so the refusal leaves the incarnation locked exactly as it was.
+			return nil, ErrRerunInputNotNeeded
+		}
+		run, uerr := unmarshalJSONB(lastRun)
+		if uerr != nil {
+			// Malformed snapshot jsonb — inconsistent with how it is written
+			// (json.Marshal). Fail-closed rather than silently rerunning on
+			// defaults.
+			return nil, ErrRerunInputUnavailable
+		}
+		rerunInput = InputFromSpec(run)
+		fromUpgrade, _ = run["from_upgrade"].(bool)
+		attemptRef := ServiceRefFromRunSnapshot(lastRun)
+		refGit, refRef = attemptRef.Git, attemptRef.Ref
 	}
 
 	var changedByArg any
@@ -1473,6 +1610,8 @@ WHERE name = $1
 		Scenario:       lastScenario,
 		Input:          rerunInput,
 		FromUpgrade:    fromUpgrade,
+		ServiceRefGit:  refGit,
+		ServiceRefRef:  refRef,
 	}, nil
 }
 
@@ -1893,9 +2032,19 @@ WHERE name = $1
 // active snapshots (`archived_at IS NULL`) — typical Operator API / MCP scenario.
 // When true, returns all records (including those marked by Reaper `archive_state_history` rule)
 // — needed to investigate "where did snapshot N days ago go".
+//
+// IncludeTransitions — include the rerun-transition markers. Default false, and
+// that is a READ-side change made in NIM-408 rather than a contract change: those
+// rows are written when a rerun STARTS, carry `state_before == state_after` and
+// never gain an outcome, so in the feed they are indistinguishable from a run that
+// happened and changed nothing — which is also what a FAILED run looks like. A
+// client cannot tell the three apart, and the entry shape deliberately does not
+// grow a status field to let it. True is for someone asking "when was this
+// unlocked", which the audit log answers better.
 type HistoryFilter struct {
-	ApplyID         string
-	IncludeArchived bool
+	ApplyID            string
+	IncludeArchived    bool
+	IncludeTransitions bool
 }
 
 // HistorySelectByName returns a page of `state_history` records for a specific
@@ -1905,6 +2054,11 @@ type HistoryFilter struct {
 // By default (filter.IncludeArchived = false), only active snapshots are returned
 // (`archived_at IS NULL`, ADR-Q19 retention). Total is also counted over active set —
 // Operator API pagination doesn't "jump" through soft-deleted gaps.
+//
+// Also by default, the rerun-transition markers are excluded (see
+// HistoryFilter.IncludeTransitions): they record a status change rather than an
+// attempt, and in a feed of state changes they read as a run that changed nothing.
+// The count follows the same predicate, so pagination stays exact.
 //
 // Return ([], 0, nil) for non-existent incarnation — no need to check existence
 // with separate query: caller (handler) should first call [SelectByName] to return 404,
@@ -1921,6 +2075,10 @@ func HistorySelectByName(ctx context.Context, db ExecQueryRower, name string, fi
 	where := "WHERE incarnation_name = $1"
 	if !filter.IncludeArchived {
 		where += " AND archived_at IS NULL"
+	}
+	if !filter.IncludeTransitions {
+		args = append(args, rerunLastScenarioLabel)
+		where += fmt.Sprintf(" AND scenario <> $%d", len(args))
 	}
 	if filter.ApplyID != "" {
 		args = append(args, filter.ApplyID)

@@ -26,7 +26,7 @@ var errHostDestroyed = errors.New("scenario: RenderForHost: host removed by clou
 // RenderForHost reproduces the Keeper-side render pipeline for a run on claim
 // (ADR-027, Phase 1.4.3): given a persisted [applyrun.Recipe] and the claimed
 // host's SID, it follows the SAME path as the run-goroutine — load service →
-// parse scenario → ExpandIncludes → essence.Resolve → ResolveInputValuesVault
+// parse scenario → ExpandIncludes → servicevars.Resolve → ResolveInputValuesVault
 // (SECRETS resolve HERE, in RAM) → Render (CEL+vault) — rendering the FULL
 // run roster (like the run-goroutine), not a single host.
 //
@@ -114,18 +114,18 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		return nil, nil, err
 	}
 
-	// 4. incarnation (for the spec.essence essence-override + IncarnationMeta).
+	// 4. incarnation (for the _stack.yaml step context + IncarnationMeta).
 	inc, err := incarnation.SelectByName(ctx, deps.DB, incarnationName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load incarnation %q: %w", incarnationName, err)
 	}
 
-	// 5. Essence (effective layer). The OS-family representative is the roster's
-	//    first host, symmetric with the run-goroutine (run.go step 4: hosts[0]);
-	//    per-host essence is a future extension.
-	essenceMap, err := deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
+	// 5. Service vars (the service's own layer) — host-invariant since ADR-0082,
+	//    so this resolves the same map as the run-goroutine (run.go step 4) with
+	//    no representative host to pick.
+	serviceVars, err := deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
 	if err != nil {
-		return nil, nil, fmt.Errorf("scenario: RenderForHost: essence: %w", err)
+		return nil, nil, fmt.Errorf("scenario: RenderForHost: service vars: %w", err)
 	}
 
 	// 6. Effective input: merge defaults/required + scoped vault-ref resolve
@@ -142,9 +142,9 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 
 	// 7. Render: vault-resolve → CEL → on/where → []RenderedTask + []DispatchPlan.
 	renderIn := render.RenderInput{
-		Scenario: scn,
-		Essence:  essenceMap,
-		Input:    effectiveInput,
+		Scenario:    scn,
+		ServiceVars: serviceVars,
+		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
 			Name:           inc.Name,
 			Service:        inc.Service,

@@ -1,6 +1,6 @@
 # Soulprint — the typed schema MVP
 
-Soulprint is facts about the host that the Soul agent collects and periodically pushes to Keeper. They are used in scenario targeting, in the essence pipeline, in core modules for abstraction via the native pkg-mgr/init-system, and in the template rendering of configs.
+Soulprint is facts about the host that the Soul agent collects and periodically pushes to Keeper. They are used in scenario targeting, in core modules for abstraction via the native pkg-mgr/init-system, and in the template rendering of configs.
 
 **The source of truth on the schema is [ADR-018](../adr/0018-soulprint-typed.md).** This document is a detailed spec of the fields, semantics, collection algorithms, and use-cases.
 
@@ -31,7 +31,7 @@ Soulprint is facts about the host that the Soul agent collects and periodically 
 
 | Field | Type | Example | Semantics |
 |---|---|---|---|
-| `family` | string | `debian` / `rhel` / `alpine` / `windows` / `darwin` | Used in the essence pipeline (the `os/<family>.yaml` step, see [ADR-009](../adr/0009-scenario-dsl.md)). |
+| `family` | string | `debian` / `rhel` / `alpine` / `windows` / `darwin` | Used in scenario targeting and in `where:` predicates. The service-vars pipeline does NOT see it: those resolve once per run for the whole roster ([ADR-0082](../adr/0082-service-vars.md)). |
 | `distro` | string | `ubuntu` / `rocky` / `alpine` | The concrete distribution. |
 | `version` | string | `22.04` / `9.3` / `3.19` | The distribution version as a string (not SemVer). |
 | `codename` | string | `jammy` / `bookworm` / `""` | Optional (not present in all distros). |
@@ -75,7 +75,7 @@ Extensions are separate changes to the Soul binary, a new version. This is the d
 
 | Field | Type | Semantics |
 |---|---|---|
-| `total_mb` | int64 | The full RAM volume in MB (not bytes!). Used in the essence pipeline: `int(soulprint.self.memory.total_mb * 0.6)`. |
+| `total_mb` | int64 | The full RAM volume in MB (not bytes!). Used in per-host sizing: `int(soulprint.self.memory.total_mb * 0.6)`. |
 | `available_mb` | int64 | Free right now (the value from `/proc/meminfo` or an equivalent). |
 | `swap_mb` | int64 | The swap volume. |
 
@@ -112,7 +112,7 @@ From destiny and scenario:
 | `soulprint.self.os.init_system` | string | everywhere (used by core.service.*) |
 | `soulprint.self.kernel.version` | string | everywhere |
 | `soulprint.self.cpu.count` | int | everywhere |
-| `soulprint.self.memory.total_mb` | int | everywhere (essence pipeline) |
+| `soulprint.self.memory.total_mb` | int | everywhere (per-host sizing) |
 | `soulprint.self.network.primary_ip` | string | everywhere |
 | `soulprint.self.network.fqdn` | string | everywhere |
 | `soulprint.self.network.interfaces[i].ipv4` | list<string> | everywhere |

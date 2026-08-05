@@ -14,7 +14,7 @@ Without `vars:`, destiny has two extremes:
 ## Semantics
 
 - **Source of truth - `destiny-<name>/vars.yml`** (next to `destiny.yml`).
-- **Isolated in destiny.** Neither the scenario, nor the operator via the API, nor the essence service **do** interrupt the values. If the operator needs the ability to substitute, the corresponding value should be in `input:`, not in `vars:`.
+- **Isolated in destiny.** Neither the scenario, nor the operator via the API, nor the service's own `vars/` **override** these values. If the operator needs the ability to substitute, the corresponding value should be in `input:`, not in `vars:`.
 - **Can refer to `input.*`.** Vars are calculated **after** input validation - that is, the expression `"/etc/redis/users/${ input.user }.acl"` is valid. The reverse (input refers to vars) is not: input comes from outside, before vars even exist.
 - **Available in all tasks** of the same destiny - in `tasks/main.yml` and in any neighbor connected via `include:`.
 
@@ -100,7 +100,7 @@ In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-te
 Not available (intentionally):
 
 - **`register.<name>`** - task results. At the time of calculation `vars` there were no tasks yet.
-- **`essence.*`** - this namespace does not exist in destiny **at all**. essence - service level concept; service itself decides which values to put into `input:` destiny when called.
+- **The SERVICE's `vars/`** - not visible here. Since [ADR-0082](../adr/0082-service-vars.md) both layers are spelled `vars.*`, but inside a destiny pass the name resolves to this file and nothing else; the service decides which of its values to put into the destiny's `input:` when calling it. The name survives the `apply:` boundary, the meaning does not — the same asymmetry that forced `apply_when_dynamic_unsupported` ([orchestration.md §2.1.2](../scenario/orchestration.md)).
 - **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only accessors. In the destiny pass they are cut off by isolation (error on compile). var → var does NOT open them.
 
 ### var → var (links inside the layer)
@@ -118,7 +118,7 @@ Not available (intentionally):
 
 - **Cycle** (`a → b → c → a`, including self-reference `a → a`) → render error `var_cycle` with cycle trace.
 - **Reference to a non-existent layer key** (`vars.z`, which does not exist) → render error `var_unknown_ref`. **eager** check: the error is raised even if the referencing var itself is not used anywhere (broken link = typo by the author, not a "deferred" var).
-- **Only inside its own layer.** var→var does NOT weaken the isolation: the link is still missing `register.*`/`essence.*`/`soulprint.hosts`. The chain between the file layer and the task layer is not available (see below).
+- **Only inside its own layer.** var→var does NOT weaken the isolation: the link is still missing `register.*`/`soulprint.hosts`. The chain between the file layer and the task layer is not available (see below).
 - Index form `vars['key']` is not supported - use select form `vars.key` (the key name must be statically known from the AST).
 
 ## Merge file-vars ↔ task-vars (Option A)
@@ -127,7 +127,7 @@ The `vars.*` namespace is shared by two sources: file-level `vars.yml` (this doc
 
 - **task-level `vars:` overrides the file-level var of the same name.** File-vars is the base layer, task-vars are placed on top. The outcome is deterministic: on a task with its own `vars: { redis_unit_name: … }`, it is the task value that will end up in `${ vars.redis_unit_name }`, but the file-level will not.
 - **var → var works WITHIN each layer, but NOT between layers.** file-var can refer to another **file-var** (eager-topological, see "var → var" above); task-var - to another **task-var** of the same layer. But **interlayer** links are prohibited: file-var does not see task-var, task-var does not see file-var (`${ vars.<foreign_layer> }` gives `var_unknown_ref`). task-vars resolve over the same base context (`input.*` + `soulprint.self.*` + `incarnation.*`) as file-vars, and the file layer is placed under them only AFTER the resolve (override) - so task-var cannot refer to file-var.
-- **Scope isolation is preserved.** file-vars resolve inside the destiny pass (after `apply.input` validation), `register.*`/`essence.*`/`soulprint.hosts` are not available to them - just like task-vars destiny-tasks. var→var does NOT weaken the insulation. scenario-level `vars:` in destiny are NOT visible at all (only through `apply: input:`).
+- **Scope isolation is preserved.** file-vars resolve inside the destiny pass (after `apply.input` validation), `register.*`/`soulprint.hosts` are not available to them - just like task-vars destiny-tasks. var→var does NOT weaken the insulation. scenario-level `vars:` in destiny are NOT visible at all (only through `apply: input:`).
 - **`soul-lint` raises `warn` (`vars_collision`)** for each name declared in both `vars.yml` and task-level `vars:` of the same destiny. This is not a mistake (Option A is clear), but almost always an oversight by the author: rename one of the two or rely on the redefinition deliberately.
 
 Resolving file-vars is executed **once per destiny-pass** (per-host, because values can refer to `soulprint.self`), and not per task: file-vars are invariant across tasks of the same pass.

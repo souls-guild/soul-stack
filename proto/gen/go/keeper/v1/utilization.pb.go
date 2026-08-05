@@ -262,7 +262,7 @@ func (x *DiskUtilization) GetInodesTotal() int64 {
 }
 
 // TelemetryConfig — the effective host-vitals collection config, resolved by
-// the Keeper (manifest telemetry: + essence override) and delivered to Soul via
+// the Keeper (manifest telemetry: + the service's own vars) and delivered to Soul via
 // FromKeeper for hot-reload of cadence/collectors without a restart (ADR-072, NIM-87).
 type TelemetryConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`

@@ -130,7 +130,7 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // `on:` labels (per-run, not per-host). A keeper task has no hosts →
 // soulprint.self/.hosts are unavailable (referencing them in a keeper task's
 // params is a normal CEL no-such-key error, as intended: a keeper step
-// operates on input/incarnation/essence, not host facts).
+// operates on input/incarnation/vars, not host facts).
 //
 // incarnation.state — read-only pre-run snapshot (RenderInput.State, the same
 // stateBefore under FOR UPDATE, see [incarnationVars]): a keeper task
@@ -169,7 +169,7 @@ func keeperVars(in RenderInput) cel.Vars {
 		Input:       in.Input,
 		Register:    reg,
 		Incarnation: inc,
-		Essence:     in.Essence,
+		Vars:        in.ServiceVars,
 		Ctx:         in.Ctx,
 	}
 }

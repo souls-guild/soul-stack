@@ -1,5 +1,5 @@
 {{/*
-  systemd unit for mongod for a binary install (essence.install_method=binary). The distro package
+  systemd unit for mongod for a binary install (vars.install_method=binary). The distro package
   mongodb-org ships its own mongod.service; with an upstream tarball there isn't one -> create renders
   THIS full unit. Go text/template strict (ADR-010). Context: .vars.bin_dir/conf_dir +
   mongo_user/mongo_group.

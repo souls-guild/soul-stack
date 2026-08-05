@@ -31,7 +31,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     sentinel_master_name: master
     memory_reserve_percent: 75
     df_config:

@@ -258,7 +258,7 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) 
 
 	// 1. Render in-process using same Keeper-side path as L0. L2-case carries input:
 	//    (not fixtures:), so map it to hermetic Fixtures.Input; rest of L2 pilot
-	//    context is empty (one host, no essence/vault).
+	//    context is empty (one host, no service vars/vault).
 	l0 := &Case{Name: c.Name, Fixtures: Fixtures{Input: c.Input}}
 	rc, err := renderCase(ctx, l0, caseFile)
 	if err != nil {

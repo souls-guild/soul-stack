@@ -76,7 +76,7 @@ how the service scenario builds and passes these values to the operator is in
   into the packages.redis.io pin with it — see `vars.redis_pkg_version`);
   `install.version` is for the binary branch. **The service-level `install_method`
   (default `package`) sets the installation method, while the repository and the binary
-  `base_url`/`version` come from `essence`** (see
+  `base_url`/`version` come from `service vars`** (see
   [service-README](../../service/redis/README.md)); the destiny assembles the `install`
   struct from them.
 - **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — a single dict

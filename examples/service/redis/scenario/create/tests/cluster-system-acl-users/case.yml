@@ -1,8 +1,8 @@
 # L0 test of create cluster: SYSTEM ACL users (system-ACL-users d2) are added into
-# users.acl OVER the lower layer from essence.system_acl_users, operator-extra (app)
+# users.acl OVER the lower layer from vars.system_acl_users, operator-extra (app)
 # layers on top. This proves:
 #   1. users.acl carries ALL system redis-server users (default_admin/replica/monitoring/
-#      sentinel/haproxy) from essence.system_acl_users with perms 1:1 from essence + state:'on';
+#      sentinel/haproxy) from vars.system_acl_users with perms 1:1 from service vars + state:'on';
 #   2. operator-extra (app) coexists with the system users in the same file;
 #   3. EACH system user has its OWN vault password secret/redis/<inc>/users/<name>#password
 #      (the same branch as operator-extra) — no cross-leak;
@@ -13,7 +13,7 @@
 #      render_context.vars.password = requirepass" model is removed
 #      (requirepass dropped from server.yml);
 #   5. state_changes.redis_users carries ONLY operator-extra (app) — the system users are NOT in
-#      state (item 7 d2: added on top from essence on every render).
+#      state (item 7 d2: added on top from service vars on every render).
 #
 # Topology: shards=1, replicas_per_master=0 → 1 host (size-guard PASS). render_context
 # .self = the first host by SID (node-a, host invariant of apply.input).
@@ -45,7 +45,7 @@ fixtures:
       password: haproxy-sys-secret-pass
     secret/redis/create/users/app:
       password: app-user-secret-pass
-  essence:
+  vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -90,7 +90,7 @@ fixtures:
 assert:
   task_present:
     # users.acl: system users (default_admin/replica/monitoring/sentinel/haproxy) with perms from
-    # essence + operator-extra (app). EACH with ITS OWN vault password. ★ default_admin REDESIGN:
+    # service vars + operator-extra (app). EACH with ITS OWN vault password. ★ default_admin REDESIGN:
     # default_admin IS in the .vars.users map (system, ~* &* +@all); the built-in default renders
     # as `off` via the template and is ABSENT from the map (a deep-compare of the whole map catches
     # it as extraneous).
@@ -140,13 +140,13 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   state_changes:
     redis_type: cluster
     redis_version: "7.4.1"
     # ★ GUARD "system users NOT in state": redis_users carries ONLY operator-extra (app),
-    # WITHOUT replica/monitoring/sentinel/haproxy (they're added from essence, deep-compare
+    # WITHOUT replica/monitoring/sentinel/haproxy (they're added from service vars, deep-compare
     # catches an extraneous system element as a mismatch). wave 1b: ARRAY of AclUser.
     redis_users:
       - { name: app, perms: "~app:* +@read +@write", state: "on" }

@@ -31,7 +31,7 @@ const (
 
 // paramRenderContext — the params key under which Keeper delivers the
 // assembled per-host root of the core.file.rendered text/template context:
-// {vars, self, role, essence} (templating.md §3.2). Soul reads it and passes it
+// {vars, self, role} (templating.md §3.2). Soul reads it and passes it
 // as the ROOT to text/template (rendered.go). No proto changes needed (A1,
 // ADR-012(d)) — it rides inside RenderedTask.params.
 const paramRenderContext = "render_context"

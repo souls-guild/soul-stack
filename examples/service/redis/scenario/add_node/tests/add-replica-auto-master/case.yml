@@ -35,9 +35,9 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # host-layout — in essence (v11→v12, Option A): modules_base_url moved out of state,
+  # host-layout — in service vars (v11→v12, Option A): modules_base_url moved out of state,
   # add_node reads it from there (the new node pulls .so from the same source).
-  essence:
+  vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster
@@ -71,8 +71,8 @@ assert:
         group: redis
         render_context:
           vars:
-            # host-layout (directive B): the new node takes its layout from essence (v11→v12,
-            # Option A; default /etc/redis ÷ /var/lib/redis, essence without override → default),
+            # host-layout (directive B): the new node takes its layout from service vars (v11→v12,
+            # Option A; default /etc/redis ÷ /var/lib/redis, service vars without override → default),
             # the template derives dir/aclfile from them — the same layout as the node that created the cluster.
             conf_dir: /etc/redis
             data_dir: /var/lib/redis
@@ -107,7 +107,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # health-gate on the new node: PING a live Redis before adding it to the cluster.
     # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.

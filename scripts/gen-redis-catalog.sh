@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Version-aware generator of the catalog of VALID redis.conf directives (MVP, architect
-# 2026-06-26). The result is COMMITTED data in essence (key redis_directives), NOT a
-# runtime dependency: the script is run manually by the service author when adding a new
-# supported Redis version, its output gets pasted into examples/service/redis/essence/
-# _default.yaml. There is no network on the render path - assert reads the already-committed catalog.
+# 2026-06-26). The result is COMMITTED data in the service's vars (key redis_directives),
+# NOT a runtime dependency: the script is run manually by the service author when adding a
+# new supported Redis version, and its output is pasted into
+# examples/service/redis/vars/00-base.yaml. There is no network on the render path - the
+# assert reads the already-committed catalog.
+#
+# Any file under vars/ will do — the directive lister assembles the whole
+# directory in lexical order (keeper/internal/artifact/directives.go), so a
+# separate vars/50-catalog.yaml is a perfectly good home for it.
 #
 # SOURCE OF TRUTH - the Redis upstream src/config.c (the standardConfig table via the
 # createXConfig macros + special directives parsed in the body of loadServerConfigFromString).
@@ -19,7 +24,7 @@
 # Usage:
 #   scripts/gen-redis-catalog.sh                       # default series (below)
 #   scripts/gen-redis-catalog.sh 7.0.15 8.0.6          # explicit tags
-# Output - a YAML fragment redis_directives: on stdout (paste into essence/_default.yaml).
+# Output - a YAML fragment redis_directives: on stdout (paste into vars/00-base.yaml).
 
 set -euo pipefail
 

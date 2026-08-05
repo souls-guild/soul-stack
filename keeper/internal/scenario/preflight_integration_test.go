@@ -23,7 +23,7 @@
 // so a roster CANNOT exist before Create — which made every create carrying a
 // topology assert resolve an empty roster and 422 unconditionally (NIM-235).
 // Those asserts are now deferred to the render fail-safe; the asserts that read
-// only input/essence keep their pre-flight 422.
+// only input/vars keep their pre-flight 422.
 
 package scenario
 

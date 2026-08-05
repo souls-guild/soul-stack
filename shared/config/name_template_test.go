@@ -54,11 +54,11 @@ func TestRenderNameTemplate_ListComponentRejected(t *testing.T) {
 }
 
 // TestRenderNameTemplate_InputOnlySandbox proves the sandbox barrier is
-// structural: a template reaching for essence/soulprint/vault does not compile,
+// structural: a template reaching for vars/soulprint/vault does not compile,
 // because those names are simply undeclared in the env (same as required_when).
 func TestRenderNameTemplate_InputOnlySandbox(t *testing.T) {
 	for _, tmpl := range []string{
-		"${essence.cluster}",
+		"${vars.cluster}",
 		"${soulprint.self.hostname}",
 		"${vault('secret/x').y}",
 		"${register.probe.stdout}",
@@ -174,7 +174,7 @@ tasks: []
 func TestNameTemplate_OutsideSandboxRejected(t *testing.T) {
 	diags := scenarioWithNameTemplate(t, `name: create
 create: true
-name_template: "${essence.cluster}-${input.name}"
+name_template: "${vars.cluster}-${input.name}"
 input:
   name:
     type: string

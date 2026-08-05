@@ -112,7 +112,7 @@ func TestCompile_SandboxRejected(t *testing.T) {
 		`soulprint.self.os.family == "debian"`,
 		`input.bar == 1`,
 		`incarnation.name == "x"`,
-		`essence.baz == 1`,
+		`vars.baz == 1`,
 	}
 	for _, expr := range cases {
 		t.Run(expr, func(t *testing.T) {

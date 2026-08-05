@@ -39,7 +39,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/dragonfly/9redis/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     sentinel_master_name: master
     provision_await_timeout: "10m"
     memory_reserve_percent: 75

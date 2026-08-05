@@ -155,7 +155,7 @@ func taskIsRefreshEmitter(t *Task) bool {
 // `on:` as a roster read. An assert is RUN-LEVEL: it emits no RenderedTask and
 // targets no hosts, so every assert carries an omitted `on:` and would be
 // classified roster-reading by that rule alone — which would sweep in asserts
-// whose predicates only touch input/essence/incarnation and are perfectly
+// whose predicates only touch input/vars/incarnation and are perfectly
 // evaluable pre-flight. Here only the predicate axes count: `when:` and
 // `that[]`.
 //

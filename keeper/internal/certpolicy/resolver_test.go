@@ -87,7 +87,7 @@ func incRow(service, serviceVersion string) staticRow {
 	now := time.Now()
 	return staticRow{values: []any{
 		"redis-prod", service, serviceVersion, 1,
-		[]byte("{}"), []byte("{}"), "ready",
+		[]byte("{}"), "ready",
 		[]byte(nil), any(nil), now, now, []string(nil),
 		[]byte("{}"),
 		any(nil), []byte(nil),

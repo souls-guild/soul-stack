@@ -177,7 +177,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # running + restart — by the node_exporter unit name (catches a name regression).
     # There is NO daemon-reload step: core.service reloads on its own when the unit
@@ -246,7 +246,7 @@ assert:
         # The redis_exporter template reads ONLY .vars.* (values raised by this scenario
         # step). Variant B (ADR-010 §3.2) injects render_context.input CONDITIONALLY —
         # only into templates that actually reference .input; redis_exporter doesn't
-        # reference it → render_context stays {vars,self,role,essence} without input.
+        # reference it → render_context stays {vars,self,role,service vars} without input.
         render_context:
           vars:
             bin_dir: /usr/local/bin
@@ -265,7 +265,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # The only core.service.enabled in the plan.
     - module: core.service.enabled

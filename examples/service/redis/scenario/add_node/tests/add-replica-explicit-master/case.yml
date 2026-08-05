@@ -28,9 +28,9 @@ fixtures:
   vault:
     secret/redis/add_node/users/default_admin:
       password: default-admin-secret-pass
-  # modules_base_url - in essence (v11→v12, Option A): moved out of state, a repeat run reads
+  # modules_base_url - in service vars (v11→v12, Option A): moved out of state, a repeat run reads
   # from here (the new node pulls .so from the same source as the cluster).
-  essence:
+  vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
     redis_type: cluster

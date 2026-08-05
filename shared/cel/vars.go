@@ -14,25 +14,33 @@ import (
 // YAML/Postgres. CEL reads them through the cel-go adapter.
 //
 // Pilot scope ([ADR-010]):
+//
 //   - Input        — the input: block of the scenario/destiny (input.<path>).
+//
 //   - Register     — results of register: from previous steps
 //     (register.<name>.<path>, register.self.*).
+//
 //   - Incarnation  — incarnation fields (name, service_version, spec.*).
+//
 //   - SoulprintSelf — stable facts of the current host; in CEL available as
 //     soulprint.self.<path> ([soulprint.md], canonical form).
+//
 //   - SoulprintHosts — the list of run hosts with stable facts; in CEL available
 //     as soulprint.hosts (+ .where(<predicate>)). Scenario-only: filled only in the
 //     render's scenario pass. nil/empty ⇒ soulprint.hosts is an empty list (and in
 //     the destiny pass accessing it is an isolation error, see [Vars.allowHosts]).
 //     [orchestration.md §4.1].
-//   - Essence       — the effective essence layer (essence.<path>); host-invariant
-//     (incarnation soul values, not per-host data).
-//   - Vars         — task-level `vars:` (destiny/tasks.md §9): local task
-//     variables already computed by render (CEL expressions over the rest of the
-//     context, resolved BEFORE params/where). In CEL available as `vars.<key>`
-//     (expression keys) and `${ vars.<key> }` (strings). Scope — one task (and its
-//     loop iterations); passed only into the per-task context. nil/empty ⇒
-//     accessing `vars.<key>` gives the normal no-such-key.
+//
+//   - Vars         — the whole `vars.*` namespace (ADR-0082), one flat map built
+//     by render from, outermost first: the SERVICE's own vars (`<service>/vars/`,
+//     host-invariant), the destiny's `vars.yml`, a `block:`'s and the task's own
+//     `vars:` (destiny/tasks.md §9). Task-level values are CEL-resolved before
+//     params/where. In CEL available as `vars.<key>` (expression keys) and
+//     `${ vars.<key> }` (strings). nil/empty ⇒ accessing `vars.<key>` gives the
+//     normal no-such-key.
+//
+//     There is no separate `essence` root: it was distinguished from `vars` by
+//     being overridable from outside, and `incarnation.spec.essence` is gone.
 //
 // Loop — `loop:` iteration variables (destiny/tasks.md §7): the name from `as:`
 // (default `item`) → the current element, optionally the name from `index_as:` →
@@ -50,7 +58,6 @@ type Vars struct {
 	Incarnation    map[string]any
 	SoulprintSelf  map[string]any
 	SoulprintHosts []map[string]any
-	Essence        map[string]any
 	Vars           map[string]any
 	Loop           map[string]any
 
@@ -113,7 +120,6 @@ func (v Vars) activation(migration bool) map[string]any {
 			"register":    orEmpty(v.Register),
 			"incarnation": orEmpty(v.Incarnation),
 			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
-			"essence":     orEmpty(v.Essence),
 			"vars":        orEmpty(v.Vars),
 			"compute":     orEmpty(v.Compute),
 		}

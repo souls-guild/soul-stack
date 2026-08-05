@@ -54,7 +54,7 @@ Scenario calls destiny via `apply: { destiny: ..., input: { ... } }` ([scenario/
     destiny: db-bootstrap
     input:
       name:    "${ input.db_name }"
-      version: "${ essence.db_version }"
+      version: "${ vars.db_version }"
   register: bootstrapped
 
 - name: Run migrations only if config actually changed

@@ -22,12 +22,12 @@ description: >-
 #   - input  — provision (cloud-create, like create — covenant does NOT carry it) + source
 #     (external source: WHERE we migrate from) + verify (offset-lag gate). ★ install_method
 #     was REMOVED from migrate-input: the install method caught up with the create redesign
-#     (2026-06-28) — it is now the author-context essence.install_method
-#     (covenant.compute.install reads default(essence.install_method,'binary')), NOT
+#     (2026-06-28) — it is now the author-context vars.install_method
+#     (covenant.compute.install reads default(vars.install_method,'binary')), NOT
 #     operator-input. The former migrate field input.install_method was "a holdover from
 #     the create contract" (fixed in the old header) from BEFORE create moved it into
-#     essence; the covenant rollout brings migrate to the shared shape (field removed,
-#     fixtures now supply install_method in essence).
+#     service vars; the covenant rollout brings migrate to the shared shape (field removed,
+#     fixtures now supply install_method in service vars).
 #   - compute — source_master/source_password/source_tls_ca (coordinates+credentials of
 #     the external source, migrate-specific) + sentinel_monitor_now=false. ★ covenant does
 #     NOT carry sentinel_monitor_now (it diverges from create semantics by VALUE:
@@ -89,7 +89,7 @@ input:
         pattern: "^[0-9]+[smh]$"
         description: >-
           Upper bound on waiting for onboarding of the created VMs (the await_online
-          barrier, ADR-061; form <N>{s|m|h}). Not set → essence.provision_await_timeout
+          barrier, ADR-061; form <N>{s|m|h}). Not set → vars.provision_await_timeout
           (default 10m). Capped from above by keeper.yml::max_await_timeout.
       join_wait_timeout:
         type: string
@@ -97,7 +97,7 @@ input:
         description: >-
           Ceiling on waiting for a freshly created VM to show up in Teleport before
           delivering the token (core.bootstrap.delivered, retry-until-join; form
-          <N>{s|m|h}). Not set → essence.provision_join_wait_timeout (default 15m).
+          <N>{s|m|h}). Not set → vars.provision_join_wait_timeout (default 15m).
       ssh_provider:
         type: string
         description: >-
@@ -180,7 +180,7 @@ input:
           guarantee). Defaults to false (compare).
 
 # ── Declarative input invariants: migrate_cluster DELTA on top of covenant.validate ──
-# INPUT-ONLY (essence/soulprint are unavailable — a structural CEL barrier). The create
+# INPUT-ONLY (service vars/soulprint are unavailable — a structural CEL barrier). The create
 # invariant (operator-extra ACL name is not a reserved one) — in covenant. Here —
 # source.hosts + the cluster_topology reject. ★ ADD-ONLY on top of covenant.validate:
 # validate sections ACCUMULATE (mergeValidateSections — append, predicate rules, not map
@@ -220,7 +220,7 @@ validate:
 # ── Computed scenario vars: migrate_cluster DELTA on top of covenant.compute ────────
 # The shared compute contract (redis_config/redis_config_base/redis_config_tls/install/
 # conf_dir/data_dir/tls_*/sentinel_directives/redis_version/modules_*/…) — in covenant.yml
-# (inherited covenant-first; ★ install is now essence-driven, like create). Here —
+# (inherited covenant-first; ★ install is now service vars-driven, like create). Here —
 # migrate-specific: coordinates/credentials of the external source +
 # sentinel_monitor_now=false. ★ compute: — a top-level scenario block; covenant
 # declarations are visible to the delta by name.

@@ -501,7 +501,7 @@ func TestIsStaticWhen_Classification(t *testing.T) {
 	}{
 		{"", false},                       // empty — nothing to evaluate Keeper-side
 		{"input.action == 'apply'", true}, // input only — static
-		{"essence.enabled && incarnation.name != ''", true}, // essence+incarnation — static
+		{"vars.enabled && incarnation.name != ''", true}, // service var + incarnation — static
 		{"vars.flag", true},                             // vars — static (host invariance caught by a second layer)
 		{"register.probe.changed", false},               // register — Soul-side
 		{"input.a && register.b.ok", false},             // mixed with register — Soul-side

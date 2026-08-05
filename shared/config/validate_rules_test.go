@@ -98,13 +98,13 @@ tasks: []
 }
 
 // TestLoadScenarioManifest_ValidateInputOnlyBarrier — a structural input-only
-// barrier: an essence/soulprint/register reference in that → validate_rule_invalid
+// barrier: a soulprint/register reference in that → validate_rule_invalid
 // (undeclared reference), NOT a value. The barrier comes from inputEnv's
 // undeclaration, not a text guard.
 func TestLoadScenarioManifest_ValidateInputOnlyBarrier(t *testing.T) {
 	forbidden := []string{
 		`soulprint.self.os.family == 'debian'`,
-		`essence.redis_port > 0`,
+		`vars.redis_port > 0`,
 		`register.probe.changed`,
 		`size(soulprint.hosts) == 3`,
 	}

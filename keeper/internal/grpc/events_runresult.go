@@ -272,6 +272,21 @@ func (h *eventStreamHandler) publishRunResult(sid string, ev *keeperv1.RunResult
 // moved the row out of applying (recovery takeover), it returns
 // [incarnation.ErrAlreadyFinalized] — the caller must treat it as a no-op
 // (log, don't fail the path), not as a consistency error.
+// runFailureSummary lifts the human-readable cause out of a terminal's
+// status_details, already masked by the caller. Empty on success.
+func runFailureSummary(details map[string]any) string {
+	if details == nil {
+		return ""
+	}
+	if e, ok := details["error"].(string); ok {
+		return e
+	}
+	if reason, ok := details["reason"].(string); ok {
+		return reason
+	}
+	return ""
+}
+
 func commitRunState(
 	ctx context.Context,
 	pool TxBeginner,
@@ -307,6 +322,15 @@ func commitRunState(
 			// a scenario-runner, so it never rendered and has no engine facts of
 			// its own to record. The per-host versions are on the apply_runs rows.
 			nil,
+			// The outcome without a replayable snapshot, for the same reason: this
+			// terminal has no RunSpec in hand — the run it closes was started by
+			// somebody else's goroutine, possibly on another Keeper. rerun-last of
+			// such a row answers 422 asking for the input, which is honest.
+			&incarnation.RunOutcome{
+				Status:       string(status),
+				FinishedAt:   time.Now().UTC(),
+				ErrorSummary: runFailureSummary(details),
+			},
 		)
 	})
 }

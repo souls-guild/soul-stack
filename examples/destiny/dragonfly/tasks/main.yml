@@ -34,7 +34,7 @@
 #                  -> group-drop;
 #   extras.yml   - host-tuning (THP-unit / logrotate / sysctl), all UNCONDITIONAL;
 #
-# Include gates are static input-predicates (conditional-include requires input./essence./
+# Include gates are static input-predicates (conditional-include requires input./vars./
 # incarnation./vars.; register./soulprint. on include is forbidden). has()-guard in each one -
 # render-safety for an absent dict (tls in plaintext mode).
 #

@@ -33,7 +33,7 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
   # Mock Vault: requirepass + TLS PEM material (cert/key/ca). scenario resolves TLS refs
-  # from essence.tls_*_ref (author's trusted path); the conf_dir override does NOT touch refs —
+  # from vars.tls_*_ref (author's trusted path); the conf_dir override does NOT touch refs —
   # only WHERE destiny puts the PEM and where redis.conf points to them.
   vault:
     secret/redis/create:
@@ -56,7 +56,7 @@ fixtures:
       cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules/6.2"
@@ -67,7 +67,7 @@ fixtures:
         appendonly: "no"
     redis_config:
       maxmemory: "256mb"
-    # ★ #2/#5: host-layout override + TLS parameters — in essence. Enabling TLS/closing
+    # ★ #2/#5: host-layout override + TLS parameters — in vars. Enabling TLS/closing
     # plain — input flags (tls_enabled/tls_keep_plain). The conf_dir override verifies that
     # redis.conf TLS paths follow conf_dir (not hardcoded /etc/redis/tls).
     conf_dir: /opt/redis
@@ -77,7 +77,7 @@ fixtures:
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # System ACL users for redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users for redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE REQUIRED: guard create/sentinel.yml (assert 1b) aborts render if either
     # set is empty (silent fail-open is not acceptable — without them replication/sentinel↔redis
     # AUTH would break).
@@ -199,7 +199,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # PING health-gate over TLS on a conf_dir-agnostic addr (tls_port). tls_ca = CA-PEM.
     - module: community.redis.command
@@ -250,8 +250,8 @@ assert:
       key_ref:  "secret/services/redis/tls#key"
       ca_ref:   "secret/services/redis/tls#ca"
     modules: [bloom, json, search, timeseries]
-    # ★ conf_dir/data_dir moved out of state into essence (v11→v12, Variant A): the override
+    # ★ conf_dir/data_dir moved out of state into service vars (v11→v12, Variant A): the override
     # is NO LONGER persisted in state (absent from state_changes — the fields are not in state_schema).
-    # The host-layout override lives in the incarnation's spec.essence; a rerun reads it from there.
+    # The host-layout override lives in the service vars; a rerun reads it from there.
     # The destiny tasks above (incl. TLS PEM under the conf_dir override) already verify that
     # the override propagated to the paths on THIS create run.

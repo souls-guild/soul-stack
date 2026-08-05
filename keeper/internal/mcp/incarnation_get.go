@@ -30,7 +30,6 @@ type incarnationGetOutput struct {
 	Service            string         `json:"service"`
 	ServiceVersion     string         `json:"service_version"`
 	StateSchemaVersion int            `json:"state_schema_version"`
-	Spec               map[string]any `json:"spec"`
 	State              map[string]any `json:"state"`
 	Status             string         `json:"status"`
 	StatusDetails      map[string]any `json:"status_details"`
@@ -106,7 +105,6 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
 		StateSchemaVersion: inc.StateSchemaVersion,
-		Spec:               audit.MaskSecrets(inc.Spec),
 		State:              audit.MaskSecrets(inc.State),
 		Status:             string(inc.Status),
 		StatusDetails:      inc.StatusDetails,

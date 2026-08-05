@@ -33,7 +33,7 @@ description: >-
     - services dragonfly + redis-sentinel + disable-thp are STOPPED (core.service.stopped,
       idempotent — no service → no-op). redis-sentinel is brought up by destiny `redis` (sentinel
       from the redis plane, refactor) — but the systemd unit name is the same, stopping it stays valid;
-    - DragonFly is REMOVED by ITS install method (essence.install_method, static gate → group-drop):
+    - DragonFly is REMOVED by ITS install method (vars.install_method, static gate → group-drop):
       the binary branch removes /usr/local/bin/dragonfly + its own unit file; the package branch removes
       the distro deb dragonfly (core.pkg.absent — the package cleanly takes its systemd unit with it, no separate
       daemon-reload needed);
@@ -59,7 +59,7 @@ description: >-
 
 # ── Operator input contract ────────────────────────────────────────────────
 # Empty: destroy takes no operator input. What to remove is a FACT from incarnation.state
-# (provisioned_provider/vm_ids/sids for cloud-cascade) + the install method and conf_dir from essence
+# (provisioned_provider/vm_ids/sids for cloud-cascade) + the install method and conf_dir from service vars
 # (install_method/conf_dir for Soul-side teardown), not an operator choice at teardown time.
 # The operator only initiates the deletion (DELETE /v1/incarnations/{name}).
 input: {}
@@ -122,21 +122,21 @@ tasks:
       name: disable-thp
 
   # ── 2a. Remove DragonFly: BINARY branch (upstream-tarball install) ────────────
-  # Gate is static (essence.install_method only → isStaticWhen) → render-phase GROUP-DROP:
+  # Gate is static (vars.install_method only → isStaticWhen) → render-phase GROUP-DROP:
   # on a package incarnation these tasks are physically excluded from the plan. ★ v1→v2:
-  # the install method was MOVED out of state into essence (install is no longer in
-  # state), so the gate reads essence.install_method (the same source as compute.install
+  # the install method was MOVED out of state into service vars (install is no longer in
+  # state), so the gate reads vars.install_method (the same source as compute.install
   # in create). binary create put the binary in /usr/local/bin and ITS OWN unit in
   # /etc/systemd/system: both are ours, remove them.
   - name: Remove the dragonfly binary (binary install)
     module: core.file.absent
-    when: "default(essence.install_method, 'package') == 'binary'"
+    when: "default(vars.install_method, 'package') == 'binary'"
     params:
       path: /usr/local/bin/dragonfly
 
   - name: Remove the dragonfly systemd unit (binary install)
     module: core.file.absent
-    when: "default(essence.install_method, 'package') == 'binary'"
+    when: "default(vars.install_method, 'package') == 'binary'"
     params:
       path: /etc/systemd/system/dragonfly.service
 
@@ -145,16 +145,16 @@ tasks:
   # distro deb dragonfly with its own systemd unit; remove it via the PACKAGE
   # (core.pkg.absent) so the package cleanly takes its unit with it (no separate
   # daemon-reload needed, since apt/dpkg reconciles systemd itself). ★ v1→v2: install
-  # method from essence.install_method (package is the default): "method != binary".
+  # method from vars.install_method (package is the default): "method != binary".
   - name: Remove the dragonfly distribution package (package install)
     module: core.pkg.absent
-    when: "default(essence.install_method, 'package') != 'binary'"
+    when: "default(vars.install_method, 'package') != 'binary'"
     params:
       name: dragonfly
 
   # ── 3. Remove OUR DragonFly config artifacts (both branches, always ours) ───────
   # ${conf_dir} files (users.acl, dragonfly.conf, TLS PEM) + /etc drop-ins (logrotate,
-  # sysctl, disable-thp unit). conf_dir from essence (default /etc/dragonfly).
+  # sysctl, disable-thp unit). conf_dir from service vars (default /etc/dragonfly).
   # core.file.absent is idempotent (no file → no-op). Remove the TLS PEM unconditionally:
   # on a plaintext incarnation these files don't exist → no-op (no need to gate it).
   # ★ sentinel.conf/sentinel-users.acl are NOT REMOVED HERE: they're deployed by destiny
@@ -163,27 +163,27 @@ tasks:
   - name: Remove the dragonfly users.acl
     module: core.file.absent
     params:
-      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/users.acl' }"
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/users.acl' }"
 
   - name: Remove the dragonfly.conf flagfile
     module: core.file.absent
     params:
-      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
 
   - name: Remove the TLS server certificate
     module: core.file.absent
     params:
-      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
 
   - name: Remove the TLS server private key
     module: core.file.absent
     params:
-      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
 
   - name: Remove the TLS CA certificate
     module: core.file.absent
     params:
-      path: "${ default(essence.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
 
   - name: Remove the dragonfly logrotate config
     module: core.file.absent

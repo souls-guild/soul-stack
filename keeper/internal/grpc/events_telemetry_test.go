@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -200,21 +200,22 @@ func (f *telemetryFakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (
 	return f.art, f.err
 }
 
-// TestResolveForSID_MergesManifestAndEssence — end-to-end resolve chain:
+// TestResolveForSID_MergesManifestAndServiceVars — end-to-end resolve chain:
 // membership → incarnation → ServiceRef(git from the registry, ref=ServiceVersion)
-// → load → manifest `telemetry:` merged with the essence-override from `_default.yaml`.
+// → load → manifest `telemetry:` merged with the service's own vars from
+// `vars/00-base.yaml`.
 //
 // The host carries NO tag of its own: being bound to the incarnation is the
 // whole reason it is owed a config (NIM-248).
-func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
+func TestResolveForSID_MergesManifestAndServiceVars(t *testing.T) {
 	tmp := t.TempDir()
-	essDir := filepath.Join(tmp, "essence")
-	if err := os.MkdirAll(essDir, 0o755); err != nil {
-		t.Fatalf("mkdir essence: %v", err)
+	varsDir := filepath.Join(tmp, "vars")
+	if err := os.MkdirAll(varsDir, 0o755); err != nil {
+		t.Fatalf("mkdir vars: %v", err)
 	}
-	// essence override of the interval (collectors untouched — taken from the manifest).
-	if err := os.WriteFile(filepath.Join(essDir, "_default.yaml"), []byte("telemetry_interval: 90s\n"), 0o644); err != nil {
-		t.Fatalf("write _default.yaml: %v", err)
+	// The service's own interval (collectors untouched — taken from the manifest).
+	if err := os.WriteFile(filepath.Join(varsDir, "00-base.yaml"), []byte("telemetry_interval: 90s\n"), 0o644); err != nil {
+		t.Fatalf("write vars/00-base.yaml: %v", err)
 	}
 
 	manifest := &config.ServiceManifest{
@@ -227,9 +228,9 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
 	resolver := telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true}
 	db := &telemetryFakeDB{
-		memberRows: [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
+		memberRows: [][]any{{"web-app", "web", "v2.0.0", []string(nil), []byte(nil)}},
 	}
-	src := NewTelemetrySource(db, resolver, loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
+	src := NewTelemetrySource(db, resolver, loader, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
 
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil {
@@ -239,7 +240,7 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 		t.Fatal("cfg == nil, want an effective config")
 	}
 	if cfg.GetIntervalSec() != 90 {
-		t.Errorf("interval_sec = %d, want 90 (essence override)", cfg.GetIntervalSec())
+		t.Errorf("interval_sec = %d, want 90 (the service's own var)", cfg.GetIntervalSec())
 	}
 	if len(cfg.GetCollectors()) != 1 || cfg.GetCollectors()[0] != "cpu" {
 		t.Errorf("collectors = %v, want [cpu] (manifest)", cfg.GetCollectors())
@@ -256,7 +257,7 @@ func TestResolveForSID_MergesManifestAndEssence(t *testing.T) {
 // TestResolveForSID_SoulNotFound — host not in the registry → (nil,nil) (broadcast skipped).
 func TestResolveForSID_SoulNotFound(t *testing.T) {
 	db := &telemetryFakeDB{soulErr: soul.ErrSoulNotFound}
-	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, essence.NewResolver(discardLogger(t)), discardLogger(t))
+	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil || cfg != nil {
 		t.Fatalf("ResolveForSID = (%v, %v), want (nil, nil)", cfg, err)
@@ -267,7 +268,7 @@ func TestResolveForSID_SoulNotFound(t *testing.T) {
 // config, and the Soul keeps its soul-local cadence.
 func TestResolveForSID_NoMembershipNoConfig(t *testing.T) {
 	db := &telemetryFakeDB{memberRows: nil}
-	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, essence.NewResolver(discardLogger(t)), discardLogger(t))
+	src := NewTelemetrySource(db, telemetryFakeResolver{}, &telemetryFakeLoader{}, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil || cfg != nil {
 		t.Fatalf("ResolveForSID = (%v, %v), want (nil, nil)", cfg, err)
@@ -287,10 +288,10 @@ func TestResolveForSID_CovenTagIsNotMembership(t *testing.T) {
 	db := &telemetryFakeDB{
 		soulCoven:      []string{"web-app"},
 		memberRows:     nil,
-		covenNamedRows: [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
+		covenNamedRows: [][]any{{"web-app", "web", "v2.0.0", []string(nil), []byte(nil)}},
 	}
 	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
-		loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
+		loader, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
 
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil {
@@ -304,19 +305,29 @@ func TestResolveForSID_CovenTagIsNotMembership(t *testing.T) {
 	}
 }
 
-// TestResolveForSID_InheritsIncarnationCovenIntoEssence — the other half of the
-// split: membership decides WHICH service config the host is owed, effective
-// labels decide which coven overlays of that config apply. A tag put on the
-// incarnation reaches its members' essence (ADR-080) without any tag being
-// written onto the host.
-func TestResolveForSID_InheritsIncarnationCovenIntoEssence(t *testing.T) {
+// TestResolveForSID_InheritsIncarnationCovenIntoServiceVars — the other half of
+// the NIM-248 split, restored over the mechanism that replaced the deleted
+// hard-wired `coven/<label>.yaml` overlay (ADR-0082). Membership decides WHICH
+// service config the host is owed; the incarnation's own labels decide which
+// overlays of that config apply, and a `vars/_stack.yaml` foreach step is how a
+// service asks for them. The tag lives on the incarnation and on no host.
+func TestResolveForSID_InheritsIncarnationCovenIntoServiceVars(t *testing.T) {
 	tmp := t.TempDir()
-	covenDir := filepath.Join(tmp, "essence", "coven")
-	if err := os.MkdirAll(covenDir, 0o755); err != nil {
-		t.Fatalf("mkdir essence/coven: %v", err)
+	varsDir := filepath.Join(tmp, "vars")
+	if err := os.MkdirAll(filepath.Join(varsDir, "coven"), 0o755); err != nil {
+		t.Fatalf("mkdir vars/coven: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(covenDir, "cache.yaml"), []byte("telemetry_interval: 15s\n"), 0o644); err != nil {
-		t.Fatalf("write coven/cache.yaml: %v", err)
+	if err := os.WriteFile(filepath.Join(varsDir, "coven", "cache.yaml"),
+		[]byte("telemetry_interval: 15s\n"), 0o644); err != nil {
+		t.Fatalf("write coven overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "_stack.yaml"), []byte(`stack:
+  - foreach: "${ incarnation.covens }"
+    as: coven
+    file: "coven/${ coven }.yaml"
+    optional: true
+`), 0o644); err != nil {
+		t.Fatalf("write _stack.yaml: %v", err)
 	}
 
 	manifest := &config.ServiceManifest{
@@ -325,11 +336,11 @@ func TestResolveForSID_InheritsIncarnationCovenIntoEssence(t *testing.T) {
 	}
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
 	db := &telemetryFakeDB{
-		memberRows:       [][]any{{"web-app", "web", "v2.0.0", []byte(`{}`)}},
-		incarnationCoven: []string{"cache"},
+		// The tag is on the INCARNATION row; the host carries none of its own.
+		memberRows: [][]any{{"web-app", "web", "v2.0.0", []string{"cache"}, []byte(nil)}},
 	}
 	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
-		loader, essence.NewResolver(discardLogger(t)), discardLogger(t))
+		loader, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
 
 	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
 	if err != nil {
@@ -339,7 +350,57 @@ func TestResolveForSID_InheritsIncarnationCovenIntoEssence(t *testing.T) {
 		t.Fatal("cfg == nil, want an effective config")
 	}
 	if cfg.GetIntervalSec() != 15 {
-		t.Errorf("interval_sec = %d, want 15 (coven overlay inherited from the incarnation)", cfg.GetIntervalSec())
+		t.Errorf("interval_sec = %d, want 15 — the incarnation's tag must reach its members' service vars", cfg.GetIntervalSec())
+	}
+}
+
+// TestResolveForSID_PassesIncarnationTraitsToTheStack — the rule
+// `scenario/state.go` writes down as hard: covens AND traits must reach the
+// resolver on EVERY path, or the same `vars/_stack.yaml` answers differently
+// depending on which one asked. The asymmetry is why this is a test and not a
+// convention: a missing key aborts loudly (`no such key: traits`), and on this
+// path the loudness is then swallowed — `broadcastTelemetryConfig` treats a
+// resolve failure as a warning and the Soul silently keeps its local cadence.
+func TestResolveForSID_PassesIncarnationTraitsToTheStack(t *testing.T) {
+	tmp := t.TempDir()
+	varsDir := filepath.Join(tmp, "vars")
+	if err := os.MkdirAll(varsDir, 0o755); err != nil {
+		t.Fatalf("mkdir vars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "00-base.yaml"), []byte("telemetry_interval: 45s\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "10-prd.yaml"), []byte("telemetry_interval: 15s\n"), 0o644); err != nil {
+		t.Fatalf("write overlay: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "_stack.yaml"), []byte(`stack:
+  - file: 00-base.yaml
+  - file: 10-prd.yaml
+    when: "incarnation.traits.env == 'prd'"
+`), 0o644); err != nil {
+		t.Fatalf("write _stack.yaml: %v", err)
+	}
+
+	manifest := &config.ServiceManifest{
+		Name:      "web",
+		Telemetry: &config.TelemetryConfig{Interval: telStrPtr("90s"), Collectors: []string{"cpu"}},
+	}
+	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
+	db := &telemetryFakeDB{
+		memberRows: [][]any{{"web-app", "web", "v2.0.0", []string(nil), []byte(`{"env":"prd"}`)}},
+	}
+	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
+		loader, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
+
+	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("ResolveForSID: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("cfg == nil, want an effective config")
+	}
+	if cfg.GetIntervalSec() != 15 {
+		t.Errorf("interval_sec = %d, want 15 — the incarnation's traits must reach the stack step", cfg.GetIntervalSec())
 	}
 }
 
@@ -358,14 +419,14 @@ func TestIncarnationForSID(t *testing.T) {
 		{
 			name: "≥2 memberships → the first by name",
 			rows: [][]any{
-				{"alpha", "web", "v1.0.0", []byte(`{}`)},
-				{"beta", "db", "v2.0.0", []byte(`{}`)},
+				{"alpha", "web", "v1.0.0", []string{"cache"}, []byte(nil)},
+				{"beta", "db", "v2.0.0", []string(nil), []byte(nil)},
 			},
 			wantName: "alpha",
 		},
 		{
 			name:     "exactly 1 membership → it",
-			rows:     [][]any{{"solo", "web", "v1.0.0", []byte(`{}`)}},
+			rows:     [][]any{{"solo", "web", "v1.0.0", []string(nil), []byte(nil)}},
 			wantName: "solo",
 		},
 		{

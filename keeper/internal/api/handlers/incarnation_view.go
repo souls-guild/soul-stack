@@ -42,7 +42,6 @@ type IncarnationGetView struct {
 	Name               string
 	Service            string
 	ServiceVersion     string
-	Spec               map[string]any
 	State              map[string]any
 	StateSchemaVersion int32
 	Status             string
@@ -102,7 +101,6 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		Name:               inc.Name,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
-		Spec:               maskWithSchema(inc.Spec, schema),
 		State:              maskWithSchema(inc.State, schema),
 		StateSchemaVersion: int32(inc.StateSchemaVersion),
 		Status:             string(inc.Status),

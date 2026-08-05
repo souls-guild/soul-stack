@@ -1,7 +1,7 @@
 # L0 test for create: MANDATORY data-plane monitoring (Slice I, redis pilot).
 # After the deploy branch (sentinel/cluster), create UNCONDITIONALLY (no when-gate) deploys
 # two exporters via COMPOSITION of reusable standalone destinies through apply:destiny:
-#   - node-exporter  — host metrics (version/listen from essence, arch — soulprint.self);
+#   - node-exporter  — host metrics (version/listen from service vars, arch — soulprint.self);
 #   - redis-exporter — Redis metrics via unix socket, authorizes with the monitoring ACL user.
 #
 # What we prove:
@@ -41,7 +41,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     redis_type: sentinel
     sentinel_master_name: master
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -55,13 +55,13 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # * New monitoring essence keys (Slice I): exporter versions/ports/sha.
+    # * New monitoring service vars keys (Slice I): exporter versions/ports/sha.
     node_exporter_version: "1.8.2"
     node_exporter_listen: ":9100"
     redis_exporter_version: "1.62.0"
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     redis_exporter_listen: ":9121"
-    # * log-shipping essence keys (Slice V-I, ADR-067): version/checksum/sink of the vector agent.
+    # * log-shipping service vars keys (Slice V-I, ADR-067): version/checksum/sink of the vector agent.
     # console sink (default) — endpoint/auth not needed; log_sources = redis logs.
     vector_version: "0.40.0"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -98,7 +98,7 @@ assert:
     #    * redis_user=monitoring — the key assert for finding B (without it, WRONGPASS on the ACL).
     #    redis_addr — unix socket (destiny default), password — the resolved keeper-side
     #    password of the monitoring ACL user. render_context is checked FULLY (deep-compare
-    #    of the nested map): vars carries all 6 file vars, self is the single host, essence
+    #    of the nested map): vars carries all 6 file vars, self is the single host, service vars
     #    is empty (sub-destiny isolation, ADR-009). Disambiguator from the node_exporter unit — path.
     - module: core.file.rendered
       params_subset:
@@ -126,7 +126,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 3. vector is deployed (apply:destiny vector → binary install). Marker of presence of
     #    the log-shipping sub-destiny (Slice V-I): the single core.file.present with the

@@ -5,7 +5,7 @@ package config
 // carries the full Engine (vault()/glob()/merge()/coverage/soulprint.hosts) and
 // all scenario/destiny context. required_when is input validation BEFORE the
 // render phase, a pure function of input.*; it needs a minimal env with the SINGLE
-// variable `input`. Any other name (essence/soulprint/register/…) → compile-error
+// variable `input`. Any other name (vars/soulprint/register/…) → compile-error
 // undeclared reference — the sandbox comes from undeclaration, like migration-CEL
 // ([ADR-019]). cel-go is already in the shared module (pulls shared/cel), so a
 // package-level config→cel-go dependency adds no new module-dep and creates no
@@ -127,7 +127,7 @@ func validateRequiredWhen(s *InputSchema, kv *ast.MappingValueNode, path string)
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "input_required_when_invalid",
 			Message:  fmt.Sprintf("required_when does not compile as CEL over input.*: %v", err),
-			Hint:     "predicate may reference only input.* (no essence/soulprint/register/vault/now)",
+			Hint:     "predicate may reference only input.* (no vars/soulprint/register/vault/now)",
 			YAMLPath: path + ".required_when",
 		})}
 	}

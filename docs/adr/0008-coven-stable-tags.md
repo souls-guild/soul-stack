@@ -111,3 +111,36 @@ That gap closes a real product surface. A run resolves its roster at start and a
 **Consequence for this ADR's own wording.** Wherever this file says the declared role "lives only in `incarnation.spec.hosts[].role`", read: lives only in `incarnation_choir_voices.role`. A host with no Voice has **no declared role** — an empty value, not a default one, symmetric to the way this ADR already treats an unlabelled host on the coven axis.
 
 **What an author writes instead.** `module: core.choir.present` with `on: keeper` inside the create scenario (params `incarnation` / `choir` / `sid` / `role` / `position`), or `POST /v1/incarnations/{name}/choirs/{choir}/voices` day-2. Both existed before this amendment; they are now the only ways.
+
+## Amendment (2026-08-03, NIM-410, [ADR-0082](0082-service-vars.md)): the assembly order collapses to one lexical layer
+
+The clause **"essence is role-agnostic — there is no `role/<Y>.yaml` stage"** stands, and so does the
+reason for it: a role is volatile and belongs to a probe, not to a directory name. What changes is
+everything else in the sentence that carried it.
+
+The order this ADR fixed as `default → os → coven → incarnation.spec` no longer exists. The layer
+is now **service vars** — `<service>/vars/`, read as `vars.*` — and its default order is every
+`*.yaml`/`*.yml` directly inside that directory, sorted lexically from `00-base.yaml`. The three
+non-default rungs are gone for two reasons:
+
+- **`os/<family>.yaml` and `coven/<label>.yaml`** were implemented and used by nothing outside the
+  resolver's own unit tests — no shipped example, no external destiny repo. Conditional assembly is
+  now written explicitly in `vars/_stack.yaml` (which this ADR's line 13 already referenced, and
+  which until NIM-413 existed only in prose), so there is one mechanism for it rather than two.
+- **`incarnation.spec.essence`** is removed outright: it had two readers and no writer. A fleet that
+  needs different defaults **forks the service repo** and re-pins its `ServiceRef`.
+
+**The coven axis of [ADR-0080](0080-label-inheritance-union.md) is not weakened.** An incarnation's
+label still reaches its members' service parameters — through a `foreach:` step over
+**`incarnation.covens`**, the row's own declared tags. Not `soulprint.self.covens`: the step context
+has no `soulprint` root at all, and it must not, because a service's vars are resolved once per run
+and handed to every host ([ADR-0082 §3](0082-service-vars.md#3-the-os-and-coven-layers-are-deleted-vars_stackyaml-becomes-real)).
+The old coven layer read the host's EFFECTIVE union — but on the keeper path it was already being
+handed `inc.Covens` under that name, so the incarnation's own tags are what it resolved from in the
+case this guard covers. The live guard (`TestIntegration_TelemetryInheritsIncarnationCovenIntoServiceVars`,
+NIM-248) is retargeted onto that step, not dropped: what it protects is still true, only the way to
+write it moved from an implicit directory convention to an explicit declaration.
+
+**Narrowing worth naming:** a tag attached to a HOST alone no longer selects a service-vars overlay.
+Nothing shipped did that (no example carried a `coven/` overlay at all), and it is the price of a
+layer that is host-invariant by construction rather than by a representative host.

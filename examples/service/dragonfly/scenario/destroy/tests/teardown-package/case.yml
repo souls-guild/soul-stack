@@ -4,7 +4,7 @@
 # What we assert:
 #   1. Services stopped (core.service.stopped): dragonfly, redis-sentinel, disable-thp.
 #   2. DragonFly removed via PACKAGE (core.pkg.absent name=dragonfly) — package branch active
-#      (essence.install_method=package → static gate group-keep; v1→v2 method comes from essence).
+#      (vars.install_method=package → static gate group-keep; v1→v2 method comes from service vars).
 #   3. Our DragonFly config artifacts are removed (core.file.absent): users.acl/dragonfly.conf/
 #      TLS PEM in /etc/dragonfly + logrotate/sysctl/disable-thp drop-in. (sentinel.conf/
 #      sentinel-users.acl are NOT removed HERE — they're placed by the `redis` destiny in /etc/redis, a refactor artifact.)
@@ -21,8 +21,8 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  # ★ v1→v2: install method and conf_dir come from essence (install_method=package, conf_dir default).
-  essence:
+  # ★ v1→v2: install method and conf_dir come from service vars (install_method=package, conf_dir default).
+  vars:
     install_method: package
     conf_dir: /etc/dragonfly
 

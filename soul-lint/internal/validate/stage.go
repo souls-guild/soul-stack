@@ -181,7 +181,7 @@ func passagePlanSummary(plan config.Passage) string {
 // recurses through block: — a within-block include is expanded like any other,
 // so its conditional when: needs the same offline check.
 // IsStaticIncludeWhen is the same criterion prod's
-// ExpandIncludes uses (input./essence./incarnation./vars. — allowed;
+// ExpandIncludes uses (input./vars./incarnation. — allowed;
 // register./soulprint. — not).
 func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {
 	var out []diag.Diagnostic
@@ -193,8 +193,8 @@ func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []d
 				Phase:   diag.PhaseSemanticValidate,
 				File:    scenarioPath,
 				Code:    "include_when_dynamic_unsupported",
-				Message: fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) -- include expands BEFORE stratification, only a static predicate input./essence./incarnation./vars. is available", t.Include.Include, t.When),
-				Hint:    "replace with a static predicate (input./essence./incarnation.) or move the condition onto a module task of the included file via when:",
+				Message: fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) -- include expands BEFORE stratification, only a static predicate input./vars./incarnation. is available", t.Include.Include, t.When),
+				Hint:    "replace with a static predicate (input./vars./incarnation.) or move the condition onto a module task of the included file via when:",
 			})
 		}
 		if t.Block != nil {

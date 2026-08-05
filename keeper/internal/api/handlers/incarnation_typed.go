@@ -159,7 +159,8 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		// nil → stub plan (`create`, not bare, auto_create=true). preflighter is h.runner
 		// (type-assertion to scenario.AssertPreflighter inside; a ScenarioStarter fake →
 		// no-op).
-		resolved, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject)
+		resolved, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject,
+			scenario.WithIncarnationLabels(req.Covens, req.Traits))
 		if perr != nil {
 			return zero, h.mapCreatePlanError(req.Name, req.Service, perr)
 		}
@@ -206,20 +207,11 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		return zero, perr
 	}
 
-	spec := map[string]any{}
-	if input != nil {
-		spec["input"] = input
-	}
-	if req.Traits != nil {
-		spec["traits"] = req.Traits
-	}
-
-	// Trait per-incarnation (ADR-060 amend, R1): operator-set traits live in
-	// incarnation.spec.traits (top-level API field `traits`, passed into spec
-	// above). On the create path we extract them into the incarnation.traits column — it is
-	// the source of truth, projected into souls.traits of member hosts by the sync-hook
-	// below. An invalid set (key/value format) → 422 BEFORE insert.
-	traits, err := incarnation.TraitsFromSpec(spec)
+	// Trait per-incarnation (ADR-060 amend, R1): the request's traits are
+	// validated and go straight into the incarnation.traits column, which has been
+	// their source of truth since migration 088. An invalid set (key/value format)
+	// → 422 BEFORE the insert.
+	traits, err := incarnation.ValidateCreateTraits(req.Traits)
 	if err != nil {
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
 	}
@@ -239,7 +231,6 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		Service:            req.Service,
 		ServiceVersion:     serviceVersion,
 		StateSchemaVersion: 1,
-		Spec:               spec,
 		State:              nil,
 		Status:             incarnation.StatusReady,
 		CreatedByAID:       &creator,
@@ -698,7 +689,7 @@ type IncarnationRerunLastView struct {
 // the previous_status/scenario payload is known only after UnlockForRerun). Parity with
 // (w,r)-RerunLast. source is ScenarioInvocationSource(ctx) (api / mcp). 202 +
 // apply_id + scenario.
-func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationRerunLastView, error) {
+func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string, fallbackInput map[string]any) (IncarnationRerunLastView, error) {
 	var zero IncarnationRerunLastView
 
 	if !incarnation.ValidName(name) {
@@ -734,9 +725,19 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	serviceRef.Ref = inc.ServiceVersion
 
 	applyID := audit.NewULID()
-	res, err := incarnation.UnlockForRerun(ctx, h.db, name, reason, claims.Subject, applyID, applyID)
+	// The input is handed down unconditionally; UnlockForRerunWithInput decides
+	// what it means. It is used ONLY when the attempt carries no replayable
+	// snapshot — the recovery this endpoint gained in NIM-408, which turned a dead
+	// end (a day-2 rerun became impossible once the recipe was purged at 30 days)
+	// into a request the operator can complete. With a snapshot present the input
+	// is REFUSED, not preferred: see ErrRerunInputNotNeeded.
+	res, err := incarnation.UnlockForRerunWithInput(ctx, h.db, name, reason, claims.Subject, applyID, applyID, fallbackInput)
 	if err != nil {
 		switch {
+		case errors.Is(err, incarnation.ErrRerunInputNotNeeded):
+			return zero, incProblem(problem.TypeValidationFailed,
+				"field 'input' is not accepted here: the last failed run is replayable from its own record. "+
+					"Run the scenario explicitly if you mean to run it with different values")
 		case errors.Is(err, incarnation.ErrIncarnationNotFound):
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 		case errors.Is(err, incarnation.ErrIncarnationNotErrorLocked):
@@ -744,10 +745,10 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 				"incarnation "+name+" is not error_locked — rerun-last requires error_locked")
 		case errors.Is(err, incarnation.ErrRerunInputUnavailable):
 			return zero, incProblem(problem.TypeRerunInputUnavailable,
-				"incarnation "+name+" rerun-last is not applicable: input of the failed run is unavailable "+
-					"(the run failed before dispatch - render/no_hosts/preflight, no recipe recorded; "+
-					"the recipe was purged by retention; legacy run without a recipe) - clear the lock via plain unlock "+
-					"and launch the desired scenario manually with an explicit input")
+				"incarnation "+name+" rerun-last cannot replay the last attempt: it has no run snapshot "+
+					"(the run failed before dispatch — render/no_hosts/pre-flight; or it predates the snapshot). "+
+					"Send the input to run with in the request body, or clear the lock with a plain unlock and "+
+					"start the scenario yourself")
 		default:
 			h.logger.Error("incarnation.rerun-last: unlock failed",
 				slog.String("name", name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
@@ -762,7 +763,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	if err := h.runner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
 		IncarnationName: name,
-		ServiceRef:      serviceRef,
+		ServiceRef:      incarnation.RerunServiceRef(serviceRef, res),
 		ScenarioName:    res.Scenario,
 		Input:           res.Input,
 		StartedByAID:    claims.Subject,
@@ -1169,7 +1170,7 @@ type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 // HistoryTyped — extracted domain function GET /v1/incarnations/{name}/history
 // (READ, typed query). existence-probe (404) + scope gate (out of scope → 404, parity
 // Get) via the passed inScope predicate. CheckPageBounds → 400; bad apply_id → 400.
-func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID string, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
+func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID string, includeTransitions bool, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
 	var zero IncarnationHistoryReply
 
 	if !incarnation.ValidName(name) {
@@ -1186,6 +1187,9 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name, applyID str
 				"query 'apply_id' must be a Crockford-base32 ULID (26 chars)")
 		}
 		filter.ApplyID = applyID
+	}
+	if includeTransitions {
+		filter.IncludeTransitions = true
 	}
 
 	inc, err := incarnation.SelectByName(ctx, h.db, name)

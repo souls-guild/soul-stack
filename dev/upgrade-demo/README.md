@@ -124,7 +124,7 @@ dev/upgrade-demo/
   run.sh                     # curl run through the cases (boot/reuse -> build -> seed -> cases)
   README.md                  # this file
   tree/
-    v1.0.0/service.yml + essence/_default.yaml
+    v1.0.0/service.yml + vars/00-base.yaml
     v2.0.0/… + migrations/001_to_002.yml + upgrade/to_v2/main.yml   (found)
     v2.0.1/… + migrations/001_to_002.yml                            (legacy)
 ```

@@ -34,7 +34,7 @@ import (
 
 // addUserSystemUsersCase is the richest add_user fixture: new user alice, already-deployed
 // operator user bob in state.redis_users, and the full system set (default_admin/replica/
-// monitoring/sentinel/haproxy) in essence — i.e. every class of secret the render reads.
+// monitoring/sentinel/haproxy) in the service's vars — i.e. every class of secret the render reads.
 const addUserSystemUsersCase = "../../../examples/service/redis/scenario/add_user/tests/add-user-preserves-system-users/case.yml"
 
 // TestRedisAddUser_SecretGeneratePrecedesVaultReads — the generate step exists in the add_user
@@ -111,7 +111,7 @@ func TestRedisAddUser_GeneratesOnlyNewUserSecret(t *testing.T) {
 	for _, want := range []string{
 		"redis/add_user/users/default_admin", // intra-cluster AUTH + ACL LOAD connect
 		"redis/add_user/users/bob",           // already-deployed operator-extra
-		"redis/add_user/users/replica",       // system user from essence
+		"redis/add_user/users/replica",       // system user from the service's vars
 	} {
 		if _, ok := readSet[want]; !ok {
 			t.Errorf("expected pre-existing path %q in read-set, only have: %v", want, sortedSetKeys(readSet))

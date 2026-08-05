@@ -22,7 +22,7 @@ import (
 //
 // Invariant A (ADR-027): the recipe carries vault-refs AS-IS — Input holds
 // the operator's `incarnation.spec.input` with string `vault:` references,
-// secrets are NOT resolved. essence / RenderedTask / ApplyRequest are never
+// secrets are NOT resolved. Service vars / RenderedTask / ApplyRequest are never
 // stored in the recipe — the Acolyte resolves them in RAM at claim time and
 // hands them to the Soul; resolved secrets and the finished render never
 // land in PG. StartedByAID is needed for the audit ctx when resolving vault

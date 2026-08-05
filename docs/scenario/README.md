@@ -8,7 +8,7 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 
 | Document | What about |
 |---|---|
-| [concept.md](concept.md) | What is a scenario in the new model, the boundary with destiny (a recommendation, not a wall), declared role vs actual role, role-agnostic essence. |
+| [concept.md](concept.md) | What is a scenario in the new model, the boundary with destiny (a recommendation, not a wall), declared role vs actual role, role-agnostic service vars. |
 | [orchestration.md](orchestration.md) | **Normative specification** orchestration layer: `on:`/`where:`-targeting, probe-idiom, two-level resource resolution, script tests, barrier/state-commit invariant. DSL task core - delegated to [destiny/tasks.md](../destiny/tasks.md). |
 | [ADR-043 §7/§8](../adr/0043-voyage.md) | State-commit policy for a batch scenario run: **per-incarnation state-commit** (batch = N incarnations by Legs, B1). Successor to the removed Tide per-Surge state-commit. | Semantics of database commit for Voyage `kind=scenario`. |
 

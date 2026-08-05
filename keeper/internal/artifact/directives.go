@@ -1,20 +1,19 @@
 package artifact
 
 import (
-	"errors"
+	"encoding/json"
 	"fmt"
-	"io/fs"
 	"regexp"
 	"sort"
 
-	yaml "gopkg.in/yaml.v3"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 )
 
-// essenceDefaultFile — the service essence baseline layer
-// (`essence/_default.yaml`), host-agnostic. The directive catalog
-// (`redis_directives`) lives here; full host resolution is not needed to
-// read it. Parallel to typesCatalogFile.
-const essenceDefaultFile = "essence/_default.yaml"
+// varsBaseFile — the conventional name of a service's baseline vars layer. Kept
+// only so a caller can say WHICH file it expected when the whole directory turns
+// out to be missing; the catalog itself is read from the assembled vars, not from
+// this file.
+const varsBaseFile = "vars/00-base.yaml"
 
 // DirectiveCatalog — a snapshot directive catalog: the SHA1 of the
 // materialized snapshot (serves as an ETag, the catalog is immutable at a
@@ -26,13 +25,13 @@ type DirectiveCatalog struct {
 }
 
 // LoadDirectiveCatalog reads the service's catalog of valid directive names
-// from the `essence/_default.yaml` snapshot (key `redis_directives`, a
+// from the `vars/00-base.yaml` snapshot (key `redis_directives`, a
 // series→[]name map) and, if version is non-empty, narrows it to that
 // version's major.minor series (the same logic as the render phase's assert,
 // see FilterDirectivesByVersion). serviceRoot — the absolute path to the
 // snapshot (ServiceArtifact.LocalDir).
 //
-// A service without a catalog (no essence/_default.yaml OR no
+// A service without a catalog (no vars/00-base.yaml OR no
 // redis_directives key) → a non-nil empty map + nil error (the frontend
 // degrades gracefully, HTTP 200). A read error (other than NotExist) /
 // invalid YAML → an error (the handler maps it to 502).
@@ -45,22 +44,32 @@ func LoadDirectiveCatalog(serviceRoot, version string) (map[string][]string, err
 }
 
 // loadDirectiveCatalogFull reads the whole catalog (all series) from
-// `essence/_default.yaml`. Missing file/key → an empty non-nil map (soft).
+// `vars/00-base.yaml`. Missing file/key → an empty non-nil map (soft).
 func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
-	data, err := readSnapshotFile(serviceRoot, essenceDefaultFile)
+	// The ASSEMBLED vars, not one file: a service may spread its vars over as
+	// many `NN-*.yaml` as it likes, and the catalog is wherever its author put
+	// it. Lexical assembly specifically — a `_stack.yaml`'s conditionality is
+	// per-incarnation by construction (its steps read `incarnation.*`), and this
+	// endpoint answers a service-level question with no incarnation in hand.
+	vars, err := servicevars.NewResolver(nil).ResolveLexical(serviceRoot)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return map[string][]string{}, nil
+		return nil, fmt.Errorf("artifact: assembling service vars: %w", err)
+	}
+	raw := struct {
+		RedisDirectives map[string][]string
+	}{}
+	if v, ok := vars["redis_directives"]; ok {
+		b, merr := json.Marshal(map[string]any{"redis_directives": v})
+		if merr != nil {
+			return nil, fmt.Errorf("artifact: re-encoding the directive catalog: %w", merr)
 		}
-		return nil, err
-	}
-	// A narrow slice of top-level essence: yaml.Unmarshal ignores the
-	// remaining keys.
-	var raw struct {
-		RedisDirectives map[string][]string `yaml:"redis_directives"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("artifact: parsing %s: %w", essenceDefaultFile, err)
+		var decoded struct {
+			RedisDirectives map[string][]string `json:"redis_directives"`
+		}
+		if derr := json.Unmarshal(b, &decoded); derr != nil {
+			return map[string][]string{}, nil // not the shape a catalog takes — no catalog
+		}
+		raw.RedisDirectives = decoded.RedisDirectives
 	}
 	if raw.RedisDirectives == nil {
 		return map[string][]string{}, nil
@@ -75,7 +84,7 @@ func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 
 // FilterDirectivesByVersion narrows the catalog to the series version belongs
 // to (e.g. "8.2.2" → series "8.2"). version=="" → the whole catalog (the same
-// map). The membership rule mirrors the create/update_config assert (essence
+// map). The membership rule mirrors the create/update_config assert (the service-var
 // #6): series s matches version if version ~ `^([0-9]+:)?<s>[.]` (optional
 // epoch prefix of a distro pin `5:7.0.15…`; the trailing dot is the series
 // boundary, so 7.0 does not catch 7.04). version with no known series → an

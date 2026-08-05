@@ -13,7 +13,7 @@ description: >-
   yet) → conservative default: empty versions (''  = "not deployed", best-effort like
   memory_mb/io_threads in 002_to_003/010_to_011), ports — conventional defaults :9100/:9121
   (standard listen for node_exporter/redis_exporter, independent of whether deployment
-  happened; the next create will overwrite them with values from essence). ONE flat set
+  happened; the next create will overwrite them with values from service vars). ONE flat set
   with a has()-guard on the WHOLE object (CEL-map-literal-default): monitoring already
   present → kept as is (idempotency of a repeat run), otherwise the default is set.
   Mirrors the object-guard of 008_to_009 (seeded_from). The rest of state (redis_config/

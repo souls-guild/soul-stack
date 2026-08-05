@@ -9,7 +9,7 @@
 
 ## 1. Why Augur - a border with a pre-resolved model
 
-The current model for accessing external systems is **pre-resolved**: everything that the run needs is resolved by Keeper-side **before** sending the command to Soul. The CEL phase (`vault(...)` / `soulprint.*` / `register.*` / `essence.*`) is executed on Keeper, Vault is read on Keeper, and Soul receives the already rendered `ApplyRequest` ([ADR-012(d)](../adr/0012-keeper-soul-grpc.md)). There is no `cel-go` on Soul, no Vault client, no Vault tokens.
+The current model for accessing external systems is **pre-resolved**: everything that the run needs is resolved by Keeper-side **before** sending the command to Soul. The CEL phase (`vault(...)` / `soulprint.*` / `register.*` / `vars.*`) is executed on Keeper, Vault is read on Keeper, and Soul receives the already rendered `ApplyRequest` ([ADR-012(d)](../adr/0012-keeper-soul-grpc.md)). There is no `cel-go` on Soul, no Vault client, no Vault tokens.
 
 This model does not cover cases where the value is needed **at execution time on the host**, and not at the render stage:
 

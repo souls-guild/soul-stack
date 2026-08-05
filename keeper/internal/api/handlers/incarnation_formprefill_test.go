@@ -26,7 +26,7 @@ func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", version, int(1),
-		[]byte("{}"), stateBytes, "ready",
+		stateBytes, "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits

@@ -123,7 +123,7 @@ include-task allow `when:` - then the connected task group is included in the pl
 file are **physically missing** from the plan (real exception, not placeholder): they
 are not issued, the index is not reserved. This is different from static-false `when:` by
 regular/block task (placeholder-skip with index reservation):
-  - **predicate scope - static only** (`input.*`/`essence.*`/`incarnation.*`/
+  - **predicate scope - static only** (`input.*`/`vars.*`/`incarnation.*`/
 `vars.*`). include is expanded **before** stratification when `register:` previous
 tasks have not yet been collected, and per-host `soulprint` is unknown. Dynamic include-when
 (`register.*`/`soulprint.*`) → error `include_when_dynamic_unsupported` (catches and
@@ -722,7 +722,7 @@ redis_unit_name: redis-server
 In this problem, `${ vars.redis_unit_name }` → `redis-server-staging`. In neighboring tasks without their own task-level, `vars:` is again `redis-server` from `vars.yml`.
 
 - **Visibility:** only within one task. This does not apply to tasks connected via `include:` / `block:` child (but the **include-task itself** with `vars:` is yes: the variables are visible to all tasks of the connected file, just like any task).
-- **Links inside `vars:`:** values can refer to `input.*`, `incarnation.*`, `soulprint.self.*`, `essence.*`, `register.*`, loop variable `<as>` (if the task is in `loop:`) - **but not to their own task-vars** (no circular/reciprocal references). Each `vars:` value is evaluated in a task context where other task-vars are not yet visible; calling `${ vars.<other> }` inside one of the values `vars:` → error `no such key`. The order in which the keys are declared in `vars:` is therefore irrelevant. *(File-level `vars.yml` as a source of links and the priority "task-level interrupts file-level" - the designed layer; in the current pilot render only task-level `vars:` is implemented.)*
+- **Links inside `vars:`:** values can refer to `input.*`, `incarnation.*`, `soulprint.self.*`, `register.*`, loop variable `<as>` (if the task is in `loop:`) - **but not to their own task-vars** (no circular/reciprocal references). Each `vars:` value is evaluated in a task context where other task-vars are not yet visible; calling `${ vars.<other> }` inside one of the values `vars:` → error `no such key`. The order in which the keys are declared in `vars:` is therefore irrelevant. *(File-level `vars.yml` as a source of links and the priority "task-level interrupts file-level" - the designed layer; in the current pilot render only task-level `vars:` is implemented.)*
 - **Resolve per-task, per-host:** `vars:` are evaluated BEFORE `params:` / `where:` of the same task. Because the values can reference `soulprint.self.*`, they are calculated for each targeted host; the final `params:` must remain host-invariant (pilot limitation, see render pipeline).
 - **Value type:** string is interpreted as CEL interpolation (`${ … }`; single block → native type, otherwise splicing into a string - [§10](#10-template-context)). Non-string literals (number/bool/collection) are passed as is, without CEL parsing (symmetrically `params:`).
 - **Application:** override of locals for loop iterations, one-off correction of paths in one task, simplification of long template expressions.
@@ -766,10 +766,10 @@ The DSL core of the tasks above is common to destiny and scenario ([ADR-009](../
 
 | | destiny (single host) | scenario (one cluster) |
 |---|---|---|
-| `essence.*` | **NO** - destiny is isolated, sees only `input:`. Service inserts values into `input:` when `apply:` is called. | **is** - merged essence (default → os → coven → spec) is available directly. |
+| the SERVICE's `vars/` | **NO** - destiny is isolated, sees only `input:` and its own `vars.yml`. The service inserts values into `input:` when `apply:` is called. | **yes** - the resolved `vars/` sits at the bottom of `vars.*` ([ADR-0082](../adr/0082-service-vars.md)). |
 | `incarnation.*` / `scenario.*` / `state.*` | **NO** - destiny does not know about the database and who called it. | **is** - attributes of the calling scenario / incarnation, current `state` from the database. |
 | `soulprint.where(<predicate>)` | **NO** - cross-host requests are a scenario level. | **is** - cross-host lookup by string predicate (`"'db' in covens"`, `"coven == 'prod'"`); in detail - [templating.md §2.3](../templating.md). |
-| `vars.*` | destiny-locals from [`vars.yml`](vars.md) + task-level | scenario-locals (scenario-`vars.yml`) + task-level - two-level resolution, see [scenario/orchestration.md](../scenario/orchestration.md). |
+| `vars.*` | destiny-locals from [`vars.yml`](vars.md) + task-level | the service's own [`vars/`](../service/manifest.md#service-vars) at the bottom, then the scenario's `vars:`, a `block:`'s and the task's ([ADR-0082](../adr/0082-service-vars.md)). There is no `scenario/<name>/vars.yml` rung — the file was documented but read by nothing, and it is gone rather than implemented. |
 
 The listed "NO" refers specifically to the destiny context. Scenario context, orchestration keys (`on:`/`where:`/`apply:`) and cross-host mechanisms are specified in [`docs/scenario/`](../scenario/README.md) - are not duplicated here.
 
@@ -857,7 +857,7 @@ Still open:
 
 ### Include
 - **Dynamic `when:` on include - deferred.** Conditional include (§4) supports
-only **static** predicate (`input.*`/`essence.*`/`incarnation.*`/`vars.*`),
+only **static** predicate (`input.*`/`vars.*`/`incarnation.*`),
 because include is expanded **before** stratification - `register:` of previous tasks
 not built yet, per-host `soulprint` unknown. Dynamic include-when
 (`register.*`/`soulprint.*`) → `include_when_dynamic_unsupported`. Open Q: whether to enter

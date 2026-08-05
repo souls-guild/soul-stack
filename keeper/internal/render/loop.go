@@ -218,12 +218,12 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 }
 
 // loopInvariantVars is the host-invariant context for the loop axis: input/
-// register/incarnation/essence + current iteration variables (`<as>`/
+// register/incarnation/vars + current iteration variables (`<as>`/
 // `<index_as>`), WITHOUT soulprint.self. items and when: resolve in exactly
 // this context — all host-invariant in the pilot (symmetric with
-// resolveCovenList: on: also resolves not per-host). essence is
+// resolveCovenList: on: also resolves not per-host). The service-vars layer is
 // host-invariant, so it's available in items/when (`items:
-// ${ essence.users }`). loopVars=nil for items itself (no loop variables yet).
+// ${ vars.users }`). loopVars=nil for items itself (no loop variables yet).
 //
 // soulprint.hosts (+ .where) IS available: it's the run's host-invariant
 // roster (not per-host facts), a legitimate items source (`items:
@@ -237,7 +237,7 @@ func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 		Register:       in.Register,
 		Incarnation:    incarnationVars(in, len(in.Hosts)),
 		SoulprintHosts: soulprintHosts(in),
-		Essence:        in.Essence,
+		Vars:           in.ServiceVars,
 		Loop:           loopVars,
 		AllowHosts:     !in.destinyIsolated,
 	}

@@ -29,7 +29,7 @@ input:
     maxclients: 10000
   # ★ default_admin REDESIGN: password REMOVED (requirepass dropped). Authentication under the ACL user
   # default_admin — comes in users with a per-user password (in a real run the scenario tops up
-  # system users from essence). The password here is a resolved value (vault: in the L2 stand).
+  # system users from service vars). The password here is a resolved value (vault: in the L2 stand).
   users:
     default_admin:
       perms:    "~* &* +@all"

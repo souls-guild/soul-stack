@@ -56,7 +56,7 @@ input:
 
 tasks:
   # 1. Listener launch script from .tmpl. core.file.rendered: Keeper delivers
-  #    literal template_content + render_context {vars,self,role,essence},
+  #    literal template_content + render_context {vars,self,role,service vars},
   #    the Soul side renders text/template on the host (ADR-010) — the same path as
   #    the systemd-unit node_exporter.service in production. listen comes from input → vars.
   - name: Render node_exporter launch script

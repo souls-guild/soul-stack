@@ -16,7 +16,7 @@ import (
 
 // TestRenderToSoulExecute_GoldenPath closes L0-gap (BUG-A): L0-Trial asserts
 // the task PLAN but doesn't EXECUTE a real Soul-render, so drift in the
-// text/template context root (flat vars vs §3.2 {vars,self,role,essence})
+// text/template context root (flat vars vs §3.2 {vars,self,role})
 // slipped through to E2E. This test stitches both sides together: real
 // keeper-render (Pipeline.Render builds render_context + injectTemplateContent
 // delivers template_content) → execution through the same engine Soul uses
@@ -53,7 +53,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 						"vars": map[string]any{
 							"socket":    "/run/redis/redis.sock",
 							"password":  "${ input.password }",
-							"maxmemory": "${ essence.redis.maxmemory }",
+							"maxmemory": "${ vars.redis.maxmemory }",
 						},
 					},
 				},
@@ -77,7 +77,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"password": "s3cr3t"},
-		Essence:     map[string]any{"redis": map[string]any{"maxmemory": "512mb"}},
+		ServiceVars: map[string]any{"redis": map[string]any{"maxmemory": "512mb"}},
 		Incarnation: IncarnationMeta{Name: "redis-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
@@ -101,7 +101,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 		t.Error("template-path must be removed from params (Soul only reads template_content)")
 	}
 
-	// Keeper built render_context = §3.2 root {vars,self,role,essence}.
+	// Keeper built render_context = §3.2 root {vars,self,role}.
 	rcVal, ok := fields[paramRenderContext]
 	if !ok {
 		t.Fatal("render_context missing from params - Keeper did not assemble the §3.2 root")
@@ -130,7 +130,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 		t.Errorf(".vars.socket not substituted:\n%s", out)
 	}
 	if !strings.Contains(out, "maxmemory 512mb") {
-		t.Errorf(".vars.maxmemory (from essence) not substituted:\n%s", out)
+		t.Errorf(".vars.maxmemory (from the service vars) not substituted:\n%s", out)
 	}
 	if !strings.Contains(out, "requirepass s3cr3t") {
 		t.Errorf(".vars.password (from input) not substituted:\n%s", out)

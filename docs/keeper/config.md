@@ -163,7 +163,7 @@ vault:
   pki_mount: "pki/soulstack"
 ```
 
-Vault is a required Keeper dependency: Essence secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, signing key JWT (see [`auth:`](#auth)), cloud driver credentials ([requirements.md](../requirements.md)).
+Vault is a required Keeper dependency: service-vars secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, signing key JWT (see [`auth:`](#auth)), cloud driver credentials ([requirements.md](../requirements.md)).
 
 `vault.auth.method` selects the Keeper authentication method in Vault ([ADR-014](../adr/0014-operator-identity.md)):
 

@@ -53,7 +53,7 @@ The "soul" metaphor runs through the whole system — a short glossary:
 | **Souls** | The managed agents, one per host. |
 | **Destiny** | The state a host is brought to on each run. |
 | **Soulprint** | Facts about a host — OS, kernel, CPU, network. |
-| **Essence** | The parameters and values substituted into a Destiny. |
+| **Service vars** | A service's own default parameters, substituted into a Destiny. |
 
 Full dictionary of names — [docs/naming-rules.md](docs/naming-rules.md).
 

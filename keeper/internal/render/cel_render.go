@@ -110,17 +110,25 @@ func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 // ErrVarCycle (mirrors resolveDestinyVars).
 func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
 	if len(fileVars) == 0 && len(taskVars) == 0 {
-		return base, nil
+		return base, nil // base.Vars is already the service layer
 	}
-	resolvedTask, err := resolveVarLayer(engine, taskVars, base)
+	// The service's own vars are the bottom of the ladder and the only layer a
+	// task var may reach downward into (ADR-0082); the file layer is stacked in
+	// below the task layer AFTER the resolve, which is what keeps the two of them
+	// isolated from each other.
+	serviceVars := base.Vars
+	resolvedTask, err := resolveVarLayer(engine, taskVars, serviceVars, base)
 	if err != nil {
 		return cel.Vars{}, err
 	}
-	resolved := make(map[string]any, len(fileVars)+len(resolvedTask))
-	for key, val := range fileVars { // base: file-vars already resolved (no CEL)
+	resolved := make(map[string]any, len(serviceVars)+len(fileVars)+len(resolvedTask))
+	for key, val := range serviceVars { // bottom: the service's own vars
 		resolved[key] = val
 	}
-	for key, val := range resolvedTask { // override: task-var shadows file-var
+	for key, val := range fileVars { // then: file-vars, already resolved (no CEL)
+		resolved[key] = val
+	}
+	for key, val := range resolvedTask { // top: a task-var shadows both
 		resolved[key] = val
 	}
 	base.Vars = resolved
@@ -169,9 +177,12 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 }
 
 // hostVars builds cel.Vars for a specific host: the common run context
-// (input/register/incarnation/essence) + soulprint.self for this host.
-// Essence is host-invariant (incarnation's effective layer) but is placed in
-// every per-host context — available wherever input is.
+// (input/register/incarnation/vars) + soulprint.self for this host.
+//
+// Vars is seeded with the SERVICE's own vars — the bottom of the flat `vars.*`
+// namespace (ADR-0082). They are host-invariant but placed in every per-host
+// context, available wherever input is; resolveTaskVars layers the destiny's
+// `vars.yml` and the task's own `vars:` over them.
 //
 // soulprint.hosts (+ .where) is projected from in.Hosts ONLY in the scenario
 // pass (in.destinyIsolated==false). In the destiny pass the host accessor is
@@ -184,7 +195,7 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Incarnation:    incarnationVars(in, hostCount),
 		SoulprintSelf:  soulprintSelfMap(host),
 		SoulprintHosts: soulprintHosts(in),
-		Essence:        in.Essence,
+		Vars:           in.ServiceVars,
 		Compute:        in.Compute,
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
@@ -214,19 +225,20 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 }
 
 // buildRenderContext builds the per-host root of the text/template context for
-// the core.file.rendered step (templating.md §3.2): `{ vars, self, role,
-// essence }` + CONDITIONALLY `input`. Soul passes it as the ROOT to
+// the core.file.rendered step (templating.md §3.2): `{ vars, self, role }`
+// + CONDITIONALLY `input`. Soul passes it as the ROOT to
 // text/template (rendered.go).
 //
 //   - self is the same soulprintSelfMap as in the CEL phase (ADR-018:
 //     soulprint.self.<p> in CEL ≡ .self.<p> in the template). role is the
 //     host's declared role (may be "").
-//   - vars is file-vars (base, fileVars) + the step's params.vars (override) —
-//     mirrors resolveTaskVars in the CEL phase (Variant A, vars.md), nested
-//     under key vars, not flattened. fileVars is scoped (referencedFileVars:
-//     only keys the template reads as `.vars.<key>`) — a template without
-//     `.vars.<file_var>` gets no extras, so its `.vars` stays bit-for-bit as
-//     before the feature. scenario pass → fileVars empty.
+//   - vars is the service's own vars + file-vars (base, fileVars) + the step's
+//     params.vars (override) — mirrors resolveTaskVars in the CEL phase
+//     (Variant A, vars.md), nested under key vars, not flattened. The base is
+//     SCOPED (referencedFileVars: only keys the template reads as
+//     `.vars.<key>`) — a template that reads neither a file-var nor a service
+//     var gets no extras, so its `.vars` stays bit-for-bit as before. In the
+//     destiny pass the service layer is empty by isolation.
 //   - input is the pass's operator-input (Variant B, ADR-010 §3.2): placed
 //     ONLY when injectInput (the template actually reads `.input.*`, detected
 //     via AST). vars-only templates get no input → their render_context stays
@@ -242,10 +254,9 @@ func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, para
 	// orEmptyMap normalizes nil (mergeVars returns nil when both are empty) —
 	// `.vars` is always present as a key, so `.vars.*` fails meaningfully, not panics.
 	rc := map[string]any{
-		"vars":    orEmptyMap(mergeVars(fileVars, paramsVars)),
-		"self":    soulprintSelfMap(host),
-		"role":    host.Role,
-		"essence": in.Essence,
+		"vars": orEmptyMap(mergeVars(fileVars, paramsVars)),
+		"self": soulprintSelfMap(host),
+		"role": host.Role,
 	}
 	if injectInput {
 		rc["input"] = orEmptyMap(in.Input)
@@ -262,7 +273,7 @@ const flowContextSelfKey = "self"
 
 // buildFlowContext builds a literal per-host snapshot of the non-register part
 // of the CEL context for flow-control predicates (when:/changed_when:/
-// failed_when:, ADR-012(d)): `{ input, vars, essence, incarnation, self }`.
+// failed_when:, ADR-012(d)): `{ input, vars, incarnation, self }`.
 // This is exactly the context available when rendering this host's params
 // (vars cel.Vars), MINUS soulprint.hosts (cross-host, scenario-only — Soul
 // doesn't have it) and loop (loop variables aren't placed in flow_context;
@@ -279,7 +290,6 @@ func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, h
 	fc := map[string]any{
 		"input":            orEmptyMap(vars.Input),
 		"vars":             orEmptyMap(vars.Vars),
-		"essence":          orEmptyMap(vars.Essence),
 		"incarnation":      incarnationVars(in, hostCount),
 		flowContextSelfKey: soulprintSelfMap(host),
 	}
@@ -427,7 +437,7 @@ func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
 		Register:      reg,
 		Incarnation:   incarnationVars(in, len(in.Hosts)),
 		SoulprintSelf: soulprintSelfMap(host),
-		Essence:       in.Essence,
+		Vars:          in.ServiceVars,
 		Compute:       in.Compute,
 		Ctx:           in.Ctx,
 	}

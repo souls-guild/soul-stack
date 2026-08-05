@@ -234,7 +234,7 @@ func (e *Engine) hostsReceiver(fac ast.ExprFactory, recv ast.Expr, iter string) 
 
 // qualifyPredicate qualifies "bare" element fields in the predicate (role,
 // covens, os.family, …) to iter.<field>; identifiers of the known outer context
-// (incarnation/input/register/soulprint/essence/vars + the iter-var itself) are
+// (incarnation/input/register/soulprint/vars + the iter-var itself) are
 // untouched. So the predicate inside filter references the current element's
 // fields __host.*, while the outer context resolves from the activation.
 //
@@ -340,7 +340,6 @@ var predicateContextRoots = map[string]bool{
 	"register":    true,
 	"incarnation": true,
 	"soulprint":   true,
-	"essence":     true,
 	"vars":        true,
 }
 

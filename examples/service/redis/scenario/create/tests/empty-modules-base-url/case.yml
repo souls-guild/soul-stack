@@ -57,9 +57,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -67,7 +67,7 @@ fixtures:
     sentinel_master_defaults:
       down-after-milliseconds: "5000"
       failover-timeout:        "60000"
-    # * SOURCE OF THE DEFECT: modules_base_url is EMPTY (default from essence/_default.yaml). This
+    # * SOURCE OF THE DEFECT: modules_base_url is EMPTY (default from service vars/_default.yaml). This
     # is a vanilla signal: no modules at all. Without the base_url gate, Redis 7 would get
     # loadmodule without downloaded .so files → abort at startup.
     modules_base_url: ""
@@ -162,7 +162,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   task_absent:
     # ── modules-dir is NOT created (include modules.yml group-drop with empty base_url) ──
@@ -198,7 +198,7 @@ assert:
     redis_users: []
     redis_hosts: []
     # * read-model (redesign): timings in master_settings (the effective per-master
-    # dict = essence.sentinel_master_defaults layered over the operator-dict, not set → defaults);
+    # dict = vars.sentinel_master_defaults layered over the operator-dict, not set → defaults);
     # settings — global sentinel directives (not set → {}).
     redis_sentinel:
       master_name: master

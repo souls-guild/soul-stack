@@ -2,7 +2,6 @@ package incarnation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -164,7 +163,6 @@ func TestCreate_HappyPath(t *testing.T) {
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
-		Spec:               map[string]any{"replicas": 3},
 		Status:             StatusReady,
 		CreatedByAID:       &parent,
 	}
@@ -180,16 +178,16 @@ func TestCreate_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO incarnation") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 12 {
-		t.Fatalf("args len = %d, want 12", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 11 {
+		t.Fatalf("args len = %d, want 11", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "redis-prod" {
 		t.Errorf("args[0] name = %v", f.queryRowArgs[0])
 	}
-	// created_scenario (args[11]): caller left the field unset (nil *string) → NULL in DB
+	// created_scenario (args[10]): caller left the field unset (nil *string) → NULL in DB
 	// (migration 090, bare incarnation). No more ""→'create' normalization.
-	if f.queryRowArgs[11] != nil {
-		t.Errorf("args[11] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[11])
+	if f.queryRowArgs[10] != nil {
+		t.Errorf("args[10] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[10])
 	}
 	if f.queryRowArgs[1] != "redis" {
 		t.Errorf("args[1] service = %v", f.queryRowArgs[1])
@@ -200,11 +198,11 @@ func TestCreate_HappyPath(t *testing.T) {
 	if f.queryRowArgs[3] != 1 {
 		t.Errorf("args[3] state_schema_version = %v", f.queryRowArgs[3])
 	}
-	if f.queryRowArgs[6] != "ready" {
-		t.Errorf("args[6] status = %v", f.queryRowArgs[6])
+	if f.queryRowArgs[5] != "ready" {
+		t.Errorf("args[5] status = %v", f.queryRowArgs[5])
 	}
-	if f.queryRowArgs[8] != "archon-alice" {
-		t.Errorf("args[8] created_by_aid = %v", f.queryRowArgs[8])
+	if f.queryRowArgs[7] != "archon-alice" {
+		t.Errorf("args[7] created_by_aid = %v", f.queryRowArgs[7])
 	}
 }
 
@@ -314,55 +312,6 @@ func TestCreate_MapsFKViolation(t *testing.T) {
 	}
 }
 
-func TestCreate_MarshalsSpecAsJSONB(t *testing.T) {
-	f := &fakeDB{
-		queryRowFunc: func(_ string) pgx.Row {
-			return staticRow{values: []any{time.Now(), time.Now()}}
-		},
-	}
-	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
-		StateSchemaVersion: 1, Status: StatusReady,
-		Spec: map[string]any{"replicas": 3, "version": "7.0"},
-	}
-	if err := Create(context.Background(), f, inc); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	b, ok := f.queryRowArgs[4].([]byte)
-	if !ok {
-		t.Fatalf("args[4] = %T, want []byte", f.queryRowArgs[4])
-	}
-	var got map[string]any
-	if err := json.Unmarshal(b, &got); err != nil {
-		t.Fatalf("spec not JSON: %v", err)
-	}
-	if got["version"] != "7.0" {
-		t.Errorf("spec.version = %v", got["version"])
-	}
-}
-
-func TestCreate_NilSpecBecomesEmptyObject(t *testing.T) {
-	f := &fakeDB{
-		queryRowFunc: func(_ string) pgx.Row {
-			return staticRow{values: []any{time.Now(), time.Now()}}
-		},
-	}
-	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
-		StateSchemaVersion: 1, Status: StatusReady,
-		// Spec / State nil
-	}
-	if err := Create(context.Background(), f, inc); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if s, _ := f.queryRowArgs[4].([]byte); string(s) != "{}" {
-		t.Errorf("spec bytes = %s, want \"{}\"", s)
-	}
-	if s, _ := f.queryRowArgs[5].([]byte); string(s) != "{}" {
-		t.Errorf("state bytes = %s, want \"{}\"", s)
-	}
-}
-
 // TestCreate_NilCovensBecomesEmptySlice — covens=nil encodes as an empty
 // array (NOT NULL DEFAULT '{}'): pgx would otherwise pass NULL → violation.
 // Arg $10 (index 9) — covens.
@@ -380,9 +329,9 @@ func TestCreate_NilCovensBecomesEmptySlice(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	covens, ok := f.queryRowArgs[9].([]string)
+	covens, ok := f.queryRowArgs[8].([]string)
 	if !ok {
-		t.Fatalf("args[9] = %T, want []string", f.queryRowArgs[9])
+		t.Fatalf("args[8] = %T, want []string", f.queryRowArgs[8])
 	}
 	if covens == nil {
 		t.Errorf("covens arg = nil, want non-nil empty slice")
@@ -407,7 +356,7 @@ func TestCreate_CovensPassedThrough(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	covens, _ := f.queryRowArgs[9].([]string)
+	covens, _ := f.queryRowArgs[8].([]string)
 	if len(covens) != 2 || covens[0] != "prod" || covens[1] != "dc1" {
 		t.Errorf("covens arg = %v, want [prod dc1]", covens)
 	}
@@ -421,7 +370,6 @@ func TestSelectByName_HappyPath(t *testing.T) {
 		queryRowFunc: func(_ string) pgx.Row {
 			return staticRow{values: []any{
 				"redis-prod", "redis", "v1.0.0", 1,
-				[]byte(`{"replicas":3}`),
 				[]byte(`{"ready":true}`),
 				"ready",
 				[]byte(nil),
@@ -446,9 +394,6 @@ func TestSelectByName_HappyPath(t *testing.T) {
 	}
 	if inc.CreatedByAID == nil || *inc.CreatedByAID != "archon-alice" {
 		t.Errorf("CreatedByAID = %v", inc.CreatedByAID)
-	}
-	if inc.Spec["replicas"] != float64(3) { // JSON-decode → float64
-		t.Errorf("Spec.replicas = %v", inc.Spec["replicas"])
 	}
 	if inc.State["ready"] != true {
 		t.Errorf("State.ready = %v", inc.State["ready"])
@@ -482,7 +427,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 			return &fakeRows{rows: []staticRow{
 				{values: []any{
 					"a", "redis", "v1", 1,
-					[]byte("{}"), []byte("{}"), "ready",
+					[]byte("{}"), "ready",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
@@ -491,7 +436,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
-					[]byte("{}"), []byte("{}"), "applying",
+					[]byte("{}"), "applying",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
 					any(nil), []byte(nil),
@@ -1140,12 +1085,37 @@ func TestHistorySelectByName_HappyPath(t *testing.T) {
 	if out[0].StateBefore["v"] != float64(1) {
 		t.Errorf("StateBefore = %v", out[0].StateBefore)
 	}
-	// No filter — only-args [name, offset, limit].
-	if len(f.queryArgs) != 3 {
-		t.Errorf("queryArgs len = %d, want 3 (name, offset, limit)", len(f.queryArgs))
+	// No caller filter — args are [name, transition-label, offset, limit]: the
+	// rerun-transition markers are excluded by default (NIM-408), so the label is
+	// always bound.
+	if len(f.queryArgs) != 4 {
+		t.Errorf("queryArgs len = %d, want 4 (name, transition label, offset, limit)", len(f.queryArgs))
 	}
 	if strings.Contains(f.querySQL, "apply_id = $") {
 		t.Errorf("empty filter must not produce apply_id WHERE; SQL=%q", f.querySQL)
+	}
+	if !strings.Contains(f.querySQL, "scenario <> $") {
+		t.Errorf("the default feed must exclude the rerun-transition markers; SQL=%q", f.querySQL)
+	}
+}
+
+// TestHistorySelectByName_IncludeTransitions — the opt-in. Asking for the markers
+// drops the predicate rather than filtering them back in afterwards, so the count
+// and the page agree.
+func TestHistorySelectByName_IncludeTransitions(t *testing.T) {
+	f := &fakeDB{
+		queryRowFunc: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
+		queryFunc:    func(_ string) (pgx.Rows, error) { return &fakeRows{}, nil },
+	}
+	if _, _, err := HistorySelectByName(context.Background(), f, "redis-prod",
+		HistoryFilter{IncludeTransitions: true}, 0, 50); err != nil {
+		t.Fatalf("HistorySelectByName: %v", err)
+	}
+	if strings.Contains(f.querySQL, "scenario <> $") {
+		t.Errorf("IncludeTransitions must drop the predicate; SQL=%q", f.querySQL)
+	}
+	if len(f.queryArgs) != 3 {
+		t.Errorf("queryArgs len = %d, want 3 (name, offset, limit)", len(f.queryArgs))
 	}
 }
 
@@ -1195,18 +1165,18 @@ func TestHistorySelectByName_FilterByApplyID(t *testing.T) {
 	if total != 1 || len(out) != 1 {
 		t.Errorf("total = %d, len(out) = %d", total, len(out))
 	}
-	if !strings.Contains(f.querySQL, "apply_id = $2") {
+	if !strings.Contains(f.querySQL, "apply_id = $3") {
 		t.Errorf("filter SQL: %q", f.querySQL)
 	}
-	// Args: [name, apply_id, offset, limit].
-	if len(f.queryArgs) != 4 {
-		t.Fatalf("queryArgs len = %d, want 4", len(f.queryArgs))
+	// Args: [name, transition label, apply_id, offset, limit].
+	if len(f.queryArgs) != 5 {
+		t.Fatalf("queryArgs len = %d, want 5", len(f.queryArgs))
 	}
-	if f.queryArgs[0] != "redis-prod" || f.queryArgs[1] != "01HAPPYBBBBBBBBBBBBBBBBB00" {
-		t.Errorf("queryArgs head = %v / %v", f.queryArgs[0], f.queryArgs[1])
+	if f.queryArgs[0] != "redis-prod" || f.queryArgs[2] != "01HAPPYBBBBBBBBBBBBBBBBB00" {
+		t.Errorf("queryArgs head = %v / %v", f.queryArgs[0], f.queryArgs[2])
 	}
-	if f.queryArgs[2] != 0 || f.queryArgs[3] != 50 {
-		t.Errorf("offset/limit args = %v / %v", f.queryArgs[2], f.queryArgs[3])
+	if f.queryArgs[3] != 0 || f.queryArgs[4] != 50 {
+		t.Errorf("offset/limit args = %v / %v", f.queryArgs[3], f.queryArgs[4])
 	}
 }
 
@@ -1355,6 +1325,7 @@ func TestUpdateStateFromRun_HappyPath(t *testing.T) {
 		StatusReady, nil, nil,
 		"01HHIST00000000000000000",
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
@@ -1384,7 +1355,7 @@ func TestUpdateStateFromRun_SingleWinner_CommitsFromApplying(t *testing.T) {
 		"redis-prod", "scale", "apply-id",
 		map[string]any{"replicas": 1.0},
 		map[string]any{"replicas": 3.0},
-		StatusReady, nil, nil, "hist-id", nil)
+		StatusReady, nil, nil, "hist-id", nil, nil)
 	if err != nil {
 		t.Fatalf("commit from applying: %v", err)
 	}
@@ -1406,7 +1377,7 @@ func TestUpdateStateFromRun_SingleWinner_AlreadyFinalized(t *testing.T) {
 		}
 		err := UpdateStateFromRun(context.Background(), f,
 			"redis-prod", "scale", "apply-id",
-			nil, nil, StatusReady, nil, nil, "hist-id", nil)
+			nil, nil, StatusReady, nil, nil, "hist-id", nil, nil)
 		if !errors.Is(err, ErrAlreadyFinalized) {
 			t.Errorf("status=%s: err = %v, want ErrAlreadyFinalized", st, err)
 		}
@@ -1427,7 +1398,7 @@ func TestUpdateStateFromRun_NotFound(t *testing.T) {
 	}
 	err := UpdateStateFromRun(context.Background(), f,
 		"ghost", "noop", "apply-id",
-		nil, nil, StatusReady, nil, nil, "hist-id", nil)
+		nil, nil, StatusReady, nil, nil, "hist-id", nil, nil)
 	if !errors.Is(err, ErrIncarnationNotFound) {
 		t.Errorf("err = %v, want ErrIncarnationNotFound", err)
 	}
@@ -1436,7 +1407,7 @@ func TestUpdateStateFromRun_NotFound(t *testing.T) {
 func TestUpdateStateFromRun_RejectsBadName(t *testing.T) {
 	f := &multiExecFake{}
 	err := UpdateStateFromRun(context.Background(), f,
-		"BAD_NAME", "s", "a", nil, nil, StatusReady, nil, nil, "h", nil)
+		"BAD_NAME", "s", "a", nil, nil, StatusReady, nil, nil, "h", nil, nil)
 	if err == nil {
 		t.Fatal("invalid name returned nil err")
 	}
@@ -1448,7 +1419,7 @@ func TestUpdateStateFromRun_RejectsBadName(t *testing.T) {
 func TestUpdateStateFromRun_RejectsBadStatus(t *testing.T) {
 	f := &multiExecFake{}
 	err := UpdateStateFromRun(context.Background(), f,
-		"redis-prod", "s", "a", nil, nil, Status("frobnicated"), nil, nil, "h", nil)
+		"redis-prod", "s", "a", nil, nil, Status("frobnicated"), nil, nil, "h", nil, nil)
 	if err == nil {
 		t.Fatal("invalid status returned nil err")
 	}
@@ -1457,7 +1428,7 @@ func TestUpdateStateFromRun_RejectsBadStatus(t *testing.T) {
 func TestUpdateStateFromRun_RejectsEmptyApplyID(t *testing.T) {
 	f := &multiExecFake{}
 	if err := UpdateStateFromRun(context.Background(), f,
-		"redis-prod", "s", "", nil, nil, StatusReady, nil, nil, "h", nil); err == nil {
+		"redis-prod", "s", "", nil, nil, StatusReady, nil, nil, "h", nil, nil); err == nil {
 		t.Fatal("empty apply_id returned nil err")
 	}
 }
@@ -1472,7 +1443,7 @@ func TestUpdateStateFromRun_ErrorLockedWithDetails(t *testing.T) {
 		"redis-prod", "scale", "apply-id",
 		map[string]any{"replicas": 1.0},
 		map[string]any{"replicas": 1.0},
-		StatusErrorLocked, details, nil, "hist-id", nil)
+		StatusErrorLocked, details, nil, "hist-id", nil, nil)
 	if err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
@@ -1536,8 +1507,8 @@ func TestCreate_CreatedScenarioPassedThrough(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if f.queryRowArgs[11] != "create_cluster" {
-		t.Errorf("args[11] created_scenario = %v, want create_cluster", f.queryRowArgs[11])
+	if f.queryRowArgs[10] != "create_cluster" {
+		t.Errorf("args[10] created_scenario = %v, want create_cluster", f.queryRowArgs[10])
 	}
 }
 
@@ -1558,8 +1529,8 @@ func TestCreate_BareCreatedScenarioNull(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if f.queryRowArgs[11] != nil {
-		t.Errorf("args[11] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[11])
+	if f.queryRowArgs[10] != nil {
+		t.Errorf("args[10] created_scenario = %v, want nil (NULL for bare)", f.queryRowArgs[10])
 	}
 }
 
@@ -1572,7 +1543,7 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 			queryRowFunc: func(_ string) pgx.Row {
 				return staticRow{values: []any{
 					"redis-cluster", "redis", "v1", 1,
-					[]byte("{}"), []byte("{}"), "ready",
+					[]byte("{}"), "ready",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), any(nil), []byte(nil),
 					createdScenario, // created_scenario (string | nil=NULL)
@@ -1611,7 +1582,7 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 			queryRowFunc: func(_ string) pgx.Row {
 				return staticRow{values: []any{
 					"redis-cluster", "redis", "v1", 1,
-					[]byte("{}"), []byte("{}"), "applying",
+					[]byte("{}"), "applying",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), any(nil), []byte(nil),
 					"create",        // created_scenario

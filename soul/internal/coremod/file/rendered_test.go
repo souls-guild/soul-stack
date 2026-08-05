@@ -12,23 +12,19 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// renderCtx builds the §3.2 root ({vars, self, role, essence}) for tests —
+// renderCtx builds the §3.2 root ({vars, self, role}) for tests —
 // the same contract Keeper puts into params.render_context (setRenderContext).
-func renderCtx(vars, self, essence map[string]any, role string) map[string]any {
+func renderCtx(vars, self map[string]any, role string) map[string]any {
 	if vars == nil {
 		vars = map[string]any{}
 	}
 	if self == nil {
 		self = map[string]any{}
 	}
-	if essence == nil {
-		essence = map[string]any{}
-	}
 	return map[string]any{
-		"vars":    vars,
-		"self":    self,
-		"role":    role,
-		"essence": essence,
+		"vars": vars,
+		"self": self,
+		"role": role,
 	}
 }
 
@@ -43,7 +39,7 @@ func TestApply_Rendered_CreatesFile(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "host = {{ .vars.host }}\nport = {{ .vars.port }}\n",
-			"render_context":   renderCtx(map[string]any{"host": "db1", "port": 5432}, nil, nil, ""),
+			"render_context":   renderCtx(map[string]any{"host": "db1", "port": 5432}, nil, ""),
 			"mode":             "0640",
 		}),
 	}, stream); err != nil {
@@ -86,7 +82,7 @@ func TestApply_Rendered_SelfFact(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "bind {{ .self.network.primary_ip }}\nfamily {{ .self.os.family }}\n",
-			"render_context":   renderCtx(nil, self, nil, ""),
+			"render_context":   renderCtx(nil, self, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -112,7 +108,7 @@ func TestApply_Rendered_Role(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "role = {{ .role }}\n",
-			"render_context":   renderCtx(nil, nil, nil, "primary"),
+			"render_context":   renderCtx(nil, nil, "primary"),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -126,20 +122,21 @@ func TestApply_Rendered_Role(t *testing.T) {
 	}
 }
 
-// .essence.* is the collected essence (read-only snapshot), available at the §3.2 root.
-func TestApply_Rendered_Essence(t *testing.T) {
+// A service's own vars reach a template as `.vars.*` like every other var
+// (ADR-0082): there is no separate root for them at §3.2.
+func TestApply_Rendered_ServiceVars(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "app.conf")
 	m := file.New()
 
-	essence := map[string]any{"redis": map[string]any{"maxmemory": "512mb"}}
+	serviceVars := map[string]any{"redis": map[string]any{"maxmemory": "512mb"}}
 	stream := &internaltest.ApplyStream{}
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: "rendered",
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
-			"template_content": "maxmemory {{ .essence.redis.maxmemory }}\n",
-			"render_context":   renderCtx(nil, nil, essence, ""),
+			"template_content": "maxmemory {{ .vars.redis.maxmemory }}\n",
+			"render_context":   renderCtx(serviceVars, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -167,7 +164,7 @@ func TestApply_Rendered_IdempotentNoChange(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "value = {{ .vars.v }}\n",
-			"render_context":   renderCtx(map[string]any{"v": 42}, nil, nil, ""),
+			"render_context":   renderCtx(map[string]any{"v": 42}, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -191,7 +188,7 @@ func TestApply_Rendered_ChangeOnContentDiff(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "value = {{ .vars.v }}\n",
-			"render_context":   renderCtx(map[string]any{"v": 2}, nil, nil, ""),
+			"render_context":   renderCtx(map[string]any{"v": 2}, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -217,7 +214,7 @@ func TestApply_Rendered_MissingVarFails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "hello {{ .vars.name }}\n",
-			"render_context":   renderCtx(map[string]any{}, nil, nil, ""), // .vars.name missing
+			"render_context":   renderCtx(map[string]any{}, nil, ""), // .vars.name missing
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -295,7 +292,7 @@ func TestApply_Rendered_ParseErrorFails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "{{ .unterminated ",
-			"render_context":   renderCtx(nil, nil, nil, ""),
+			"render_context":   renderCtx(nil, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -318,7 +315,7 @@ func TestApply_Rendered_NestedVars(t *testing.T) {
 			"template_content": "addr = {{ .vars.db.host }}:{{ .vars.db.port }}\n",
 			"render_context": renderCtx(map[string]any{
 				"db": map[string]any{"host": "pg", "port": 6432},
-			}, nil, nil, ""),
+			}, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -346,7 +343,7 @@ func TestApply_Rendered_ModeOnlyChange(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "x = {{ .vars.x }}\n",
-			"render_context":   renderCtx(map[string]any{"x": 1}, nil, nil, ""),
+			"render_context":   renderCtx(map[string]any{"x": 1}, nil, ""),
 			"mode":             "0600",
 		}),
 	}, stream); err != nil {
@@ -372,7 +369,7 @@ func TestApply_Rendered_InvalidModeFails(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "x\n",
-			"render_context":   renderCtx(nil, nil, nil, ""),
+			"render_context":   renderCtx(nil, nil, ""),
 			"mode":             "nonsense",
 		}),
 	}, stream); err != nil {
@@ -412,7 +409,7 @@ func TestApply_Rendered_NoTempLeftover(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"path":             path,
 			"template_content": "ok\n",
-			"render_context":   renderCtx(nil, nil, nil, ""),
+			"render_context":   renderCtx(nil, nil, ""),
 		}),
 	}, stream); err != nil {
 		t.Fatalf("Apply: %v", err)

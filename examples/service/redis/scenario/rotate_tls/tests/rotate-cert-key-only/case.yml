@@ -31,9 +31,9 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # System ACL users are appended to users.acl on re-render; host-layout is in essence
+  # System ACL users are appended to users.acl on re-render; host-layout is in service vars
   # (v11→v12, Variant A). Identical to rotate-cert-key-ca.
-  essence:
+  vars:
     conf_dir: /etc/redis
     data_dir: /var/lib/redis
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -166,7 +166,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 1c. GUARD replica→master AUTH: config-map carries masteruser/masterauth (see rotate-cert-key-ca).
     - module: core.file.rendered
@@ -207,7 +207,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. APPLIER-REGISTER MATERIALIZED: terminal core.noop.run(register=tls_certs) —
     #    onchanges-gate anchor (id disambiguator).

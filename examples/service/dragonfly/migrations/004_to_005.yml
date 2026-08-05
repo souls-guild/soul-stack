@@ -13,7 +13,7 @@ description: >-
   v4 incarnations were deployed BEFORE monitoring was introduced (no exporter yet) -> conservative
   default: an empty version ('' = "not deployed", best-effort like memory_mb), the port — the
   conventional :9100 (node_exporter's standard listen; the next create will overwrite it with the
-  value from essence). ONE flat set with a has()-guard on the WHOLE object (CEL map-literal
+  value from service vars). ONE flat set with a has()-guard on the WHOLE object (CEL map-literal
   default): monitoring already present -> kept as-is (idempotent on reruns), otherwise the
   default is set. Mirrors redis 012_to_013 (object-guard). The rest of state is untouched.
 

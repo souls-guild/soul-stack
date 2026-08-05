@@ -51,7 +51,7 @@
 # reactively re-reads it with `sysctl -p <file>` on change (reload: auto). In containers some
 # vm.* keys are read-only — ignore_failures makes it `sysctl -e -p` (--ignore silences
 # read-only/nonexistent keys). sysctl_settings — a map kernel-parameter→value, passed by the
-# service scenario via apply.input (defaults — essence.sysctl_settings).
+# service scenario via apply.input (defaults — vars.sysctl_settings).
 - name: Apply dragonfly sysctl kernel parameters
   module: core.sysctl.applied
   params:

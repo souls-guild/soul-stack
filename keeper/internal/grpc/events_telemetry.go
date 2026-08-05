@@ -10,8 +10,8 @@ import (
 	grpclib "google.golang.org/grpc"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
@@ -25,30 +25,30 @@ type serviceArtifactLoader interface {
 
 // telemetrySource is an implementation of [TelemetrySource] (ADR-072, NIM-87) over PG
 // (souls + incarnation + soulprint) + a service registry (git coordinates) +
-// a Service loader + an essence resolver. Wired up in the daemon: shared pool +
-// d.serviceRegistry + d.serviceLoader + d.essenceResolver.
+// a Service loader + a service-vars resolver. Wired up in the daemon: shared pool +
+// d.serviceRegistry + d.serviceLoader + d.serviceVarsResolver.
 type telemetrySource struct {
 	db       soul.ExecQueryRower
 	resolver incarnation.ServiceResolver
 	loader   serviceArtifactLoader
-	essence  *essence.Resolver
+	vars     *servicevars.Resolver
 	logger   *slog.Logger
 }
 
 // NewTelemetrySource assembles a [TelemetrySource]. db - shared pool (souls +
 // incarnation + soulprint). resolver - service registry (git coordinates by name,
-// d.serviceRegistry). loader - Service loader (d.serviceLoader). ess -
-// essence resolver (d.essenceResolver). logger nil -> slog.Default().
+// d.serviceRegistry). loader - Service loader (d.serviceLoader). vars -
+// service-vars resolver (d.serviceVarsResolver). logger nil -> slog.Default().
 //
 // resolver is required in addition to the loader: [artifact.ServiceLoader.Load] requires
 // a git URL in ServiceRef (empty Git is a hard error), while an incarnation only carries the
 // service name + version - the URL is resolved by the registry (mirrors oracle_enqueuer /
 // incarnation handlers).
-func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceResolver, loader serviceArtifactLoader, ess *essence.Resolver, logger *slog.Logger) TelemetrySource {
+func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceResolver, loader serviceArtifactLoader, vars *servicevars.Resolver, logger *slog.Logger) TelemetrySource {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &telemetrySource{db: db, resolver: resolver, loader: loader, essence: ess, logger: logger}
+	return &telemetrySource{db: db, resolver: resolver, loader: loader, vars: vars, logger: logger}
 }
 
 // selectIncarnationsForSIDSQL - the incarnations host $1 is BOUND to
@@ -68,7 +68,7 @@ func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceReso
 // receiving that incarnation's service config, which is not what the operator
 // bound (ADR-030 amendment 2026-07-28).
 const selectIncarnationsForSIDSQL = `
-SELECT i.name, i.service, i.service_version, i.spec
+SELECT i.name, i.service, i.service_version, i.covens, i.traits
 FROM incarnation_membership m
 JOIN incarnation i ON i.name = m.incarnation_name
 WHERE m.sid = $1
@@ -77,28 +77,34 @@ ORDER BY i.name
 
 // ResolveForSID resolves the host's effective telemetry config (ADR-072, NIM-87):
 //
-//	soul.EffectiveCovens -> incarnation by MEMBERSHIP (first by name)
+//	registry gate -> incarnation by MEMBERSHIP (first by name)
 //	  -> serviceRegistry.Resolve(inc.Service) (ref = inc.ServiceVersion)
-//	  -> loader.Load -> art.Manifest.Telemetry + essence.Resolve(override)
+//	  -> loader.Load -> art.Manifest.Telemetry + servicevars.Resolve
 //	  -> ResolveEffectiveTelemetry(merge+clamp).
 //
-// The two label questions are answered from different places on purpose:
-// "which incarnation's service config is this host owed" is membership
-// ([telemetrySource.incarnationForSID], the relation), while "which coven
-// overlays of that service's essence apply to it" is the effective label set
-// ([soul.EffectiveCovens], the ADR-080 union) - so a tag put on the incarnation
-// reaches its members' essence, without a tag ever conjuring a membership.
+// "Which incarnation's service config is this host owed" is MEMBERSHIP
+// ([telemetrySource.incarnationForSID], the relation) and must never be answered
+// from the label union, which deliberately admits a host-attached tag spelled
+// like an incarnation's name. The second question this used to ask - "which
+// coven overlays of that service apply to it" - no longer exists: service vars
+// are host-invariant (ADR-0082). A service that needs a label-dependent value
+// declares the step in `vars/_stack.yaml` (NIM-413).
 //
 // (nil, nil) - "no config": host not in the registry / in no incarnation.
 // broadcast is skipped, Soul stays on the soul-local cadence. Any resolve failure -
 // (nil, err): broadcast swallows it as a warning, the stream stays alive.
 func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keeperv1.TelemetryConfig, error) {
-	covens, err := soul.EffectiveCovens(ctx, s.db, sid)
-	if err != nil {
+	// Registry gate: a host that is not in `souls` at all must be told nothing
+	// rather than resolved against somebody's incarnation. A plain existence
+	// lookup — the label-union query this used to call (soul.EffectiveCovens,
+	// souls ∪ every incarnation's tags) answered a question nothing on this path
+	// asks any more, and a failure of the inheritance join would have failed the
+	// telemetry resolve for no reason.
+	if _, err := soul.SelectBySID(ctx, s.db, sid); err != nil {
 		if errors.Is(err, soul.ErrSoulNotFound) {
 			return nil, nil // host not yet in the registry - no config
 		}
-		return nil, fmt.Errorf("telemetry: effective covens %q: %w", sid, err)
+		return nil, fmt.Errorf("telemetry: registry lookup %q: %w", sid, err)
 	}
 
 	inc, err := s.incarnationForSID(ctx, sid)
@@ -124,20 +130,24 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		return nil, fmt.Errorf("telemetry: load service %q@%q: %w", ref.Name, ref.Ref, err)
 	}
 
-	essenceMap, err := s.essence.Resolve(essence.ResolveInput{
-		ServiceDir:      art.LocalDir,
-		OSFamily:        s.osFamilyForSID(ctx, sid),
-		Covens:          covens,
-		IncarnationSpec: specEssence(inc),
+	serviceVars, err := s.vars.Resolve(servicevars.ResolveInput{
+		ServiceDir: art.LocalDir,
+		Incarnation: servicevars.IncarnationContext{
+			Name:           inc.Name,
+			Service:        inc.Service,
+			ServiceVersion: inc.ServiceVersion,
+			Covens:         inc.Covens,
+			Traits:         inc.Traits,
+		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("telemetry: essence resolve (%q): %w", inc.Name, err)
+		return nil, fmt.Errorf("telemetry: service-vars resolve (%q): %w", inc.Name, err)
 	}
 
-	// An operator typo in essence-collectors (unknown names are silently
+	// An operator typo in collectors named in the service vars (unknown names are silently
 	// filtered out) - made visible in the logs, otherwise there is nothing to diagnose it with.
-	if unknown := essence.UnknownTelemetryCollectors(essenceMap); len(unknown) > 0 {
-		s.logger.Warn("telemetry: ignored unknown telemetry collectors in essence",
+	if unknown := servicevars.UnknownTelemetryCollectors(serviceVars); len(unknown) > 0 {
+		s.logger.Warn("telemetry: ignored unknown telemetry collectors in the service vars",
 			slog.String("incarnation", inc.Name),
 			slog.Any("unknown", unknown),
 		)
@@ -146,7 +156,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	// art.Manifest is guaranteed non-nil after a successful Load (otherwise Load
 	// would have returned an error); Telemetry can be nil - ResolveEffectiveTelemetry
 	// is nil-safe.
-	return essence.ResolveEffectiveTelemetry(art.Manifest.Telemetry, essenceMap), nil
+	return servicevars.ResolveEffectiveTelemetry(art.Manifest.Telemetry, serviceVars), nil
 }
 
 // incarnationForSID returns the first-by-name incarnation the host is a member
@@ -174,15 +184,15 @@ func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*i
 	var matches []*incarnation.Incarnation
 	for rows.Next() {
 		var (
-			inc       incarnation.Incarnation
-			specBytes []byte
+			inc         incarnation.Incarnation
+			traitsBytes []byte
 		)
-		if err := rows.Scan(&inc.Name, &inc.Service, &inc.ServiceVersion, &specBytes); err != nil {
+		if err := rows.Scan(&inc.Name, &inc.Service, &inc.ServiceVersion, &inc.Covens, &traitsBytes); err != nil {
 			return nil, fmt.Errorf("telemetry: scan incarnation: %w", err)
 		}
-		if len(specBytes) > 0 {
-			if err := json.Unmarshal(specBytes, &inc.Spec); err != nil {
-				return nil, fmt.Errorf("telemetry: unmarshal incarnation spec %q: %w", inc.Name, err)
+		if len(traitsBytes) > 0 {
+			if err := json.Unmarshal(traitsBytes, &inc.Traits); err != nil {
+				return nil, fmt.Errorf("telemetry: unmarshal incarnation traits %q: %w", inc.Name, err)
 			}
 		}
 		incCopy := inc
@@ -206,43 +216,6 @@ func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*i
 			slog.Any("incarnations", names))
 	}
 	return matches[0], nil
-}
-
-// osFamilyForSID is a best-effort extraction of soulprint.os.family for the essence os layer.
-// A fresh host without soulprint (ErrSoulprintNotReceived) / any failure -> "" (the os layer
-// is simply skipped, does not fail the resolve).
-func (s *telemetrySource) osFamilyForSID(ctx context.Context, sid string) string {
-	rec, err := soul.SelectSoulprint(ctx, s.db, sid)
-	if err != nil {
-		return ""
-	}
-	var facts map[string]any
-	if err := json.Unmarshal(rec.FactsJSON, &facts); err != nil {
-		return ""
-	}
-	return osFamilyOf(facts)
-}
-
-// osFamilyOf extracts soulprint.os.family from last-reported facts. A trivial
-// duplicate of the scenario helper (signature over a map, not over *topology.HostFacts -
-// exporting it just for 3 lines would be excessive).
-func osFamilyOf(soulprint map[string]any) string {
-	os, ok := soulprint["os"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	family, _ := os["family"].(string)
-	return family
-}
-
-// specEssence returns incarnation.spec.essence (the operator's override) or nil.
-// A trivial duplicate of the scenario helper (exporting it just for 3 lines would be excessive).
-func specEssence(inc *incarnation.Incarnation) map[string]any {
-	if inc.Spec == nil {
-		return nil
-	}
-	e, _ := inc.Spec["essence"].(map[string]any)
-	return e
 }
 
 // broadcastTelemetryConfig hands the Soul its effective host-vitals telemetry config

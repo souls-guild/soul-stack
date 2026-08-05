@@ -61,10 +61,10 @@ fixtures:
       password: haproxy-sys-secret-pass
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
-  essence:
-    # install_method - in essence (author-context): the install method is NOT operator-input
-    # (covenant.compute.install reads default(essence.install_method, 'binary')). package
-    # explicit (the field moved input→essence together with migrate, a covenant rollout).
+  vars:
+    # install_method - in service vars (author-context): the install method is NOT operator-input
+    # (covenant.compute.install reads default(vars.install_method, 'binary')). package
+    # explicit (the field moved input→service vars together with migrate, a covenant rollout).
     install_method: package
     redis_type: cluster
     sentinel_master_name: master
@@ -88,7 +88,7 @@ fixtures:
     redis_type: cluster
     # ★ version - enum of builds shipped to Nexus (redesign); a valid enum is needed so that
     # the run passes input validation and reaches replica-guard (render-assert), instead of failing
-    # earlier on the enum. install_method moved into essence (above) - NOT operator-input.
+    # earlier on the enum. install_method moved into service vars (above) - NOT operator-input.
     version: "7.4.1"
     shards: 2
     # ★ replicas_per_master=1 - a topology with replicas. size-guard (0.) PASS (4==2*(1+1)),

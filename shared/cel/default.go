@@ -12,21 +12,21 @@ import (
 // 2026-06-23]). Value-or-default: return x if
 // present/available, else y. Shortens the canonical has()-guard ([docs/input.md]):
 //
-//	default(essence.tls_enable, false)   ≡  has(essence.tls_enable) ? essence.tls_enable : false
+//	default(vars.tls_enable, false)   ≡  has(vars.tls_enable) ? vars.tls_enable : false
 //	default(input.redis_settings, {})    ≡  has(input.redis_settings) ? input.redis_settings : {}
-//	int(default(essence.tls_port, 7379)) ≡  int(has(essence.tls_port) ? essence.tls_port : 7379)
+//	int(default(vars.tls_port, 7379)) ≡  int(has(vars.tls_port) ? vars.tls_port : 7379)
 //
 // Implemented as a custom macro (compile-time AST rewrite), like vault()
 // ([vault.go]). CEL evaluates arguments EAGERLY: as a plain function,
-// default(essence.tls_enable, false) would fail "no such key" on a missing key
+// default(vars.tls_enable, false) would fail "no such key" on a missing key
 // BEFORE the call. The macro sees the first argument's AST BEFORE eval and rewrites
 // it to the guarded has(x) ? x : y — the same eagerness-bypass technique as vault().
 // Compile-time rewrite, not runtime execution of a string.
 //
 // Constraint (value-or-default semantics): x must be a select-chain or an
 // identifier. has() in CEL applies ONLY to field access (select), so:
-//   - Select x (essence.tls_enable, a.b.c) → has(x) ? x : y;
-//   - a bare root identifier (input/essence/…) is always present in the
+//   - Select x (vars.tls_enable, a.b.c) → has(x) ? x : y;
+//   - a bare root identifier (input/vars/…) is always present in the
 //     activation ([Vars.activation] binds roots as an empty map, not "absent")
 //     → expands into x itself (fallback unreachable — correct degenerate
 //     semantics; has(ident) does not compile in CEL at all);
@@ -41,7 +41,7 @@ import (
 // — hermetic sandbox with minimal surface area (symmetric with merge()/glob()).
 //
 // Masking invariant: default(x, y) does NOT rename the destination key, so a secret
-// substituted via default(essence.x, vault('…#password')) or assigned to a
+// substituted via default(vars.x, vault('…#password')) or assigned to a
 // sensitive-named key (password/secret/token/tls_key/…) is masked by the output
 // layer (shared/audit.MaskSecrets) IDENTICALLY to a direct substitution; it neither
 // widens nor narrows the masking boundary (symmetric with merge()).
@@ -82,7 +82,7 @@ func expandDefaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast
 		return mef.Copy(x), nil
 	default:
 		return nil, mef.NewError(x.ID(),
-			"default(x, y): first argument must be a field (essence.tls_enable, a.b.c) "+
+			"default(x, y): first argument must be a field (vars.tls_enable, a.b.c) "+
 				"or an identifier, not an expression - for computations use the ternary has(...)?...:...")
 	}
 }

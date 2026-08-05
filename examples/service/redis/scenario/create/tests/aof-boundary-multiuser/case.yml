@@ -2,12 +2,12 @@
 #   - persistence: aof  → save="" + appendonly yes (aof preset, not rdb);
 #   - memory_mb=64 (min BOUNDARY) → 64*75/100=48 → maxmemory "48mb" (NOT "0mb":
 #     exactly why min:64 exists, for a nonzero result — see input.memory_mb);
-#   - maxmemory_policy NOT set → falls back to essence (allkeys-lru), has-guard does
+#   - maxmemory_policy NOT set → falls back to service vars (allkeys-lru), has-guard does
 #     not materialize an empty key;
 #   - ≥2 ACL users with names that VIOLATE insertion order (zeta/alpha/mike) →
 #     users renders as a MAP (deterministic line order in users.acl; direct
 #     order-guard on the rendered file — destiny_redis_tmpl_test.go).
-name: aof + memory boundary 64mb + essence policy fallback + multi-user map
+name: aof + memory boundary 64mb + service vars policy fallback + multi-user map
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
@@ -40,9 +40,9 @@ fixtures:
       password: alpha-secret-pass
     secret/redis/create/users/mike:
       password: mike-secret-pass
-  essence:
-    # install_method - in essence (author context, 2026-06-28): the install method is
-    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method - in service vars (author context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -67,7 +67,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server + the sentinel daemon (1:1 from essence/_default.yaml).
+    # System ACL users of redis-server + the sentinel daemon (1:1 from service vars/_default.yaml).
     # BOTH ARE MANDATORY: the create/sentinel.yml guard (assert 1b) fails the render if
     # either set is empty (a silent fail-open is not acceptable - without them
     # replication/sentinel<->redis AUTH would break).
@@ -100,7 +100,7 @@ fixtures:
     replicas_per_master: 0
     memory_mb: 64
     persistence: aof_1sec
-    # maxmemory_policy is NOT set - must come from essence (allkeys-lru).
+    # maxmemory_policy is NOT set - must come from service vars (allkeys-lru).
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }
       - { name: alpha, perms: "~app:* +@read", state: "on" }
@@ -125,7 +125,7 @@ assert:
         group: redis
         render_context:
           vars:
-            # SYSTEM (4, from essence.system_acl_users, merged in MANDATORILY - guard 1b)
+            # SYSTEM (4, from vars.system_acl_users, merged in MANDATORILY - guard 1b)
             # + operator-extra zeta/alpha/mike (last-wins). Names do not collide with system ones.
             users:
               default_admin:
@@ -172,7 +172,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # redis.conf: the RESULT of merge() - the main guard of this case.
     - module: core.file.rendered
@@ -201,9 +201,9 @@ assert:
               # over them like any directive -> they survive a restart statically.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
-              # BOUNDARY: 64*75/100=48 -> "48mb" (NOT "0mb"). Overrode essence's "256mb".
+              # BOUNDARY: 64*75/100=48 -> "48mb" (NOT "0mb"). Overrode service vars's "256mb".
               maxmemory: "48mb"
-              # maxmemory_policy is NOT set in input -> comes from essence (has-guard: an empty
+              # maxmemory_policy is NOT set in input -> comes from service vars (has-guard: an empty
               # key is not materialized, the default is not overwritten).
               maxmemory-policy: allkeys-lru
               maxclients: 10000
@@ -223,7 +223,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   state_changes:
     redis_type: sentinel

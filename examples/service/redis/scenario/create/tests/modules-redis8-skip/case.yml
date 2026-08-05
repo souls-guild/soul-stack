@@ -46,9 +46,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -79,7 +79,7 @@ fixtures:
       timeout:          300
 
     # System ACL users for redis-server + the sentinel daemon (1:1 from
-    # essence/_default.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
+    # service vars/_default.yaml). BOTH ARE MANDATORY: the create/sentinel.yml guard
     # (assert 1b) aborts the render if either set is empty (a silent fail-open is not
     # acceptable — without them replication/sentinel↔redis AUTH would break).
     system_acl_users:
@@ -156,7 +156,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # standalone-PING: cluster/sentinel branches — placeholder-skip; disambiguator
     # addr/args.

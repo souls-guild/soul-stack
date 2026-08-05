@@ -76,14 +76,14 @@ assert:
             os:
               arch: arm64
           role: ""
-          essence: {}
+          service vars: {}
 
     # unit: render_context.vars.sink_token is the resolved collector secret (passed into
     # Environment=VECTOR_SINK_TOKEN). journald=true → the template adds SupplementaryGroups
     # (not visible in L0: static .tmpl text, but input.journald is present in the context).
     # render_context is checked IN FULL (deep-compare of every key, like vector.yaml above):
     # vars = file-vars + sink_token; input = all fields after defaults (loki + endpoint +
-    # journald=true); self = synthetic arm64 host; essence is empty (sub-destiny isolation).
+    # journald=true); self = synthetic arm64 host; service vars is empty (sub-destiny isolation).
     - module: core.file.rendered
       params_subset:
         path: /etc/systemd/system/vector.service
@@ -120,7 +120,7 @@ assert:
             os:
               arch: arm64
           role: ""
-          essence: {}
+          service vars: {}
 
     - module: core.service.running
       params_subset:

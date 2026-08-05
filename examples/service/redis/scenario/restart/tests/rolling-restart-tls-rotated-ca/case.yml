@@ -1,19 +1,19 @@
-# L0-GUARD for the fix of a latent bug "CA from essence instead of state" (audit 2026-06-26).
+# L0-GUARD for the fix of a latent bug "CA from service vars instead of state" (audit 2026-06-26).
 # Scenario-after-rotate_tls: state.tls.ca_ref has ALREADY been rewritten to the NEW Vault path
-# (rotate_tls changed the CA material and recorded the new ref in state). essence.tls_ca_ref
+# (rotate_tls changed the CA material and recorded the new ref in state). vars.tls_ca_ref
 # meanwhile stayed at the author default (rotate does NOT touch it) — it points at the OLD CA.
 #
 # ★ VERIFIED INVARIANT: the connect (compute.tls_ca) must resolve the CA from the
-# NAMED incarnation.state.tls.ca_ref (CURRENT, new), NOT from essence.tls_ca_ref
-# (stale). Before the fix tls_ca = vault(essence.tls_ca_ref) → connect with the OLD CA to a server
+# NAMED incarnation.state.tls.ca_ref (CURRENT, new), NOT from vars.tls_ca_ref
+# (stale). Before the fix tls_ca = vault(vars.tls_ca_ref) → connect with the OLD CA to a server
 # with a NEW cert → TLS verify fails → step failed → error_locked. This case catches the regression:
-# the state-ref and essence-ref DELIBERATELY point at DIFFERENT Vault paths with DIFFERENT PEM.
+# the state-ref and service vars-ref DELIBERATELY point at DIFFERENT Vault paths with DIFFERENT PEM.
 #
 # state.tls.ca_ref → secret/services/redis/tls-v2#ca → NEW-CA (current).
-# essence.tls_ca_ref → secret/services/redis/tls#ca   → OLD-CA (stale).
-# The probe/health-gate assert: tls_ca == NEW-CA. If the code reverts to essence → the assert
+# vars.tls_ca_ref → secret/services/redis/tls#ca   → OLD-CA (stale).
+# The probe/health-gate assert: tls_ca == NEW-CA. If the code reverts to service vars → the assert
 # would see OLD-CA → FAIL. Render-only, hermetic. Roster — 2 hosts, probe-role = slave.
-name: rolling-restart over TLS after rotate reads CA from state.tls.ca_ref not essence
+name: rolling-restart over TLS after rotate reads CA from state.tls.ca_ref not service vars
 
 fixtures:
   hosts:
@@ -52,17 +52,17 @@ fixtures:
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
 
-  # essence.tls_ca_ref — the author default, POINTS AT THE OLD CA (tls#ca). After the fix
+  # vars.tls_ca_ref — the author default, POINTS AT THE OLD CA (tls#ca). After the fix
   # a repeat run does NOT read it; it's present here PRECISELY to prove that the connect does NOT
-  # pick it up (regress-trap: if the code reverted to essence — it would see OLD-CA, the assert would fail).
-  essence:
+  # pick it up (regress-trap: if the code reverted to service vars — it would see OLD-CA, the assert would fail).
+  vars:
     tls_ca_ref: "secret/services/redis/tls#ca"
 
   # Password (incarnation.name == restart; ★ default_admin REDESIGN — connect under the system
   # default_admin, users/default_admin branch; the old secret/redis/<inc>#password is DROPPED)
   # + TWO DIFFERENT CA-PEMs:
   #   secret/services/redis/tls-v2#ca → NEW-CA (current, per state.tls.ca_ref);
-  #   secret/services/redis/tls#ca    → OLD-CA (stale, per essence.tls_ca_ref).
+  #   secret/services/redis/tls#ca    → OLD-CA (stale, per vars.tls_ca_ref).
   vault:
     secret/redis/restart/users/default_admin:
       password: default-admin-secret-pass
@@ -79,7 +79,7 @@ mocks:
 assert:
   task_present:
     # ── probe (community.redis.role): tls_ca = NEW-CA (state.tls.ca_ref) ──
-    # MAIN guard: the connect resolves the CA from the state-ref (current), NOT from the essence-ref.
+    # MAIN guard: the connect resolves the CA from the state-ref (current), NOT from the service vars-ref.
     # NEW-CA proves that after rotate, restart verifies the server with the new CA.
     - module: community.redis.role
       params_subset:
@@ -99,8 +99,8 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 
-  # ── REGRESS-TRAP: OLD-CA (essence.tls_ca_ref) must NOT make it into the connect ──
-  # If compute.tls_ca reverted to vault(essence.tls_ca_ref) — probe/health-gate would carry
+  # ── REGRESS-TRAP: OLD-CA (vars.tls_ca_ref) must NOT make it into the connect ──
+  # If compute.tls_ca reverted to vault(vars.tls_ca_ref) — probe/health-gate would carry
   # OLD-CA. task_absent catches ANY task with OLD-CA: ≥1 match → FAIL.
   task_absent:
     - module: community.redis.role

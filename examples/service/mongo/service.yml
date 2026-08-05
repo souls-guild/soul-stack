@@ -27,7 +27,7 @@ description: >-
 #     "as deployed".
 #   - named fields (memory_mb/wiredtiger_cache_gb/...) — the operator's INTENT in simple
 #     typed concepts (read-model). install and host-layout (conf_dir/data_dir)
-#     are moved into essence (author-context, day-2 reads essence directly).
+#     are moved into service vars (author-context, day-2 reads service vars directly).
 # BOTH are filled from a SINGLE create compute pass — there is no desync.
 state_schema:
   type: object
@@ -36,7 +36,7 @@ state_schema:
     # Effective MongoDB version (upstream series for binary; distro pin for package).
     mongo_version:
       type: string
-    # Final mongod.conf (merged default→computed→passthrough from essence). Goes into
+    # Final mongod.conf (merged default→computed→passthrough from service vars). Goes into
     # rendering the scenario-local mongod.conf.tmpl. Structure — nested YAML mongod (net/
     # storage/security/systemLog as subtrees).
     mongo_config:
@@ -56,7 +56,7 @@ state_schema:
     wiredtiger_cache_gb:
       type: number
       minimum: 0
-    # Applied kernel parameters for MongoDB (host-tuning). From essence.sysctl_settings.
+    # Applied kernel parameters for MongoDB (host-tuning). From vars.sysctl_settings.
     sysctl_settings:
       type: object
       additionalProperties:

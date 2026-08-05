@@ -12,7 +12,7 @@ import (
 //
 // Used by the Keeper-side core.file.rendered renderer: the `input` key is put into
 // render_context ONLY when the template actually reads `.input.*` — otherwise
-// render_context stays `{vars,self,role,essence}` as before Variant B (templates on
+// render_context stays `{vars,self,role}` as before Variant B (templates on
 // `.vars` alone get no extra `input`, deep-equal fixtures stay stable).
 //
 // Detection is by AST, not string-search: `text/template/parse` separates action
@@ -84,6 +84,98 @@ func (e *Engine) RootFieldSubKeys(templateContent, field string) (map[string]boo
 		collectSubKeys(tmpl.Tree.Root, field, keys)
 	}
 	return keys, nil
+}
+
+// UsesWholeRootField reports whether the template reads the root field AS A MAP
+// rather than through a named subkey — `{{ index .vars "x" }}`,
+// `{{ range $k, $v := .vars }}`, `{{ toYaml .vars }}`, `{{ with .vars }}`. In the
+// AST all of these are a FieldNode whose Ident is EXACTLY [field], with no second
+// identifier for [Engine.RootFieldSubKeys] to collect.
+//
+// The caller needs the distinction because targeted injection is keyed on the
+// subkeys it can see: a template that names none gets none, so a whole-map read
+// silently renders `{}` / `<no value>` / an empty range against a map the caller
+// does hold. That is a config file written with a section missing and no error
+// anywhere. When this returns true the caller injects the whole map instead.
+//
+// `{{ $.vars.x }}` and `{{ $v := .vars }}{{ $v.x }}` are NOT detected — they are
+// VariableNode chains, and both already fail loudly under strict-mode, which is an
+// acceptable answer. Detection stays fail-closed the way [Engine.UsesRootField] is.
+func (e *Engine) UsesWholeRootField(templateContent, field string) (bool, error) {
+	t := template.New("useswhole").Funcs(e.funcs)
+	t, err := t.Parse(templateContent)
+	if err != nil {
+		return false, &ErrParse{Err: err}
+	}
+	for _, tmpl := range t.Templates() {
+		if tmpl.Tree == nil || tmpl.Tree.Root == nil {
+			continue
+		}
+		if walkUsesWholeRootField(tmpl.Tree.Root, field) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// walkUsesWholeRootField mirrors walkUsesRootField, matching only a bare
+// `.<field>` (Ident of length exactly 1).
+func walkUsesWholeRootField(node parse.Node, field string) bool {
+	if node == nil {
+		return false
+	}
+	switch n := node.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return false
+		}
+		for _, child := range n.Nodes {
+			if walkUsesWholeRootField(child, field) {
+				return true
+			}
+		}
+	case *parse.ActionNode:
+		return walkUsesWholeRootField(n.Pipe, field)
+	case *parse.PipeNode:
+		if n == nil {
+			return false
+		}
+		for _, cmd := range n.Cmds {
+			if walkUsesWholeRootField(cmd, field) {
+				return true
+			}
+		}
+	case *parse.CommandNode:
+		for _, arg := range n.Args {
+			if walkUsesWholeRootField(arg, field) {
+				return true
+			}
+		}
+	case *parse.FieldNode:
+		return len(n.Ident) == 1 && n.Ident[0] == field
+	case *parse.IfNode:
+		return walkWholeBranch(&n.BranchNode, field)
+	case *parse.RangeNode:
+		return walkWholeBranch(&n.BranchNode, field)
+	case *parse.WithNode:
+		return walkWholeBranch(&n.BranchNode, field)
+	case *parse.TemplateNode:
+		return walkUsesWholeRootField(n.Pipe, field)
+	}
+	return false
+}
+
+func walkWholeBranch(b *parse.BranchNode, field string) bool {
+	if b == nil {
+		return false
+	}
+	if walkUsesWholeRootField(b.Pipe, field) {
+		return true
+	}
+	if b.List != nil && walkUsesWholeRootField(b.List, field) {
+		return true
+	}
+	return b.ElseList != nil && walkUsesWholeRootField(b.ElseList, field)
 }
 
 // collectSubKeys recursively walks the parse AST and collects the second identifiers

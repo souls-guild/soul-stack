@@ -9,48 +9,35 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// --- TraitsFromSpec (bridge incarnation.spec.traits → incarnation.traits) ---
+// --- ValidateCreateTraits (the create request → incarnation.traits) ---
 
-func TestTraitsFromSpec_NilSpec(t *testing.T) {
-	got, err := TraitsFromSpec(nil)
+func TestValidateCreateTraits_Nil(t *testing.T) {
+	got, err := ValidateCreateTraits(nil)
 	if err != nil {
-		t.Fatalf("TraitsFromSpec(nil): %v", err)
+		t.Fatalf("ValidateCreateTraits(nil): %v", err)
 	}
 	if got != nil {
 		t.Errorf("got %v, want nil", got)
 	}
 }
 
-func TestTraitsFromSpec_NoTraitsKey(t *testing.T) {
-	got, err := TraitsFromSpec(map[string]any{"input": map[string]any{"x": 1}})
+func TestValidateCreateTraits_EmptyMap(t *testing.T) {
+	got, err := ValidateCreateTraits(map[string]any{})
 	if err != nil {
-		t.Fatalf("TraitsFromSpec: %v", err)
-	}
-	if got != nil {
-		t.Errorf("got %v, want nil (traits not set)", got)
-	}
-}
-
-func TestTraitsFromSpec_EmptyMap(t *testing.T) {
-	got, err := TraitsFromSpec(map[string]any{"traits": map[string]any{}})
-	if err != nil {
-		t.Fatalf("TraitsFromSpec: %v", err)
+		t.Fatalf("ValidateCreateTraits: %v", err)
 	}
 	if got != nil {
 		t.Errorf("got %v, want nil (empty traits = not set)", got)
 	}
 }
 
-func TestTraitsFromSpec_ScalarAndList(t *testing.T) {
-	spec := map[string]any{
-		"traits": map[string]any{
-			"namespace": "dba-ns",
-			"owners":    []any{"alice", "bob"},
-		},
-	}
-	got, err := TraitsFromSpec(spec)
+func TestValidateCreateTraits_ScalarAndList(t *testing.T) {
+	got, err := ValidateCreateTraits(map[string]any{
+		"namespace": "dba-ns",
+		"owners":    []any{"alice", "bob"},
+	})
 	if err != nil {
-		t.Fatalf("TraitsFromSpec: %v", err)
+		t.Fatalf("ValidateCreateTraits: %v", err)
 	}
 	if got["namespace"] != "dba-ns" {
 		t.Errorf("namespace = %v", got["namespace"])
@@ -61,20 +48,18 @@ func TestTraitsFromSpec_ScalarAndList(t *testing.T) {
 	}
 }
 
-func TestTraitsFromSpec_RejectsNonObject(t *testing.T) {
-	_, err := TraitsFromSpec(map[string]any{"traits": "not-a-map"})
-	if err == nil {
-		t.Fatal("TraitsFromSpec(traits=string) returned nil")
-	}
-}
+// The old "traits must be an object" guard is gone with the freeform spec map it
+// policed: the create request types `traits` as a map, so a non-object is a decode
+// error at the API boundary and never reaches here. What still needs guarding is
+// the VALUE form, below.
 
-func TestTraitsFromSpec_RejectsInvalidValue(t *testing.T) {
+func TestValidateCreateTraits_RejectsInvalidValue(t *testing.T) {
 	// a nested-map Trait value is not allowed (scalar|list only) — ValidateTraitDelta.
-	_, err := TraitsFromSpec(map[string]any{
+	_, err := ValidateCreateTraits(map[string]any{
 		"traits": map[string]any{"bad": map[string]any{"nested": 1}},
 	})
 	if err == nil {
-		t.Fatal("TraitsFromSpec(nested value) returned nil")
+		t.Fatal("ValidateCreateTraits(nested value) returned nil")
 	}
 }
 
@@ -97,9 +82,9 @@ func TestCreate_TraitsPassedThrough(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	b, ok := f.queryRowArgs[10].([]byte)
+	b, ok := f.queryRowArgs[9].([]byte)
 	if !ok {
-		t.Fatalf("args[10] traits = %T, want []byte", f.queryRowArgs[10])
+		t.Fatalf("args[9] traits = %T, want []byte", f.queryRowArgs[9])
 	}
 	var got map[string]any
 	if err := json.Unmarshal(b, &got); err != nil {
@@ -126,7 +111,7 @@ func TestCreate_NilTraitsBecomesEmptyObject(t *testing.T) {
 	if err := Create(context.Background(), f, inc); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if s, _ := f.queryRowArgs[10].([]byte); string(s) != "{}" {
+	if s, _ := f.queryRowArgs[9].([]byte); string(s) != "{}" {
 		t.Errorf("traits bytes = %s, want \"{}\"", s)
 	}
 }

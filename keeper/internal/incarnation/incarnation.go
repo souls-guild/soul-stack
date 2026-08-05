@@ -69,7 +69,7 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 
 // Incarnation — runtime representation of an `incarnation` registry row.
 //
-// jsonb fields (`Spec` / `State` / `StatusDetails`) are `map[string]any` for
+// jsonb fields (`State` / `StatusDetails`) are `map[string]any` for
 // freeform data; typing for a concrete service / scenario lives in their
 // manifests, not in this layer.
 type Incarnation struct {
@@ -77,7 +77,6 @@ type Incarnation struct {
 	Service            string         `json:"service"`
 	ServiceVersion     string         `json:"service_version"`
 	StateSchemaVersion int            `json:"state_schema_version"`
-	Spec               map[string]any `json:"spec"`
 	State              map[string]any `json:"state"`
 	Status             Status         `json:"status"`
 	StatusDetails      map[string]any `json:"status_details,omitempty"`

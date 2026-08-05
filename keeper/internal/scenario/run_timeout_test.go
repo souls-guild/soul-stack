@@ -6,8 +6,8 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -25,7 +25,7 @@ func newTimeoutRunner(t *testing.T, runTimeout time.Duration, ceilingFn func() t
 	return NewRunner(Deps{
 		Loader:            artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:          topology.NewResolver(lazyPool(t), nil, nil),
-		Essence:           essence.NewResolver(nil),
+		ServiceVars:       servicevars.NewResolver(nil),
 		Render:            render.NewPipeline(nil, engine, nil, nil),
 		Outbound:          fakeDispatcher{},
 		DB:                lazyPool(t),

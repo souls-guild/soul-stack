@@ -98,7 +98,7 @@
 #
 # ★ default_admin REDESIGN (2026-06-30): .vars.password is NO LONGER passed (requirepass
 # removed). The system user default_admin (`~* &* +@all`) comes in the `users` map from scenario
-# (essence.system_acl_users) with its OWN Vault password and is rendered by the range. The built-in
+# (vars.system_acl_users) with its OWN Vault password and is rendered by the range. The built-in
 # `default` template renders `off` if the operator hasn't declared it in input.users (see the header
 # of users.acl.tmpl) → there is no built-in passwordless default access under protected-mode, external
 # connections go through default_admin. The minimal file is default_admin (always) + default off.

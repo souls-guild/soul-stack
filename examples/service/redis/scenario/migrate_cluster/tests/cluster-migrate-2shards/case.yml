@@ -81,10 +81,10 @@ fixtures:
     # operator aligned old == new).
     secret/redis/migrate/oldcluster:
       password: old-cluster-source-pass
-  essence:
-    # install_method — in essence (author-context): install method is NOT operator-input
-    # (covenant.compute.install reads default(essence.install_method, 'binary')). package
-    # explicitly — a distro-pin =version (the field moved input→essence along with migrate,
+  vars:
+    # install_method — in service vars (author-context): install method is NOT operator-input
+    # (covenant.compute.install reads default(vars.install_method, 'binary')). package
+    # explicitly — a distro-pin =version (the field moved input→service vars along with migrate,
     # replicated from covenant).
     install_method: package
     redis_type: cluster
@@ -108,7 +108,7 @@ fixtures:
   input:
     redis_type: cluster
     # ★ version — enum of builds shipped to Nexus (redesign). install_method moved to
-    # essence (above) — NOT operator-input after covenant replication. connection_mode
+    # service vars (above) — NOT operator-input after covenant replication. connection_mode
     # omitted → plain.
     version: "7.4.1"
     shards: 2
@@ -177,7 +177,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # ── JOIN: community.redis.cluster action:join-external ───────────────────────
     # nodes-MAP is deterministic (key=SID, addr=primary_ip+":6379"), shards_dest=2,

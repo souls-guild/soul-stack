@@ -36,8 +36,8 @@ input:
   # enabled=false — provision.yml group-drop, the run works against the EXISTING roster.
   #
   # ★ provider/profile/await_timeout/ssh_provider — the operator may leave these UNSET; they
-  # fall back to essence.provision_* (redis-provision.yml: default(input.provision.X,
-  # essence.provision_X)). By default the operator does NOT pick them manually (the form is hidden).
+  # fall back to vars.provision_* (redis-provision.yml: default(input.provision.X,
+  # vars.provision_X)). By default the operator does NOT pick them manually (the form is hidden).
   #
   # ★ FORM: provision is DELIBERATELY NOT in form.sections (decision 2026-06-30) — the section is
   # hidden from the Run form. soul-lint emits a form_field_uncovered WARNING for this field (the UI
@@ -75,18 +75,18 @@ input:
         type: string
         description: >-
           Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
-          Unset → essence.provision_provider.
+          Unset → vars.provision_provider.
       profile:
         type: string
         description: >-
           Name of the VM profile in the profiles registry (VM resources/image/network). Unset →
-          essence.provision_profile.
+          vars.provision_profile.
       await_timeout:
         type: string
         pattern: "^[0-9]+[smh]$"
         description: >-
           Upper bound on waiting for the created VMs to onboard (the await_online barrier,
-          ADR-061; form <N>{s|m|h}). Unset → essence.provision_await_timeout (default
+          ADR-061; form <N>{s|m|h}). Unset → vars.provision_await_timeout (default
           10m). Capped from above by keeper.yml::max_await_timeout.
       join_wait_timeout:
         type: string
@@ -94,13 +94,13 @@ input:
         description: >-
           Ceiling on waiting for a freshly created VM to appear in Teleport before delivering
           the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Unset →
-          essence.provision_join_wait_timeout (default 15m).
+          vars.provision_join_wait_timeout (default 15m).
       ssh_provider:
         type: string
         description: >-
           Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
           delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
-          Unset → essence.provision_ssh_provider.
+          Unset → vars.provision_ssh_provider.
 
 # ── Computed scenario-vars: create's DELTA on top of covenant.compute ────────────────
 # The shared compute contract (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
@@ -123,7 +123,7 @@ form:
   sections:
     # 1. Redis parameters — mode, connection channel, version.
     # install_method removed from the form (2026-06-28): install method is fixed in
-    # essence (binary), the operator doesn't set it.
+    # service vars (binary), the operator doesn't set it.
     - key: redis
       title: "Redis parameters"
       description: "Deployment mode, connection channel and version"
@@ -166,7 +166,7 @@ form:
         - name: memory_mb
           label: "Data volume, MB"
           placeholder: "1024"
-          hint: "Memory budget for Redis on the host. maxmemory is computed as a share of it (minus the OS reserve). Unset → maxmemory from the essence substrate."
+          hint: "Memory budget for Redis on the host. maxmemory is computed as a share of it (minus the OS reserve). Unset → maxmemory from the service vars substrate."
         - name: io_threads
           label: "I/O threads"
           placeholder: "0"
@@ -204,7 +204,7 @@ form:
 
     # ★ The provision section is DELIBERATELY REMOVED from the form (user decision 2026-06-30):
     # provision default-on (input.provision.default {enabled: true}), provider/profile come from
-    # essence — the operator does NOT pick them in the Run form. The input.provision field is not
+    # service vars — the operator does NOT pick them in the Run form. The input.provision field is not
     # covered by the form → soul-lint form_field_uncovered WARNING (the UI draws it into the
     # default section) — EXPECTED, not an error. If it's ever needed again (per-Coven/ENV-override
     # provider) — bring the section back here. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR.
@@ -247,7 +247,7 @@ tasks:
   # STRICTLY BEFORE any vault()-read) is pinned by the guard test
   # keeper/internal/render/redis_create_secrets_passage_test.go.
   #
-  # targets are COMPUTED from the SAME essence/input as the read-tasks (drift between "what we
+  # targets are COMPUTED from the SAME service vars/input as the read-tasks (drift between "what we
   # generate" and "what we read" = a bug, so the user list is NOT hardcoded): the main
   # secret/redis/<inc> #password + per-user union(system_acl_users, system_acl_users_sentinel)
   # WITHOUT default (sentinel default → the main secret) + operator-extra input.users. policy
@@ -265,7 +265,7 @@ tasks:
       # targets is a SINGLE-LINE quoted-string ${…} (NOT a block-scalar): module.params
       # type-check only passes the CEL-wrap through for a StringNode. Union of keys
       # system_acl_users ∪ system_acl_users_sentinel WITHOUT default + operator-extra input.users.
-      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(essence.system_acl_users, {}).map(n, { n: 0 }) + default(essence.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(vars.system_acl_users, {}).map(n, { n: 0 }) + default(vars.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
 
   # ── Version-aware validator for redis_settings directive names (assert, #6) ─────────────
   # ★ #6 (2026-06-26): redis_settings — passthrough KEY→VALUE: the input schema lets
@@ -273,18 +273,18 @@ tasks:
   # silently drag in a typo (`maxmemoyr 512mb`) or a directive from a different version → the
   # redis-server fails to start on the host (a late, confusing failure). This assert checks
   # EVERY redis_settings directive NAME against the catalog of valid names FOR THE SELECTED
-  # version (essence.redis_directives[<series>], generated from the upstream src/config.c) — the
+  # version (vars.redis_directives[<series>], generated from the upstream src/config.c) — the
   # first unknown key aborts render (422 assert-failed) BEFORE applying, with a clear message.
   #
-  # WHY assert and not validate: the catalog lives in essence, and the validate context is
-  # INPUT-ONLY (essence is unavailable, a structural CEL barrier). assert sees
-  # essence+input+compute (the full scenario context) — the only mechanism that can reach the
+  # WHY assert and not validate: the catalog lives in service vars, and the validate context is
+  # INPUT-ONLY (service vars are unavailable, a structural CEL barrier). assert sees
+  # service vars+input+compute (the full scenario context) — the only mechanism that can reach the
   # catalog. Run-level (once per run), soulprint.hosts isn't needed (the check is
   # host-invariant), but it's available.
   #
   # VERSION — compute.redis_version (= input.version, an enum of upstream releases;
   # ★ redesign: ONE for both install methods — binary downloads binaries of this version, package
-  # installs a =version pin; the former cascade "binary → essence.binary_version" is removed).
+  # installs a =version pin; the former cascade "binary → vars.binary_version" is removed).
   # The version carries a major.minor series → assert matches it against the catalog keys.
   #
   # version→series MECHANICS WITHOUT split (StdLib CEL has no .split/.substring): we iterate
@@ -302,16 +302,16 @@ tasks:
       # soul-lint requires *ast.StringNode (quoted/plain), a block-scalar = type_mismatch.
       # The predicate is one line (CEL-normalize collapses whitespace): for each redis_settings
       # key k — for each catalog series s that the version belongs to
-      # (regex `^([0-9]+:)?<s>[.]`), k must be in essence.redis_directives[s]; series
+      # (regex `^([0-9]+:)?<s>[.]`), k must be in vars.redis_directives[s]; series
       # not matching the version are vacuously true (ternary), a version outside the catalog →
       # no series matches → skip.
       #
-      # `!has(essence.redis_directives) || …` — EMPTY-CATALOG-SKIP: the catalog is optional.
-      # If essence doesn't carry it (minimal L0-case fixtures, or an operator's essence
+      # `!has(vars.redis_directives) || …` — EMPTY-CATALOG-SKIP: the catalog is optional.
+      # If service vars doesn't carry it (minimal L0-case fixtures, or an operator's service vars
       # without a catalog) — assert skip (nothing to validate against). With a catalog — full check.
       that:
-        - "!has(essence.redis_directives) || default(input.redis_settings, {}).all(k, essence.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in essence.redis_directives[s]) : true))"
-      message: "redis_settings contains an unknown redis.conf directive for the selected Redis version (input.version): check the name against the catalog of valid directives for this version (essence.redis_directives[<major.minor>]) — typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
+        - "!has(vars.redis_directives) || default(input.redis_settings, {}).all(k, vars.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in vars.redis_directives[s]) : true))"
+      message: "redis_settings contains an unknown redis.conf directive for the selected Redis version (input.version): check the name against the catalog of valid directives for this version (vars.redis_directives[<major.minor>]) — typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
 
   # ── provision (ADR-061, Option A): cloud-create + onboarding BEFORE the role branch ──────
   # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE cluster/sentinel: when enabled=true
@@ -336,7 +336,7 @@ tasks:
   # two metrics exporters onto EVERY incarnation host by COMPOSING reusable
   # standalone destinies via apply:destiny (isolated render for each, ADR-009). Monitoring
   # is not an operator choice but a data-service invariant (contract=A: versions/ports/checksum in
-  # essence, covenant.input/form are NOT touched).
+  # service vars, covenant.input/form are NOT touched).
   #
   # ★ ORDER (staged-render Passage stratifies this itself): both tasks read the run's roster
   # (arch/password resolve per-host, apply.input carries soulprint.self) → they are
@@ -348,33 +348,33 @@ tasks:
     apply:
       destiny: node-exporter
       input:
-        version: "${ default(essence.node_exporter_version, '1.8.2') }"
+        version: "${ default(vars.node_exporter_version, '1.8.2') }"
         # arch is NOT passed: the destiny takes it directly from soulprint.self.os.arch (available
         # in destiny-CEL) — an incarnation may mix amd64/arm64 hosts.
-        listen: "${ default(essence.node_exporter_listen, ':9100') }"
-        # Download root: an essence-override for an internal mirror/nexus-proxy (hosts without
+        listen: "${ default(vars.node_exporter_listen, ':9100') }"
+        # Download root: a service-vars override for an internal mirror/nexus-proxy (hosts without
         # access to github.com); default is GitHub Releases (back-compat).
-        base_url: "${ default(essence.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
+        base_url: "${ default(vars.node_exporter_base_url, 'https://github.com/prometheus/node_exporter/releases/download') }"
         # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
-        allow_private: "${ default(essence.node_exporter_allow_private, false) }"
+        allow_private: "${ default(vars.node_exporter_allow_private, false) }"
 
   # redis-exporter: Redis metrics over a unix socket (--redis.addr=unix://<socket>). ★ Finding B:
   # redis on ACL WITHOUT requirepass (the default_admin redesign removed requirepass) → the
   # exporter MUST authenticate as the monitoring ACL user (redis_user), otherwise WRONGPASS. The
   # password resolves via keeper-side vault() from secret/redis/<inc>/users/monitoring#password
-  # (the same ACL user as essence.system_acl_users.monitoring, password generated by kv-present
+  # (the same ACL user as vars.system_acl_users.monitoring, password generated by kv-present
   # ABOVE) — only the VALUE reaches the host (ADR-012). redis_socket is NOT passed — the
   # destiny's default (/var/run/redis/redis-server.sock) matches redis.conf's unixsocket.
   - name: Apply redis-exporter destiny (redis metrics)
     apply:
       destiny: redis-exporter
       input:
-        version: "${ default(essence.redis_exporter_version, '1.62.0') }"
-        sha256:  "${ default(essence.redis_exporter_sha256, '') }"
-        listen:  "${ default(essence.redis_exporter_listen, ':9121') }"
-        base_url: "${ default(essence.redis_exporter_base_url, 'https://github.com/oliver006/redis_exporter/releases/download') }"
+        version: "${ default(vars.redis_exporter_version, '1.62.0') }"
+        sha256:  "${ default(vars.redis_exporter_sha256, '') }"
+        listen:  "${ default(vars.redis_exporter_listen, ':9121') }"
+        base_url: "${ default(vars.redis_exporter_base_url, 'https://github.com/oliver006/redis_exporter/releases/download') }"
         # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
-        allow_private: "${ default(essence.redis_exporter_allow_private, false) }"
+        allow_private: "${ default(vars.redis_exporter_allow_private, false) }"
         redis_user:     monitoring
         redis_password: "${ vault('secret/redis/' + incarnation.name + '/users/monitoring#password') }"
 
@@ -383,22 +383,22 @@ tasks:
   # agent) onto EVERY incarnation host by COMPOSING a reusable standalone destiny via
   # apply:destiny (isolated render, ADR-009). vector COMPLEMENTS node/redis-exporter
   # (metrics, pull) with the log plane (redis logs, push) — not an operator choice but a
-  # data-service invariant (contract=A: versions/checksum/sink in essence). arch is taken by the
+  # data-service invariant (contract=A: versions/checksum/sink in service vars). arch is taken by the
   # destiny itself from soulprint.self.os.arch. sink_auth_ref is a Vault ref OR a value: the
-  # caller (essence) passes a ref, resolved Soul-side (the secret doesn't land in state, InfoSec).
-  # log_sources — redis logs from essence (/var/log/redis/*.log). Order: doesn't read the roster
+  # caller (service vars) passes a ref, resolved Soul-side (the secret doesn't land in state, InfoSec).
+  # log_sources — redis logs from service vars (/var/log/redis/*.log). Order: doesn't read the roster
   # (arch is a soulprint destiny-fact), but apply.input carries soulprint.self → roster-consumer
   # → passage AFTER deploy, same as the exporters.
   - name: Apply vector destiny (log shipping)
     apply:
       destiny: vector
       input:
-        version:       "${ default(essence.vector_version, '0.40.0') }"
-        sha256:        "${ default(essence.vector_sha256, '') }"
-        base_url:      "${ default(essence.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
+        version:       "${ default(vars.vector_version, '0.40.0') }"
+        sha256:        "${ default(vars.vector_sha256, '') }"
+        base_url:      "${ default(vars.vector_base_url, 'https://github.com/vectordotdev/vector/releases/download') }"
         # SSRF-guard opt-out for private-resolve base_url (the binary_allow_private pattern); default false — the guard stays on.
-        allow_private: "${ default(essence.vector_allow_private, false) }"
-        sink_type:     "${ default(essence.vector_sink_type, 'console') }"
-        sink_endpoint: "${ default(essence.vector_sink_endpoint, '') }"
-        sink_auth_ref: "${ default(essence.vector_sink_auth_ref, '') }"
-        log_sources:   "${ default(essence.vector_log_sources, []) }"
+        allow_private: "${ default(vars.vector_allow_private, false) }"
+        sink_type:     "${ default(vars.vector_sink_type, 'console') }"
+        sink_endpoint: "${ default(vars.vector_sink_endpoint, '') }"
+        sink_auth_ref: "${ default(vars.vector_sink_auth_ref, '') }"
+        log_sources:   "${ default(vars.vector_log_sources, []) }"

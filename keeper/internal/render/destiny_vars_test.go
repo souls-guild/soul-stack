@@ -152,25 +152,25 @@ func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_EssenceIsolation — a vars.yml value doesn't see essence.*
-// (essence is a service-level concept, absent entirely in destiny) → error.
-func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
+// TestDestinyFileVars_ServiceVarsIsolation — a vars.yml value doesn't see vars.*
+// (a service-level layer, absent entirely in destiny) → error.
+func TestDestinyFileVars_ServiceVarsIsolation(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
-		map[string]any{"x": "${ essence.maxmemory }"},
+		map[string]any{"x": "${ vars.maxmemory }"},
 		map[string]any{"cmd": "echo ${ vars.x }"},
 	)}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// scenario carries essence — destiny must NOT see it even in vars.yml.
-		Essence: map[string]any{"maxmemory": "256mb"},
-		Hosts:   []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
-		Destiny: res,
+		// the scenario carries service vars — destiny must NOT see them, even in vars.yml.
+		ServiceVars: map[string]any{"maxmemory": "256mb"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     res,
 	}
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
-		t.Fatal("Render: expected an error - vars.yml must not see essence.* (isolation)")
+		t.Fatal("Render: expected an error - vars.yml must not see vars.* (isolation)")
 	}
 }
 
@@ -209,7 +209,7 @@ func TestDestinyFileVars_TransitiveChain(t *testing.T) {
 		"a": "${ vars.b }/a",
 		"b": "${ vars.c }/b",
 		"c": "root",
-	}, cel.Vars{})
+	}, nil, cel.Vars{})
 	if err != nil {
 		t.Fatalf("resolveVarLayer: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestDestinyFileVars_Cycle(t *testing.T) {
 		"a": "${ vars.b }",
 		"b": "${ vars.c }",
 		"c": "${ vars.a }",
-	}, cel.Vars{})
+	}, nil, cel.Vars{})
 	if err == nil || !errors.Is(err, ErrVarCycle) {
 		t.Fatalf("resolveVarLayer: expected ErrVarCycle, got: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestDestinyFileVars_Cycle(t *testing.T) {
 func TestDestinyFileVars_SelfReference(t *testing.T) {
 	_, err := resolveVarLayer(newEngine(t), map[string]any{
 		"a": "${ vars.a }-loop",
-	}, cel.Vars{})
+	}, nil, cel.Vars{})
 	if err == nil || !errors.Is(err, ErrVarCycle) {
 		t.Fatalf("resolveVarLayer: self-reference must give ErrVarCycle, got: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestDestinyFileVars_OrderIndependent(t *testing.T) {
 		"a": "root",
 		"b": "${ vars.a }-b",
 		"c": "${ vars.b }-c",
-	}, cel.Vars{})
+	}, nil, cel.Vars{})
 	if err != nil {
 		t.Fatalf("resolveVarLayer v1: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestDestinyFileVars_OrderIndependent(t *testing.T) {
 		"c": "${ vars.b }-c",
 		"a": "root",
 		"b": "${ vars.a }-b",
-	}, cel.Vars{})
+	}, nil, cel.Vars{})
 	if err != nil {
 		t.Fatalf("resolveVarLayer v2: %v", err)
 	}

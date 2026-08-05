@@ -49,7 +49,7 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create_from_souls/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
+  vars:
     install_method: package
     redis_type: sentinel
     sentinel_master_name: master
@@ -147,7 +147,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # -- REPLICAOF for replicas (community.redis.replica) --------------------
     # addr=127.0.0.1:6379 (per-host local invariant), master_addr — master election
@@ -163,7 +163,7 @@ assert:
 
     # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
     # monitor.ip — HOST-INVARIANT master address (master election node-1). quorum=2
-    # (AUTO: size(3)/2+1). master_name=master (essence default).
+    # (AUTO: size(3)/2+1). master_name=master (service vars default).
     - module: community.redis.sentinel
       params_subset:
         addr: "127.0.0.1:26379"

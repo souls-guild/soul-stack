@@ -251,7 +251,7 @@ func mapIncarnationErrorToMCP(err error) (code, detail string) {
 	case errors.Is(err, incarnation.ErrIncarnationNotErrorLocked):
 		return mcpCodeIncarnationLocked, "incarnation is not error_locked — rerun-last requires error_locked"
 	case errors.Is(err, incarnation.ErrRerunInputUnavailable):
-		return mcpCodeRerunInputUnavailable, "rerun-last: failed run's input is unavailable (run failed before dispatch, no recipe recorded / recipe purged by retention / legacy run) — use unlock + manual run with explicit input"
+		return mcpCodeRerunInputUnavailable, "rerun-last: the last attempt has no run snapshot to replay (it failed before dispatch, or predates the snapshot) — pass the input to run with, or unlock and start the scenario yourself"
 	case errors.Is(err, incarnation.ErrIncarnationBusy):
 		return mcpCodeIncarnationLocked, "incarnation is applying — operation rejected until run completes"
 	case errors.Is(err, incarnation.ErrIncarnationLocked):

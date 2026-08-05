@@ -288,7 +288,6 @@ var loopReservedNames = map[string]bool{
 	"register":    true,
 	"incarnation": true,
 	"soulprint":   true,
-	"essence":     true,
 	"vars":        true,
 }
 
@@ -1171,7 +1170,7 @@ func validateApplyWhenStatic(present map[string]*ast.MappingValueNode, pathPrefi
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:     "apply_when_dynamic_unsupported",
 		Message:  fmt.Sprintf("when: %q on an apply: task reads register/soulprint — an applier's condition is decided before its destiny is rendered", sn.Value),
-		Hint:     "use where: for a host-variant condition (register- and soulprint-capable), or onchanges:/onfail: to depend on a source's outcome; a static when: (input./essence./vars.) works as written",
+		Hint:     "use where: for a host-variant condition (register- and soulprint-capable), or onchanges:/onfail: to depend on a source's outcome; a static when: (input./vars./incarnation.) works as written",
 		YAMLPath: pathPrefix + ".when",
 	})}
 }
@@ -1507,7 +1506,7 @@ func validateLoopVar(sub *ast.MappingValueNode, key, pathPrefix string) []diag.D
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "loop_var_reserved",
 			Message:  fmt.Sprintf("loop.%s %q shadows a reserved CEL context name", key, sn.Value),
-			Hint:     "reserved: input, register, incarnation, soulprint, essence, vars",
+			Hint:     "reserved: input, register, incarnation, soulprint, vars",
 			YAMLPath: pathPrefix + ".loop." + key,
 		})}
 	}

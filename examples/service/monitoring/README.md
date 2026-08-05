@@ -78,7 +78,7 @@ monitoring/
 ├── service.yml                              # manifest: state_schema_version=1,
 │                                            #   destiny[] (node-exporter),
 │                                            #   state_schema {node/redis versions, redis_socket}
-├── essence/
+├── service vars/
 │   └── _default.yaml                        # baseline: versions + socket path (substrate)
 └── scenario/
     └── create/

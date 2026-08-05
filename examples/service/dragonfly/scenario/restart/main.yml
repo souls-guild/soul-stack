@@ -43,7 +43,7 @@ input:
 state_changes: {}
 
 # ── Computed scenario-vars (compute:, ADR-009 amendment) ───────────────────────
-# Run-level context (input/essence/incarnation — WITHOUT soulprint). Removes duplication
+# Run-level context (input/vars/incarnation — WITHOUT soulprint). Removes duplication
 # of the plugin's local connect address (would repeat across probe + health-gate).
 #
 # ★ DragonFly vs redis (BLOCKER fix): local plugin calls go to its OWN instance via a
@@ -53,10 +53,10 @@ state_changes: {}
 # it (even on a TLS instance): tls/tls_ca were REMOVED from the local probe/health-gate. So the TLS
 # discriminator (tls_on/tls_port/tls_ca) is NO LONGER NEEDED for restart — it only applied to local
 # connects, which are now UDS. run_dir is a host invariant (vars destiny); the default duplicates
-# the default (scenario doesn't see destiny-vars); essence is incomplete on day-2, but run_dir isn't
-# an operator override, the default is correct.
+# the default (scenario doesn't see destiny-vars); the service vars are incomplete on day-2, but run_dir is
+# a fixed layout fact, so the default is correct.
 compute:
-  local_addr: "${ 'unix:' + default(essence.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (default_admin redesign): the role probe + replica health-gate connect to the
   # local DragonFly as this user (requirepass removed). Literal (day-2, outside covenant).
   admin_user: "${ 'default_admin' }"

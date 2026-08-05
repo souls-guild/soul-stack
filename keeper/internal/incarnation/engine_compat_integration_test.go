@@ -79,7 +79,7 @@ func TestIntegration_EngineCompat_StampedOnSuccessfulCommit(t *testing.T) {
 	want := sampleStamp()
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		map[string]any{"v": 1.0}, map[string]any{"v": 2.0},
-		StatusReady, nil, nil, hist, want); err != nil {
+		StatusReady, nil, nil, hist, want, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestIntegration_EngineCompat_FailedRunKeepsPreviousStamp(t *testing.T) {
 
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyOK,
 		map[string]any{}, map[string]any{"v": 1.0},
-		StatusReady, nil, nil, histOK, sampleStamp()); err != nil {
+		StatusReady, nil, nil, histOK, sampleStamp(), nil); err != nil {
 		t.Fatalf("UpdateStateFromRun (success): %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestIntegration_EngineCompat_FailedRunKeepsPreviousStamp(t *testing.T) {
 	}
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyBad,
 		map[string]any{"v": 1.0}, map[string]any{"v": 1.0},
-		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, histBad, nil); err != nil {
+		StatusErrorLocked, map[string]any{"reason": "boom"}, nil, histBad, nil, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun (failure): %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestIntegration_EngineCompat_SurvivesStateSchemaUpgrade(t *testing.T) {
 
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		map[string]any{}, map[string]any{"v": 1.0},
-		StatusReady, nil, nil, hist, sampleStamp()); err != nil {
+		StatusReady, nil, nil, hist, sampleStamp(), nil); err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 
@@ -224,7 +224,7 @@ func TestIntegration_EngineCompat_UnstampedRowsReadFine(t *testing.T) {
 	// nil stamp — exactly what every pre-103 row holds.
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyID,
 		map[string]any{}, map[string]any{"v": 1.0},
-		StatusReady, nil, nil, hist, nil); err != nil {
+		StatusReady, nil, nil, hist, nil, nil); err != nil {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 	if _, ok := readEngineCompat(t, name); ok {

@@ -18,34 +18,28 @@ import (
 // incarnation label cover hosts that join later without overwriting a label
 // attached directly to a host.
 
-// TraitsFromSpec extracts operator-set traits from freeform jsonb spec of incarnation
-// (`incarnation.spec.traits`, ADR-060 amend R1). Symmetric with [readSpecHosts]
-// (which reads spec["hosts"]): missing key / non-map form → nil (traits not
-// set), no error (spec freeform). Value of each key polymorphic
-// (scalar | list) — form validated by [soul.ValidateTraitDelta], same as per-soul
-// bulk-write; invalid set → error (caller 422s on create path BEFORE insert).
+// ValidateCreateTraits checks the operator-set traits of a create request and
+// returns them in the form the `incarnation.traits` column takes (ADR-060 amend
+// R1). Each value is polymorphic (scalar | list); the form is validated by
+// [soul.ValidateTraitDelta], the same check the per-soul bulk-write runs, and an
+// invalid set is an error the caller answers with 422 BEFORE the insert.
 //
-// nil result on create path goes to column as `{}` (NOT NULL DEFAULT,
-// marshalJSONB(nil) → `{}`): "incarnation without traits".
-func TraitsFromSpec(spec map[string]any) (map[string]any, error) {
-	if spec == nil {
+// It takes the request's traits DIRECTLY. Until NIM-408 they arrived here inside
+// a freeform `spec` map that the create path assembled purely to take them back
+// out of it again — and the column has been the source of truth since migration
+// 088, so the detour only existed because `spec` was where the request used to be
+// persisted. `spec` is gone; the request is read where it arrives.
+//
+// nil / empty → nil, which the column stores as `{}` (NOT NULL DEFAULT):
+// "an incarnation without traits".
+func ValidateCreateTraits(traits map[string]any) (map[string]any, error) {
+	if len(traits) == 0 {
 		return nil, nil
 	}
-	raw, ok := spec["traits"]
-	if !ok {
-		return nil, nil
+	if err := soul.ValidateTraitDelta(traits); err != nil {
+		return nil, fmt.Errorf("incarnation: invalid traits: %w", err)
 	}
-	m, ok := raw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("incarnation: spec.traits must be an object (key → scalar|list), got %T", raw)
-	}
-	if len(m) == 0 {
-		return nil, nil
-	}
-	if err := soul.ValidateTraitDelta(m); err != nil {
-		return nil, fmt.Errorf("incarnation: invalid spec.traits: %w", err)
-	}
-	return m, nil
+	return traits, nil
 }
 
 // UpdateTraitsResult — result of [UpdateTraits]: snapshots of old/new keys for audit
@@ -84,7 +78,7 @@ func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[
 
 	const selectForUpdateSQL = `
 SELECT name, service, service_version, state_schema_version,
-       spec, state, status, status_details, created_by_aid,
+       state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        last_drift_check_at, last_drift_summary, created_scenario,
        applying_apply_id

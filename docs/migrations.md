@@ -114,7 +114,7 @@ To iterate through the map, the native macro `.map()` **above the map itself** i
 | `now()` | For test reproducibility. |
 | `register.*` | There is no host context (migration - keeper-side). |
 | `soulprint.*` | Likewise. |
-| `essence.*` | Migration should be a pure function of the old state, not dependent on the current essence. |
+| `vars.*` | Migration should be a pure function of the old state, not dependent on the service's current defaults. |
 | `input.*` | Migration does not accept operator-parameters (only `state`). |
 | Any user-defined CEL functions | Sandbox by design. |
 

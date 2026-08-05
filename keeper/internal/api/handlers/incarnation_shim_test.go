@@ -152,7 +152,7 @@ func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	if v := q.Get("limit"); v != "" {
 		limit, _ = strconv.Atoi(v)
 	}
-	reply, err := h.HistoryTyped(r.Context(), name, q.Get("apply_id"), offset, limit, h.GetInScopeFor(claims, "history"))
+	reply, err := h.HistoryTyped(r.Context(), name, q.Get("apply_id"), q.Get("include_transitions") == "true", offset, limit, h.GetInScopeFor(claims, "history"))
 	if err != nil {
 		renderProblem(rec, err)
 		return rec
@@ -299,7 +299,6 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 		Name               string          `json:"name"`
 		Service            string          `json:"service"`
 		ServiceVersion     string          `json:"service_version"`
-		Spec               *map[string]any `json:"spec"`
 		State              *map[string]any `json:"state"`
 		StateSchemaVersion int32           `json:"state_schema_version"`
 		Status             string          `json:"status"`
@@ -308,7 +307,7 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 	}{
 		Covens: v.Covens, CreatedAt: rfc3339Nano(v.CreatedAt), CreatedByAID: v.CreatedByAID,
 		Name: v.Name, Service: v.Service, ServiceVersion: v.ServiceVersion,
-		Spec: ptrMapShim(v.Spec), State: ptrMapShim(v.State), StateSchemaVersion: v.StateSchemaVersion,
+		State: ptrMapShim(v.State), StateSchemaVersion: v.StateSchemaVersion,
 		Status: v.Status, StatusDetails: ptrMapShim(v.StatusDetails), UpdatedAt: rfc3339Nano(v.UpdatedAt),
 	}
 	if v.LastDriftCheckAt != nil {
@@ -354,7 +353,6 @@ func ptrMapShim(m map[string]any) *map[string]any {
 type incDTOJSON struct {
 	Name          string         `json:"name"`
 	Status        string         `json:"status"`
-	Spec          map[string]any `json:"spec"`
 	State         map[string]any `json:"state"`
 	StatusDetails map[string]any `json:"status_details"`
 	CreatedByAID  *string        `json:"created_by_aid"`

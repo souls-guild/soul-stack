@@ -142,7 +142,6 @@ type IncarnationGetReply struct {
 	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
 	Service            string                  `json:"service"`
 	ServiceVersion     string                  `json:"service_version"`
-	Spec               *map[string]interface{} `json:"spec"`
 	State              *map[string]interface{} `json:"state"`
 	StateSchemaVersion int32                   `json:"state_schema_version"`
 	Status             IncarnationStatus       `json:"status"`
@@ -277,7 +276,6 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		Name:               v.Name,
 		Service:            v.Service,
 		ServiceVersion:     v.ServiceVersion,
-		Spec:               ptrMap(v.Spec),
 		State:              ptrMap(v.State),
 		StateSchemaVersion: v.StateSchemaVersion,
 		Status:             IncarnationStatus(v.Status),

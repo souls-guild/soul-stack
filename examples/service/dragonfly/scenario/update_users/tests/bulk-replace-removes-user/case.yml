@@ -4,7 +4,7 @@
 #   1. users.acl renders with alice (new perms) - WITHOUT bob (removed from ACL);
 #   2. state_changes.df_users = [alice] (bob dropped out - bulk-replace, not upsert).
 # Regression "update_users merges/upserts instead of replace" = bob would remain → assert fails.
-# Render-only, hermetic. ACL LOAD goes through a LOCAL UNIX socket. essence.system_acl_users
+# Render-only, hermetic. ACL LOAD goes through a LOCAL UNIX socket. vars.system_acl_users
 # is NOT set → system defaults get topped up ({}) → vars.users carries ONLY operator-extra (a clean
 # bulk-replace assert).
 name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
@@ -15,7 +15,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved out to essence): operator-
+  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved out to service vars): operator-
   # extra alice + bob.
   state:
     df_version: "1.39.0"
@@ -66,7 +66,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # 2. HOT-RELOAD ACL: community.redis.acl to the live instance through a LOCAL UNIX socket.
     #    AUTH as default_admin (requirepass removed).

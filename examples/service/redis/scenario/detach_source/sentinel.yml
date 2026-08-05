@@ -125,7 +125,7 @@
 #    SOURCES come from incarnation.state (detach has no input contract):
 #    master_name/timings/version are compute.sentinel_master_name/
 #    sentinel_directives/redis_version (assembled from state.redis_sentinel/redis_version,
-#    see compute main.yml), not from essence/input. On detach the roster is the new
+#    see compute main.yml), not from service vars/input. On detach the roster is the new
 #    master (soulprint.hosts[0] = itself), MONITOR sets up monitoring of the
 #    now-autonomous master.
 - name: Configure each sentinel to monitor the now-standalone master (SENTINEL MONITOR)

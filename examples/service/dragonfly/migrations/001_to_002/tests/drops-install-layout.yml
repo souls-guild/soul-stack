@@ -1,7 +1,7 @@
 name: drops-install-layout
 description: >
   The v1 incarnation carries install + host-layout (conf_dir/data_dir) in state. The
-  migration STRIPS all three fields (moved to essence, Variant A). The rest of the
+  migration STRIPS all three fields (moved to service vars, Variant A). The rest of the
   state (df_config/df_users/tls/df_sentinel/df_version/topology/sysctl_settings)
   passes through bit-for-bit.
 

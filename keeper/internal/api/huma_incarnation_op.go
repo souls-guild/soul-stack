@@ -155,8 +155,13 @@ func incGetOperation() huma.Operation {
 type incHistoryInput struct {
 	Name    string `path:"name" doc:"incarnation name"`
 	ApplyID string `query:"apply_id" doc:"opt. ULID filter by state_history.apply_id; non-ULID → 400"`
-	Offset  int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
-	Limit   int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+	// IncludeTransitions — the rerun-transition markers are excluded by default:
+	// they carry state_before == state_after and never gain an outcome, so in a
+	// feed of state changes they read as a run that happened and changed nothing,
+	// which is also what a failed run looks like. Opt in to see them.
+	IncludeTransitions bool  `query:"include_transitions" default:"false" doc:"opt. include the rerun-transition markers (excluded by default)"`
+	Offset             int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit              int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // incHistoryOutput — huma-output GET /v1/incarnations/{name}/history (FULL-TYPED). Body
@@ -420,9 +425,16 @@ type incRerunInput struct {
 	Body IncarnationRerunLastRequest
 }
 
-// IncarnationRerunLastRequest — Go form of the POST .../rerun-last body. reason required.
+// IncarnationRerunLastRequest — Go form of the POST .../rerun-last body. reason
+// required; input optional.
 type IncarnationRerunLastRequest struct {
 	Reason string `json:"reason" required:"true" minLength:"1" maxLength:"500" doc:"free text confirmation"`
+	// Input — the operator's input for the restart, used ONLY when the failed
+	// attempt's history row carries no replayable snapshot (NIM-408). It is a
+	// recovery path, not an override: with a snapshot present, sending input is
+	// refused rather than silently ignored, because "rerun that" and "run this
+	// instead" are different requests and the second one has its own endpoint.
+	Input map[string]any `json:"input,omitempty" doc:"operator input, accepted only when the attempt cannot be replayed from history"`
 }
 
 // incRerunOutput — huma-output POST .../rerun-last (FULL-TYPED). Status=202; Body —

@@ -60,14 +60,15 @@ type fakeIncDB struct {
 	unlockSelectRow func(name string) pgx.Row
 	execCalls       []string
 
+	// recipeProbed records that something asked apply_runs for a recipe — the
+	// source rerun-last no longer uses.
+	recipeProbed bool
+
 	// Rerun-last path: the last-run probe in UnlockForRerun
-	// `SELECT scenario, apply_id FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
-	// nil → default [create, <applyID>] (create path: the last failed = create).
+	// `SELECT scenario, apply_id, run FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
+	// nil → a default create row with a snapshot. ONE source since NIM-408: the
+	// create-vs-day-2 branch and its apply_runs.recipe probe are gone.
 	lastScenarioRow func(name string) pgx.Row
-	// Rerun-last day-2 path: the recipe probe `SELECT recipe FROM apply_runs WHERE
-	// apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil → ErrNoRows (fail-closed:
-	// recipe unavailable). Set for the day-2 happy path.
-	recipeRow func(applyID string) pgx.Row
 
 	// Upgrade path: SELECT FOR UPDATE (state, state_schema_version, status).
 	upgradeSelectRow func(name string) pgx.Row
@@ -140,13 +141,16 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		if f.lastScenarioRow != nil {
 			return f.lastScenarioRow(args[0].(string))
 		}
-		// Default: the last failed = create (create path), apply_id is a stub.
-		return staticRow{values: []any{"create", "01HFAILEDRUN00000000000000"}}
+		// Default: the last failed = create, with a snapshot carrying the input the
+		// create was started with. One source now — the recipe probe below is gone.
+		return staticRow{values: []any{"create", "01HFAILEDRUN00000000000000",
+			[]byte(`{"scenario_name":"create","input":{"version":"7.2"}}`)}}
 	}
 	if strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL") {
-		if f.recipeRow != nil {
-			return f.recipeRow(args[0].(string))
-		}
+		// The rerun path must never come here again: its input is the history
+		// snapshot, whichever branch produced the run. A probe reaching this is the
+		// two-source design coming back.
+		f.recipeProbed = true
 		return errRow{err: pgx.ErrNoRows}
 	}
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
@@ -305,7 +309,7 @@ func makeIncarnationRow(name string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte("{}"), "ready",
+		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"),          // traits (ADR-060 amend R1)
@@ -483,15 +487,15 @@ func TestIncarnation_Get_InvalidName_422(t *testing.T) {
 
 // --- Secret masking on GET output (variant D) -------------------------
 
-func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
+// TestToDTO_MasksSecretsInState — the view masks secrets in `state`. It used to
+// check `spec` too; that field is gone with the column (NIM-408), and what an
+// incarnation was created WITH is now read from its history, where the same
+// masking applies per attempt.
+func TestToDTO_MasksSecretsInState(t *testing.T) {
 	pwd := "s3cr3t"
 	inc := &incarnation.Incarnation{
 		Name:   "redis-prod",
 		Status: incarnation.StatusReady,
-		Spec: map[string]any{
-			"input":         map[string]any{"db_password": pwd},
-			"public_option": "visible",
-		},
 		State: map[string]any{
 			"admin_token": pwd,
 			"replicas":    float64(3),
@@ -508,21 +512,6 @@ func TestToDTO_MasksSecretsInStateAndSpec(t *testing.T) {
 	}
 	if got := dto.State["replicas"]; got != float64(3) {
 		t.Errorf("state.replicas = %v, want 3 (non-secret - no masking)", got)
-	}
-	specInput := dto.Spec["input"].(map[string]any)
-	if got := specInput["db_password"]; got != "***MASKED***" {
-		t.Errorf("spec.input.db_password = %v, want masked", got)
-	}
-	if got := dto.Spec["public_option"]; got != "visible" {
-		t.Errorf("spec.public_option = %v, want visible", got)
-	}
-
-	// The stored incarnation is not mutated — only the response is masked.
-	if inc.State["admin_token"] != pwd {
-		t.Errorf("original inc.State mutated: %v", inc.State["admin_token"])
-	}
-	if inc.Spec["input"].(map[string]any)["db_password"] != pwd {
-		t.Errorf("original inc.Spec mutated")
 	}
 }
 
@@ -593,7 +582,6 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 			now := time.Now()
 			return staticRow{values: []any{
 				name, "redis", "v1", int(1),
-				[]byte("{}"),
 				[]byte(`{"admin_token":"s3cr3t","replicas":3}`),
 				"ready",
 				[]byte(nil), any(nil),
@@ -1072,7 +1060,7 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 	}
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), stateBytes, "ready",
+		stateBytes, "ready",
 		[]byte(nil), any(nil),
 		now, now, covenArg,
 		[]byte("{}"), // traits
@@ -1178,7 +1166,7 @@ func incListRowBare(name string) staticRow {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte("{}"), "ready",
+		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
@@ -1547,7 +1535,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 		now := time.Now()
 		return staticRow{values: []any{
 			name, "redis", "v1", int(1),
-			[]byte("{}"), []byte("{}"), "ready",
+			[]byte("{}"), "ready",
 			[]byte(nil), any(nil),
 			now, now, []string{"prod"},
 			[]byte("{}"),          // traits
@@ -1740,7 +1728,7 @@ func makeIncStatusRow(name, status string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte("{}"), status,
+		[]byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
@@ -1913,7 +1901,7 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", "v1", int(1),
-		[]byte("{}"), []byte("{}"), status,
+		[]byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
@@ -2203,7 +2191,7 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 	now := time.Now()
 	return staticRow{values: []any{
 		name, "redis", serviceVersion, schema,
-		[]byte("{}"), []byte("{}"), "ready",
+		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"),          // traits
@@ -3065,8 +3053,8 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	}
 	// created_scenario at auto_create=false is NOT NULL: the bootstrap scenario exists (create),
 	// the run is merely deferred (unlike bare). $12 = create.
-	if got, _ := db.insertArgs[11].(string); got != "create" {
-		t.Errorf("INSERT created_scenario ($12) = %q, want create (auto_create=false ≠ bare)", got)
+	if got, _ := db.insertArgs[10].(string); got != "create" {
+		t.Errorf("INSERT created_scenario ($11) = %q, want create (auto_create=false ≠ bare)", got)
 	}
 	// apply_id is absent from the JSON (nullable, omitempty).
 	var raw map[string]any
@@ -3206,7 +3194,6 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 	for _, want := range []string{
 		`"created_by_aid":null`,
 		`"state":null`,
-		`"spec":null`,
 		`"status_details":null`,
 	} {
 		if !strings.Contains(got, want) {

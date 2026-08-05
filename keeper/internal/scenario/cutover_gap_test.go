@@ -18,9 +18,9 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -77,7 +77,7 @@ func newAcolyteRunnerWith(t *testing.T, summons SummonsPublisher, disp ApplyDisp
 		SoulCap:        stubSoulCap{},
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		Essence:        essence.NewResolver(nil),
+		ServiceVars:    servicevars.NewResolver(nil),
 		Render:         render.NewPipeline(nil, engine, nil, nil),
 		Outbound:       disp,
 		DB:             integrationPool,
@@ -428,7 +428,7 @@ func TestIntegration_NoClaim_BarrierTimeout(t *testing.T) {
 		SoulCap:        stubSoulCap{},
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		Essence:        essence.NewResolver(nil),
+		ServiceVars:    servicevars.NewResolver(nil),
 		Render:         render.NewPipeline(nil, engine, nil, nil),
 		Outbound:       fakeDispatcher{},
 		DB:             integrationPool,

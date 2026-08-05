@@ -159,7 +159,7 @@ redis_pkg_version: >-
 # A fleet's own binary mirror may resolve to an RFC1918 address → core.url.fetched by
 # default (allow_private:false) blocks the dial via the SSRF guard (shared/netguard). The
 # value comes from the scenario via apply.input.install.allow_private (compute.install ←
-# essence.binary_allow_private, default false: the guard stays up for a publicly resolvable
+# vars.binary_allow_private, default false: the guard stays up for a publicly resolvable
 # base). The 4 binary-branch fetch tasks take the
 # ready ${ vars.redis_binary_allow_private }. The has() chain is render-safe in a DEAD
 # package pass (binary block static-skip, but the file-var still resolves before tasks):
@@ -172,7 +172,7 @@ redis_binary_allow_private: >-
 # Symmetric to redis_binary_allow_private: modules_base_url can also be an internal
 # Nexus (resolves to RFC1918) → the 4 .so fetches (modules.yml) would fail on the SSRF guard.
 # The value — from the scenario's apply.input.modules_allow_private (compute.modules_allow_private
-# ← essence.modules_allow_private, default true). has()-guard render-safe: absent → false.
+# ← vars.modules_allow_private, default true). has()-guard render-safe: absent → false.
 redis_modules_allow_private: >-
   ${ has(input.modules_allow_private) && input.modules_allow_private }
 

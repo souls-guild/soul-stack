@@ -12,7 +12,7 @@ What we protect and why compromise is critical.
 
 | Active | Where does he live | Why is it critical |
 |---|---|---|
-| **Vault-secrets** (Essence/passwords) | Vault KV, resolved in the CEL rendering phase on Keeper | Host config parameters, database/service passwords. Leak = compromise of managed services. Should never fall into observable channels (see invariant below). |
+| **Vault-secrets** (service vars / passwords) | Vault KV, resolved in the CEL rendering phase on Keeper | Host config parameters, database/service passwords. Leak = compromise of managed services. Should never fall into observable channels (see invariant below). |
 | **mTLS-CA** (SoulSeed Trust Root) | Vault PKI root | Every SoulSeed subscribes. CA compromise = the ability to issue a valid client certificate and impersonate any Soul or join EventStream. |
 | **JWT signing-key** | Vault KV `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md)) | Signs the JWT of all Archons. Compromise = issuing a token with any roles (full RBAC bypass). |
 | **Sigil trust-anchor** (ed25519 plugin-signing) | private - Vault KV `secret/keeper/sigil-keys/<key_id>`; public recruitment goes to Soul in `BootstrapReply` ([ADR-026(d)/(h)](../adr/0026-sigil.md)) | Signs accepted plugin digests. Compromise = ability to sign an arbitrary plugin binary (RCE on the fleet via a forged `soul-mod-*`). |

@@ -4,7 +4,7 @@
 # What we assert:
 #   1. mongod is stopped (core.service.stopped).
 #   2. MongoDB is removed via PACKAGE (core.pkg.absent name=mongodb-org) — package branch active
-#      (essence.install_method=package -> static gate group-keep).
+#      (vars.install_method=package -> static gate group-keep).
 #   3. Our config artifacts are removed (core.file.absent mongod.conf + sysctl drop-in).
 #   4. BINARY branch is dropped (group-drop): core.file.absent for the binary/binary-unit are ABSENT.
 name: destroy tears down a package-installed mongo (stop + pkg.absent + remove configs)
@@ -17,7 +17,7 @@ fixtures:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
 
-  essence:
+  vars:
     install_method: package
     conf_dir: /etc/mongodb
 

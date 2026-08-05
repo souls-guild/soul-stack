@@ -29,11 +29,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
@@ -325,7 +325,7 @@ func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner
 	return NewRunner(Deps{
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		Essence:        essence.NewResolver(nil),
+		ServiceVars:    servicevars.NewResolver(nil),
 		Render:         render.NewPipeline(nil, engine, nil, nil),
 		Outbound:       disp,
 		DB:             integrationPool,
@@ -347,13 +347,13 @@ func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *Destin
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
-		Loader:   artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology: topology.NewResolver(integrationPool, nil, nil),
-		Essence:  essence.NewResolver(nil),
-		Render:   render.NewPipeline(nil, engine, nil, nil),
-		Outbound: disp,
-		Destiny:  destinySrc,
-		DB:       integrationPool,
+		Loader:      artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:    topology.NewResolver(integrationPool, nil, nil),
+		ServiceVars: servicevars.NewResolver(nil),
+		Render:      render.NewPipeline(nil, engine, nil, nil),
+		Outbound:    disp,
+		Destiny:     destinySrc,
+		DB:          integrationPool,
 		// Staged gate (ADR-056 §S5): test hosts "support passage" (lacking is
 		// empty) — otherwise the fail-closed reject would reject all staged
 		// tests. The forward-compat reject is verified by a separate stub in
@@ -378,7 +378,7 @@ func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 	return NewRunner(Deps{
 		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:     topology.NewResolver(integrationPool, nil, nil),
-		Essence:      essence.NewResolver(nil),
+		ServiceVars:  servicevars.NewResolver(nil),
 		Render:       render.NewPipeline(nil, engine, nil, nil),
 		Outbound:     disp,
 		DB:           integrationPool,
@@ -403,7 +403,7 @@ func newRunnerWithSoulCap(t *testing.T, disp ApplyDispatcher, cap SoulCapability
 	return NewRunner(Deps{
 		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:     topology.NewResolver(integrationPool, nil, nil),
-		Essence:      essence.NewResolver(nil),
+		ServiceVars:  servicevars.NewResolver(nil),
 		Render:       render.NewPipeline(nil, engine, nil, nil),
 		Outbound:     disp,
 		DB:           integrationPool,
@@ -2192,7 +2192,7 @@ func newRunnerWithKeeper(t *testing.T, disp ApplyDispatcher, keepers KeeperModul
 		SoulCap:       stubSoulCap{},
 		Loader:        artifact.NewServiceLoader(t.TempDir(), nil),
 		Topology:      topology.NewResolver(integrationPool, nil, nil),
-		Essence:       essence.NewResolver(nil),
+		ServiceVars:   servicevars.NewResolver(nil),
 		Render:        render.NewPipeline(nil, engine, nil, nil),
 		Outbound:      disp,
 		KeeperModules: keepers,
@@ -2526,8 +2526,8 @@ tasks:
 //
 // Observable: keeper module called (applyCount==1), run is NOT error_locked
 // on no_hosts, reaches keeper-dispatch (step 5.5) and finalizes ready —
-// host-fan-out on an empty roster = no-op success. Essence resolves in the
-// keeper context (keeperEssenceInput, no host representative) — no panic on
+// host-fan-out on an empty roster = no-op success. The service vars resolve the
+// same way with no roster (host-invariant, ADR-0082) — no panic on
 // hosts[0].
 func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	resetAll(t)
@@ -2795,9 +2795,14 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 // by the handler/MCP, Create persists it). state_before == state_after = `{}`.
 func seedCreateHistory(t *testing.T, name string) {
 	t.Helper()
+	// The `run` snapshot is what makes the attempt replayable — without it
+	// UnlockForRerun refuses, because "rerun that" has no `that` to point at
+	// (NIM-408). Every caller of this helper is exercising the rerun path, so
+	// the fixture has to seed an attempt that can actually be rerun.
 	_, err := integrationPool.Exec(context.Background(), `
-INSERT INTO state_history (history_id, incarnation_name, scenario, state_before, state_after, apply_id)
-VALUES ($1, $2, 'create', '{}'::jsonb, '{}'::jsonb, $1)`,
+INSERT INTO state_history (history_id, incarnation_name, scenario, state_before, state_after, apply_id, run, run_status)
+VALUES ($1, $2, 'create', '{}'::jsonb, '{}'::jsonb, $1,
+        '{"scenario_name":"create","input":{}}'::jsonb, 'error_locked')`,
 		audit.NewULID(), name)
 	if err != nil {
 		t.Fatalf("seedCreateHistory: %v", err)

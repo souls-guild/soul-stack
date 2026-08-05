@@ -190,7 +190,7 @@ type RenderedTask struct {
 	// infrastructural and remains a terminal fail-stop.
 	FailedWhen string `protobuf:"bytes,9,opt,name=failed_when,json=failedWhen,proto3" json:"failed_when,omitempty"`
 	// flow_context: a literal per-host snapshot of the non-register part of the
-	// flow-control predicates' CEL context: { input, vars, essence, incarnation, self }.
+	// flow-control predicates' CEL context: { input, vars, incarnation, self }.
 	// Keeper builds it in the CEL phase (same as for rendering params, MINUS
 	// soulprint.hosts and loop), Soul reads it as DATA (not code): binds
 	// soulprint.self <- flow_context.self, the rest becomes top-level activation

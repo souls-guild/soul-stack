@@ -62,13 +62,13 @@ type enqErrRow struct{ err error }
 func (r enqErrRow) Scan(...any) error { return r.err }
 
 // enqIncRow emulates an incarnation row in scanIncarnation order:
-// name, service, service_version, state_schema_version, spec, state, status,
+// name, service, service_version, state_schema_version, state, status,
 // status_details, created_by_aid, created_at, updated_at, covens, traits,
 // last_drift_check_at, last_drift_summary, created_scenario, applying_apply_id.
 type enqIncRow struct{ inc *incarnation.Incarnation }
 
 func (r enqIncRow) Scan(dest ...any) error {
-	if len(dest) != 17 {
+	if len(dest) != 16 {
 		return errors.New("enqIncRow: len mismatch")
 	}
 	*dest[0].(*string) = r.inc.Name
@@ -76,21 +76,20 @@ func (r enqIncRow) Scan(dest ...any) error {
 	*dest[2].(*string) = r.inc.ServiceVersion
 	*dest[3].(*int) = r.inc.StateSchemaVersion
 	*dest[4].(*[]byte) = []byte("{}")
-	*dest[5].(*[]byte) = []byte("{}")
-	*dest[6].(*string) = string(r.inc.Status)
-	*dest[7].(*[]byte) = nil
-	*dest[8].(**string) = nil
+	*dest[5].(*string) = string(r.inc.Status)
+	*dest[6].(*[]byte) = nil
+	*dest[7].(**string) = nil
+	*dest[8].(*time.Time) = time.Now()
 	*dest[9].(*time.Time) = time.Now()
-	*dest[10].(*time.Time) = time.Now()
-	*dest[11].(*[]string) = r.inc.Covens
-	*dest[12].(*[]byte) = []byte("{}") // traits (ADR-060 amend R1)
-	*dest[13].(**time.Time) = nil
-	*dest[14].(*[]byte) = nil
+	*dest[10].(*[]string) = r.inc.Covens
+	*dest[11].(*[]byte) = []byte("{}") // traits (ADR-060 amend R1)
+	*dest[12].(**time.Time) = nil
+	*dest[13].(*[]byte) = nil
 	// created_scenario NULLABLE (migration 090): scanIncarnation reads into **string.
 	// nil incarnation pointer = bare (NULL); otherwise a pointer to the starting scenario name.
-	*dest[15].(**string) = r.inc.CreatedScenario
+	*dest[14].(**string) = r.inc.CreatedScenario
 	// applying_apply_id (ADR-068 §A1, migration 082): non-null while applying, nil at terminal.
-	*dest[16].(**string) = r.inc.ApplyingApplyID
+	*dest[15].(**string) = r.inc.ApplyingApplyID
 	return nil
 }
 

@@ -24,8 +24,8 @@ fixtures:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
 
-  # ★ Soul-side teardown reads essence (install_method/conf_dir, v1→v2 moved out of state).
-  essence:
+  # ★ Soul-side teardown reads service vars (install_method/conf_dir, v1→v2 moved out of state).
+  vars:
     install_method: package
     conf_dir: /etc/dragonfly
 

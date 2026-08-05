@@ -1,11 +1,11 @@
 # L0 trial for update_users: an EMPTY input.users removes ALL operator-extra users. The deployed
 # state.df_users = {alice, bob}; the operator sets input.users = [] (empty array). bulk-replace
 # replaces state.df_users ENTIRELY with an empty set:
-#   1. users.acl renders WITHOUT operator-extra (system users would be merged in from essence —
-#      here essence.system_acl_users is not set → vars.users = {} empty);
+#   1. users.acl renders WITHOUT operator-extra (system users would be merged in from service vars —
+#      here vars.system_acl_users is not set → vars.users = {} empty);
 #   2. state_changes.df_users = [] (operator-extra wiped).
 # Proves that bulk-replace lets you remove all operator-extra users with an empty array (system
-# users outside state — remain via merge-in from essence on every render, see main.yml).
+# users outside state — remain via merge-in from service vars on every render, see main.yml).
 name: update_users with empty input removes all operator-extra users
 
 fixtures:
@@ -14,7 +14,7 @@ fixtures:
     network: { primary_ip: 10.0.0.5 }
     os: { arch: amd64 }
 
-  # state v2: install/conf_dir/data_dir moved out into essence (not state).
+  # state v2: install/conf_dir/data_dir moved out into service vars (not state).
   state:
     df_version: "1.39.0"
     tls:
@@ -39,7 +39,7 @@ fixtures:
 
 assert:
   task_present:
-    # users.acl renders with an EMPTY set (operator-extra wiped; no system users — essence
+    # users.acl renders with an EMPTY set (operator-extra wiped; no system users — service vars
     # without system_acl_users → vars.users = {}).
     - module: core.file.rendered
       params_subset:
@@ -58,7 +58,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # HOT-RELOAD ACL: community.redis.acl over a LOCAL UNIX socket (ACL LOAD brings the instance
     # to an empty operator set). AUTH as default_admin (requirepass removed).

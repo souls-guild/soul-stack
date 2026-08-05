@@ -12,18 +12,29 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
-	"github.com/souls-guild/soul-stack/keeper/internal/essence"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
-	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 const (
+	// covens and traits are in the list because `vars/_stack.yaml` reads BOTH
+	// (servicevars.IncarnationContext): every other path to an incarnation goes
+	// through incarnation.SelectByName, which has always selected them, so
+	// leaving either out here would make the RUN resolve a different set of
+	// service vars than the pre-flight gate and the drift check on the same row —
+	// and worse, differently from the mid-run re-render of the same run, which
+	// goes through RenderForHost -> SelectByName.
+	//
+	// The two failure modes are not symmetrical, which is why this is a hard rule
+	// rather than a preference: `incarnation.traits.env == 'prd'` on a step aborts
+	// the run outright (no such key), while `has(incarnation.traits)` quietly
+	// resolves one layer fewer and returns success.
 	selectIncarnationForUpdateSQL = `
 SELECT name, service, service_version, state_schema_version,
-       spec, state, status, status_details, created_by_aid,
-       created_at, updated_at
+       state, status, status_details, created_by_aid,
+       created_at, updated_at, covens, traits
 FROM incarnation
 WHERE name = $1
 FOR UPDATE
@@ -59,23 +70,24 @@ func selectForUpdate(ctx context.Context, tx pgx.Tx, name string) (*incarnation.
 	return scanForUpdate(row)
 }
 
-// scanForUpdate parses an incarnation row (same columns as
-// incarnation.SelectByName, but via a locking SELECT inside the runner's
+// scanForUpdate parses an incarnation row (a SUBSET of incarnation.SelectByName's
+// columns — every field a service-vars resolve reads must be in it, see
+// selectIncarnationForUpdateSQL — via a locking SELECT inside the runner's
 // transaction — incarnation.scanIncarnation isn't exported, so we duplicate the
 // minimum).
 func scanForUpdate(row pgx.Row) (*incarnation.Incarnation, error) {
 	var (
 		inc                incarnation.Incarnation
 		statusStr          string
-		specBytes          []byte
 		stateBytes         []byte
+		traitsBytes        []byte
 		statusDetailsBytes []byte
 		createdByAID       *string
 	)
 	err := row.Scan(
 		&inc.Name, &inc.Service, &inc.ServiceVersion, &inc.StateSchemaVersion,
-		&specBytes, &stateBytes, &statusStr, &statusDetailsBytes, &createdByAID,
-		&inc.CreatedAt, &inc.UpdatedAt,
+		&stateBytes, &statusStr, &statusDetailsBytes, &createdByAID,
+		&inc.CreatedAt, &inc.UpdatedAt, &inc.Covens, &traitsBytes,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -85,11 +97,11 @@ func scanForUpdate(row pgx.Row) (*incarnation.Incarnation, error) {
 	}
 	inc.Status = incarnation.Status(statusStr)
 	inc.CreatedByAID = createdByAID
-	if inc.Spec, err = unmarshalJSONB(specBytes); err != nil {
-		return nil, fmt.Errorf("scenario: unmarshal spec: %w", err)
-	}
 	if inc.State, err = unmarshalJSONB(stateBytes); err != nil {
 		return nil, fmt.Errorf("scenario: unmarshal state: %w", err)
+	}
+	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
+		return nil, fmt.Errorf("scenario: unmarshal traits: %w", err)
 	}
 	if len(statusDetailsBytes) > 0 {
 		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
@@ -139,51 +151,38 @@ func lockApplyingWithEpoch(ctx context.Context, tx pgx.Tx, name, applyID, kid st
 	return nil
 }
 
-// essenceInput builds [essence.ResolveInput] for a representative host:
-// OS-family from soulprint, host Coven labels, override from incarnation.spec.essence.
-func essenceInput(serviceDir string, inc *incarnation.Incarnation, host *topology.HostFacts) essence.ResolveInput {
-	return essence.ResolveInput{
-		ServiceDir:      serviceDir,
-		OSFamily:        osFamilyOf(host),
-		Covens:          host.Coven,
-		IncarnationSpec: specEssence(inc),
+// serviceVarsInput builds [servicevars.ResolveInput] for one incarnation.
+//
+// It takes no host: a service's vars are host-INVARIANT (ADR-0082). The
+// per-host layers this used to select on — the old `os/<family>.yaml` and
+// `coven/<label>.yaml` overlays — are gone; a service that needs a host-dependent
+// value declares the step in `vars/_stack.yaml`. This is also why the keeper
+// context (provision-from-zero, no representative host — ADR-0061 §context) no
+// longer needs a resolve input of its own: there is nothing left for it to
+// differ in.
+func serviceVarsInput(serviceDir string, inc *incarnation.Incarnation) servicevars.ResolveInput {
+	return servicevars.ResolveInput{
+		ServiceDir:  serviceDir,
+		Incarnation: incarnationStackVars(inc),
 	}
 }
 
-// keeperEssenceInput builds [essence.ResolveInput] for the keeper context — empty
-// roster, provision-from-zero (ADR-0061 §context): no representative host. The
-// OS-family overlay is skipped (OSFamily empty — no per-host soulprint), the
-// Coven overlay is the incarnation's declared stable coven tags (inc.Covens,
-// ADR-008 amendment 2026-07-17/NIM-124: incarnation.name is NOT a Coven, so it is
-// no longer overlaid here), and the spec.essence override applies as usual.
-// Symmetric to renderKeeperTask, which renders keeper tasks in keeper context
-// without per-host soulprint.
-func keeperEssenceInput(serviceDir string, inc *incarnation.Incarnation) essence.ResolveInput {
-	return essence.ResolveInput{
-		ServiceDir:      serviceDir,
-		Covens:          inc.Covens,
-		IncarnationSpec: specEssence(inc),
+// incarnationStackVars builds the `incarnation.*` step context a
+// `vars/_stack.yaml` evaluates against. Deliberately the ROW's own fields —
+// `covens` in particular, which is how a step reaches the labels an operator put
+// on the incarnation (ADR-0080) now that the hard-wired `coven/<label>.yaml`
+// overlay is gone.
+func incarnationStackVars(inc *incarnation.Incarnation) servicevars.IncarnationContext {
+	if inc == nil {
+		return servicevars.IncarnationContext{}
 	}
-}
-
-// osFamilyOf extracts `soulprint.self.os.family` from the host's last-reported
-// facts. Missing facts / field → "" (essence skips the os layer).
-func osFamilyOf(host *topology.HostFacts) string {
-	os, ok := host.Soulprint["os"].(map[string]any)
-	if !ok {
-		return ""
+	return servicevars.IncarnationContext{
+		Name:           inc.Name,
+		Service:        inc.Service,
+		ServiceVersion: inc.ServiceVersion,
+		Covens:         inc.Covens,
+		Traits:         inc.Traits,
 	}
-	family, _ := os["family"].(string)
-	return family
-}
-
-// specEssence returns incarnation.spec.essence (operator override) or nil.
-func specEssence(inc *incarnation.Incarnation) map[string]any {
-	if inc.Spec == nil {
-		return nil
-	}
-	e, _ := inc.Spec["essence"].(map[string]any)
-	return e
 }
 
 // loadRegisterByHost reads accumulated register data for the run from

@@ -281,9 +281,9 @@ tasks: []
 	}
 }
 
-// TestForm_ShowWhen_EssenceRef — show_when references essence.* (outside the input-only
+// TestForm_ShowWhen_ServiceVarsRef — show_when references vars.* (outside the input-only
 // sandbox) → form_show_when_invalid ERROR (undeclared-reference compile error).
-func TestForm_ShowWhen_FieldEssenceRef(t *testing.T) {
+func TestForm_ShowWhen_FieldServiceVarsRef(t *testing.T) {
 	src := `name: x
 input:
   a: { type: string }
@@ -291,18 +291,18 @@ form:
   sections:
     - key: s1
       fields:
-        - { name: a, show_when: "essence.tls.enabled" }
+        - { name: a, show_when: "vars.tls.enabled" }
 tasks: []
 `
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if !hasCodeAt(diags, "form_show_when_invalid", "$.form.sections[0].fields[0].show_when") {
 		dump(t, diags)
-		t.Fatalf("expected form_show_when_invalid on essence-ref field show_when")
+		t.Fatalf("expected form_show_when_invalid on a vars-ref field show_when")
 	}
 }
 
-// TestForm_ShowWhen_SectionEssenceRef — the same at the section level.
-func TestForm_ShowWhen_SectionEssenceRef(t *testing.T) {
+// TestForm_ShowWhen_SectionServiceVarsRef — the same at the section level.
+func TestForm_ShowWhen_SectionServiceVarsRef(t *testing.T) {
 	src := `name: x
 input:
   a: { type: string }

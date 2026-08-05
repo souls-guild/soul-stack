@@ -45,9 +45,9 @@ fixtures:
       cert: "-----BEGIN CERTIFICATE-----\nSERVERCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nSERVERKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method is
-    # NOT operator-input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -61,13 +61,13 @@ fixtures:
       maxmemory-policy: allkeys-lru
       maxclients:       10000
       timeout:          300
-    # ★ #5: port/refs — in essence; the channel mode is input.connection_mode (tls = only-TLS).
+    # ★ #5: port/refs — in service vars; the channel mode is input.connection_mode (tls = only-TLS).
     tls_port:   7379
     tls_cert_ref: "secret/services/redis/tls#cert"
     tls_key_ref:  "secret/services/redis/tls#key"
     tls_ca_ref:   "secret/services/redis/tls#ca"
 
-    # System ACL users of redis-server (1:1 from essence/_default.yaml). MANDATORY:
+    # System ACL users of redis-server (1:1 from service vars/_default.yaml). MANDATORY:
     # the create/cluster.yml guard (assert 1b) breaks the render on an empty system_acl_users
     # (a silent fail-open is unacceptable — replication/health-check would break without them).
     # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of full access
@@ -154,7 +154,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # cluster-build: nodes MAP on tls_port (7379), tls=true + tls_ca (plugin over TLS) +
     # mTLS client-cert (tls_cert/tls_key for the mutual cluster bus, tls-cluster yes).

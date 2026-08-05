@@ -10,7 +10,7 @@ description: >-
 # (after manually quiescing writes to the source, see description).
 
 # ── Computed scenario-vars (compute:) ─────────────────────────────────────────
-# Run-level context (incarnation/essence — without soulprint). source_master — the master
+# Run-level context (incarnation/service vars — without soulprint). source_master — the master
 # of the EXTERNAL source from state (written by migrate_cluster: seeded_from.source_endpoints[0]).
 # tls_* — the connection discriminator to the LOCAL instance from state.tls (like all maintenance scenarios:
 # add_user/update_users/restart).

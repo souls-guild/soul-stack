@@ -15,7 +15,7 @@ state_changes: {}
 
 # ── Computed scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
 # `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
-# (input/essence/incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible
+# (input/vars/incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible
 # as `compute.<name>` in the task params below. Removes duplication of the TLS discriminator:
 # the TLS discriminator was repeated 4× (probe.addr/tls/tls_ca + health-gate.addr/tls/tls_ca
 # = 3 each on two tasks). Declared ONCE here, tasks reference
@@ -24,10 +24,10 @@ state_changes: {}
 #
 # ★ The source of truth is incarnation.state.tls (a NAMED intent field, state_schema
 # v3, convention docs/destiny/production-conventions.md §7a, ADR-057 amendment),
-# NOT essence and NOT parsing redis_config: create translates the operator's TLS input
+# NOT service vars and NOT parsing redis_config: create translates the operator's TLS input
 # (tls_enabled/tls_keep_plain) → named-field state.tls (the same compute.tls_* that
-# populated the TLS block of redis_config); on a repeat run, essence
-# is INCOMPLETE (it doesn't see operator overrides). The discriminator used to parse the opaque write-model
+# populated the TLS block of redis_config); on a repeat run, the service vars alone do not
+# say whether TLS is on — that is a run-time fact, not a declared default. The discriminator used to parse the opaque write-model
 # (`'tls-port' in incarnation.state.redis_config`); v3 gives a NAMED read-model
 # state.tls.enable — more readable and without bracket-notation for the hyphenated key.
 # The chain has(incarnation.state) && has(incarnation.state.tls) guards against no-such-key
@@ -42,7 +42,7 @@ compute:
   # resolved via vault(incarnation.state.tls.ca_ref) — the secret doesn't live in state (security), what's there is
   # a stable Vault PATH (read-model v3), symmetric with tls_port from state.tls.port. After
   # rotate_tls (changes state.tls.ca_ref to a new path), restart connects with the CURRENT CA;
-  # essence.tls_ca_ref would be stale (rotate doesn't touch it) → verifying the new cert would fail.
+  # vars.tls_ca_ref would be stale (rotate doesn't touch it) → verifying the new cert would fail.
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
@@ -62,7 +62,7 @@ tasks:
   # of truth is incarnation.state.tls (a NAMED v3 field, convention §7a). ca_ref was written
   # to state.tls.ca_ref on create as a Vault PATH (not PEM), and the plugin needs the PEM
   # CONTENT → a repeat run gets the CA via vault(incarnation.state.tls.ca_ref): the current path
-  # after rotate_tls, not a stale essence default. addr on
+  # after rotate_tls, not a stale service vars default. addr on
   # compute.tls_on/tls_port: TLS enabled → '127.0.0.1:' + tls-port (string(state.tls.port),
   # INTEGER in v3), otherwise plaintext 6379.
   - name: Detect actual redis role per host

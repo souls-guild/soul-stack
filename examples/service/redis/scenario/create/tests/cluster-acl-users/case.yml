@@ -68,7 +68,7 @@ fixtures:
       password: zeta-user-secret-pass
     secret/redis/create/users/alpha:
       password: alpha-user-secret-pass
-  essence:
+  vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
     memory_reserve_percent: 75
@@ -82,7 +82,7 @@ fixtures:
       maxclients:       10000
       timeout:          300
 
-    # System ACL users of redis-server (1:1 from essence/_default.yaml). REQUIRED:
+    # System ACL users of redis-server (1:1 from service vars/_default.yaml). REQUIRED:
     # guard create/cluster.yml (assert 1b) aborts the render when system_acl_users is empty
     # (a silent fail-open is unacceptable - without them replication/health-check would break).
     # * default_admin REDESIGN (2026-06-30): default_admin is the full-access system user
@@ -132,7 +132,7 @@ assert:
         group: redis
         render_context:
           vars:
-            # SYSTEM (5, from essence.system_acl_users, merged in MANDATORY - guard 1b)
+            # SYSTEM (5, from vars.system_acl_users, merged in MANDATORY - guard 1b)
             # + operator-extra zeta/alpha (last-wins). Names do not overlap with system ones.
             # * default_admin REDESIGN: default_admin (~* &* +@all) is a system user, rendered
             # via range like the others (Vault password from the users/default_admin branch).
@@ -177,7 +177,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
     # redis.conf: cluster directives COEXIST with ACL (different files). config has
     # NO per-user password (it is only in users.acl, hashed). Disambiguator from
@@ -229,7 +229,7 @@ assert:
             os:
               arch: amd64
           role: ""
-          essence: {}
+          service vars: {}
 
   task_absent:
     # GUARD "cluster does NOT deploy the sentinel daemon": include tasks/sentinel.yml

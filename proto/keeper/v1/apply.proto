@@ -75,7 +75,7 @@ message RenderedTask {
   string failed_when = 9;
 
   // flow_context: a literal per-host snapshot of the non-register part of the
-  // flow-control predicates' CEL context: { input, vars, essence, incarnation, self }.
+  // flow-control predicates' CEL context: { input, vars, incarnation, self }.
   // Keeper builds it in the CEL phase (same as for rendering params, MINUS
   // soulprint.hosts and loop), Soul reads it as DATA (not code): binds
   // soulprint.self <- flow_context.self, the rest becomes top-level activation

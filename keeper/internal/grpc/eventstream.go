@@ -214,7 +214,7 @@ type EventStreamDeps struct {
 	// config for the connect-time cadence/collectors broadcast (ADR-072, NIM-87).
 	// nil → broadcast no-op (dev / unit / push harness). Production wire-up
 	// (`keeper run`) passes telemetrySource over the shared pool + serviceRegistry +
-	// serviceLoader + essenceResolver.
+	// serviceLoader + serviceVarsResolver.
 	TelemetrySource TelemetrySource
 
 	// TollNotifier is the Toll cluster-detector hook (ADR-038): the handler
@@ -265,10 +265,10 @@ type VigilSource interface {
 }
 
 // TelemetrySource — the narrow surface for resolving a host's effective
-// telemetry config (manifest `telemetry:` + essence-override), needed by the
+// telemetry config (manifest `telemetry:` + the service's own vars), needed by the
 // connect-time broadcast ([broadcastTelemetryConfig], ADR-072, NIM-87). Narrowing
 // to one method isolates the EventStream handler from the soul->incarnation->
-// service-artifact->essence chain and allows a fake in unit tests. Implementation
+// service-artifact->service-vars chain and allows a fake in unit tests. Implementation
 // — [telemetrySource] (events_telemetry.go). (nil, nil) = "no config" (host
 // without an incarnation): the broadcast is skipped, Soul keeps its soul-local
 // cadence (unlike Vigil/Sigil ReplaceAll, where an empty set is still sent).
@@ -683,7 +683,7 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	// Connect-time broadcast of the effective host-vitals telemetry config (ADR-072,
 	// NIM-87): in the same goroutine after VigilSnapshot, BEFORE the send-loop
 	// starts — direct stream.Send (order guaranteed). Resolve per-SID (manifest
-	// `telemetry:` + essence-override). No incarnation -> skip (Soul stays on its
+	// `telemetry:` + the service's own vars). No incarnation -> skip (Soul stays on its
 	// soul-local cadence, not an empty config). Best-effort — see [broadcastTelemetryConfig].
 	h.broadcastTelemetryConfig(ctx, stream, sid, sessionID)
 

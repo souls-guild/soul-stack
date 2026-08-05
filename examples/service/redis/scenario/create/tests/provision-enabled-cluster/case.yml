@@ -51,9 +51,9 @@ fixtures:
       password: sentinel-sys-secret-pass
     secret/redis/create/users/haproxy:
       password: haproxy-sys-secret-pass
-  essence:
-    # install_method — in essence (author-context, 2026-06-28): the install method is
-    # NOT operator input. compute.install reads default(essence.install_method, 'binary').
+  vars:
+    # install_method — in service vars (author-context, 2026-06-28): the install method is
+    # NOT operator input. compute.install reads default(vars.install_method, 'binary').
     install_method: package
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -135,8 +135,8 @@ assert:
       params_subset:
         ssh_provider: ssh-example
         install: true
-        # join_wait_timeout — from essence.provision_join_wait_timeout (input.provision
-        # doesn't set it). Guard: the essence default reaches the step (not hardcoded), a
+        # join_wait_timeout — from vars.provision_join_wait_timeout (input.provision
+        # doesn't set it). Guard: the service vars default reaches the step (not hardcoded), a
         # duration string.
         join_wait_timeout: "55m"
         hosts:
@@ -146,7 +146,7 @@ assert:
           - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
 
     # (c) core.soul.registered: sid — the list of SIDs of the created VMs; await_online +
-    # refresh_soulprint; await_timeout from input.provision (5m, overrides the essence
+    # refresh_soulprint; await_timeout from input.provision (5m, overrides the service vars
     # default).
     - module: core.soul.registered
       params_subset:
