@@ -72,7 +72,6 @@
   "auditEventLabel_incarnation_destroy_failed": "Уничтожение Incarnation не удалось",
   "auditEventLabel_incarnation_destroy_started": "Уничтожение Incarnation начато",
   "auditEventLabel_incarnation_drift_checked": "Выполнена проверка drift",
-  "auditEventLabel_incarnation_hosts_updated": "Список объявленных хостов изменён",
   "auditEventLabel_incarnation_member_bound": "Хост привязан к Incarnation",
   "auditEventLabel_incarnation_member_unbound": "Хост отвязан от Incarnation",
   "auditEventLabel_incarnation_rerun_last": "Повторён последний упавший сценарий",

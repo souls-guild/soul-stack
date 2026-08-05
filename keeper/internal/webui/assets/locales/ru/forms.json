@@ -1,5 +1,4 @@
 {
-  "addHostTitle": "Добавить хост → {{name}}",
   "addRole": "добавить роль",
   "addVoiceTitle": "Добавить Voice → {{choir}}",
   "ariaAssignRole": "назначить роль {{aid}}",
@@ -29,7 +28,6 @@
   "refHint": "git- ref: tag (v2.0.0) или branch (main)",
   "refsLoading": "Загружаем refs…",
   "refsUnavailable": "Каталог refs недоступен, имя вводится вручную.",
-  "removeHostTitle": "Удалить хост: {{sid}}",
   "required": "Обязательное поле",
   "revokeArchonTitle": "Отозвать {{aid}}?",
   "revokeArchonWarn": "Архонт {{aid}} будет помечен как отозванный. Все его JWT-токены перестанут работать мгновенно. Новые токены выпустить нельзя.",

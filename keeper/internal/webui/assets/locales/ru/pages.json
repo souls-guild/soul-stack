@@ -75,7 +75,6 @@
   "overviewTransport": "Транспорт pull / push",
   "overviewTransportHint": "agent (pull) / ssh (push)",
   "rbacCrumbs": "роли, permissions, назначения Archons",
-  "removeFromDeclared": "Удалить из declared-списка",
   "revokeSigilConfirm": "Отозвать Sigil-допуск {{sigil}}?\nБинарь перестанет проходить Sigil-верификацию. Запись остаётся в реестре для аудита.",
   "revokeSigilTitle": "Отозвать допуск",
   "runScenarioViaWizard": "Запустить scenario через Run Wizard",
