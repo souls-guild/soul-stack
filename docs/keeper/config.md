@@ -1051,7 +1051,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 |---|---|---|---|
 | `kid` | — | `kid` | Instance ID; change = new instance. |
 | `listen.*` | — | all (`grpc.addr`, `openapi.addr`, `mcp.addr`, `metrics.addr`, `grpc.tls.*`, `grpc.event_stream.max_apply_size_mb`) | External surface; TLS files are read at init context, `MaxSendMsgSize` is set on the gRPC server once at startup. |
-| `postgres.pool.*` | `min`/`max` (in-memory grows/shrinks) | — | The pool settings are applied to new connections. |
+| `postgres.pool.*` | — | yes | `min`/`max` are baked into the pgxpool config when the pool is opened (`pg.NewPool`, once at startup); pgx has no live resize and no reload subscriber re-opens the pool. |
 | `postgres.dsn_ref` | — | yes | Open connections are not recreated. |
 | `redis.*` | — | yes | Connection-strings + password. |
 | `vault.addr` | — | yes | Open Vault-client connection. |
