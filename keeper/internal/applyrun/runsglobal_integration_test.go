@@ -13,10 +13,48 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
 // unrestrictedScope is an unrestricted scope (Unrestricted operator).
 var unrestrictedScope = incarnation.ListScope{Unrestricted: true}
+
+// runsScopeColumns mirrors the column map the runs handler hands to
+// [rbac.PurviewSQL] (handlers.incScopeColumns). It is duplicated rather than
+// imported because api/handlers imports this package. The names are bare
+// (unaliased) because [incarnation.ScopeCondition] is embedded in
+// `... IN (SELECT name FROM incarnation WHERE <cond>)`.
+var runsScopeColumns = rbac.ScopeColumns{
+	Coven:       "covens",
+	Incarnation: "name",
+	Service:     "service",
+	Traits:      "traits",
+}
+
+// purviewScope builds the scope the runs handler actually produces:
+// handlers.resolveListScope renders the operator's [rbac.Purview] over the
+// incarnation columns via [rbac.PurviewSQL] and carries it as the
+// [incarnation.ListScope.Scope] closure, which fully supersedes the flat
+// dimensions. Tests reach the store through this shape so the assertions run
+// over the same SQL production emits.
+//
+// Reaching an incarnation by its own identity is `incarnation=<name>`, never
+// `coven=<name>`: a name is an identity, not a label an operator attached
+// (ADR-008 amendment 2026-08-05, NIM-281). A coven scope is still exercised
+// below against a genuinely declared `covens[]` tag.
+func purviewScope(t *testing.T, raw string) incarnation.ListScope {
+	t.Helper()
+	expr, err := rbac.ParseScopeExpr(raw)
+	if err != nil {
+		t.Fatalf("ParseScopeExpr(%q): %v", raw, err)
+	}
+	pv := rbac.Purview{Exprs: []*rbac.ScopeExpr{expr}}
+	return incarnation.ListScope{
+		Scope: func(startIdx int) (string, []any, int) {
+			return rbac.PurviewSQL(pv, runsScopeColumns, startIdx)
+		},
+	}
+}
 
 // seedRun is a helper: one run with applyID in incarnation inc with a given SET of
 // host statuses (host-0..host-N). Terminal statuses are set via UpdateStatus
@@ -158,9 +196,10 @@ func TestIntegration_ListRuns_Paging(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRuns_Scope - Purview-scope subquery: the coven union {name}
-// dimension narrows the result to visible incarnations; empty scope (not
-// Unrestricted) fails closed to empty; covens[] labels also match.
+// TestIntegration_ListRuns_Scope - Purview-scope subquery narrows the result to
+// visible incarnations along BOTH dimensions that can name one: `incarnation=`
+// (its own identity, read from the name column) and `coven=` (a tag an operator
+// declared on it). Empty scope (not Unrestricted) fails closed to empty.
 func TestIntegration_ListRuns_Scope(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -177,19 +216,23 @@ func TestIntegration_ListRuns_Scope(t *testing.T) {
 	seedRun(t, ctx, "01HSC01", "redis-prod", "create", StatusSuccess)
 	seedRun(t, ctx, "01HSC02", "redis-staging", "create", StatusSuccess)
 
-	// scope by incarnation NAME (coven union {name}): only redis-prod is visible.
+	// scope by the incarnation's own identity (`incarnation=`): only redis-prod is
+	// visible. redis-prod carries no covens at all, so this passes only if the
+	// identity dimension reaches the runs view — `coven=redis-prod` would match
+	// nothing (NIM-281).
 	runs, total, err := ListRuns(ctx, integrationPool,
-		RunsFilter{}, incarnation.ListScope{Covens: []string{"redis-prod"}}, 0, 50)
+		RunsFilter{}, purviewScope(t, "incarnation=redis-prod"), 0, 50)
 	if err != nil {
-		t.Fatalf("ListRuns(scope name): %v", err)
+		t.Fatalf("ListRuns(scope incarnation): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].Incarnation != "redis-prod" {
-		t.Fatalf("scope name: total=%d runs=%+v, want only redis-prod", total, runs)
+		t.Fatalf("scope incarnation: total=%d runs=%+v, want only redis-prod", total, runs)
 	}
 
-	// scope by covens[] label: only redis-staging is visible.
+	// a coven scope matches the tag an operator declared, and only that: redis-staging
+	// carries team-x, redis-prod carries nothing.
 	runs, total, err = ListRuns(ctx, integrationPool,
-		RunsFilter{}, incarnation.ListScope{Covens: []string{"team-x"}}, 0, 50)
+		RunsFilter{}, purviewScope(t, "coven=team-x"), 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(scope coven): %v", err)
 	}
@@ -335,7 +378,7 @@ func TestIntegration_SelectRunsStats_Scoped(t *testing.T) {
 	seedRun(t, ctx, "01HSS02", "redis-staging", "create", StatusFailed)
 
 	stats, err := SelectRunsStats(ctx, integrationPool,
-		incarnation.ListScope{Covens: []string{"redis-prod"}})
+		purviewScope(t, "incarnation=redis-prod"))
 	if err != nil {
 		t.Fatalf("SelectRunsStats(scoped): %v", err)
 	}
@@ -487,8 +530,8 @@ func TestIntegration_ListRuns_QScopeBinding(t *testing.T) {
 	seedRun(t, ctx, "01HQBIN", "in-scope-inc", "sharedterm", StatusSuccess)
 	seedRun(t, ctx, "01HQBOUT", "out-scope-inc", "sharedterm", StatusSuccess)
 
-	// Limited scope (coven union {name}) - only in-scope-inc is visible.
-	scope := incarnation.ListScope{Covens: []string{"in-scope-inc"}}
+	// Limited scope (`incarnation=`) - only in-scope-inc is visible.
+	scope := purviewScope(t, "incarnation=in-scope-inc")
 	runs, total, err := ListRuns(ctx, integrationPool, RunsFilter{Q: "sharedterm"}, scope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(q under limited scope): %v", err)
@@ -626,9 +669,9 @@ func TestIntegration_ListRuns_TimeScopeBinding(t *testing.T) {
 	setStart("01HTSOUT", tWindow)
 	setStart("01HTSOLD", tBefore)
 
-	// Limited scope (coven union {name}) - only in-scope-inc is visible; the window
+	// Limited scope (`incarnation=`) - only in-scope-inc is visible; the window
 	// cuts off everything before tWindow.
-	scope := incarnation.ListScope{Covens: []string{"in-scope-inc"}}
+	scope := purviewScope(t, "incarnation=in-scope-inc")
 	runs, total, err := ListRuns(ctx, integrationPool,
 		RunsFilter{StartedAfter: &tWindow}, scope, 0, 50)
 	if err != nil {

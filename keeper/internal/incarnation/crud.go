@@ -262,8 +262,10 @@ type ListScope struct {
 	// rbac.PurviewSQL) that a flat value-list can't express. Carried as a
 	// placeholder-relative closure ([ScopeSQLFunc]) so this package stays free of
 	// an rbac import. Unrestricted still short-circuits before this is consulted;
-	// the flat fields remain for the legacy state-CEL adapter ([StateLister]) and
-	// the global-runs view ([applyrun], via [ScopeCondition]).
+	// the flat fields remain only for the legacy state-CEL adapter ([StateLister]).
+	// Every scope an operator's Purview produces — for the incarnation list and
+	// for the global-runs view alike — arrives through this closure, so a caller
+	// reading the flat fields is not reading what production hands the store.
 	Scope ScopeSQLFunc
 }
 
