@@ -69,24 +69,36 @@ destiny: *values the author of this artifact nailed down, resolvable by expressi
 of anyone's external contract*. What an operator is meant to supply has one home, and always
 had one: `input:`.
 
-**Merged, not merely renamed.** `vars.*` is a single flat namespace. The ladder is flat, and
-outermost to innermost it is:
+**Merged, not merely renamed.** `vars.*` is a single flat namespace — but it is a namespace per
+PASS, and the two passes never share one. Drawn as one ladder it reads as if a service's vars
+reach a destiny, which is the opposite of what happens (§6), so it is drawn as two:
 
 ```
-<service>/vars/*.yaml  →  destiny vars.yml  →  block: vars:  →  task vars:
+scenario pass:   <service>/vars/*.yaml  →  block: vars:  →  task vars:
+destiny pass:    <destiny>/vars.yml     →  block: vars:  →  task vars:
+                 ─── apply: ────────────────────────────────────────────
+                 nothing crosses except what the caller writes in `apply: input:`
 ```
 
-Two of those four are not separate rungs at RESOLVE time, and the difference is worth stating
-because it decides what may reference what. `mergeBlockInheritance` (`block.go`) folds a block's
-vars into each child task's own `vars:` BEFORE the layer is resolved, so block and task are one
-layer with the task winning on a collision — which is also why a block var and a task var can
-reference each other. The file rung exists only in the destiny pass: a scenario has no file layer
-at all, because `scenario/<name>/vars.yml` is documented and read by nothing (which is why NIM-416
-deletes it from the docs rather than implementing it). What actually stacks at resolve time is the
-service layer under the file layer under the merged block+task layer (`resolveTaskVars`,
-`cel_render.go`). There is no operator rung, because
+That separation is structural, not a convention: the isolated destiny `RenderInput` carries
+`ServiceVars: nil` (`render/destiny.go`), and the scenario pass has no file layer at all
+(`fileVars` is empty in `cel_render.go`), because `scenario/<name>/vars.yml` is documented and read
+by nothing — which is why NIM-416 deletes it from the docs rather than implementing it. So a
+service var and a destiny var can carry the same name and never meet; `run_dir` in the shipped
+examples does exactly that.
+
+Within a pass, block and task are ONE rung, not two. `mergeBlockInheritance` (`block.go`) folds a
+block's vars into each child task's own `vars:` BEFORE the layer is resolved, so the task wins on a
+collision — which is also why a block var and a task var can reference each other. What stacks at
+resolve time is therefore the file (or service) layer under the merged block+task layer
+(`resolveTaskVars`, `cel_render.go`). There is no operator rung, because
 [§2](#2-a-fleet-overrides-a-services-defaults-by-forking-the-service-repo) removes the only one
 that existed.
+
+The name surviving a boundary whose meaning does not is stated head-on rather than removed
+([§6](#6-the-asymmetry-across-the-apply-boundary-is-stated-not-removed)); an independent review of
+NIM-415 went looking for destiny expressions newly seeing a service var precisely because the
+single-ladder drawing above implied they could, and found none, because they cannot.
 
 **A layer may reference the layers BELOW it.** Before this change a task var reached the service
 layer by spelling `${ essence.X }` — a different root, always in scope. With one root the same

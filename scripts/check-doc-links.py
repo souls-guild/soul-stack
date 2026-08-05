@@ -31,6 +31,17 @@ ALLOWLIST_PATH = os.path.join(REPO_ROOT, "scripts", "doc-links-allowlist.txt")
 SKIP_DIRS = {".git", "node_modules", "vendor", ".pm", "proto/gen"}
 
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+?)\)")
+# A link whose target contains a space is NOT a link — markdown stops parsing it,
+# and so did this checker, silently. That is the wrong way round: an ordinary
+# broken target gets reported, while a target mangled badly enough to stop being
+# a link at all passes. NIM-415 renamed a directory into a two-word phrase and
+# left seven of these; the run said "all internal links are intact" every time.
+#
+# Matched separately from MD_LINK_RE (which deliberately refuses whitespace, so
+# ordinary prose parentheses are not mistaken for links). The target must still
+# look like a path — contain a dot or a slash — or `see (a b)` in prose would be
+# reported. `%20` is a real escaped space and stays legal.
+MD_LINK_SPACE_RE = re.compile(r"\[[^\]]*\]\(([^)\n]*[ \t][^)\n]*)\)")
 # Go comments: catch docs/...#anchor or ../docs/...#anchor inside a line.
 GO_DOC_LINK_RE = re.compile(r"(?:\.\./)*docs/[\w./-]+\.md#[\w.-]+")
 
@@ -180,6 +191,17 @@ def main() -> int:
             targets = GO_DOC_LINK_RE.findall(content)
         else:  # .md
             targets = MD_LINK_RE.findall(content)
+            for mangled in MD_LINK_SPACE_RE.findall(content):
+                if "%20" in mangled or not re.search(r"[./]", mangled):
+                    continue
+                key = f"{rel_src}:{mangled}"
+                if key in allowlist:
+                    used_allow.add(key)
+                    continue
+                errors.append(
+                    f"{rel_src}: link target contains a space, so it is not a link at all "
+                    f"(link: {mangled})"
+                )
 
         for target in targets:
             key = f"{rel_src}:{target}"
