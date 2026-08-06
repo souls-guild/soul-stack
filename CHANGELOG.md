@@ -564,6 +564,28 @@ order to act in.
   rather than from a missing alert. Historical `audit_log` rows keep the event
   type forever; the type is out of the enum, so filtering by it now answers 422.
 
+- **If your only cluster administrator holds `*` through an LDAP/OIDC group, that
+  login can now fail instead of demoting them.** Federated role reconciliation
+  ([ADR-058(d)](docs/adr/0058-operator-auth-ldap-oidc.md)) revokes the mapped roles
+  a user's groups no longer carry, and it did so below the self-lockout guard: an
+  identity provider answering with **fewer** groups than it should — an outage, a
+  directory reorganisation, a group membership that has not propagated — stripped
+  `*` from whoever logged in during it. Do that to the last administrator and the
+  cluster has none, with no route back through the API.
+
+  Such a revoke is now refused and the login fails with it, touching no membership.
+  A failed login is recoverable by fixing the IdP or the map; an empty admin set is
+  not. **Check your `group_role_map` before upgrading:** if a `*`-granting role is
+  mapped to a group and no administrator exists outside the federated domain, an
+  IdP hiccup that used to demote you silently will now lock you out of *logging in*
+  until it is fixed. The configuration to keep is one administrator enrolled
+  outside LDAP/OIDC — the `keeper init` bootstrap Archon (`auth_method=jwt`) already
+  is one, and the federated mapper never serves it.
+
+  An IdP returning **no** usable groups was already safe and is unchanged: such an
+  identity is rejected before reconciliation begins, so nothing was ever revoked on
+  that path. The case this closes is the partial answer.
+
 ### Added
 
 - **The composed incarnation name, previewed before it is permanent**
@@ -1071,6 +1093,31 @@ order to act in.
   `incarnation.spec`" is enforced by the compiler rather than asserted by a test.
 
 ### Security
+
+- **Federated role reconciliation could empty the cluster's admin set, and no
+  operator had to be involved** ([ADR-058(d)](docs/adr/0058-operator-auth-ldap-oidc.md)
+  amendment 2026-07-29). LDAP/OIDC login revokes the mapped roles a user's groups no
+  longer carry. It writes inside its own transaction, alongside the grants it makes
+  in the same breath, so it could not go through `rbac.Service` — and took the
+  package-level revoke, which enforced nothing. The self-lockout invariant lived in
+  the Service, and the package function's doc said so; a comment is not a boundary.
+
+  The trigger needs no mistake by anyone: an identity provider can be wrong in the
+  one direction that matters, answering with **fewer** groups than it should. Map a
+  group to a `*`-granting role — the first thing anyone configures — and an outage,
+  a reorganisation or an unpropagated membership demotes whoever logs in during it.
+  The last administrator going that way leaves a cluster with no way back through
+  the API.
+
+  The revoke is now guarded and a refusal fails the login, rolling back the grants
+  made alongside it so membership is never half-synced. The names carry the
+  guarantee instead of a comment: `rbac.RevokeOperator` runs the probe, and the bare
+  DELETE is `RevokeOperatorRow`, reached only by asking for it. The probe is the
+  cluster-state precondition of [ADR-078 §n](docs/adr/0078-rbac-derived-roles.md),
+  not a permission check — this path has no caller and its grants are equally
+  caller-less, so an operator's rights are not the question. An IdP returning no
+  usable groups was already refused before reconciliation and is unchanged; the hole
+  was the partial answer.
 
 - **`errand.run` no longer reaches an arbitrary shell on its own**
   ([ADR-0074](docs/adr/0074-interactive-console-pty.md), amendment 2026-07-28;

@@ -103,4 +103,21 @@ var (
 	// (anti-oracle doesn't apply to policy — the fact "method disabled" is
 	// not a leak of someone else's credentials).
 	ErrProvisioningDisabled = errors.New("auth: operator provisioning is disabled for this method by policy")
+	// ErrReconcileWouldLockOutCluster — the external groups say this operator
+	// should lose a role, and obeying would leave the cluster with no active
+	// operator holding an effective `*` (NIM-320). The login FAILS and no
+	// membership is touched: an identity provider that answers with fewer groups
+	// than it should — an outage, a directory reorganisation, a group whose
+	// membership has not propagated yet — must not be able to strip the last
+	// administrator. A failed login is recoverable by fixing the IdP; being
+	// locked out of the cluster is not recoverable through the API at all.
+	//
+	// Not a user auth failure but a configuration outcome, like
+	// [ErrProvisioningDisabled]: the operator did nothing wrong and their
+	// credentials were fine. Distinguished so the cause reaches the logs and the
+	// response rather than surfacing as an opaque 500 — an administrator seeing
+	// federated logins fail needs to know it is this, because the fix is to stop
+	// mapping a `*`-granting role to an IdP group (or to give the cluster a
+	// second administrator outside the federated domain).
+	ErrReconcileWouldLockOutCluster = errors.New("auth: refusing to revoke a role from the last cluster administrator")
 )

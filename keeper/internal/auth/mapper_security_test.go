@@ -129,6 +129,15 @@ type reconcileDB struct {
 	existing     *operator.Operator
 	currentRoles []string // direct membership for DirectRolesOf
 
+	// rolePerms — permission strings per role, read by the self-lockout probe to
+	// decide whether the role being revoked is a cluster-admin source at all
+	// (NIM-320). An absent role has no permissions, so the probe is skipped.
+	rolePerms map[string][]string
+	// survivingAdmins — AIDs the probe finds still holding an effective `*`
+	// AFTER excluding the (role, aid) pair being revoked. Empty means the revoke
+	// would leave the cluster with no administrator and must be refused.
+	survivingAdmins []string
+
 	granted []string // role_name from INSERT rbac_role_operators
 	revoked []string // role_name from DELETE rbac_role_operators
 }
@@ -151,9 +160,25 @@ func (d *reconcileDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
 	return &fakeOperatorRow{op: d.existing}
 }
 
-func (d *reconcileDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM rbac_role_operators WHERE aid") {
+func (d *reconcileDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	switch {
+	case strings.Contains(sql, "FROM rbac_role_operators WHERE aid"):
+		// DirectRolesOf — the operator's current direct membership.
 		return &directRoleRows{names: d.currentRoles}, nil
+
+	// The four reads the self-lockout probe adds to the revoke path (NIM-320).
+	case strings.Contains(sql, "SELECT permission FROM rbac_role_permissions"):
+		return &directRoleRows{names: d.rolePerms[toStr(args[0])]}, nil
+	case strings.Contains(sql, "SELECT parent_role FROM rbac_roles"):
+		// Every role in these fixtures is plain, which is what makes a `*` role a
+		// cluster-admin source (ADR-078(i)).
+		return &nullStringRows{directRoleRows{names: []string{""}}}, nil
+	case strings.Contains(sql, "FROM rbac_role_operators ro"):
+		// The direct branch of the admin-survivor probe.
+		return &directRoleRows{names: d.survivingAdmins}, nil
+	case strings.Contains(sql, "FROM synod_operators so"):
+		// The Synod branch — no group membership in these fixtures.
+		return &directRoleRows{}, nil
 	}
 	return nil, errors.New("reconcileDB.Query: unexpected sql")
 }
@@ -175,6 +200,16 @@ func (r *directRoleRows) Scan(dest ...any) error {
 	*(dest[0].(*string)) = r.names[r.idx-1]
 	return nil
 }
+
+// nullStringRows — one row holding SQL NULL, for reads scanning into a *string
+// (roleParent). Reuses directRoleRows for the pgx.Rows boilerplate.
+type nullStringRows struct{ directRoleRows }
+
+func (r *nullStringRows) Scan(dest ...any) error {
+	*(dest[0].(**string)) = nil
+	return nil
+}
+
 func (r *directRoleRows) Err() error                                   { return nil }
 func (r *directRoleRows) Close()                                       {}
 func (r *directRoleRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
@@ -196,6 +231,13 @@ func TestMapper_HIGH1_ScopedRoleRevoke(t *testing.T) {
 		// Current direct membership: managed cluster-admin (leaving) + managed
 		// operator (incoming — already present? no, absent from current) + manual-extra (outside the domain).
 		currentRoles: []string{"cluster-admin", "manual-extra"},
+		// cluster-admin grants `*`, so revoking it now runs the self-lockout probe
+		// (NIM-320). archon-root keeps the cluster administered, which is what
+		// makes bob's revoke legal — this test is about the SCOPE of the managed
+		// domain, and it needs the revoke to go through to show that. The refusal
+		// when no one survives is TestMapper_NIM320_RefusesRevokeOfLastAdmin.
+		rolePerms:       map[string][]string{"cluster-admin": {"*"}},
+		survivingAdmins: []string{"archon-root"},
 	}
 	tx := &reconcileTx{db: db}
 
@@ -264,6 +306,116 @@ func TestMapper_HIGH1_NoChurnWhenGroupsStable(t *testing.T) {
 	}
 	if len(db.revoked) != 0 {
 		t.Errorf("nothing to revoke (operator stays, manual-extra unmanaged); revoked=%v", db.revoked)
+	}
+}
+
+// --- NIM-320: federated reconciliation may not empty the admin set ---
+
+// The reconciler obeys an external IdP with no operator behind it, so it was the
+// one revoke path with no self-lockout probe. bob holds `*` through a managed
+// role and nobody else administers the cluster; his groups come back without the
+// admin group — an outage, a directory reorganisation, a membership that has not
+// propagated. Obeying would leave the cluster with no administrator and no way
+// back through the API, so the login fails and membership is untouched.
+func TestMapper_NIM320_RefusesRevokeOfLastAdmin(t *testing.T) {
+	db := &reconcileDB{
+		existing: &operator.Operator{
+			AID: "archon-bob", AuthMethod: operator.AuthMethodLDAP,
+			CreatedVia: operator.CreatedViaLDAP,
+		},
+		currentRoles:    []string{"cluster-admin"},
+		rolePerms:       map[string][]string{"cluster-admin": {"*"}},
+		survivingAdmins: nil, // nobody else holds `*`
+	}
+	tx := &reconcileTx{db: db}
+	m := NewMapper(MapperConfig{
+		Method:       operator.AuthMethodLDAP,
+		GroupRoleMap: map[string][]string{"admins": {"cluster-admin"}, "ops": {"operator"}},
+		DB:           db, Tx: tx, Audit: &fakeAudit{},
+	})
+
+	_, err := m.Map(context.Background(), ExternalIdentity{
+		AID: "archon-bob", Groups: []string{"ops"},
+	})
+	if !errors.Is(err, ErrReconcileWouldLockOutCluster) {
+		t.Fatalf("err = %v, want ErrReconcileWouldLockOutCluster", err)
+	}
+	if len(db.revoked) != 0 {
+		t.Errorf("membership must survive a refused reconcile; revoked=%v", db.revoked)
+	}
+	if tx.committed {
+		t.Error("the transaction must not commit — the grants made alongside the revoke roll back with it")
+	}
+}
+
+// The guard must not over-refuse. A managed role that grants no `*` is not a
+// cluster-admin source (ADR-078(i)), so revoking it never consults the probe —
+// here there are no surviving admins at all and the revoke still proceeds.
+func TestMapper_NIM320_NonAdminRoleRevokedWithoutProbe(t *testing.T) {
+	db := &reconcileDB{
+		existing: &operator.Operator{
+			AID: "archon-bob", AuthMethod: operator.AuthMethodLDAP,
+		},
+		currentRoles:    []string{"viewer"},
+		rolePerms:       map[string][]string{"viewer": {"soul.list"}},
+		survivingAdmins: nil,
+	}
+	tx := &reconcileTx{db: db}
+	m := NewMapper(MapperConfig{
+		Method:       operator.AuthMethodLDAP,
+		GroupRoleMap: map[string][]string{"ro": {"viewer"}, "ops": {"operator"}},
+		DB:           db, Tx: tx, Audit: &fakeAudit{},
+	})
+
+	if _, err := m.Map(context.Background(), ExternalIdentity{
+		AID: "archon-bob", Groups: []string{"ops"},
+	}); err != nil {
+		t.Fatalf("Map: %v (a non-`*` role is not an admin source; the probe must be skipped)", err)
+	}
+	if !contains(db.revoked, "viewer") {
+		t.Errorf("viewer must be revoked; revoked=%v", db.revoked)
+	}
+}
+
+// An IdP that answers with NO usable groups never reaches reconciliation at all:
+// [DBMapper.Map] rejects an identity mapping to zero roles before any mutation.
+// So the total-outage case — the one that looks most alarming — was already
+// closed, and the hole NIM-320 fixed was the PARTIAL answer above. Pinned here
+// because the distinction is easy to lose and led to the wrong fix being
+// specified first.
+func TestMapper_NIM320_EmptyGroupsNeverReachReconcile(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		groups []string
+	}{
+		{"no groups at all", nil},
+		{"groups that map to nothing", []string{"unmapped-group"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &reconcileDB{
+				existing: &operator.Operator{
+					AID: "archon-bob", AuthMethod: operator.AuthMethodLDAP,
+				},
+				currentRoles: []string{"cluster-admin"},
+				rolePerms:    map[string][]string{"cluster-admin": {"*"}},
+			}
+			tx := &reconcileTx{db: db}
+			m := NewMapper(MapperConfig{
+				Method:       operator.AuthMethodLDAP,
+				GroupRoleMap: map[string][]string{"admins": {"cluster-admin"}},
+				DB:           db, Tx: tx, Audit: &fakeAudit{},
+			})
+
+			_, err := m.Map(context.Background(), ExternalIdentity{
+				AID: "archon-bob", Groups: tc.groups,
+			})
+			if !errors.Is(err, ErrNoRoleMapping) {
+				t.Fatalf("err = %v, want ErrNoRoleMapping", err)
+			}
+			if len(db.revoked) != 0 || len(db.granted) != 0 {
+				t.Errorf("nothing may be mutated; revoked=%v granted=%v", db.revoked, db.granted)
+			}
+		})
 	}
 }
 

@@ -635,25 +635,12 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		// ErrRoleNotFound propagates as-is.
 		return err
 	}
-	perms, err := rolePermissions(ctx, tx, in.RoleName)
-	if err != nil {
-		return err
-	}
-	parent, err := roleParent(ctx, tx, in.RoleName)
-	if err != nil {
-		return err
-	}
 	// Before the caller gate below, per the precedence argued at
-	// [Service.assertNotLastWildcardRole] (NIM-319).
-	if grantsClusterAdmin(perms, parent) {
-		// Are we removing the last admin with `*`? The probe query, run
-		// UNDER FOR UPDATE, excludes the target (RoleName, AID) pair: if the
-		// AID also holds `*` via other roles, it stays in the result set and
-		// lockout doesn't trigger. A DERIVED role is not a source at all
-		// (ADR-078(i)), so revoking one never needs the probe.
-		if err := s.assertNotLastWildcardOperator(ctx, tx, in.RoleName, in.AID); err != nil {
-			return err
-		}
+	// [Service.assertNotLastWildcardRole] (NIM-319). The same decision the
+	// guarded [RevokeOperator] makes for callers outside this Service — one
+	// definition of "would this revoke strand the cluster", never two.
+	if err := assertRevokeKeepsClusterAdmin(ctx, tx, in.RoleName, in.AID); err != nil {
+		return err
 	}
 
 	// The rights `role.grant-operator` would have demanded to create this binding
@@ -666,7 +653,7 @@ func (s *Service) RevokeOperator(ctx context.Context, in RevokeOperatorInput) er
 		return err
 	}
 
-	if err := RevokeOperator(ctx, tx, in.RoleName, in.AID); err != nil {
+	if err := RevokeOperatorRow(ctx, tx, in.RoleName, in.AID); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -861,8 +848,11 @@ func (s *Service) assertNotLastWildcardRole(ctx context.Context, tx ExecQueryRow
 // Only the pair's contribution is excluded: if excludeAID also holds `*` via
 // another role, it stays; if another AID holds `*` via excludeRole, it stays
 // too (only excludeAID's membership is being removed, not the whole role).
-func (s *Service) assertNotLastWildcardOperator(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) error {
-	survivors, err := s.lockWildcardAdminsExcludingPair(ctx, tx, excludeRole, excludeAID)
+//
+// Not a method: it reads no Service state, and [assertRevokeKeepsClusterAdmin]
+// needs it from a package-level call path (NIM-320).
+func assertNotLastWildcardOperator(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) error {
+	survivors, err := lockWildcardAdminsExcludingPair(ctx, tx, excludeRole, excludeAID)
 	if err != nil {
 		return err
 	}
@@ -934,7 +924,7 @@ FOR UPDATE OF so, sr, rp, r, o
 // The direct branch excludes the pair: `NOT (role_name=$1 AND aid=$2)`. Two
 // locking queries in a fixed order (direct → Synod, see
 // [directClusterAdminsForUpdateSQL]).
-func (s *Service) lockWildcardAdminsExcludingPair(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) ([]string, error) {
+func lockWildcardAdminsExcludingPair(ctx context.Context, tx ExecQueryRower, excludeRole, excludeAID string) ([]string, error) {
 	// No DISTINCT (see lockWildcardAdminsExcludingRole).
 	const directQ = `
 SELECT ro.aid

@@ -284,6 +284,16 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 // grant-only over DB (back-compat): revoke is skipped, but grant from groups
 // still holds. The daemon always sets Tx, so reconciliation is atomic and
 // revokes in production.
+//
+// A revoke that would empty the cluster's admin set is REFUSED and fails the
+// login ([ErrReconcileWouldLockOutCluster], NIM-320). This path obeys an external
+// system with no operator behind it, so it is measured against the cluster-state
+// precondition rather than against anyone's rights — see the reasoning on
+// [rbac.RevokeOperator]. Note what this does NOT rescue: a group whose mapped
+// roles are gone entirely never reaches here, because [DBMapper.Map] rejects an
+// identity that maps to zero roles ([ErrNoRoleMapping]) before reconciliation
+// starts. The case that needed closing was the PARTIAL one — groups that still
+// map to something, minus the role granting `*`.
 func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string) error {
 	for _, role := range want {
 		if !rbac.ValidRoleName(role) {
@@ -325,10 +335,30 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 		if _, keep := wantSet[role]; keep {
 			continue
 		}
+		// rbac.RevokeOperator carries the self-lockout probe (NIM-320). This loop
+		// obeys an external identity provider, so it is the one revoke path in the
+		// cluster with no operator behind it and no confirmation step — and the
+		// IdP can be wrong in the one direction that matters, answering with fewer
+		// groups than it should.
 		if err := rbac.RevokeOperator(ctx, tx, role, aid); err != nil {
 			// The pairing may already be gone (race with a manual revoke) — that's fine, don't fail.
 			if errors.Is(err, rbac.ErrRoleOperatorNotFound) {
 				continue
+			}
+			// Obeying would leave the cluster with no administrator. Fail the
+			// login and touch nothing (the deferred Rollback discards the grants
+			// made above in this same tx, so membership is not left half-synced).
+			// A failed login is recoverable by fixing the IdP or the map; an empty
+			// admin set is not recoverable through the API.
+			if errors.Is(err, rbac.ErrWouldLockOutCluster) {
+				if m.cfg.Logger != nil {
+					m.cfg.Logger.Error("auth/mapper: refusing to revoke a role from the last cluster administrator — federated login failed",
+						slog.String("aid", aid),
+						slog.String("role", role),
+						slog.String("method", string(m.cfg.Method)),
+						slog.String("remedy", "stop mapping a `*`-granting role to an external group, or give the cluster a second administrator outside the federated domain"))
+				}
+				return fmt.Errorf("%w: role %q, aid %q", ErrReconcileWouldLockOutCluster, role, aid)
 			}
 			return fmt.Errorf("auth/mapper: reconcile revoke role %q: %w", role, err)
 		}

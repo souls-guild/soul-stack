@@ -327,14 +327,22 @@ func UpdateRolePermissions(ctx context.Context, db ExecQueryRower, name string, 
 	return nil
 }
 
-// RevokeOperator removes a membership row (roleName, aid) from
-// rbac_role_operators. The self-lockout check lives in
-// [Service.RevokeOperator] (this is DELETE only).
+// RevokeOperatorRow removes a membership row (roleName, aid) from
+// rbac_role_operators and enforces NOTHING — no self-lockout probe, no
+// caller-side check. It is the bare DELETE.
+//
+// Use [RevokeOperator] instead. This one exists for the single caller that has
+// already run [assertRevokeKeepsClusterAdmin] itself — [Service.RevokeOperator],
+// which runs it earlier than the delete for the ordering reason in ADR-078(n) —
+// and it is named this way so that no future caller reaches it by accident. It
+// was previously called `RevokeOperator`, documented as "the self-lockout check
+// lives in Service.RevokeOperator", and the federated reconciler in
+// `keeper/internal/auth` took it at face value (NIM-320).
 //
 // Errors:
 //   - [ErrRoleOperatorNotFound] on 0 affected rows (the pair doesn't exist).
 //   - a wrapped pgx error on a transport failure.
-func RevokeOperator(ctx context.Context, db ExecQueryRower, roleName, aid string) error {
+func RevokeOperatorRow(ctx context.Context, db ExecQueryRower, roleName, aid string) error {
 	tag, err := db.Exec(ctx, deleteRoleOperatorSQL, roleName, aid)
 	if err != nil {
 		return fmt.Errorf("rbac: revoke operator (%s -> %s): %w", roleName, aid, wrapPgErr(err))
