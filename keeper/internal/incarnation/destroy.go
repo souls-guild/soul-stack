@@ -39,9 +39,9 @@ type DestroyResult struct {
 // destroying is rejected too: a repeat initiation (idempotency is S-D3's job;
 // here it's an explicit refusal).
 //
-// drift (ADR-031, Scry, an informational status) is allowed: drift does NOT
-// block remediation (same as ready). An operator can destroy an incarnation in
-// drift exactly like from ready, without waiting for a fix-apply.
+// drift (ADR-031(d), an informational status) is allowed: drift does NOT block
+// remediation (same as ready). An operator can destroy an incarnation in drift
+// exactly like from ready, without waiting for a fix-apply.
 func canDestroyFrom(s Status) bool {
 	switch s {
 	case StatusReady, StatusErrorLocked, StatusMigrationFailed, StatusDrift:

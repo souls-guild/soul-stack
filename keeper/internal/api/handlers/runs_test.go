@@ -26,7 +26,7 @@ func runsClaims() *keeperjwt.Claims { return &keeperjwt.Claims{Subject: "archon-
 // newRunsHandler — a handler with a fake DB and the given scoper (only db/scoper are
 // needed by the global read view).
 func newRunsHandler(db *fakeIncDB, scoper PurviewResolver) *IncarnationHandler {
-	return NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, scoper, nil)
+	return NewIncarnationHandler(db, nil, nil, nil, nil, nil, scoper, nil)
 }
 
 // --- AllRunsTyped: input validation -------------------------------------

@@ -14,16 +14,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
-	"github.com/souls-guild/soul-stack/keeper/internal/render"
-	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
-	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/audit"
-	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -208,68 +203,5 @@ func TestIntegration_NilSoulCap_FailClosed(t *testing.T) {
 	}
 	if disp.calls != 0 {
 		t.Fatalf("* SendApply calls = %d, want 0 (no presence source -> reject BEFORE dispatch)", disp.calls)
-	}
-}
-
-// newDriftRunnerWithSoulCap — [newDriftRunner] with an explicit checker, for the
-// dry_run guard below.
-func newDriftRunnerWithSoulCap(t *testing.T, cap SoulCapabilityChecker) *Runner {
-	t.Helper()
-	engine, err := cel.New()
-	if err != nil {
-		t.Fatalf("cel.New: %v", err)
-	}
-	return NewRunner(Deps{
-		SoulCap:        cap,
-		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology:       topology.NewResolver(integrationPool, nil, nil),
-		ServiceVars:    servicevars.NewResolver(nil),
-		Render:         render.NewPipeline(nil, engine, nil, nil),
-		Outbound:       fakeDispatcher{},
-		DB:             integrationPool,
-		AcolyteEnabled: true,
-		KID:            "keeper-drift-soulcap-test",
-		PollInterval:   20 * time.Millisecond,
-		RunTimeout:     30 * time.Second,
-	})
-}
-
-// TestIntegration_CheckDrift_DryRunNotAnnounced_Rejected — ★ check-drift promises
-// a PURE READ (ADR-031): keeper never calls module.Apply, it calls Plan. A binary
-// that ignores ApplyRequest.dry_run would apply for real — a read operation
-// mutating the fleet. So `dry_run` is required of EVERY roster host before a
-// single planned row is written. ASSERT: CheckDrift returns an error naming the
-// host, and no apply_runs row was inserted.
-func TestIntegration_CheckDrift_DryRunNotAnnounced_Rejected(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "noop-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
-	gitURL := noopServiceRepoWithConverge(t, nil)
-
-	r := newDriftRunnerWithSoulCap(t, stubSoulCap{
-		lackingByCap: map[string][]string{config.CapabilityDryRun: {"host-a.example.com"}},
-	})
-	applyID := audit.NewULID()
-	_, err := r.CheckDrift(context.Background(), CheckDriftSpec{
-		ApplyID:         applyID,
-		IncarnationName: "noop-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		StartedByAID:    "archon-alice",
-	})
-	if err == nil {
-		t.Fatal("a host that did not announce dry_run must not be asked to check drift - it would apply for real")
-	}
-	for _, want := range []string{"host-a.example.com", config.CapabilityDryRun} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error = %q, does not mention %q", err, want)
-		}
-	}
-	st, serr := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
-	if serr != nil {
-		t.Fatalf("SelectStatusesByApplyID: %v", serr)
-	}
-	if len(st) != 0 {
-		t.Fatalf("* apply_runs rows = %+v, want none (rejection must precede dispatch)", st)
 	}
 }

@@ -144,8 +144,8 @@ const (
 	ScenarioKindLifecycle = "lifecycle"
 	// ScenarioKindOperational is an ordinary scenario (free operation over state),
 	// run by ordinary run. `converge` is operational (amend ADR-031, 2026-06-10):
-	// extracted from lifecycle set, carries dual role of Apply-reconcile-run +
-	// dry-run target check-drift.
+	// extracted from lifecycle set. Since NIM-446 removed the drift circuit it
+	// carries only the Apply-reconcile role — it is a scenario like any other.
 	ScenarioKindOperational = "operational"
 )
 

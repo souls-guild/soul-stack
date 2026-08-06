@@ -72,8 +72,7 @@ tests/e2e-live/
 │   ├── config_builder.go           # buildKeeperYAML
 │   ├── probe.go                    # waitForReady
 │   ├── git.go                      # SetupGitRepo
-│   ├── destiny.go                  # MaterializeDestinies
-│   └── drift.go                    # CheckDrift → DriftReport (real core.file.Plan)
+│   └── destiny.go                  # MaterializeDestinies
 ├── smoke-nginx-live/  redis/  redis-cluster-live/  staged-probe-live/
 │   └── …/expectations/             # per-example host_state expectations
 ├── smoke_bootstrap_test.go         # TestL3bBootstrap_OneSoul
@@ -81,7 +80,6 @@ tests/e2e-live/
 ├── redis_live_test.go              # TestL3bRedisLive_CreateWithNodeExporter
 ├── redis_cluster_live_test.go      # TestL3bRedisClusterLive_ThreeNode
 ├── staged_probe_live_test.go       # TestL3bStagedProbeLive_WhereTargetsOnlyMaster
-├── drift_live_test.go              # TestL3bDriftLive_HelloWorld
 └── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
 
@@ -128,7 +126,7 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | **L3b-3** | First L3b example `smoke-nginx-live` (actually installs nginx via apt + systemctl start). | done |
 | **L3b-4** | Container-side asserts (`AssertHostPkgInstalled` / `AssertHostServiceActive` / `AssertHostFileExists` / `AssertHostFileContent`). | done |
 | **L3b-5** | Multi-host (`redis-cluster-live` with 3 soul containers) + YAML expectations loader (`harness.LoadExpectations` / `Stack.AssertExpectations`). | done |
-| **L3b-6** | Drift-live (`drift_live_test.go` + `harness/drift.go`): check-drift on a live soul through a real `core.file.Plan` (`core.file.present` module), not a stub Plan as in L3a. | done |
+| **L3b-6** | ~~Drift-live~~ — removed with the drift circuit (NIM-446). It was the only live exercise of `core.file.Plan` end to end; the module's own `Plan` is still covered by its unit tests, but nothing drives it over a real Soul any more (Errand's dry-run would be the natural replacement). | removed |
 
 ## Tests
 
@@ -139,7 +137,6 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | `TestL3bRedisLive_CreateWithNodeExporter` | 1 | Real redis service: `apt install redis` + node-exporter destiny on a live host. |
 | `TestL3bRedisClusterLive_ThreeNode` | 3 | Multi-host: install redis on 3 containers + form a Redis Cluster (`redis-cli --cluster create --cluster-replicas 0`); independent check `cluster_state:ok`. |
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where on a live soul** (ADR-056): a real probe step emits a per-host register, and the Passage action `where: register.*=='master'` is genuinely applied ONLY on the master host. L3b analog of `TestE2EStagedFailover_2Passage`, but via a real apply instead of a stub. |
-| `TestL3bDriftLive_HelloWorld` | 1 | Drift check on a live soul: create hello-world (`core.file.present` greeting file) → clean baseline → out-of-band file mutation → `CheckDrift` sees `drifted=1` via a real `core.file.Plan` → re-apply → `CheckDrift` clean again. Catches real Plan regressions (unlike L3a's stub Plan). |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Real `soul_beacon` plugin (gRPC-over-stdio): inotify portent → Vigil → Decree → Oracle → fired scenario on a live soul. |
 | `TestL3bRedisClusterCreate_FullLifecycle` | 3 | **SKIPPED (structural blocker, see below)**. Body kept: documents the target create-lifecycle. Its `SeedIncarnationForCreate` helper is gone with `spec.hosts[]` (NIM-330) - a declared role is now a Voice, seeded via `incarnation_choir_voices` or laid down by a `core.choir.present` step. |
 

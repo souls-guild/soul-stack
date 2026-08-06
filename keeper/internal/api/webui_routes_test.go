@@ -35,7 +35,7 @@ func webUIRouter(t *testing.T, verifier *keeperjwt.Verifier, webUIEnabled bool) 
 		verifier,
 		healthH,
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),

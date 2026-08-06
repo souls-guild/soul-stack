@@ -205,9 +205,9 @@ func TestEventCadence_VoyageTerminals(t *testing.T) {
 	if got := eventCadence(audit.EventCadenceSkippedOverlap, map[string]any{"cadence_id": cid}); got != cid {
 		t.Fatalf("eventCadence(cadence.skipped_overlap) broken: = %q, want %q", got, cid)
 	}
-	// Other events (drift_checked) do not carry cadence_id: "".
-	if got := eventCadence(audit.EventIncarnationDriftChecked, map[string]any{"cadence_id": cid}); got != "" {
-		t.Fatalf("eventCadence(drift_checked) = %q, want empty (not a cadence event)", got)
+	// Other events (incarnation.created) do not carry cadence_id: "".
+	if got := eventCadence(audit.EventIncarnationCreated, map[string]any{"cadence_id": cid}); got != "" {
+		t.Fatalf("eventCadence(incarnation.created) = %q, want empty (not a cadence event)", got)
 	}
 }
 

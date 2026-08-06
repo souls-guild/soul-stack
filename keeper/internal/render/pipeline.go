@@ -186,7 +186,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// RUN-LEVEL "once": in staged-render, Render is called per-Passage with
 		// a growing ActivePassage; the assert is evaluated only when its own
 		// Passage is active (otherwise it'd repeat every Passage). Non-staged
-		// (TaskPassage==nil: Trial/Acolyte/CheckDrift) → passage is always 0 ==
+		// (TaskPassage==nil: Trial/Acolyte) → passage is always 0 ==
 		// ActivePassage 0 → single pass, bit-for-bit unchanged.
 		if IsAssertTask(task) {
 			if in.TaskPassage == nil || passage == in.ActivePassage {
@@ -2037,7 +2037,7 @@ func guardApplierWhen(task config.Task, idx int) error {
 
 // taskPassageAt returns top-level task i's passage index from the
 // stratification plan (RenderInput.TaskPassage). nil plan or i out of range
-// → 0 (N=1 / non-staged caller: Trial / Acolyte RenderForHost / CheckDrift)
+// → 0 (N=1 / non-staged caller: Trial / Acolyte RenderForHost)
 // — behavior is bit-for-bit unchanged from before staged-render. Treating
 // out-of-range as 0 is fail-safe: an extra Passage-0 is safer than
 // panicking on a length mismatch.

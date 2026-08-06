@@ -112,18 +112,6 @@ type Stub struct {
 	// [SetTaskRegister].
 	taskRegisterByName map[string]map[string]map[string]any
 
-	// dryRunPlanSet toggles Plan reply on dry_run ApplyRequest (Scry, ADR-031).
-	// When true, for ApplyRequest{dry_run:true} stub sends one TaskEvent per task
-	// before RunResult with status=CHANGED|OK and register_data{changed:dryRunChanged};
-	// keeper-side accumulateRegister stores them in apply_task_register, from
-	// which CheckDrift builds per-task changed (drifted/clean). Default false:
-	// without explicit enabling, dry_run run behaves as normal (only RunResult),
-	// drift-report is built with host=clean (no register rows). Emulates
-	// SoulModule.Plan (mod.Apply is not called on dry_run - read-only guarantee
-	// ADR-031), does NOT execute real Plan core module (L3a contract, like whole stub).
-	dryRunPlanSet bool
-	dryRunChanged bool
-
 	mu       sync.Mutex
 	conn     *grpc.ClientConn
 	stream   keeperv1.Keeper_EventStreamClient
@@ -281,19 +269,6 @@ func (s *Stub) SetApplyStatusForSID(sid string, success bool) {
 func (s *Stub) SetErrandStatusForSID(sid string, status keeperv1.ErrandStatus) {
 	s.mu.Lock()
 	s.errandStatusBySID[sid] = status
-	s.mu.Unlock()
-}
-
-// SetDryRunPlan enables a Plan response to dry_run ApplyRequest (Scry, ADR-031):
-// before RunResult, the stub emits TaskEvent for each task with
-// register_data{changed}=changed. changed=true -> drift (per-task CHANGED),
-// false -> clean (per-task OK). Without this call, dry_run behaves like a normal
-// run (RunResult only) and the drift report is built as host=clean without
-// per-task register rows.
-func (s *Stub) SetDryRunPlan(changed bool) {
-	s.mu.Lock()
-	s.dryRunPlanSet = true
-	s.dryRunChanged = changed
 	s.mu.Unlock()
 }
 
@@ -561,8 +536,6 @@ func (s *Stub) respondToErrand(req *keeperv1.ErrandRequest) {
 func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 	s.mu.Lock()
 	defaultSuccess := s.applyDefaultSuccess
-	dryRunPlanSet := s.dryRunPlanSet
-	dryRunChanged := s.dryRunChanged
 	sidOverride, hasSidOverride := s.applyStatusBySID[s.SID]
 	holdApply := s.holdApply
 	if holdApply {
@@ -604,14 +577,6 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 	// Passage resolves `where: register.<name>.*` using this fact. Without
 	// scripted-register it is a no-op (normal apply).
 	s.emitTaskRegisters(req)
-
-	// dry_run + enabled Plan mode (Scry, ADR-031): emit per-task TaskEvent with
-	// register_data{changed}, as Soul would do after mod.Plan. This fills
-	// apply_task_register, where CheckDrift collects per-task drifted/clean.
-	// RunResult below closes the host terminal (driftBarrier waits for it).
-	if req.GetDryRun() && dryRunPlanSet {
-		s.emitPlanTaskEvents(req, dryRunChanged)
-	}
 
 	worst := keeperv1.RunStatus_RUN_STATUS_SUCCESS
 	merged := map[string]any{}
@@ -691,42 +656,6 @@ func (s *Stub) emitTaskRegisters(req *keeperv1.ApplyRequest) {
 					ApplyId:      req.GetApplyId(),
 					TaskIdx:      int32(idx),
 					Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
-					RegisterData: reg,
-					Passage:      req.GetPassage(),
-				},
-			},
-		})
-	}
-}
-
-// emitPlanTaskEvents sends one TaskEvent for each task of dry_run ApplyRequest
-// with status=CHANGED|OK and register_data{changed}. task_idx is the task
-// position in req.Tasks[] (real Soul sets it the same way:
-// applyrunner.go TaskIdx=int32(idx)), which matches RenderedTask.Index for a
-// linear scenario such as converge. Keeper-side accumulateRegister stores
-// register_data in apply_task_register by task_idx.
-func (s *Stub) emitPlanTaskEvents(req *keeperv1.ApplyRequest, changed bool) {
-	s.mu.Lock()
-	stream := s.stream
-	s.mu.Unlock()
-	if stream == nil {
-		return
-	}
-	status := keeperv1.TaskStatus_TASK_STATUS_OK
-	if changed {
-		status = keeperv1.TaskStatus_TASK_STATUS_CHANGED
-	}
-	for idx := range req.GetTasks() {
-		reg, err := structpb.NewStruct(map[string]any{"changed": changed})
-		if err != nil {
-			continue
-		}
-		_ = stream.Send(&keeperv1.FromSoul{
-			Payload: &keeperv1.FromSoul_TaskEvent{
-				TaskEvent: &keeperv1.TaskEvent{
-					ApplyId:      req.GetApplyId(),
-					TaskIdx:      int32(idx),
-					Status:       status,
 					RegisterData: reg,
 					Passage:      req.GetPassage(),
 				},

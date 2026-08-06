@@ -27,7 +27,6 @@ var incarnationContractSchemas = []string{
 	"IncarnationUpgradeReply",
 	"IncarnationRerunLastRequest",
 	"IncarnationRerunLastReply",
-	"IncarnationCheckDriftRequest",
 	"IncarnationSetTraitsRequest",
 	"IncarnationGetReply",
 	"IncarnationDestroyReply",
@@ -45,6 +44,8 @@ var incarnationForbiddenSchemas = []string{
 	"IncUnlockHumaBody",
 	"IncUpgradeHumaBody",
 	"IncRerunHumaBody",
+	// IncCheckDriftHumaBody: the operation left with NIM-446; the name is kept in
+	// the forbidden list so a revival would have to be deliberate.
 	"IncCheckDriftHumaBody",
 	// Generic names that DefaultSchemaNamer WOULD produce from an unaliased
 	// sharedapi.PagedResponse[T] (generic brackets collapse into concatenation):

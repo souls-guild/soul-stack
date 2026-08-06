@@ -41,14 +41,6 @@ type Recipe struct {
 	// when resolving vault at claim. NULL for runs without an Archon identity
 	// (Soul-initiated / system).
 	StartedByAID *string `json:"started_by_aid,omitempty"`
-	// DryRun is the Scry flag (ADR-031): the Acolyte will build
-	// `ApplyRequest{dry_run:true}` for this task, and the Soul calls
-	// `mod.Plan` instead of `mod.Apply` (pure-read, read-safe-capability
-	// required). The field is omitempty/false for forward-compat with old
-	// recipes — absence in jsonb is equivalent to false (a normal apply).
-	// Only set by the check-drift path (Runner.CheckDrift); the normal
-	// run/destroy path leaves it untouched.
-	DryRun bool `json:"dry_run,omitempty"`
 	// FromUpgrade means load the scenario from upgrade/<slug>/ rather than
 	// scenario/<slug>/ (ADR-0068): at claim time the Acolyte re-renders the
 	// upgrade run the same way the run-goroutine does. omitempty/false for

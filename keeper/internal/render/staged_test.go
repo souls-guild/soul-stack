@@ -140,7 +140,7 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 
 // TestRender_NoStratifyPlanIsPassage0 — backward compat: without
 // RenderInput.TaskPassage (nil) every RenderedTask carries Passage 0 (N=1 /
-// non-staged caller: Trial / Acolyte RenderForHost / CheckDrift). Guarantees a
+// non-staged caller: Trial / Acolyte RenderForHost). Guarantees a
 // non-staged caller gets the previous behavior (BIT-FOR-BIT — Passage
 // stamping isn't activated).
 func TestRender_NoStratifyPlanIsPassage0(t *testing.T) {

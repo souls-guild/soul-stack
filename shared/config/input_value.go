@@ -274,7 +274,7 @@ func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[stri
 // (a narrow CEL env, input_required_when.go); this is input validation, not
 // render. The message carries the same recognizable "required, but not passed and
 // has no default" form as the unconditional required — downstream detection
-// (checkdrift.isInputRequiredErr) catches both with one match.
+// catches both with one match.
 func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 	for name, s := range schema {
 		if s == nil {

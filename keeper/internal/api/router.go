@@ -510,7 +510,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// audit class): create/run/unlock/upgrade — WRITE-MIDDLEWARE-AUDIT variant B
 		// (newHumaIncarnationAPI(evt) — huma writes the response ITSELF, audit holds hctx.Status()
 		// + a carrier payload from *Typed-reply.AuditPayload, otherwise an S6 relapse); rerun-last/
-		// check-drift/destroy/traits-set — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
+		// destroy/traits-set — WRITE-SELF-AUDIT (audit is written by the handler ITSELF
 		// INSIDE *Typed via h.auditW.Write — the payload is assembled after the domain operation;
 		// audit-middleware is NOT wired, newHumaCadenceAPI); list/get/history — read (no
 		// audit). TOPOLOGY: chi.Route("/{name}") is REMOVED — all incarnation ops carry the FULL
@@ -682,16 +682,6 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "rerun-last", incScope),
 			).Group(func(r chi.Router) {
 				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
-			})
-
-			// POST /v1/incarnations/{name}/check-drift — Scry on-demand (ADR-031, Slice B).
-			// WRITE-SELF-AUDIT: incarnation.drift_checked is written by the handler itself (the payload —
-			// drift_summary — after CheckDrift; audit-middleware is NOT wired). Permission
-			// incarnation.check-drift, scope incScope.
-			r.With(
-				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "check-drift", incScope),
-			).Group(func(r chi.Router) {
-				registerHumaIncarnationCheckDrift(newHumaCadenceAPI(r), incH)
 			})
 
 			// DELETE /v1/incarnations/{name} — destroy (S-D4). WRITE-SELF-AUDIT:

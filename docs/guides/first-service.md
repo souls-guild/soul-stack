@@ -39,7 +39,7 @@ hello-world/
     │   └── tests/
     │       └── greeting-hello/case.yml   # L0 test: checks script rendering without hosts
     └── converge/
-        └── main.yml                # desired state for drift-check (check-drift)
+        └── main.yml                # desired end state, run as an ordinary scenario
 ```
 
 What is specifically **not** here and why - it will be useful so as not to look for unnecessary things:

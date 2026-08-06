@@ -543,6 +543,27 @@ order to act in.
   key `essence:` becomes `vars:`, and the run error code `essence_failed` becomes
   `service_vars_failed`.
 
+- **Delete the `scry_background` block from `keeper.yml` before upgrading.**
+  Its two rule fields — `max_concurrent_in_flight` and
+  `min_interval_per_incarnation` — left the config schema with the rule, and
+  keeper.yml is strict about unknown keys: an unrecognized field is an ERROR
+  diagnostic and the daemon exits at config load, before it ever reaches the
+  code that would have warned about an unknown rule *name*. So a config still
+  carrying them does not degrade, it refuses to start. The error names the field
+  and the YAML path, which is the whole remediation.
+
+- **Drift check is gone, and one of its leftovers can stop a cluster from
+  starting.** Migration `113` deletes every `incarnation.check-drift` grant. That
+  is not tidiness: the RBAC catalog is a closed enum and the enforcer is
+  fail-closed, so a single surviving row would fail the parse and keeper would
+  refuse to start on its next cold load — losing the whole cluster's
+  authorization, not one permission. The migration also strips
+  `incarnation.drift_checked` out of Tiding subscriptions and **deletes whole**
+  any rule that named only it, reporting both in `NOTICE` output: a notification
+  rule that vanishes is something an operator must learn from the migration log
+  rather than from a missing alert. Historical `audit_log` rows keep the event
+  type forever; the type is out of the enum, so filtering by it now answers 422.
+
 ### Added
 
 - **The composed incarnation name, previewed before it is permanent**
@@ -964,7 +985,69 @@ order to act in.
   response field is narrowed; the `?type=` filter stays a free string, because a
   filter has to keep matching historical rows whose type has since been retired.
 
+### Changed
+
+- **A Tiding's `incarnation` selector now binds through `incarnation.run_completed`.**
+  It used to bind through `incarnation.drift_checked`, the only run-scope event
+  whose payload named a single instance — so when NIM-446 removed that event the
+  selector briefly matched nothing at all: an operator could set the filter, the
+  form would accept it, and no notification would ever arrive. It is re-pointed
+  at `run_completed`, the surviving point event, whose meaning ("this run, on
+  this incarnation") is what the filter was asking for in the first place. A rule
+  carrying the selector should list `incarnation.run_completed` in its
+  `event_types`; on Voyage terminals (many incarnations) and cadence events (bound
+  to `cadence_id`) it still does not fire, unchanged. Note the payload key differs
+  from drift's — `incarnation`, not `name`.
+
 ### Removed
+
+- **Drift detection (Scry) — the whole circuit**
+  ([ADR-031 closing amendment](docs/adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
+  It shipped complete — an on-demand check, a background scan, a permission, an
+  audit event, two columns — and then went unused: the background rule was
+  default-OFF and stayed off, and the sync endpoint that blocks a request for the
+  length of a fleet-wide dry run was not a thing operators reached for. Keeping
+  it meant carrying a permission in a closed catalog, an event type in a closed
+  enum, and a Reaper rule that dispatches work, for a feature nobody ran.
+
+  Removed: `POST /v1/incarnations/{name}/check-drift` and `keeper.incarnation.check-drift`;
+  `soulctl incarnation check-drift` and the `LAST_DRIFT` column of `incarnation list`;
+  the permission `incarnation.check-drift`; the audit event
+  `incarnation.drift_checked` (and with it the last point type Tidings could
+  subscribe to besides `incarnation.run_completed`); the Reaper rule
+  `scry_background` with `max_concurrent_in_flight` / `min_interval_per_incarnation`;
+  the columns `incarnation.last_drift_check_at` / `last_drift_summary` and their
+  keys in the `GET`/`LIST` incarnation body; `DriftReport` and its schemas.
+  Migration `114` drops the columns, cleans the grants and subscriptions, and
+  **cancels stale `planned` dry-run runs**. That last step is not tidiness: a
+  check-drift queued one `apply_runs` row per host with `recipe.dry_run=true`,
+  `ClaimNext` has never looked at the recipe, and the recipe no longer carries
+  the flag — so a row left behind by a keeper that restarted mid-check would be
+  claimed by the new binary and dispatched as a REAL apply of the `converge`
+  scenario. A pure-read operation turning into a fleet-wide mutation, days
+  later.
+
+  **Not removed, deliberately:** `Plan` pure-read and the `PlanReadSafe`
+  capability across the core modules — that is the SoulModule contract, it is
+  public API under `sdk/`, and Errand's dry-run exercises it independently; the
+  only-add proto fields `PlanEvent.changed` / `ApplyRequest.dry_run`; and the
+  incarnation status **`drift`**, which was never reachable only through Scry —
+  a legacy upgrade (one with no upgrade scenario for the transition) still leaves
+  an incarnation in it, meaning "the DB state is ahead of the hosts". Remediation
+  is unchanged: a normal apply returns it to `ready`. `scenario/converge/main.yml`
+  also stays exactly where it was, now as an ordinary operational scenario — run
+  it to bring hosts back to the declaration.
+
+- **`soulctl incarnation run --dry-run`** — a flag that never worked and said
+  otherwise. The client appended `?dry_run=true`, but
+  `POST /v1/incarnations/{name}/scenarios/{scenario}` has never bound that
+  parameter, so the run was a REAL apply while the operator believed it was a
+  rehearsal. It survived from the public beta because the only test covering it
+  asserted that the CLIENT sent the parameter, against a fake server that accepts
+  any query — a test that builds its own input proves nothing about whether the
+  thing is reachable. Nothing sets `Recipe.DryRun` any more either, so the flag
+  could not be repaired in place; ad-hoc read-only checks are Errand's
+  `--dry-run`, which is wired end to end.
 
 - **`incarnation.spec.hosts[]` and its editing endpoint**
   ([ADR-044 amendment 2026-07-30](docs/adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)).

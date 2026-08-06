@@ -4,7 +4,6 @@
 // from service.yml::modules[] (ADR-065, NIM-8): a run with modules[] carries
 // a synthesized RenderedTask with params {name, ref} in the ApplyRequest
 // BEFORE the consumer; an explicit operator step (takeover) suppresses the
-// duplicate; the drift plan is symmetric.
 
 package scenario
 
@@ -279,87 +278,6 @@ tasks:
 		if tasks[i].Module != dispatched[i].GetModule() {
 			t.Errorf("plan parity: task[%d] claim=%q run=%q - Acolyte<->run plans diverged", i, tasks[i].Module, dispatched[i].GetModule())
 		}
-	}
-}
-
-// TestIntegration_CheckDrift_SynthesizedInstallInPlan: the drift plan is
-// symmetric with the apply plan — converge with the community.echo consumer
-// → DriftReport carries a task with module core.module.installed (synthesized
-// from modules[]).
-func TestIntegration_CheckDrift_SynthesizedInstallInPlan(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "noop-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
-	gitURL := moduleServiceRepo(t, `name: create
-state_changes: {}
-tasks:
-  - name: Use the echo plugin
-    module: community.echo.run
-    params:
-      message: hello
-`, map[string]string{
-		"scenario/converge/main.yml": `name: converge
-state_changes: {}
-tasks:
-  - name: Converge via the echo plugin
-    module: community.echo.run
-    params:
-      message: hello
-`,
-	})
-
-	r := newDriftRunner(t)
-	applyID := audit.NewULID()
-	ch := runCheckDriftInBackground(t, r, CheckDriftSpec{
-		ApplyID:         applyID,
-		IncarnationName: "noop-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		StartedByAID:    "archon-alice",
-	})
-	// drift plan = synthesized install (plan_index 0) + converge consumer (1).
-	finalizeDriftHostWithPlanIndexes(t, applyID, "host-a.example.com", 2)
-
-	report, err := waitDriftResult(t, ch)
-	if err != nil {
-		t.Fatalf("CheckDrift: %v", err)
-	}
-	if len(report.Hosts) != 1 {
-		t.Fatalf("hosts = %d, want 1", len(report.Hosts))
-	}
-	tasks := report.Hosts[0].Tasks
-	if len(tasks) != 2 {
-		t.Fatalf("drift tasks = %d, want 2 (synth-install + consumer): %+v", len(tasks), tasks)
-	}
-	if tasks[0].Module != "core.module.installed" {
-		t.Errorf("drift task[0].module = %q, want core.module.installed (synth in the drift plan)", tasks[0].Module)
-	}
-	if tasks[1].Module != "community.echo.run" {
-		t.Errorf("drift task[1].module = %q, want community.echo.run", tasks[1].Module)
-	}
-}
-
-// finalizeDriftHostWithPlanIndexes emulates the Acolyte for a drift run of
-// taskCount tasks: register on EVERY plan_index (N=1 passage: local
-// task_idx == global) + a success terminal.
-func finalizeDriftHostWithPlanIndexes(t *testing.T, applyID, sid string, taskCount int) {
-	t.Helper()
-	ctx := context.Background()
-	for idx := 0; idx < taskCount; idx++ {
-		if err := applyrun.UpsertTaskRegister(ctx, integrationPool, &applyrun.TaskRegister{
-			ApplyID:   applyID,
-			SID:       sid,
-			PlanIndex: idx,
-			TaskIdx:   idx,
-			RegisterData: map[string]any{
-				"changed": false, "failed": false, "timed_out": false, "skipped": false,
-			},
-		}); err != nil {
-			t.Fatalf("UpsertTaskRegister(%d): %v", idx, err)
-		}
-	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, 0, applyrun.StatusSuccess, nil); err != nil {
-		t.Fatalf("UpdateStatus(success): %v", err)
 	}
 }
 

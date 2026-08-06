@@ -52,8 +52,9 @@ func TestEventTypeCatalog_List(t *testing.T) {
 		}
 	}
 
-	// Point types: drift check + terminal run_completed (T4a/T4b subscriptions).
-	for _, want := range []string{"incarnation.drift_checked", "incarnation.run_completed"} {
+	// Point types: terminal run_completed (T4a/T4b subscriptions). It is the only
+	// one since NIM-446 took incarnation.drift_checked out of run scope.
+	for _, want := range []string{"incarnation.run_completed"} {
 		if !containsName(pointNames(resp.PointEvents), want) {
 			t.Errorf("point type %q missing from point_events catalog", want)
 		}

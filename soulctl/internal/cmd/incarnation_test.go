@@ -172,6 +172,13 @@ func TestIncarnationsGet404(t *testing.T) {
 	}
 }
 
+// The `--dry-run` flag this test used to cover was removed in NIM-446, and how it
+// survived is worth recording: the assertion below checked that the CLIENT put
+// `dry_run=true` on the URL, against a fake server that accepts any query it is
+// handed. It never checked that the real endpoint binds the parameter — and
+// `POST .../scenarios/{scenario}` never did. So the flag reported a dry run and
+// performed a real apply, from the public beta until now. A test that builds its
+// own input proves nothing about reachability.
 func TestIncarnationsRun(t *testing.T) {
 	var capturedBody bytes.Buffer
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{
@@ -180,8 +187,8 @@ func TestIncarnationsRun(t *testing.T) {
 				t.Errorf("expected POST, got %s", r.Method)
 			}
 			_, _ = capturedBody.ReadFrom(r.Body)
-			if r.URL.Query().Get("dry_run") != "true" {
-				t.Errorf("dry_run query: got %q", r.URL.Query().Get("dry_run"))
+			if q := r.URL.Query().Get("dry_run"); q != "" {
+				t.Errorf("client sent dry_run=%q — the run endpoint does not bind it", q)
 			}
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -192,7 +199,7 @@ func TestIncarnationsRun(t *testing.T) {
 		},
 	})
 	reply, err := cl.Incarnations.Run(context.Background(), "redis-prod", "converge",
-		map[string]any{"shards": 3}, true)
+		map[string]any{"shards": 3})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

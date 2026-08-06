@@ -728,7 +728,7 @@ func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
 	if !strings.Contains(err.Error(), "shards") {
 		t.Errorf("error doesn't name the parameter: %v", err)
 	}
-	// A recognizable required-error form — downstream detection (checkdrift) catches
+	// A recognizable required-error form — downstream detection catches
 	// both unconditional and conditional required with a single substring match.
 	if !strings.Contains(err.Error(), "was not provided and has no default") {
 		t.Errorf("error doesn't carry the recognizable required form: %v", err)

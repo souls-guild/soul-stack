@@ -6,7 +6,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): mounted via
 //     newHumaIncarnationAPI(evt) (huma-audit-middleware variant B); the register func
 //     sets the payload from *Typed reply.AuditPayload via SetHumaAuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): mounted via
+//   - SELF-AUDIT (rerun-last / destroy / traits-set): mounted via
 //     newHumaCadenceAPI (no audit wiring); audit is written BY the handler ITSELF inside
 //     *Typed (h.auditW.Write). Confusing the class = an S6 regression.
 //   - READ (get / list / history): newHumaCadenceAPI, no audit written.
@@ -153,30 +153,6 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 			return nil, incProblem(err)
 		}
 		return &incRerunOutput{Status: http.StatusAccepted, Body: newIncarnationRerunLastReply(body)}, nil
-	})
-}
-
-// registerHumaIncarnationCheckDrift mounts POST /v1/incarnations/{name}/check-drift
-// (SELF-AUDIT incarnation.drift_checked — written BY the handler itself inside CheckDriftTyped).
-// incH nil → no-op.
-func registerHumaIncarnationCheckDrift(humaAPI huma.API, incH *handlers.IncarnationHandler) {
-	if incH == nil {
-		return
-	}
-	huma.Register(humaAPI, incCheckDriftOperation(), func(ctx context.Context, in *incCheckDriftInput) (*incCheckDriftOutput, error) {
-		claims, ok := apimiddleware.ClaimsFromContext(ctx)
-		if !ok {
-			return nil, incMissingClaims()
-		}
-		var override map[string]any
-		if in.Body != nil {
-			override = in.Body.Input
-		}
-		report, err := incH.CheckDriftTyped(ctx, claims, in.Name, override)
-		if err != nil {
-			return nil, incProblem(err)
-		}
-		return &incCheckDriftOutput{Body: report}, nil
 	})
 }
 
@@ -456,7 +432,6 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationUnlock(api, stub)
 		registerHumaIncarnationUpgrade(api, stub)
 		registerHumaIncarnationRerunLast(api, stub)
-		registerHumaIncarnationCheckDrift(api, stub)
 		registerHumaIncarnationDestroy(api, stub)
 		registerHumaIncarnationSetTraits(api, stub)
 		registerHumaIncarnationRevealSecret(api, stub)

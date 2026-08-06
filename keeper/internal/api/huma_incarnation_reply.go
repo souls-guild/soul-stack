@@ -126,7 +126,7 @@ type IncarnationDestroyReply struct {
 // IncarnationGetReply — native body for GET /v1/incarnations/{name} (and PATCH .../hosts, list element).
 // Form is 1:1 with the former IncarnationGetReply: covens is always an array (WITHOUT omitempty, never nil);
 // created_by_aid/spec/state/status_details — `*map`/`*string` WITHOUT omitempty (nil → `null`);
-// last_drift_check_at/last_drift_summary/created_scenario/traits — WITH omitempty (nil/empty →
+// created_scenario/traits — WITH omitempty (nil/empty →
 // key omitted; traits is a bare map, NOT `*map`, so an empty `{}` gets omitted). created_at/
 // updated_at — nanosecond time-wire (handler gives .UTC() without Truncate).
 type IncarnationGetReply struct {
@@ -137,9 +137,7 @@ type IncarnationGetReply struct {
 	CreatedAt          time.Time               `json:"created_at"`
 	CreatedByAID       *string                 `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CreatedScenario    string                  `json:"created_scenario,omitempty"`                             // starting scenario (multiple-create mechanism); empty → omitted
-	LastDriftCheckAt   *time.Time              `json:"last_drift_check_at,omitempty"`
-	LastDriftSummary   *DriftScanSummary       `json:"last_drift_summary,omitempty"`
-	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`               // ← incarnation.NamePattern
 	Service            string                  `json:"service"`
 	ServiceVersion     string                  `json:"service_version"`
 	State              *map[string]interface{} `json:"state"`
@@ -151,17 +149,6 @@ type IncarnationGetReply struct {
 }
 
 // === nested reply-DTO ===
-
-// DriftScanSummary — native counts aggregate for last_drift_summary (form 1:1 with the former
-// DriftScanSummary; scanned_at — nanosecond time-wire). int (not int32) — parity.
-type DriftScanSummary struct {
-	HostsClean       int       `json:"hosts_clean"`
-	HostsDrifted     int       `json:"hosts_drifted"`
-	HostsFailed      int       `json:"hosts_failed"`
-	HostsUnsupported int       `json:"hosts_unsupported"`
-	ScannedAt        time.Time `json:"scanned_at"`
-	TotalHosts       int       `json:"total_hosts"`
-}
 
 // StateHistoryEntry — native element of history.items (form 1:1 with the former StateHistoryEntry):
 // changed_by_aid — `*string` WITH omitempty (nil → key omitted); state_before/state_after — `*map`
@@ -245,22 +232,6 @@ func newIncarnationDestroyReply(v handlers.IncarnationDestroyView) IncarnationDe
 	return IncarnationDestroyReply{ApplyID: v.ApplyID}
 }
 
-// newDriftScanSummary projects the domain *handlers.DriftScanSummaryView into native (nil → nil:
-// omitempty omits the key).
-func newDriftScanSummary(v *handlers.DriftScanSummaryView) *DriftScanSummary {
-	if v == nil {
-		return nil
-	}
-	return &DriftScanSummary{
-		HostsClean:       v.HostsClean,
-		HostsDrifted:     v.HostsDrifted,
-		HostsFailed:      v.HostsFailed,
-		HostsUnsupported: v.HostsUnsupported,
-		ScannedAt:        v.ScannedAt,
-		TotalHosts:       v.TotalHosts,
-	}
-}
-
 // newIncarnationGetReply projects the flat domain handlers.IncarnationGetView into native.
 // map fields spec/state/status_details are wrapped in *map (nil → `null` WITHOUT omitempty).
 // status — native enum cast (same underlying string).
@@ -271,8 +242,6 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		CreatedAt:          v.CreatedAt,
 		CreatedByAID:       v.CreatedByAID,
 		CreatedScenario:    v.CreatedScenario,
-		LastDriftCheckAt:   v.LastDriftCheckAt,
-		LastDriftSummary:   newDriftScanSummary(v.LastDriftSummary),
 		Name:               v.Name,
 		Service:            v.Service,
 		ServiceVersion:     v.ServiceVersion,

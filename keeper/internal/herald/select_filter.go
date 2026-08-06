@@ -7,19 +7,26 @@ import "github.com/souls-guild/soul-stack/shared/audit"
 // carries incarnation binding equal to selector.
 //
 // Binding source from actual payload forms of run-scope emitters:
-//   - incarnation.drift_checked → payload["name"] (incarnation.go/reaper.scry).
+//   - incarnation.run_completed → payload["incarnation"] (scenario/run.go, the
+//     per-incarnation run terminal, ADR-052 §k).
 //
-// Other run events do NOT carry binding to ONE incarnation: Voyage
-// (scenario_run.*/command_run.*/voyage.*) executes over MULTIPLE
-// incarnations (scope), no single incarnation field in its events
-// (voyageorch.emitCreated/emitFinalized have scope_size/target, not one name).
-// cadence.* bound to cadence_id, not incarnation.
+// Other run events do NOT carry a binding to ONE incarnation: Voyage
+// (scenario_run.*/command_run.*/voyage.*) executes over MULTIPLE incarnations
+// (scope) and has scope_size/target rather than one name
+// (voyageorch.emitCreated/emitFinalized); cadence.* is bound to cadence_id.
 //
-// Consequence (documented trade-off): Tiding with `incarnation` selector
-// matches ONLY drift_checked events of that incarnation; on
-// scenario_run/command_run/voyage/cadence events incarnation selector doesn't
-// fire (no field → no match). Conservative: better not notify than notify
-// about event whose incarnation binding isn't expressed in payload.
+// The binding used to come from `incarnation.drift_checked` (payload key
+// `name`), which left with the drift circuit in NIM-446. That briefly made the
+// selector match NOTHING, so it was re-pointed at run_completed — the only
+// surviving run-scope point event, and the one whose meaning ("this run, on
+// this incarnation") is what an operator setting the filter was asking for.
+// Note the key differs: `incarnation`, not `name`.
+//
+// Consequence (documented trade-off, unchanged in shape): a Tiding with an
+// `incarnation` selector matches ONLY run_completed events of that incarnation;
+// on scenario_run/command_run/voyage/cadence events it does not fire (no field
+// → no match). Conservative: better not notify than notify about an event whose
+// incarnation binding isn't expressed in the payload.
 func matchIncarnation(sel *string, et audit.EventType, payload map[string]any) bool {
 	if sel == nil {
 		return true
@@ -76,8 +83,8 @@ func matchVoyage(sel *string, correlationID string, payload map[string]any) bool
 // eventIncarnation extracts incarnation name from run event payload or ""
 // if event doesn't carry binding to one incarnation (see [matchIncarnation]).
 func eventIncarnation(et audit.EventType, payload map[string]any) string {
-	if et == audit.EventIncarnationDriftChecked {
-		return payloadStr(payload, "name")
+	if et == audit.EventIncarnationRunCompleted {
+		return payloadStr(payload, "incarnation")
 	}
 	return ""
 }

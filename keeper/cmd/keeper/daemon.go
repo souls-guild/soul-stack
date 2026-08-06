@@ -4540,7 +4540,6 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		MetricsHTTP:         d.httpMetrics,
 		ScenarioRunner:      d.scenarioRunner,
 		ScenarioDestroyer:   d.scenarioRunner,
-		ScenarioDrift:       d.scenarioRunner,
 		ServiceRegistry:     d.serviceRegistry,
 		ServiceLoader:       d.serviceLoader,
 		// Keeper daemon runtime wiring note.
@@ -4940,7 +4939,6 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			IncarnationDB:     d.pool,
 			ScenarioRunner:    d.scenarioRunner,
 			ScenarioDestroyer: d.scenarioRunner,
-			ScenarioDrift:     d.scenarioRunner,
 			ServiceRegistry:   d.serviceRegistry,
 			ServiceLoader:     d.serviceLoader,
 			// Keeper daemon runtime wiring note.
@@ -5958,16 +5956,6 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
-		var scryDeps *reaper.ScryDeps
-		if d.scenarioRunner != nil && d.serviceRegistry != nil {
-			scryDeps = &reaper.ScryDeps{
-				Pool:         d.pool,
-				DriftChecker: d.scenarioRunner,
-				Services:     d.serviceRegistry,
-				Audit:        d.auditWriter,
-			}
-		}
-
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -6045,7 +6033,6 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			Holder:                 cfg.KID,
 			Logger:                 logger,
 			Metrics:                reaperMetrics,
-			Scry:                   scryDeps,
 			OldErrands:             oldErrandsPurger,
 			OldConsoleRecordings:   oldConsoleRecordingsPurger,
 			VoyageReclaim:          d.voyageReclaimer,

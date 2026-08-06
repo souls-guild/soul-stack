@@ -58,11 +58,11 @@ func TestLifecycleScenarioNames(t *testing.T) {
 // Run form.
 func TestIsRunnableScenario(t *testing.T) {
 	want := map[string]bool{
-		CreateScenarioName:   true,
-		DestroyScenarioName:  false,
-		ConvergeScenarioName: true,
-		"rotate_certs":       true,
-		"add_replicas":       true,
+		CreateScenarioName:  true,
+		DestroyScenarioName: false,
+		"converge":          true,
+		"rotate_certs":      true,
+		"add_replicas":      true,
 	}
 	for name, exp := range want {
 		if got := IsRunnableScenario(name); got != exp {
@@ -73,15 +73,16 @@ func TestIsRunnableScenario(t *testing.T) {
 
 // TestConvergeIsOperational — guard (amend ADR-031, 2026-06-10): `converge`
 // was removed from the lifecycle set and is treated as an operational
-// scenario kind (apply-reconcile via a normal run + dry-run check-drift
-// target). Regression guard against converge sneaking back into
-// LifecycleScenarioNames.
+// scenario kind (apply-reconcile via a normal run). Since NIM-446 removed the
+// drift circuit it has no second role and no name constant either — the
+// literal below is the point: nothing in keeper special-cases the name.
+// Regression guard against converge sneaking back into LifecycleScenarioNames.
 func TestConvergeIsOperational(t *testing.T) {
-	if IsLifecycleScenario(ConvergeScenarioName) {
-		t.Errorf("IsLifecycleScenario(%q) = true, want false (converge — operational, amend ADR-031)", ConvergeScenarioName)
+	if IsLifecycleScenario("converge") {
+		t.Errorf("IsLifecycleScenario(%q) = true, want false (converge — operational, amend ADR-031)", "converge")
 	}
-	if _, ok := LifecycleScenarioNames[ConvergeScenarioName]; ok {
-		t.Errorf("converge (%q) must not be in LifecycleScenarioNames", ConvergeScenarioName)
+	if _, ok := LifecycleScenarioNames["converge"]; ok {
+		t.Errorf("converge (%q) must not be in LifecycleScenarioNames", "converge")
 	}
 }
 

@@ -73,16 +73,6 @@ type DestroyStarter interface {
 	StartDestroy(ctx context.Context, spec scenario.RunSpec) error
 }
 
-// DriftChecker — narrow surface of scenario.Runner for the check-drift handler
-// (ADR-031, Slice B). CheckDrift is sync (not async, unlike Start/StartDestroy):
-// the handler blocks until the DriftReport is assembled so it can return it to the
-// operator in the 200 response. MarkDriftStatus is a post-check informational mark
-// on incarnation.status (drift/ready). A real *scenario.Runner satisfies it.
-type DriftChecker interface {
-	CheckDrift(ctx context.Context, spec scenario.CheckDriftSpec) (*scenario.DriftReport, error)
-	MarkDriftStatus(ctx context.Context, name string, hasDrift bool) error
-}
-
 // ServiceResolver resolves the git coordinates of a service repo by service name
 // (`incarnation.service` → service registry in the DB, ADR-029). Used by the
 // Create handler when starting the `create` scenario.
@@ -136,7 +126,6 @@ type IncarnationHandler struct {
 	db        IncarnationDB
 	runner    ScenarioStarter
 	destroyer DestroyStarter
-	drift     DriftChecker
 	services  ServiceResolver
 	loader    ServiceSnapshotLoader
 	auditW    audit.Writer
@@ -189,11 +178,10 @@ type RunTaskAuditReader interface {
 	SelectTaskExecutions(ctx context.Context, applyID string) ([]auditpg.TaskExecution, error)
 }
 
-// NewIncarnationHandler builds the handler. runner / destroyer / drift / services /
+// NewIncarnationHandler builds the handler. runner / destroyer / services /
 // loader / auditW allow nil: without runner+services Create degrades to the stub,
 // without loader Upgrade returns 500, without destroyer+services+loader Destroy
-// returns 500, without drift+services CheckDrift returns 500, without auditW the
-// destroy/drift trail is not written.
+// returns 500, without auditW the destroy trail is not written.
 //
 // scoper — read surface of the operator's scope boundary ([PurviewResolver],
 // production wire-up passes rbac.Holder) for scoped List/Get visibility
@@ -201,11 +189,11 @@ type RunTaskAuditReader interface {
 // only in tests that don't use List/Get scope: List with a nil scoper is
 // fail-closed (empty list — the safe default, NOT all incarnations), Get with a
 // nil scoper is fail-closed (404 — don't leak another's incarnation).
-func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer DestroyStarter, drift DriftChecker, services ServiceResolver, loader ServiceSnapshotLoader, auditW audit.Writer, scoper PurviewResolver, logger *slog.Logger) *IncarnationHandler {
+func NewIncarnationHandler(db IncarnationDB, runner ScenarioStarter, destroyer DestroyStarter, services ServiceResolver, loader ServiceSnapshotLoader, auditW audit.Writer, scoper PurviewResolver, logger *slog.Logger) *IncarnationHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &IncarnationHandler{db: db, runner: runner, destroyer: destroyer, drift: drift, services: services, loader: loader, auditW: auditW, scoper: scoper, logger: logger}
+	return &IncarnationHandler{db: db, runner: runner, destroyer: destroyer, services: services, loader: loader, auditW: auditW, scoper: scoper, logger: logger}
 }
 
 // SetServiceRefs late-binds the refs lister (ls-remote of the service registry's

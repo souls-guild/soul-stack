@@ -315,10 +315,9 @@ func makeIncarnationRow(name string) pgx.Row {
 		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
-		[]byte("{}"),          // traits (ADR-060 amend R1)
-		any(nil), []byte(nil), // last_drift_check_at, last_drift_summary (ADR-031 Slice C)
-		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-		any(nil), // applying_apply_id (ADR-068 §A1)
+		[]byte("{}"), // traits (ADR-060 amend R1)
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -326,7 +325,7 @@ func makeIncarnationRow(name string) pgx.Row {
 
 func TestIncarnation_Create_202(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","input":{"replicas":3}}`)))
 	req = withClaims(req, "archon-alice")
@@ -362,7 +361,7 @@ func TestIncarnation_Create_202(t *testing.T) {
 // INSERT arg $10 is covered by the domain test TestCreate_CovensPassedThrough.
 func TestIncarnation_Create_Covens_Accepted(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["prod","dc1"]}`)))
 	req = withClaims(req, "archon-alice")
@@ -377,7 +376,7 @@ func TestIncarnation_Create_Covens_Accepted(t *testing.T) {
 
 func TestIncarnation_Create_InvalidCoven_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["Bad_Coven"]}`)))
 	req = withClaims(req, "archon-alice")
@@ -392,7 +391,7 @@ func TestIncarnation_Create_InvalidCoven_422(t *testing.T) {
 
 func TestIncarnation_Create_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"Bad_Name","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
@@ -407,7 +406,7 @@ func TestIncarnation_Create_InvalidName_422(t *testing.T) {
 
 func TestIncarnation_Create_MissingService_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod"}`)))
 	req = withClaims(req, "archon-alice")
@@ -425,7 +424,7 @@ func TestIncarnation_Create_DuplicateName_409(t *testing.T) {
 			}}
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
@@ -447,7 +446,7 @@ func TestIncarnation_Get_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "name", "redis-prod"), "archon-alice")
 	rec := incGet(h, req)
 
@@ -470,7 +469,7 @@ func TestIncarnation_Get_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/ghost", nil, "name", "ghost")
 	rec := incGet(h, req)
 	if rec.Code != http.StatusNotFound {
@@ -480,7 +479,7 @@ func TestIncarnation_Get_404(t *testing.T) {
 
 func TestIncarnation_Get_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/Bad_Name", nil, "name", "Bad_Name")
 	rec := incGet(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -589,14 +588,13 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				"ready",
 				[]byte(nil), any(nil),
 				now, now, []string(nil),
-				[]byte("{}"),          // traits
-				any(nil), []byte(nil), // ADR-031 Slice C
-				"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-				any(nil), // applying_apply_id (ADR-068 §A1)
+				[]byte("{}"), // traits
+				"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+				any(nil),     // applying_apply_id (ADR-068 §A1)
 			}}
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod", nil, "name", "redis-prod"), "archon-alice")
 	rec := incGet(h, req)
 
@@ -622,7 +620,7 @@ func TestIncarnation_List_200_Empty(t *testing.T) {
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -642,7 +640,7 @@ func TestIncarnation_List_200_Empty(t *testing.T) {
 
 func TestIncarnation_List_BadLimit_400(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?limit=99999", nil)
 	rec := incList(h, req)
 	if rec.Code != http.StatusBadRequest {
@@ -652,7 +650,7 @@ func TestIncarnation_List_BadLimit_400(t *testing.T) {
 
 func TestIncarnation_List_BadStatusFilter_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?status=destroyed", nil)
 	rec := incList(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -680,7 +678,7 @@ func TestIncarnation_List_CovenFilter_PassesToSQL(t *testing.T) {
 		return staticRow{values: []any{int(0)}}
 	}
 
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?coven=dev", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -699,7 +697,7 @@ func TestIncarnation_List_CovenFilter_PassesToSQL(t *testing.T) {
 // before SQL (kebab-case format).
 func TestIncarnation_List_InvalidCoven_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?coven=DEV_UPPER", nil)
 	rec := incList(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -725,7 +723,7 @@ func listSQLCapture() (*fakeIncDB, *string) {
 // reaches the jsonb pushdown (->>) in the COUNT SQL.
 func TestIncarnation_List_StateFilter_PassesToSQL(t *testing.T) {
 	db, captured := listSQLCapture()
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?state.redis_version=8.0", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -740,7 +738,7 @@ func TestIncarnation_List_StateFilter_PassesToSQL(t *testing.T) {
 // parses into a numeric comparison (->>)::numeric.
 func TestIncarnation_List_StateFilter_NumericOp(t *testing.T) {
 	db, captured := listSQLCapture()
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?state.memory_mb=gt:1000", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -760,7 +758,7 @@ func TestIncarnation_List_StateFilter_InjectionPath_422(t *testing.T) {
 		"state.with-dash=1",
 	} {
 		db := &fakeIncDB{}
-		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 		req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?"+raw, nil)
 		rec := incList(h, req)
 		if rec.Code != http.StatusUnprocessableEntity {
@@ -780,7 +778,7 @@ func TestIncarnation_List_StateFilter_NumericOp_NonNumericValue_422(t *testing.T
 		"state.memory_mb=lte:10x",
 	} {
 		db := &fakeIncDB{}
-		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 		req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?"+raw, nil), "archon-alice")
 		rec := incList(h, req)
 		if rec.Code != http.StatusUnprocessableEntity {
@@ -798,7 +796,7 @@ func TestIncarnation_List_SortStateField_PassesToSQL(t *testing.T) {
 		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
 		captureListSQL: func(sql string) { listSQL = sql },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?sort=state.redis_version&sort_dir=desc", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -815,7 +813,7 @@ func TestIncarnation_List_BadSortField_422(t *testing.T) {
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?sort=spec", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -829,7 +827,7 @@ func TestIncarnation_List_BadSortDir_422(t *testing.T) {
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?sort=name&sort_dir=sideways", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -845,7 +843,7 @@ func TestIncarnation_History_200_Empty(t *testing.T) {
 		countRow:        func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows:        func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodGet, "/v1/incarnations/redis-prod/history", nil, "name", "redis-prod"), "archon-alice")
 	rec := incHistory(h, req)
 	if rec.Code != http.StatusOK {
@@ -858,7 +856,7 @@ func TestIncarnation_History_NotFound_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/ghost/history", nil, "name", "ghost")
 	rec := incHistory(h, req)
 	if rec.Code != http.StatusNotFound {
@@ -868,7 +866,7 @@ func TestIncarnation_History_NotFound_404(t *testing.T) {
 
 func TestIncarnation_History_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/Bad_Name/history", nil, "name", "Bad_Name")
 	rec := incHistory(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -883,7 +881,7 @@ func TestIncarnation_History_ApplyIDFilter_200(t *testing.T) {
 		countRow:        func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows:        func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodGet,
 		"/v1/incarnations/redis-prod/history?apply_id=01HABCDEFGHJKMNPQRSTVWXYZ0", nil,
 		"name", "redis-prod"), "archon-alice")
@@ -904,7 +902,7 @@ func TestIncarnation_History_ApplyIDInvalid_400(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	// Non-ULID: lowercase, wrong length.
 	req := newChiRequest(http.MethodGet,
 		"/v1/incarnations/redis-prod/history?apply_id=not-a-ulid", nil,
@@ -928,7 +926,7 @@ func TestIncarnation_History_ApplyIDEmpty_OK(t *testing.T) {
 		countRow:        func(_ string) pgx.Row { return staticRow{values: []any{int(0)}} },
 		listRows:        func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodGet,
 		"/v1/incarnations/redis-prod/history?apply_id=", nil,
 		"name", "redis-prod"), "archon-alice")
@@ -940,7 +938,7 @@ func TestIncarnation_History_ApplyIDEmpty_OK(t *testing.T) {
 
 func TestIncarnation_Create_InvalidService_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"Bad/Service"}`)))
 	req = withClaims(req, "archon-alice")
@@ -971,7 +969,7 @@ func (f *captureInsertDB) QueryRow(ctx context.Context, sql string, args ...any)
 func TestIncarnation_Create_NilInput_SpecEmpty(t *testing.T) {
 	// Body without `input` — spec must go to the DB as `{}`, not `{"input": null}`.
 	db := &captureInsertDB{fakeIncDB: &fakeIncDB{}}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
@@ -999,7 +997,7 @@ func TestIncarnation_List_OffsetBeyondTotal_200_EmptyItems(t *testing.T) {
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(7)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(httptest.NewRequest(http.MethodGet, "/v1/incarnations?offset=100&limit=10", nil), "archon-alice")
 	rec := incList(h, req)
 	if rec.Code != http.StatusOK {
@@ -1067,9 +1065,8 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		[]byte(nil), any(nil),
 		now, now, covenArg,
 		[]byte("{}"), // traits
-		any(nil), []byte(nil),
-		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-		any(nil), // applying_apply_id (ADR-068 §A1)
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -1117,7 +1114,7 @@ func TestIncarnation_List_EmptyPurview_FailClosed(t *testing.T) {
 			return &incRows{rows: []staticRow{incListRow("secret-inc", []string{"secret"}, nil)}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
@@ -1147,7 +1144,7 @@ func TestIncarnation_List_NoClaims_FailClosed(t *testing.T) {
 			return &incRows{rows: []staticRow{incListRow("secret-inc", nil, nil)}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations", nil) // no claims
 	rec := incList(h, req)
@@ -1173,9 +1170,8 @@ func incListRowBare(name string) staticRow {
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
-		any(nil), []byte(nil),
-		any(nil), // created_scenario = NULL (bare, migration 090)
-		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // created_scenario = NULL (bare, migration 090)
+		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
@@ -1194,7 +1190,7 @@ func TestIncarnation_List_BareIncarnation_NoPanic(t *testing.T) {
 			return &incRows{rows: []staticRow{incListRowBare("redis-bare")}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
@@ -1222,7 +1218,7 @@ func TestIncarnation_List_NilScoper_FailClosed(t *testing.T) {
 		countRow: func(_ string) pgx.Row { return staticRow{values: []any{int(3)}} },
 		listRows: func() (pgx.Rows, error) { return &emptyRows{}, nil },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
@@ -1244,7 +1240,7 @@ func TestIncarnation_List_Unrestricted_All(t *testing.T) {
 			}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 
 	rec := doIncList(t, h, "")
 	if rec.Code != http.StatusOK {
@@ -1277,7 +1273,7 @@ func TestIncarnation_List_CovenScope_ReachesSQL(t *testing.T) {
 		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
 		captureListSQL: func(sql string) { listSQL = sql },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"redis-prod"}}, nil)
 
 	rec := doIncList(t, h, "")
@@ -1303,7 +1299,7 @@ func TestIncarnation_List_IncarnationScope_ReachesSQL(t *testing.T) {
 		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
 		captureListSQL: func(sql string) { listSQL = sql },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{incarnations: []string{"redis-prod"}}, nil)
 
 	rec := doIncList(t, h, "")
@@ -1333,7 +1329,7 @@ func TestIncarnation_Get_EmptyPurview_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("Code = %d, want 404 (out-of-scope must not leak as 403)", rec.Code)
@@ -1345,7 +1341,7 @@ func TestIncarnation_Get_NilScoper_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("Code = %d, want 404 (nil-scoper fail-closed)", rec.Code)
@@ -1357,7 +1353,7 @@ func TestIncarnation_Get_Unrestricted_200(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
 		t.Errorf("Code = %d, want 200 (unrestricted)", rec.Code)
@@ -1372,7 +1368,7 @@ func TestIncarnation_Get_CovenMatch_200(t *testing.T) {
 			return incListRow(name, []string{"prod"}, nil)
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -1390,7 +1386,7 @@ func TestIncarnation_Get_NameMatch_200(t *testing.T) {
 			return incListRow(name, []string{"other-coven"}, nil) // covens do NOT contain redis-prod
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{incarnations: []string{"redis-prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -1406,7 +1402,7 @@ func TestIncarnation_Get_CovenMismatch_404(t *testing.T) {
 			return incListRow(name, []string{"staging"}, nil)
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
@@ -1440,7 +1436,7 @@ func fakeIncHistoryDB(name string, covens []string, state map[string]any) *fakeI
 // gate too, now — via getInScope("history")).
 func TestIncarnation_History_CovenMatch_200(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"prod"}, nil)
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"prod"}}, nil)
 	rec := doIncHistory(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -1452,7 +1448,7 @@ func TestIncarnation_History_CovenMatch_200(t *testing.T) {
 // (the history of an existing-but-foreign incarnation is not revealed).
 func TestIncarnation_History_EmptyPurview_404(t *testing.T) {
 	db := fakeIncHistoryDB("redis-prod", []string{"prod"}, nil)
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, fakeIncScoper{empty: true}, nil)
 	rec := doIncHistory(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("Code = %d, want 404 (empty-purview fail-closed)", rec.Code)
@@ -1541,10 +1537,9 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			[]byte("{}"), "ready",
 			[]byte(nil), any(nil),
 			now, now, []string{"prod"},
-			[]byte("{}"),          // traits
-			any(nil), []byte(nil), // ADR-031 Slice C
-			"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-			any(nil), // applying_apply_id (ADR-068 §A1)
+			[]byte("{}"), // traits
+			"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+			any(nil),     // applying_apply_id (ADR-068 §A1)
 		}}
 	}}
 	sel := IncarnationScopeSelector(db)
@@ -1734,10 +1729,9 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		[]byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
-		[]byte("{}"),          // traits
-		any(nil), []byte(nil), // ADR-031 Slice C
-		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-		any(nil), // applying_apply_id (ADR-068 §A1)
+		[]byte("{}"), // traits
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -1761,7 +1755,7 @@ func makeUnlockSelectRowBare(status string) pgx.Row {
 }
 
 func newRunHandler(db *fakeIncDB, starter *fakeStarter, resolver *fakeResolver) *IncarnationHandler {
-	return NewIncarnationHandler(db, starter, nil, nil, resolver, nil, nil, nil, nil)
+	return NewIncarnationHandler(db, starter, nil, resolver, nil, nil, nil, nil)
 }
 
 // --- Run --------------------------------------------------------------
@@ -1887,7 +1881,7 @@ func TestIncarnation_Run_NoBody_202(t *testing.T) {
 
 func TestIncarnation_Run_NoRunner_500(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequestScenario(http.MethodPost,
 		"/v1/incarnations/redis-prod/scenarios/add_user", nil, "redis-prod", "add_user")
 	req = withClaims(req, "archon-alice")
@@ -1907,10 +1901,9 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 		[]byte("{}"), status,
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
-		[]byte("{}"),          // traits
-		any(nil), []byte(nil), // ADR-031 Slice C
-		any(nil), // created_scenario = NULL (bare, migration 090)
-		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
+		[]byte("{}"), // traits
+		any(nil),     // created_scenario = NULL (bare, migration 090)
+		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
@@ -1950,7 +1943,7 @@ func TestIncarnation_Unlock_200(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock",
 		bytes.NewReader([]byte(`{"reason":"manual cleanup verified"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -1990,7 +1983,7 @@ func TestIncarnation_Unlock_NotLocked_409(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("ready") },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock",
 		bytes.NewReader([]byte(`{"reason":"x"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2013,7 +2006,7 @@ func TestIncarnation_Unlock_MissingIncarnation_404(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/ghost/unlock",
 		bytes.NewReader([]byte(`{"reason":"x"}`)), "name", "ghost")
 	req = withClaims(req, "archon-alice")
@@ -2025,7 +2018,7 @@ func TestIncarnation_Unlock_MissingIncarnation_404(t *testing.T) {
 
 func TestIncarnation_Unlock_NoReason_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock",
 		bytes.NewReader([]byte(`{}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2044,7 +2037,7 @@ func TestIncarnation_Unlock_ReasonAtMax_200(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen)
 	body, _ := json.Marshal(map[string]string{"reason": reason})
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock",
@@ -2066,7 +2059,7 @@ func TestIncarnation_Unlock_ReasonOverMax_422(t *testing.T) {
 	db := &fakeIncDB{
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRow("error_locked") },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	reason := strings.Repeat("a", incarnation.ReasonMaxLen+1)
 	body, _ := json.Marshal(map[string]string{"reason": reason})
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock",
@@ -2197,10 +2190,9 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		[]byte("{}"), "ready",
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
-		[]byte("{}"),          // traits
-		any(nil), []byte(nil), // ADR-031 Slice C
-		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-		any(nil), // applying_apply_id (ADR-068 §A1)
+		[]byte("{}"), // traits
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
@@ -2211,7 +2203,7 @@ func makeUpgradeSelectRow(schema int, status string) pgx.Row {
 }
 
 func newUpgradeHandler(db *fakeIncDB, loader *fakeLoader) *IncarnationHandler {
-	return NewIncarnationHandler(db, &fakeStarter{}, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	return NewIncarnationHandler(db, &fakeStarter{}, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 }
 
 func TestIncarnation_Upgrade_202(t *testing.T) {
@@ -2267,7 +2259,7 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v1"}}},
 	}
 	starter := &fakeStarter{}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
 		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2334,7 +2326,7 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 		upgrades:     []artifact.Scenario{{Name: "to_v2", FromVersions: []string{"v1"}}},
 	}
 	// runner=nil (2nd arg) with an upgrade scenario found.
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
 		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2366,7 +2358,7 @@ func TestIncarnation_Upgrade_LegacyNoRun_202(t *testing.T) {
 	}
 	loader := &fakeLoader{targetSchema: 2, chain: statemigrate.Chain{mig}} // upgrades nil → legacy
 	starter := &fakeStarter{}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
 		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2486,7 +2478,7 @@ func TestIncarnation_Upgrade_NoToVersion_422(t *testing.T) {
 
 func TestIncarnation_Upgrade_NoLoader_500(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := newChiRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade",
 		bytes.NewReader([]byte(`{"to_version":"v2"}`)), "name", "redis-prod")
 	req = withClaims(req, "archon-alice")
@@ -2616,257 +2608,6 @@ func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 // operator_test.go and reused here directly (one package
 // handlers, shared visibility).
 
-// --- CheckDrift -------------------------------------------------------
-
-// fakeDriftChecker — a mock [DriftChecker] (CheckDrift + MarkDriftStatus).
-// Records the passed spec, the call count and the MarkDriftStatus arguments; report
-// / err — what to return from CheckDrift; markErr — what to return from MarkDriftStatus.
-type fakeDriftChecker struct {
-	gotSpec      scenario.CheckDriftSpec
-	calls        int
-	report       *scenario.DriftReport
-	err          error
-	marked       bool
-	markName     string
-	markHasDrift bool
-	markErr      error
-}
-
-func (f *fakeDriftChecker) CheckDrift(_ context.Context, spec scenario.CheckDriftSpec) (*scenario.DriftReport, error) {
-	f.calls++
-	f.gotSpec = spec
-	return f.report, f.err
-}
-
-func (f *fakeDriftChecker) MarkDriftStatus(_ context.Context, name string, hasDrift bool) error {
-	f.marked = true
-	f.markName = name
-	f.markHasDrift = hasDrift
-	return f.markErr
-}
-
-// sampleDriftReportH — a sample report with one drifted host to check the
-// response body and the aggregate summary.
-func sampleDriftReportH() *scenario.DriftReport {
-	return &scenario.DriftReport{
-		CheckedAt:       time.Now().UTC(),
-		IncarnationName: "redis-prod",
-		ScenarioRef:     scenario.ConvergeScenarioName,
-		Hosts: []scenario.DriftHostReport{
-			{
-				SID:    "host-a.example.com",
-				Status: scenario.DriftStatusDrifted,
-				Tasks: []scenario.DriftTaskResult{
-					{Idx: 0, Module: "core.file.present", Changed: true},
-				},
-			},
-		},
-		Summary: scenario.DriftSummary{HostsDrifted: 1, HostsClean: 0},
-	}
-}
-
-func newDriftHandler(db *fakeIncDB, drift *fakeDriftChecker, aw *fakeAuditWriter) *IncarnationHandler {
-	return NewIncarnationHandler(db, nil, nil, drift, &fakeResolver{ok: true}, nil, aw, nil, nil)
-}
-
-func newDriftRequest(name, aid string, body []byte) *http.Request {
-	r := newChiRequest(http.MethodPost, "/v1/incarnations/"+name+"/check-drift",
-		bytes.NewReader(body), "name", name)
-	return withClaims(r, aid)
-}
-
-func TestIncarnation_CheckDrift_Success_200(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
-	}
-	drift := &fakeDriftChecker{report: sampleDriftReportH()}
-	aw := &fakeAuditWriter{}
-	h := newDriftHandler(db, drift, aw)
-
-	rec := incCheckDrift(h, newDriftRequest("redis-prod", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Code = %d, want 200, body=%s", rec.Code, rec.Body.String())
-	}
-	var got scenario.DriftReport
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got.IncarnationName != "redis-prod" {
-		t.Errorf("incarnation = %q, want redis-prod", got.IncarnationName)
-	}
-	if got.ScenarioRef != scenario.ConvergeScenarioName {
-		t.Errorf("scenario_ref = %q, want converge", got.ScenarioRef)
-	}
-	if got.Summary.HostsDrifted != 1 {
-		t.Errorf("hosts_drifted = %d, want 1", got.Summary.HostsDrifted)
-	}
-	if len(got.Hosts) != 1 || got.Hosts[0].Status != scenario.DriftStatusDrifted {
-		t.Errorf("hosts = %+v, want one drifted host", got.Hosts)
-	}
-
-	if drift.calls != 1 {
-		t.Errorf("CheckDrift calls = %d, want 1", drift.calls)
-	}
-	if drift.gotSpec.IncarnationName != "redis-prod" || drift.gotSpec.StartedByAID != "archon-alice" {
-		t.Errorf("spec = %+v", drift.gotSpec)
-	}
-	if len(drift.gotSpec.ApplyID) != 26 {
-		t.Errorf("apply_id len = %d, want 26 (ULID)", len(drift.gotSpec.ApplyID))
-	}
-
-	// MarkDriftStatus called with hasDrift=true (there is a drifted host) — parity
-	// with the MCP handler.
-	if !drift.marked {
-		t.Fatal("MarkDriftStatus was not called")
-	}
-	if drift.markName != "redis-prod" || !drift.markHasDrift {
-		t.Errorf("MarkDriftStatus state = (%q, %v), want (redis-prod, true)",
-			drift.markName, drift.markHasDrift)
-	}
-
-	// Audit-trail: EventIncarnationDriftChecked with correlation_id=apply_id and
-	// source=api.
-	if !hasEvent(aw, audit.EventIncarnationDriftChecked) {
-		t.Fatal("audit: incarnation.drift_checked was not recorded")
-	}
-	for _, ev := range aw.events {
-		if ev.EventType != audit.EventIncarnationDriftChecked {
-			continue
-		}
-		if ev.Source != audit.SourceAPI {
-			t.Errorf("audit source = %q, want api", ev.Source)
-		}
-		if ev.CorrelationID != drift.gotSpec.ApplyID {
-			t.Errorf("audit correlation_id = %q, want %q (apply_id)", ev.CorrelationID, drift.gotSpec.ApplyID)
-		}
-		if ev.ArchonAID != "archon-alice" {
-			t.Errorf("audit archon_aid = %q", ev.ArchonAID)
-		}
-		summary, _ := ev.Payload["drift_summary"].(map[string]any)
-		if summary == nil {
-			t.Fatalf("audit drift_summary is missing: %+v", ev.Payload)
-		}
-		if summary["hosts_drifted"] != 1 {
-			t.Errorf("audit hosts_drifted = %v, want 1", summary["hosts_drifted"])
-		}
-	}
-}
-
-func TestIncarnation_CheckDrift_ConvergeMissing_422(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
-	}
-	drift := &fakeDriftChecker{err: scenario.ErrConvergeMissing}
-	h := newDriftHandler(db, drift, &fakeAuditWriter{})
-
-	rec := incCheckDrift(h, newDriftRequest("redis-prod", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("Code = %d, want 422, body=%s", rec.Code, rec.Body.String())
-	}
-	var p problem.Details
-	_ = json.NewDecoder(rec.Body).Decode(&p)
-	if p.Type != problem.TypeValidationFailed {
-		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
-	}
-	if drift.marked {
-		t.Error("MarkDriftStatus must not be called on ErrConvergeMissing")
-	}
-}
-
-func TestIncarnation_CheckDrift_InputMissing_422(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
-	}
-	drift := &fakeDriftChecker{err: scenario.ErrDriftInputMissing}
-	h := newDriftHandler(db, drift, &fakeAuditWriter{})
-
-	rec := incCheckDrift(h, newDriftRequest("redis-prod", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("Code = %d, want 422, body=%s", rec.Code, rec.Body.String())
-	}
-	var p problem.Details
-	_ = json.NewDecoder(rec.Body).Decode(&p)
-	if p.Type != problem.TypeValidationFailed {
-		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
-	}
-}
-
-func TestIncarnation_CheckDrift_NotConfigured_500(t *testing.T) {
-	// drift=nil → the endpoint is not configured, symmetric with Run/Upgrade/Destroy.
-	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
-
-	rec := incCheckDrift(h, newDriftRequest("redis-prod", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("Code = %d, want 500", rec.Code)
-	}
-}
-
-func TestIncarnation_CheckDrift_NotFound_404(t *testing.T) {
-	db := &fakeIncDB{
-		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
-	}
-	drift := &fakeDriftChecker{}
-	h := newDriftHandler(db, drift, &fakeAuditWriter{})
-
-	rec := incCheckDrift(h, newDriftRequest("ghost", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("Code = %d, want 404", rec.Code)
-	}
-	if drift.calls != 0 {
-		t.Errorf("CheckDrift calls = %d, want 0 (404 before CheckDrift)", drift.calls)
-	}
-}
-
-func TestIncarnation_CheckDrift_InvalidName_422(t *testing.T) {
-	db := &fakeIncDB{}
-	drift := &fakeDriftChecker{}
-	h := newDriftHandler(db, drift, &fakeAuditWriter{})
-
-	rec := incCheckDrift(h, newDriftRequest("Bad_Name", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("Code = %d, want 422", rec.Code)
-	}
-	if drift.calls != 0 {
-		t.Errorf("CheckDrift calls = %d, want 0 (validation before CheckDrift)", drift.calls)
-	}
-}
-
-func TestIncarnation_CheckDrift_NoDrift_MarksReady(t *testing.T) {
-	// A clean report (no drifted/failed) → MarkDriftStatus(name, false): the handler
-	// resets the incarnation to ready (if it was in drift). Parity with the
-	// informational semantics of ADR-031(d).
-	db := &fakeIncDB{
-		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRow(name, "ready") },
-	}
-	drift := &fakeDriftChecker{report: &scenario.DriftReport{
-		CheckedAt:       time.Now().UTC(),
-		IncarnationName: "redis-prod",
-		ScenarioRef:     scenario.ConvergeScenarioName,
-		Hosts: []scenario.DriftHostReport{
-			{SID: "host-a.example.com", Status: scenario.DriftStatusClean},
-		},
-		Summary: scenario.DriftSummary{HostsClean: 1},
-	}}
-	h := newDriftHandler(db, drift, &fakeAuditWriter{})
-
-	rec := incCheckDrift(h, newDriftRequest("redis-prod", "archon-alice", []byte(`{}`)))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	if !drift.marked || drift.markHasDrift {
-		t.Errorf("MarkDriftStatus state = (marked=%v, hasDrift=%v), want (true, false)",
-			drift.marked, drift.markHasDrift)
-	}
-}
-
 // recordingAuditWriter — a simple in-memory audit.Writer for checking the payload.
 type recordingAuditWriter struct{ events []*audit.Event }
 
@@ -2925,7 +2666,7 @@ func newCreateHandlerWithSchema(t *testing.T, db *fakeIncDB, yaml string) (*Inca
 	t.Helper()
 	starter := &fakeStarter{}
 	loader := &fakeLoader{localDir: writeCreateScenarioDir(t, yaml)}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	return h, starter
 }
 
@@ -3039,7 +2780,7 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
 		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(false)},
 	}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
@@ -3081,7 +2822,7 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
 		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(true)},
 	}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
@@ -3123,7 +2864,7 @@ func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 func newRunHandlerWithSchema(db *fakeIncDB, yaml string) (*IncarnationHandler, *fakeStarter) {
 	starter := &fakeStarter{}
 	loader := &fakeLoader{scenarioYAML: yaml}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	return h, starter
 }
 
@@ -3202,89 +2943,6 @@ func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("wire does NOT contain %s (omitempty regression?)\nwire: %s", want, got)
 		}
-	}
-}
-
-// TestIncarnationGetReply_DriftSummaryTyped — the wire invariant for typed
-// last_drift_summary (moving away from opaque passthrough): a populated column goes onto
-// the wire as a typed object with counts keys (integer, NOT float strings) and
-// scanned_at in RFC3339Nano. Catches a regression back to map-passthrough or
-// loss/rename of DriftScanSummary fields.
-func TestIncarnationGetReply_DriftSummaryTyped(t *testing.T) {
-	scannedAt := time.Date(2026, 5, 26, 12, 0, 0, 123456789, time.UTC)
-	inc := &incarnation.Incarnation{
-		Name:               "redis-prod",
-		Service:            "redis",
-		ServiceVersion:     "v1",
-		StateSchemaVersion: 1,
-		Status:             incarnation.StatusReady,
-		CreatedAt:          time.Unix(0, 0).UTC(),
-		UpdatedAt:          time.Unix(0, 0).UTC(),
-		LastDriftCheckAt:   &scannedAt,
-		LastDriftSummary: &incarnation.DriftScanSummary{
-			HostsDrifted: 1, HostsClean: 2, HostsUnsupported: 0, HostsFailed: 0,
-			TotalHosts: 3, ScannedAt: scannedAt,
-		},
-	}
-	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc, nil)))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	got := string(b)
-	for _, want := range []string{
-		`"hosts_drifted":1`,
-		`"hosts_clean":2`,
-		`"hosts_unsupported":0`,
-		`"hosts_failed":0`,
-		`"total_hosts":3`,
-		`"scanned_at":"2026-05-26T12:00:00.123456789Z"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("wire does NOT contain %s (typed-drift regression?)\nwire: %s", want, got)
-		}
-	}
-	// Round-trip through the wire form — counts/scanned_at read back typed without loss.
-	var reply struct {
-		LastDriftSummary *struct {
-			HostsDrifted int       `json:"hosts_drifted"`
-			TotalHosts   int       `json:"total_hosts"`
-			ScannedAt    time.Time `json:"scanned_at"`
-		} `json:"last_drift_summary"`
-	}
-	if err := json.Unmarshal(b, &reply); err != nil {
-		t.Fatalf("unmarshal wire: %v", err)
-	}
-	if reply.LastDriftSummary == nil {
-		t.Fatalf("LastDriftSummary is omitted from the wire despite a populated column")
-	}
-	if reply.LastDriftSummary.HostsDrifted != 1 || reply.LastDriftSummary.TotalHosts != 3 {
-		t.Errorf("round-trip counts diverged: %+v", *reply.LastDriftSummary)
-	}
-	if !reply.LastDriftSummary.ScannedAt.Equal(scannedAt) {
-		t.Errorf("round-trip scanned_at = %v, want %v", reply.LastDriftSummary.ScannedAt, scannedAt)
-	}
-}
-
-// TestIncarnationGetReply_DriftSummaryOmittedWhenNil — a NULL column
-// (the incarnation was never scanned): the last_drift_summary key is ABSENT
-// on the wire (omit, not null) — the former omit semantics preserved after typing.
-func TestIncarnationGetReply_DriftSummaryOmittedWhenNil(t *testing.T) {
-	inc := &incarnation.Incarnation{
-		Name:               "redis-prod",
-		Service:            "redis",
-		ServiceVersion:     "v1",
-		StateSchemaVersion: 1,
-		Status:             incarnation.StatusReady,
-		CreatedAt:          time.Unix(0, 0).UTC(),
-		UpdatedAt:          time.Unix(0, 0).UTC(),
-		// LastDriftSummary / LastDriftCheckAt — nil.
-	}
-	b, err := json.Marshal(shimGetReplyJSON(toIncarnationGetView(inc, nil)))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if got := string(b); strings.Contains(got, "last_drift_summary") {
-		t.Errorf("wire contains last_drift_summary for a NULL column (should be omitted)\nwire: %s", got)
 	}
 }
 

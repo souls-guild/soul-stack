@@ -12,7 +12,7 @@ import (
 
 // Status — incarnation status. MVP enum: four base values + DESTROYING
 // (S-D1, teardown phase via scenario `destroy`) + DESTROY_FAILED (S-D2a,
-// terminal for a failed teardown) + DRIFT (ADR-031, Scry, informational).
+// terminal for a failed teardown) + DRIFT (informational, ADR-031(d)).
 // PROVISIONING is post-MVP, will appear once that phase is implemented.
 //
 // Matches CHECK-constraint incarnation_status_valid (005 + 031 + 036 + 047).
@@ -40,13 +40,17 @@ const (
 	// run by the fail-closed allow-list in scenario.lockRun (run.go).
 	StatusDestroyFailed Status = "destroy_failed"
 
-	// StatusDrift — a Scry check found a mismatch between actual host state and
-	// the declaration (ADR-031, on-demand pilot). Informational, NOT blocking:
-	// drift remediation = a normal apply from `drift` → `ready` (the allow-list
-	// in scenario.lockRun accepts drift as a starting status, symmetric to
-	// ready). The transition into drift is set by the check-drift handler once
-	// the DriftReport is assembled (if hosts_drifted > 0); cleared by a
-	// successful apply (commitSuccess → ready).
+	// StatusDrift — the incarnation's DB state is ahead of what the hosts are
+	// running (ADR-031(d)). Informational, NOT blocking: remediation = a normal
+	// apply from `drift` → `ready` (the allow-list in scenario.lockRun accepts
+	// drift as a starting status, symmetric to ready).
+	//
+	// The single writer is the legacy upgrade branch ([PrepareUpgrade], ADR-031
+	// amendment 2026-06-27 / ADR-019 amendment): a state-schema migration moved
+	// the pin and the state in one tx while the hosts stayed on the old
+	// rollout. The Scry check that was the OTHER writer left with NIM-446;
+	// upgrade-drift is what the status now means. Cleared by a successful apply
+	// (commitSuccess → ready).
 	StatusDrift Status = "drift"
 )
 
@@ -111,20 +115,6 @@ type Incarnation struct {
 	// (scalar | list). Empty map for an incarnation without traits (DEFAULT
 	// '{}').
 	Traits map[string]any `json:"traits"`
-
-	// LastDriftCheckAt — completion time of the last dry_run converge run
-	// (ADR-031 Slice C, migration 050). nil = never scanned. Set via
-	// [UpdateDriftScanResult] (Slice B on-demand + Slice C background).
-	LastDriftCheckAt *time.Time `json:"last_drift_check_at,omitempty"`
-
-	// LastDriftSummary — typed counts aggregate of the last DriftReport
-	// ([DriftScanSummary]: `hosts_*` + `total_hosts` + `scanned_at`).
-	// nil = never scanned (column NULL). Counts-only: the full DriftReport is
-	// not stored in the DB (Slice C is limited to counters, the full on-demand
-	// report from Slice B is returned directly in the response). Read from the
-	// column in typed form ([scanIncarnation]), goes on the wire as a typed
-	// object.
-	LastDriftSummary *DriftScanSummary `json:"last_drift_summary,omitempty"`
 
 	// ApplyingApplyID — apply_id of the currently running run (ADR-068 §A1,
 	// column applying_apply_id, ADR-027 m-S1). Non-null exactly while a run is

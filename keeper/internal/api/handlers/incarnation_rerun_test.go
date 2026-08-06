@@ -18,7 +18,7 @@ import (
 // newRerunHandler assembles a handler with all deps for rerun-last
 // (runner + resolver + auditWriter). loader is not needed (rerun does not validate input).
 func newRerunHandler(db *fakeIncDB, starter *fakeStarter, aw *fakeAuditWriter) *IncarnationHandler {
-	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, nil, aw, nil, nil)
+	return NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, nil, aw, nil, nil)
 }
 
 // rerunDB constructs a fakeIncDB for the rerun flow: SelectByName (status) +

@@ -28,13 +28,11 @@ var runScopeAreas = map[string]struct{}{
 // explicitly in run scope (ADR-052(b)). `incarnation.*` as a whole is not in scope
 // because the area carries incarnation CRUD/lifecycle events, but selected run
 // events are allowed:
-//   - drift_checked is a Scry run event (ADR-031);
 //   - run_completed is a terminal scenario-run for one incarnation (ADR-052(k),
 //     status in {success, failed}): the carrier for T4a/T4b subscriptions (task
 //     alerts and scheduled-run notifications). The incarnation.* area remains out
 //     of scope as CRUD noise; only this exact type is open.
 var runScopePointEvents = map[string]struct{}{
-	"incarnation.drift_checked":                {},
 	string(audit.EventIncarnationRunCompleted): {},
 }
 
@@ -59,7 +57,7 @@ func isHeraldOwnEvent(et audit.EventType) bool {
 // must be non-empty (mirrors CHECK tidings_event_types_nonempty for defence in
 // depth and a friendly pre-DB error). Each element is either an area-glob
 // `<area>.*` with a run-scope `<area>`, an exact `<area>.<action>` with that same
-// `<area>`, or an explicitly allowed point type (`incarnation.drift_checked`).
+// `<area>`, or an explicitly allowed point type (`incarnation.run_completed`).
 // Everything else (bare wildcard `*`, unknown area, point type outside scope) is
 // rejected.
 func ValidateEventTypes(eventTypes []string) error {
@@ -136,7 +134,7 @@ func RunScopeAreas() []string {
 }
 
 // RunScopePointEvents returns sorted point event types outside area-globs
-// (`incarnation.drift_checked`/`incarnation.run_completed`) allowed for whole
+// (`incarnation.run_completed`) allowed for whole
 // Tiding subscriptions (ADR-052(b)). It is the source of truth for the
 // `GET /v1/event-types` catalog.
 func RunScopePointEvents() []string {

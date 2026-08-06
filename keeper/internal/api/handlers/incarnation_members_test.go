@@ -149,14 +149,14 @@ type memberIncRow struct{ name string }
 
 func (r memberIncRow) Scan(dest ...any) error {
 	// Column order of incarnation.scanIncarnation (crud.go): name, service,
-	// service_version, state_schema_version, spec, state, status, status_details,
-	// created_by_aid, created_at, updated_at, covens, traits, last_drift_check_at,
-	// last_drift_summary, created_scenario, applying_apply_id.
+	// service_version, state_schema_version, state, status, status_details,
+	// created_by_aid, created_at, updated_at, covens, traits, created_scenario,
+	// applying_apply_id.
 	vals := []any{
 		r.name, "redis", "v1.0.0", 1,
 		[]byte(`{}`), "ready", []byte(`{}`),
 		(*string)(nil), time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC(),
-		[]string{}, []byte(`{}`), (*time.Time)(nil), []byte(`{}`),
+		[]string{}, []byte(`{}`),
 		(*string)(nil), (*string)(nil),
 	}
 	return scanInto(dest, vals)
@@ -270,7 +270,7 @@ func (c *memberAuditCapture) Write(_ context.Context, e *audit.Event) error {
 func memberClaims() *jwt.Claims { return &jwt.Claims{Subject: "archon-alice"} }
 
 func memberHandler(db *fakeMemberDB, scoper PurviewResolver, auditW audit.Writer) *IncarnationHandler {
-	return NewIncarnationHandler(db, nil, nil, nil, nil, nil, auditW, scoper, nil)
+	return NewIncarnationHandler(db, nil, nil, nil, nil, auditW, scoper, nil)
 }
 
 // --- guard 1: an operator can bind an onboarded host ----------------------

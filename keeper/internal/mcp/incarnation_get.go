@@ -36,12 +36,6 @@ type incarnationGetOutput struct {
 	CreatedByAID       *string        `json:"created_by_aid"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
-
-	// ADR-031 Slice C: see handlers.incarnationDTO. LastDriftSummary is typed
-	// (counts + scanned_at), same wire form as REST (shared json contract
-	// incarnation.DriftScanSummary).
-	LastDriftCheckAt *time.Time                    `json:"last_drift_check_at,omitempty"`
-	LastDriftSummary *incarnation.DriftScanSummary `json:"last_drift_summary,omitempty"`
 }
 
 // callIncarnationGet — read-tool keeper.incarnation.get. Reference
@@ -111,7 +105,5 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 		CreatedByAID:       inc.CreatedByAID,
 		CreatedAt:          inc.CreatedAt,
 		UpdatedAt:          inc.UpdatedAt,
-		LastDriftCheckAt:   inc.LastDriftCheckAt,
-		LastDriftSummary:   inc.LastDriftSummary,
 	})
 }

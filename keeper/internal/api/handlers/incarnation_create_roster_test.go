@@ -188,7 +188,7 @@ func (f *fakeRosterDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, erro
 func rosterHandler(t *testing.T, db *fakeRosterDB, starter ScenarioStarter, scoper PurviewResolver, auditW audit.Writer) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: rosterScenarioSnapshot(t)}
-	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, auditW, scoper, nil)
+	return NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, auditW, scoper, nil)
 }
 
 // createFromSoulsBody — a create request against the roster-declaring scenario.

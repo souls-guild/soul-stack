@@ -20,9 +20,8 @@ Operator API; links to endpoints — [operator-api.md](../docs/keeper/operator-a
 |---|---|---|
 | `incarnation list` | list incarnations | `--service`, `--status`, `--coven` (client-side), `--limit`, `--offset` |
 | `incarnation get <name>` | show an incarnation (spec/state/status/covens), always JSON | — |
-| `incarnation run <name> <scenario>` | run a scenario on an incarnation | `--input <json>`, `--dry-run`, `--wait`, `--wait-timeout` (default `5m`) |
+| `incarnation run <name> <scenario>` | run a scenario on an incarnation | `--input <json>`, `--wait`, `--wait-timeout` (default `5m`) |
 | `incarnation history <name>` | `state_history` entries | `--limit`, `--offset` |
-| `incarnation check-drift <name>` | Scry drift check (ADR-031) | `--input <json>` (override converge-input) |
 
 `--wait` on `run` polls the incarnation's `history` + `status` (there's no separate
 `/v1/applies/{apply_id}` in MVP), fail-fast on `error_locked` /
@@ -198,7 +197,7 @@ soulctl/
     cmd/                            # cobra commands (root + seven groups)
       root.go                       # global flags, loadClient, renderAPIError
       archon.go                     # archon login / whoami / logout
-      incarnation.go                # incarnation list / get / run / history / check-drift
+      incarnation.go                # incarnation list / get / run / history
       souls.go                      # souls list / get / ssh-target + soul exec
       errand.go                     # errand list / get / cancel
       pushprovider.go               # push-providers create / update / delete / list / get

@@ -132,13 +132,6 @@ type HandlerDeps struct {
 	// configured" (mirrors REST 500).
 	ScenarioDestroyer handlers.DestroyStarter
 
-	// ScenarioDrift — narrow scenario.Runner surface for the check-drift-tool
-	// (Scry on-demand pilot, ADR-031 Slice B). CheckDrift is sync (unlike
-	// Start/StartDestroy). Production wiring passes the same *scenario.Runner.
-	// nil → keeper.incarnation.check-drift returns internal-error "drift
-	// checker is not configured" (mirrors REST 500).
-	ScenarioDrift handlers.DriftChecker
-
 	// SoulDB — same [handlers.SoulPool] (`*pgxpool.Pool`) REST passes into
 	// SoulHandler (single source of truth). Needed by soul-tools (create /
 	// issue-token); read-only soul.list remains a stub. nil → soul-tools
@@ -515,8 +508,6 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationUpgrade(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.destroy":
 		return h.callIncarnationDestroy(ctx, claims, req, p.Arguments), false
-	case "keeper.incarnation.check-drift":
-		return h.callIncarnationCheckDrift(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.traits-set":
 		return h.callIncarnationTraitsSet(ctx, claims, req, p.Arguments), false
 	// Membership (ADR-008 amendment 2026-07-28, NIM-209) — the operator path for
@@ -1056,9 +1047,8 @@ func (h *Handler) writeAudit(eventType audit.EventType, aid string, payload map[
 
 // writeAuditCorrelated extends writeAudit with a CorrelationID (run/check
 // ULID). Needed for events that must coalesce with a task.executed /
-// run.completed chain (e.g. `incarnation.drift_checked` → all task.executed
-// events within one check-drift). Background context has the same rationale
-// as writeAudit (client may have disconnected).
+// run.completed chain (all task.executed events within one run). Background
+// context has the same rationale as writeAudit (client may have disconnected).
 func (h *Handler) writeAuditCorrelated(eventType audit.EventType, aid, correlationID string, payload map[string]any) {
 	ev := &audit.Event{
 		EventType:     eventType,

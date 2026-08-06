@@ -192,7 +192,8 @@ tests/e2e/
 │   ├── config_builder.go      # buildKeeperYAML
 │   ├── git.go / destiny.go    # bare git repo per service + MaterializeDestinies
 │   ├── fixtures.go            # YAML loader for souls/soulprint
-│   ├── drift.go / errand.go   # drift-check + errand driver
+│   ├── soul_history.go        # GET /v1/souls/{sid}/history driver
+│   ├── errand.go              # errand driver
 │   ├── oracle.go / probe.go   # Vigil/Oracle event-driven helpers
 │   └── operator.go            # HTTP client for the Operator API with JWT
 ├── internal/
@@ -221,7 +222,6 @@ tests/e2e/
 | `TestE2EServiceRedisMonitored_Create` / `TestE2EServiceRedisSentinel_Create` | | redis + monitoring / sentinel topology. |
 | `TestE2EKeeperSideDispatch_CovenRegistered` | | keeper-side core `core.soul.registered` (`on: keeper` dispatcher). |
 | `TestE2EOracleTypedPortent_*` / `TestOracle_FileChanged_FiresScenario` / `TestL3b_VigilDecreeOracleFlow_Smoke` | | Vigil/Oracle event-driven: portent → fired scenario. |
-| `TestDrift_CheckDrift_DriftedAndClean` | 1 | drift-check (stub-Plan; the real Plan is in L3b). |
 | `TestSoulHistory_AggregatesScenarioAndErrand` | | scenario+errand history aggregation by SID. |
 | `TestIncarnationCreate_MissingRequiredInput_422` | | negative: sync validation of required input. |
 | `TestValidApplyRunsStatus_*` | — | guard: `apply_runs.status` enum values haven't drifted from Go. |

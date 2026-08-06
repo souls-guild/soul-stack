@@ -492,6 +492,20 @@ func failureReason(hs applyrun.HostStatus, noLogByIndex map[int]bool) string {
 	return *hs.ErrorSummary
 }
 
+// failedPlanIndex picks the GLOBAL plan_index of a host's failed task:
+// failed_plan_index (migration 081) takes priority; falls back to the local
+// task_idx (identical to global for N=1) when absent (old Soul without echoed
+// plan_index, or a pre-081 run). (false, _) means no failed task was recorded.
+func failedPlanIndex(hs applyrun.HostStatus) (int, bool) {
+	if hs.FailedPlanIndex != nil {
+		return *hs.FailedPlanIndex, true
+	}
+	if hs.TaskIdx != nil {
+		return *hs.TaskIdx, true
+	}
+	return 0, false
+}
+
 // noLogIndex builds the set of run task indexes with `no_log: true`. Used by
 // the barrier to suppress stderr of a failed no_log task in the
 // operator-facing reason ([failureReason], BUG-3).

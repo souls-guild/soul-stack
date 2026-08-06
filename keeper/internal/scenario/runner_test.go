@@ -192,7 +192,7 @@ func TestStart_ConvergeAcceptedByGate(t *testing.T) {
 	err := r.Start(context.Background(), RunSpec{
 		ApplyID:         "a",
 		IncarnationName: "i",
-		ScenarioName:    ConvergeScenarioName, // operational run, not a special name
+		ScenarioName:    "converge", // operational run, not a special name
 	})
 	if !errors.Is(err, ErrShuttingDown) {
 		t.Errorf("Start(converge) = %v, want ErrShuttingDown (name converge accepted by admission, not rejected)", err)

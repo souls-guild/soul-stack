@@ -213,8 +213,7 @@ func (h *eventStreamHandler) recordTaskFailure(ctx context.Context, sid string, 
 	//
 	// plan_index (ADR-056 §S1 fix Variant B): the GLOBAL cross-plan index of the failed
 	// task across the whole plan (= RenderedTask.Index). Written into apply_runs.
-	// failed_plan_index — the correlation key for the failed task's module/action when building
-	// DriftReport (checkdrift.buildHostReport) and for no_log suppression in the barrier
+	// failed_plan_index — the correlation key for no_log suppression in the barrier
 	// (dispatch.failureReason). The local taskIdx (the task_idx field) under staged/
 	// per-host-where ≠ the global one — it's not fit for correlating with the plan (the same
 	// defect the register channel closed via migration 079). N=1 → plan_index==task_idx.

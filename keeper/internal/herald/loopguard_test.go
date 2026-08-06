@@ -18,7 +18,7 @@ func TestIsHeraldOwnEvent(t *testing.T) {
 		{audit.EventScenarioRunFailed, false},
 		{audit.EventVoyageReclaimed, false},
 		{audit.EventCommandRunCompleted, false},
-		{audit.EventIncarnationDriftChecked, false},
+		{audit.EventIncarnationCreated, false},
 	}
 	for _, c := range cases {
 		if got := isHeraldOwnEvent(c.et); got != c.want {

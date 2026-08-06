@@ -255,15 +255,9 @@ type Deps struct {
 	// of Runner without obs stack).
 	Metrics *ReaperMetrics
 
-	// Scry contains dependencies for background drift rule `scry_background`
-	// (ADR-031 Slice C). Optional: nil → rule in dispatch
-	// is skipped with warn (see runScryBackground). Production wire-up
-	// assembles [ScryDeps] in daemon.setupReaper.
-	Scry *ScryDeps
-
 	// OrphanPushRuns is dependency of rule `purge_orphan_push_runs`
 	// (Variant C push orchestrator, docs/keeper/push.md). Optional: nil →
-	// rule in dispatch is skipped with warn (Scry pattern).
+	// rule in dispatch is skipped with warn.
 	// Production wire-up passes [*orphanPurger] from
 	// [NewOrphanPushRunsPurger] over pushorch.Store.
 	OrphanPushRuns *orphanPurger
@@ -582,13 +576,6 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 			// recovery may conflict with stale result (docs/keeper/reaper.md).
 			r.runDurationRule(ctx, name, rule.StaleAfter, defaultReclaimApplyRunsLease, batchSize, dryRun,
 				r.deps.Purger.ReclaimApplyRuns)
-		case "scry_background":
-			// Background periodic drift scanning (ADR-031 Slice C). Default
-			// OFF (through enabled: false above) + opt-in; parameters
-			// max_concurrent_in_flight / min_interval_per_incarnation are resolved
-			// inside runScryBackground. Starts per-incarnation goroutines,
-			// tick synchronously waits for their completion (see docstring).
-			r.runScryBackground(ctx, name, rule, batchSize, dryRun, r.deps.Scry)
 		case "archive_state_history":
 			// ADR-Q19 retention (PM decision, 2026-05): soft-delete active
 			// state_history snapshots beyond latest N per incarnation, optionally with

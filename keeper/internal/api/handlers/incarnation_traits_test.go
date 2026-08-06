@@ -28,7 +28,7 @@ import (
 // column itself is gone (NIM-408).
 func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)))
 	req = withClaims(req, "archon-alice")
@@ -71,7 +71,7 @@ func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 // reads, and its emptiness is a claim that can fail.
 func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
@@ -99,7 +99,7 @@ func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 // by the domain (ValidateCreateTraits) BEFORE the insert.
 func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)))
 	req = withClaims(req, "archon-alice")
@@ -120,7 +120,7 @@ func TestIncarnation_SetTraits_200_Replaces(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba","env":"prod"}}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -145,7 +145,7 @@ func TestIncarnation_SetTraits_EmptyClears(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -163,7 +163,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{"traits":{"bad":{"nested":1}}}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -178,7 +178,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 // TestIncarnation_SetTraits_InvalidName_422 — invalid incarnation name → 422.
 func TestIncarnation_SetTraits_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/Bad_Name/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba"}}`)), "name", "Bad_Name"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -192,7 +192,7 @@ func TestIncarnation_SetTraits_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/ghost/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba"}}`)), "name", "ghost"), "archon-alice")
 	rec := incSetTraits(h, req)

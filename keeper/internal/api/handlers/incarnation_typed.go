@@ -11,9 +11,9 @@ package handlers
 //     (variant B) writes audit from OUTSIDE. *Typed returns a reply CARRYING the audit-payload
 //     (field AuditPayload) — the huma register func sets it via SetHumaAuditPayload.
 //     The *Typed functions do NOT write audit themselves.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): the handler writes
+//   - SELF-AUDIT (rerun-last / destroy / traits-set): the handler writes
 //     audit ITSELF via h.auditW.Write INSIDE *Typed (the payload is built only after
-//     the domain operation — previous_status / drift_summary / old-new snapshot). audit
+//     the domain operation — previous_status / old-new snapshot). audit
 //     middleware is NOT wired on these routes.
 //
 // read (get / list / history) — do NOT write audit at all.
@@ -795,85 +795,6 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	}
 
 	return IncarnationRerunLastView{ApplyID: applyID, Incarnation: name, Scenario: res.Scenario}, nil
-}
-
-// --- CheckDrift (SELF-AUDIT incarnation.drift_checked) ----------------
-
-// CheckDriftTyped — extracted domain function POST /v1/incarnations/{name}/
-// check-drift (SELF-AUDIT: the handler writes incarnation.drift_checked ITSELF — the
-// drift_summary payload is built after CheckDrift). Parity with (w,r)-CheckDrift: sync
-// drift check → 200 + *scenario.DriftReport.
-func (h *IncarnationHandler) CheckDriftTyped(ctx context.Context, claims *jwt.Claims, name string, inputOverride map[string]any) (*scenario.DriftReport, error) {
-	if !incarnation.ValidName(name) {
-		return nil, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
-	}
-	if h.drift == nil || h.services == nil {
-		return nil, incProblem(problem.TypeInternalError, "drift checker is not configured")
-	}
-
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
-	if err != nil {
-		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
-			return nil, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
-		}
-		h.logger.Error("incarnation.check-drift: select failed", slog.String("name", name), slog.Any("error", err))
-		return nil, incProblem(problem.TypeInternalError, "select incarnation failed")
-	}
-
-	serviceRef, ok := h.services.Resolve(inc.Service)
-	if !ok {
-		return nil, incProblem(problem.TypeValidationFailed,
-			"service "+inc.Service+" is not registered (manage via service.* API, ADR-029)")
-	}
-
-	applyID := audit.NewULID()
-	report, err := h.drift.CheckDrift(ctx, scenario.CheckDriftSpec{
-		ApplyID:         applyID,
-		IncarnationName: name,
-		ServiceRef:      serviceRef,
-		InputOverride:   inputOverride,
-		StartedByAID:    claims.Subject,
-	})
-	if err != nil {
-		if errors.Is(err, scenario.ErrConvergeMissing) {
-			return nil, incProblem(problem.TypeValidationFailed,
-				"drift check unavailable for service "+inc.Service+": converge scenario is absent from the current service snapshot")
-		}
-		if errors.Is(err, scenario.ErrDriftInputMissing) {
-			return nil, incProblem(problem.TypeValidationFailed, "drift input does not resolve: "+err.Error())
-		}
-		h.logger.Error("incarnation.check-drift: failed",
-			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
-		return nil, incProblem(problem.TypeInternalError, "check-drift failed")
-	}
-
-	hasDrift := report.Summary.HostsDrifted > 0 || report.Summary.HostsFailed > 0
-	if err := h.drift.MarkDriftStatus(ctx, name, hasDrift); err != nil {
-		h.logger.Warn("incarnation.check-drift: drift status not recorded",
-			slog.String("name", name), slog.Any("error", err))
-	}
-
-	if h.auditW != nil {
-		_ = h.auditW.Write(ctx, &audit.Event{
-			EventType:     audit.EventIncarnationDriftChecked,
-			Source:        audit.SourceAPI,
-			ArchonAID:     claims.Subject,
-			CorrelationID: applyID,
-			Payload: map[string]any{
-				"name":     name,
-				"scenario": scenario.ConvergeScenarioName,
-				"apply_id": applyID,
-				"drift_summary": map[string]any{
-					"hosts_drifted":     report.Summary.HostsDrifted,
-					"hosts_clean":       report.Summary.HostsClean,
-					"hosts_unsupported": report.Summary.HostsUnsupported,
-					"hosts_failed":      report.Summary.HostsFailed,
-				},
-			},
-		})
-	}
-
-	return report, nil
 }
 
 // --- Destroy (SELF-AUDIT incarnation.destroy_started — written by the service layer) ---

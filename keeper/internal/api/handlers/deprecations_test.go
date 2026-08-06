@@ -17,7 +17,7 @@ func TestDeprecationsTyped_EmptyScopeFailsClosed(t *testing.T) {
 	db := &fakeIncDB{}
 	// services/loader are non-nil via the stub below so the wiring check passes
 	// and the scope gate is what actually decides.
-	h := NewIncarnationHandler(db, nil, nil, nil, stubServiceResolver{}, stubSnapshotLoader{}, nil,
+	h := NewIncarnationHandler(db, nil, nil, stubServiceResolver{}, stubSnapshotLoader{}, nil,
 		fakeIncScoper{}, nil)
 
 	reply, err := h.DeprecationsTyped(context.Background(), runsClaims())
@@ -36,7 +36,7 @@ func TestDeprecationsTyped_EmptyScopeFailsClosed(t *testing.T) {
 // into "unrestricted".
 func TestDeprecationsTyped_NilScoperFailsClosed(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, stubServiceResolver{}, stubSnapshotLoader{}, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, stubServiceResolver{}, stubSnapshotLoader{}, nil, nil, nil)
 
 	reply, err := h.DeprecationsTyped(context.Background(), runsClaims())
 	if err != nil {
@@ -51,7 +51,7 @@ func TestDeprecationsTyped_NilScoperFailsClosed(t *testing.T) {
 // That is a wiring fault and must surface as an error rather than as an empty
 // list, which would read as "the estate is clean".
 func TestDeprecationsTyped_UnwiredRegistryIsAnError(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, fakeIncScoper{}, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, fakeIncScoper{}, nil)
 
 	if _, err := h.DeprecationsTyped(context.Background(), runsClaims()); err == nil {
 		t.Fatal("an unwired registry returned a clean survey instead of an error")

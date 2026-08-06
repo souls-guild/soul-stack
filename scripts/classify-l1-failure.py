@@ -128,8 +128,8 @@ SELF_TEST = [
     (
         "named failing test, no infra text -> REGRESSION",
         "REGRESSION",
-        "--- FAIL: TestIntegration_CheckDrift_HappyPath_Clean (0.68s)\n"
-        "    checkdrift_test.go:236: UpsertTaskRegister: FK violation on "
+        "--- FAIL: TestIntegration_ModuleInstallSynthesis (0.68s)\n"
+        "    module_installs_integration_test.go:236: UpsertTaskRegister: FK violation on "
         "apply_task_register_apply_run_fk (SQLSTATE 23503)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/scenario\t80.606s\n",
     ),

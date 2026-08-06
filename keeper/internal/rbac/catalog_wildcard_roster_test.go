@@ -70,7 +70,6 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 		// Decrees reach it — privilege worth naming in the roster on its own.
 		"incarnation": {
 			"incarnation.bind-member",
-			"incarnation.check-drift",
 			"incarnation.create",
 			"incarnation.destroy",
 			"incarnation.get",

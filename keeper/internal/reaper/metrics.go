@@ -24,15 +24,15 @@ import (
 // Labels:
 //   - `rule` — canonical rule name from docs/keeper/reaper.md. Closed enum,
 //     cardinality-safe: values = exactly the set of rules dispatched via
-//     runDurationRule / runStatusesRule / runArchiveStateHistory /
-//     runScryBackground in runner.go::dispatch (enum closed by runner-dispatch,
-//     not by this list — docstring is synchronized manually). Full set:
+//     runDurationRule / runStatusesRule / runArchiveStateHistory in
+//     runner.go::dispatch (enum closed by runner-dispatch, not by this list —
+//     docstring is synchronized manually). Full set:
 //     `purge_audit_old`, `expire_pending_seeds`, `purge_used_tokens`,
 //     `purge_souls`, `purge_old_seeds`, `mark_disconnected`,
 //     `purge_apply_runs`, `purge_voyages`, `purge_push_runs`,
 //     `purge_incarnation_archive`, `purge_state_history_archive`,
 //     `purge_archived_state_history`, `purge_apply_task_register`,
-//     `reclaim_apply_runs`, `scry_background`, `archive_state_history`,
+//     `reclaim_apply_runs`, `archive_state_history`,
 //     `purge_orphan_push_runs`, `reap_orphan_vault_keys`, `purge_old_errands`,
 //     `purge_orphan_ephemeral_tidings`, `reclaim_voyages`,
 //     `reconcile_orphan_applying`.

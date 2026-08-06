@@ -8,7 +8,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create / run / unlock / upgrade): huma-audit-middleware writes the
 //     event OUTSIDE (variant B). The registerHuma* func sets the payload via
 //     SetHumaAuditPayload from the *Typed reply.AuditPayload.
-//   - SELF-AUDIT (rerun-last / check-drift / destroy / traits-set): the handler ITSELF
+//   - SELF-AUDIT (rerun-last / destroy / traits-set): the handler ITSELF
 //     writes audit INSIDE *Typed; audit-middleware is not wired (newHumaCadenceAPI).
 //
 // All incarnation huma ops carry the FULL path /{name}[/...] relative to the group
@@ -19,8 +19,6 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
-
-	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
 )
 
 // === POST /v1/incarnations (create) — MIDDLEWARE-AUDIT incarnation.created (202+body) ===
@@ -459,43 +457,6 @@ func incRerunOperation() huma.Operation {
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
-	}
-}
-
-// === POST /v1/incarnations/{name}/check-drift (check-drift) — SELF-AUDIT incarnation.drift_checked (200+body) ===
-
-// incCheckDriftInput — huma input for POST .../check-drift. Name — path; Body — a POINTER
-// (opt. body: huma RequestBody.Required=false for *T, on an empty body Body=nil — parity
-// with legacy io.EOF→zero-value).
-type incCheckDriftInput struct {
-	Name string                        `path:"name" doc:"incarnation name"`
-	Body *IncarnationCheckDriftRequest `doc:"optional body: override converge parameters"`
-}
-
-// IncarnationCheckDriftRequest — Go form of the POST .../check-drift body. input — an override
-// of converge parameters (opt.). additionalProperties:false → unknown field → 400. The name =
-// the contract schema name (T4b).
-type IncarnationCheckDriftRequest struct {
-	Input map[string]any `json:"input,omitempty" doc:"override converge parameters (ADR-031 Slice B)"`
-}
-
-// incCheckDriftOutput — huma-output POST .../check-drift (FULL-TYPED). Status=200; Body
-// — *scenario.DriftReport (the same type legacy writeJSON wrote). CheckDriftTyped
-// returns non-nil on success.
-type incCheckDriftOutput struct {
-	Body *scenario.DriftReport
-}
-
-func incCheckDriftOperation() huma.Operation {
-	return huma.Operation{
-		OperationID:   "checkIncarnationDrift",
-		Method:        http.MethodPost,
-		Path:          "/{name}/check-drift",
-		Summary:       "Check incarnation drift (Scry)",
-		Description:   "Sync dry_run converge -> DriftReport (ADR-031 Slice B). Informational status=drift marking. Permission incarnation.check-drift.",
-		Tags:          []string{"incarnation"},
-		DefaultStatus: http.StatusOK,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 

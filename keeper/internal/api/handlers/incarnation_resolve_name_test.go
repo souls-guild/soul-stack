@@ -35,7 +35,7 @@ func newResolveHandler(t *testing.T, db *fakeIncDB, scoper PurviewResolver, chec
 }) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, scoper, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, nil, scoper, nil)
 	h.SetPermissionChecker(checker)
 	return h
 }
@@ -191,7 +191,7 @@ func TestResolveName_UnfinishedInputIsAnAnswerNot422(t *testing.T) {
 // is the caller's mistake, not a preview state.
 func TestResolveName_UnregisteredService_422(t *testing.T) {
 	loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
-	h := NewIncarnationHandler(notFoundDB(), nil, nil, nil, &fakeResolver{ok: false}, loader, nil, unrestrictedScoper(), nil)
+	h := NewIncarnationHandler(notFoundDB(), nil, nil, &fakeResolver{ok: false}, loader, nil, unrestrictedScoper(), nil)
 	h.SetPermissionChecker(allowAllChecker{})
 
 	_, err := resolveName(t, h, ResolveNameRequest{
@@ -227,7 +227,7 @@ func TestIncarnation_Create_DuplicateNamesHolderInScope(t *testing.T) {
 				selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 			}
 			loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
-			h := NewIncarnationHandler(db, &fakeStarter{}, nil, nil, &fakeResolver{ok: true}, loader, nil, tc.scoper, nil)
+			h := NewIncarnationHandler(db, &fakeStarter{}, nil, &fakeResolver{ok: true}, loader, nil, tc.scoper, nil)
 			h.SetPermissionChecker(allowAllChecker{})
 
 			rec := postCreate(t, h, `{"service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)

@@ -57,7 +57,7 @@ tasks: []
 func newNameTemplateHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	// Gate (b) re-measures the COMPOSED name against the caller's scope (NIM-333),
 	// and refuses when no checker is wired — so these tests, which are about
 	// composition rather than about scope, must say who may create. An unrestricted
@@ -411,7 +411,7 @@ func TestIncarnation_Create_Templated_ComposedNameInsideScopeAllowed(t *testing.
 func TestIncarnation_Create_Templated_NoCheckerRefuses(t *testing.T) {
 	db := &fakeIncDB{}
 	loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
-	h := NewIncarnationHandler(db, &fakeStarter{}, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, &fakeStarter{}, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	// deliberately no SetPermissionChecker
 
 	r := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations", nil), "archon-alice")

@@ -27,9 +27,8 @@ func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
-		any(nil), []byte(nil),
-		"create", // created_scenario
-		any(nil), // applying_apply_id
+		"create",     // created_scenario
+		any(nil),     // applying_apply_id
 	}}
 }
 
@@ -75,7 +74,7 @@ func userPasswordSecret() config.RevealableSecret {
 func revealHandler(state map[string]any, revealable []config.RevealableSecret, vr VaultKVReader, scoper PurviewResolver, aw audit.Writer) *IncarnationHandler {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncRowWithState(name, state) }}
 	loader := &fakeLoader{revealableSecrets: revealable}
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, aw, scoper, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, aw, scoper, nil)
 	h.SetVaultReader(vr)
 	return h
 }
@@ -364,7 +363,7 @@ func TestRevealSecret_FloorBackstop_ServiceNamedKeeper(t *testing.T) {
 	}}}
 	aw := &fakeAuditWriter{}
 	vr := &fakeVaultReader{data: map[string]any{"password": "leak"}}
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, aw, fakeIncScoper{unrestricted: true}, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, aw, fakeIncScoper{unrestricted: true}, nil)
 	h.SetVaultReader(vr)
 
 	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "kept", "user_password", "alice")
@@ -424,7 +423,7 @@ func TestRevealSecret_VersionCraft_PinsServiceVersion(t *testing.T) {
 		return makeIncRowWithStateVersion(name, wantVersion, redisUsersState("alice"))
 	}}
 	loader := &fakeLoader{revealableSecrets: []config.RevealableSecret{userPasswordSecret()}}
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, &fakeAuditWriter{}, fakeIncScoper{unrestricted: true}, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, &fakeAuditWriter{}, fakeIncScoper{unrestricted: true}, nil)
 	h.SetVaultReader(&fakeVaultReader{data: map[string]any{"password": "x"}})
 
 	if _, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", "user_password", "alice"); err != nil {

@@ -1,6 +1,6 @@
 # Incarnation - MCP-tools for the life cycle of runtime instances
 
-Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.incarnation.*` (creating / running scripts / reading / unlock / upgrade / drift / destroy / traits-set / membership bind-member / unbind-member / members). Transport, auth, tool declaration format, async-convention `_apply_id`, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Incarnation](../operator-api/incarnations.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.incarnation.*` (creating / running scripts / reading / unlock / upgrade / destroy / traits-set / membership bind-member / unbind-member / members). Transport, auth, tool declaration format, async-convention `_apply_id`, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Incarnation](../operator-api/incarnations.md).
 
 ### Incarnation (11)
 
@@ -157,31 +157,6 @@ Transfer to new `state_schema_version` + change `service_version`. Permission: `
 | Field | Type | Meaning |
 |---|---|---|
 | `_apply_id` | `string` (ULID) | Migration start ID. |
-
-#### `keeper.incarnation.check-drift`
-
-Scry on-demand drift check ([ADR-031](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)). Permission: `incarnation.check-drift`. Endpoint: [`POST /v1/incarnations/{name}/check-drift`](../operator-api/incarnations.md). Async: **no** (sync - handler blocks until `DriftReport` is built).
-
-Keeper renders `scenario/converge/main.yml` service and sends `ApplyRequest{dry_run:true}` to all hosts via work-queue (Acolyte). Soul calls `mod.Plan` instead of `mod.Apply` (pure-read), collects per-host per-task `changed` and returns `DriftReport`. converge-input resolves automatically according to the name convention from the `incarnation.state.<param>` + opt-override operator.
-
-**Input:**
-
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `name` | `string` | yes | Name instance. |
-| `input` | `object` | optional | Override converge parameters. The names/types match the `input:` schema in the `scenario/converge/main.yml` service. |
-
-**Output `DriftReport`:** See `DriftReport` diagram in [openapi.yaml](../openapi.yaml).
-
-| Field | Type | Meaning |
-|---|---|---|
-| `checked_at` | `string` (RFC 3339) | Report generation time. |
-| `incarnation` | `string` | Name of the checked instance. |
-| `scenario_ref` | `string` | The Scry script name is always `converge`. |
-| `hosts` | `array<DriftHostReport>` | Per-host aggregates (`{sid, status, tasks}`). status ∈ `clean`/`drifted`/`unsupported`/`failed`. |
-| `summary` | `DriftSummary` | Units: `{hosts_drifted, hosts_clean, hosts_unsupported, hosts_failed}`. |
-
-**Errors:** `validation-failed` (converge is missing in service-snapshot - "drift checker is not available", informational; or drift-input does not resolve), `not-found` (incarnation), `internal-error` (drift-checker is not configured - the only inline mode is acolytes=0).
 
 #### `keeper.incarnation.destroy`
 

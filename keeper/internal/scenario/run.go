@@ -1031,11 +1031,11 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 		}
 		switch got.Status {
 		case incarnation.StatusReady, incarnation.StatusDrift:
-			// ready is the normal start; drift is Scry's informational status
-			// (ADR-031): remediating drift is just a normal apply, which on
-			// success returns the incarnation to ready via commitSuccess. Same
-			// applying transition and same gate as from ready — drift does NOT
-			// block.
+			// ready is the normal start; drift is the informational status left
+			// by a legacy upgrade (ADR-031(d)): remediating it is just a normal
+			// apply, which on success returns the incarnation to ready via
+			// commitSuccess. Same applying transition and same gate as from
+			// ready — drift does NOT block.
 		case incarnation.StatusApplying:
 			return ErrAlreadyRunning
 		case incarnation.StatusErrorLocked:
@@ -1361,8 +1361,7 @@ func destroyForce(inc *incarnation.Incarnation) bool {
 // the whole point: rendering needs the git coordinates of the code the attempt
 // used, and an upgrade moves the incarnation's pin — so a rerun rebuilt from an
 // input alone renders with the CURRENT service version rather than the one the
-// attempt failed on. `dry_run` is not carried: a Scry pass never reaches these
-// terminals — it has its own path and commits no state. A marshal failure is NOT
+// attempt failed on. A marshal failure is NOT
 // fatal to the terminal: the run's
 // outcome must be recorded even if its snapshot cannot be, and an unreplayable
 // row is a 422 asking for the input, not a lost terminal.

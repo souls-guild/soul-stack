@@ -90,7 +90,6 @@ func incRow(service, serviceVersion string) staticRow {
 		[]byte("{}"), "ready",
 		[]byte(nil), any(nil), now, now, []string(nil),
 		[]byte("{}"),
-		any(nil), []byte(nil),
 		any(nil), // created_scenario
 		any(nil), // applying_apply_id
 	}}

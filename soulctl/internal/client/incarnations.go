@@ -40,8 +40,6 @@ type IncarnationListItem struct {
 	CreatedByAID       string          `json:"created_by_aid"`
 	CreatedAt          string          `json:"created_at"`
 	UpdatedAt          string          `json:"updated_at"`
-	LastDriftCheckAt   string          `json:"last_drift_check_at,omitempty"`
-	LastDriftSummary   json.RawMessage `json:"last_drift_summary,omitempty"`
 }
 
 // IncarnationListReply is a list page.
@@ -119,18 +117,19 @@ type IncarnationRunReply struct {
 	Scenario    string `json:"scenario"`
 }
 
-// Run is POST /v1/incarnations/{name}/scenarios/{scenario}. The server
-// accepts dry_run as a query parameter (no explicit description in openapi;
-// we pass it as a query param — the server will either honor it or ignore
-// it, which is safe either way).
-func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input map[string]any, dryRun bool) (*IncarnationRunReply, error) {
+// Run is POST /v1/incarnations/{name}/scenarios/{scenario}.
+//
+// It used to append ?dry_run=true for a --dry-run flag, on the reasoning that
+// "the server will either honor it or ignore it, which is safe either way".
+// That reasoning was wrong in the only direction that mattered: the operation
+// has never declared the parameter, so the server ignored it and applied for
+// real while the operator was told it was a rehearsal. Flag and parameter both
+// removed in NIM-446 — a read-only check is an Errand dry-run, which is wired.
+func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input map[string]any) (*IncarnationRunReply, error) {
 	if name == "" || scenario == "" {
 		return nil, fmt.Errorf("incarnation/scenario are empty")
 	}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", url.PathEscape(name), url.PathEscape(scenario))
-	if dryRun {
-		path += "?dry_run=true"
-	}
 	body := IncarnationRunRequest{Input: input}
 	var reply IncarnationRunReply
 	if err := a.c.Do(ctx, "POST", path, body, &reply); err != nil {
@@ -179,53 +178,6 @@ func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offse
 		return nil, err
 	}
 	return &reply, nil
-}
-
-// DriftReport is the response for POST /v1/incarnations/{name}/check-drift.
-// Full shape in openapi.yaml → DriftReport / DriftHostReport / DriftSummary.
-type DriftReport struct {
-	CheckedAt   string             `json:"checked_at"`
-	Incarnation string             `json:"incarnation"`
-	ScenarioRef string             `json:"scenario_ref"`
-	Hosts       []DriftHostReport  `json:"hosts"`
-	Summary     DriftSummaryCounts `json:"summary"`
-}
-
-type DriftHostReport struct {
-	SID    string            `json:"sid"`
-	Status string            `json:"status"`
-	Tasks  []DriftTaskResult `json:"tasks"`
-}
-
-type DriftTaskResult struct {
-	Idx     int    `json:"idx"`
-	Module  string `json:"module"`
-	Action  string `json:"action,omitempty"`
-	Changed bool   `json:"changed"`
-	Message string `json:"message,omitempty"`
-}
-
-type DriftSummaryCounts struct {
-	HostsDrifted     int `json:"hosts_drifted"`
-	HostsClean       int `json:"hosts_clean"`
-	HostsUnsupported int `json:"hosts_unsupported"`
-	HostsFailed      int `json:"hosts_failed"`
-}
-
-// CheckDrift is POST /v1/incarnations/{name}/check-drift with optional input.
-func (a *IncarnationsAPI) CheckDrift(ctx context.Context, name string, input map[string]any) (*DriftReport, error) {
-	if name == "" {
-		return nil, fmt.Errorf("incarnation name is empty")
-	}
-	body := map[string]any{}
-	if len(input) > 0 {
-		body["input"] = input
-	}
-	var report DriftReport
-	if err := a.c.Do(ctx, "POST", "/v1/incarnations/"+url.PathEscape(name)+"/check-drift", body, &report); err != nil {
-		return nil, err
-	}
-	return &report, nil
 }
 
 // RunSummary is one row of the runs list (GET /v1/incarnations/{name}/runs).

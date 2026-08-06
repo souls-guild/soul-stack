@@ -36,13 +36,13 @@ const validApplyID = "01HZZZ00000000000000000000"
 // --- RunsTyped (list of runs) --------------------------------------
 
 func TestRunsTyped_BadName_422(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunsTyped(context.Background(), "Bad_Name", 0, 50, allowScope)
 	requireProblemStatus(t, err, 422)
 }
 
 func TestRunsTyped_BadLimit_400(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunsTyped(context.Background(), "redis-prod", 0, 99999, allowScope)
 	requireProblemStatus(t, err, 400)
 }
@@ -51,7 +51,7 @@ func TestRunsTyped_BadLimit_400(t *testing.T) {
 // 404 (the existence probe does not leak someone else's incarnation as 403).
 func TestRunsTyped_OutOfScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunsTyped(context.Background(), "redis-prod", 0, 50, denyScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -60,7 +60,7 @@ func TestRunsTyped_OutOfScope_404(t *testing.T) {
 // untouched.
 func TestRunsTyped_NilScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunsTyped(context.Background(), "redis-prod", 0, 50, nil)
 	requireProblemStatus(t, err, 404)
 }
@@ -69,7 +69,7 @@ func TestRunsTyped_NilScope_404(t *testing.T) {
 // → 404 already at the existence probe, before touching apply_runs.
 func TestRunsTyped_IncarnationNotFound_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(string) pgx.Row { return errRow{err: pgx.ErrNoRows} }}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunsTyped(context.Background(), "ghost", 0, 50, allowScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -82,7 +82,7 @@ func TestRunsTyped_Empty_OK(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		// COUNT(DISTINCT apply_id)→0 + apply_runs Query→emptyRows (default fake).
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	reply, err := h.RunsTyped(context.Background(), "redis-prod", 0, 50, allowScope)
 	if err != nil {
 		t.Fatalf("RunsTyped: %v", err)
@@ -101,7 +101,7 @@ func TestRunsTyped_Empty_OK(t *testing.T) {
 // --- RunDetailTyped (run detail) ----------------------------------
 
 func TestRunDetailTyped_BadName_422(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "Bad_Name", validApplyID, allowScope)
 	requireProblemStatus(t, err, 422)
 }
@@ -109,7 +109,7 @@ func TestRunDetailTyped_BadName_422(t *testing.T) {
 // TestRunDetailTyped_BadApplyID_400 — a non-ULID apply_id is rejected with 400 BEFORE
 // the existence probe (validation before the store).
 func TestRunDetailTyped_BadApplyID_400(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "redis-prod", "not-a-ulid", allowScope)
 	requireProblemStatus(t, err, 400)
 }
@@ -118,7 +118,7 @@ func TestRunDetailTyped_BadApplyID_400(t *testing.T) {
 // (store untouched, the existence probe rejected it).
 func TestRunDetailTyped_OutOfScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, denyScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -131,7 +131,7 @@ func TestRunDetailTyped_RunNotFound_404(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		applyRunsRows:   func() (pgx.Rows, error) { return &emptyRows{}, nil }, // 0 host rows
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -164,7 +164,7 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 			}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	d, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	if err != nil {
 		t.Fatalf("RunDetailTyped: %v", err)
@@ -349,7 +349,7 @@ func TestRunDetailTyped_NoticesReachTheView(t *testing.T) {
 			}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	d, err := h.RunDetailTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	if err != nil {
 		t.Fatalf("RunDetailTyped: %v", err)

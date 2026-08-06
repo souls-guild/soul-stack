@@ -37,10 +37,8 @@ func matchEventType(pattern string, et audit.EventType) bool {
 //   - scenario_run.lease_lost (run crashed — failover outcome),
 //   - voyage.reclaimed (stale lease returned by Reaper — anomaly).
 //
-// drift_checked is NOT failure by status (drift = divergence, not
-// run failure) — filtering for it is done by only_changes. cadence.skipped_overlap
-// is not failure (normal skip). started/invoked/created/leg_*/completed are not
-// failures. Mapping built from actual event-type emitters
+// cadence.skipped_overlap is not failure (normal skip).
+// started/invoked/created/leg_*/completed are not failures. Mapping built from actual event-type emitters
 // (voyageorch.emitFinalized / emitLeaseLost, reaper.voyage_reclaim).
 func isFailureEvent(et audit.EventType) bool {
 	switch et {
@@ -59,8 +57,6 @@ func isFailureEvent(et audit.EventType) bool {
 // hasChanges classifies an event as carrying changes for the only_changes filter
 // (ADR-052(c)). Based on actual payload shapes from emitters:
 //
-//   - incarnation.drift_checked: changed <-> drift_summary.hosts_drifted > 0
-//     (Scry found divergence, payload incarnation.go/reaper.scry).
 //   - scenario_run.leg_completed: changed <-> succeeded > 0 (Leg actually
 //     applied part of the incarnations; payload voyageorch.emitLegCompleted).
 //   - scenario_run.completed / command_run.completed / *_partial_failed:
@@ -78,9 +74,6 @@ func isFailureEvent(et audit.EventType) bool {
 // false positive.
 func hasChanges(et audit.EventType, payload map[string]any) bool {
 	switch et {
-	case audit.EventIncarnationDriftChecked:
-		return driftHostsDrifted(payload) > 0
-
 	case audit.EventScenarioRunLegCompleted:
 		return payloadInt(payload, "succeeded") > 0
 
@@ -111,16 +104,6 @@ func hasChanges(et audit.EventType, payload map[string]any) bool {
 	default:
 		return false
 	}
-}
-
-// driftHostsDrifted extracts drift_summary.hosts_drifted from payload of
-// drift_checked event (incarnation.go / reaper.scry). Missing/other form → 0.
-func driftHostsDrifted(payload map[string]any) int {
-	ds, ok := payload["drift_summary"].(map[string]any)
-	if !ok {
-		return 0
-	}
-	return payloadInt(ds, "hosts_drifted")
 }
 
 // payloadInt reads integer field from payload map. Tolerant to actual

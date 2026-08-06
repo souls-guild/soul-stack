@@ -82,13 +82,13 @@ func withPlan(db *fakeIncDB, rows ...planRow) *fakeIncDB {
 // --- input + scope gate --------------------------------------------------
 
 func TestRunTasksTyped_BadName_422(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunTasksTyped(context.Background(), "Bad_Name", validApplyID, allowScope)
 	requireProblemStatus(t, err, 422)
 }
 
 func TestRunTasksTyped_BadApplyID_400(t *testing.T) {
-	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(&fakeIncDB{}, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunTasksTyped(context.Background(), "redis-prod", "not-a-ulid", allowScope)
 	requireProblemStatus(t, err, 400)
 }
@@ -97,7 +97,7 @@ func TestRunTasksTyped_BadApplyID_400(t *testing.T) {
 // (we don't leak existence), the plan store is not touched.
 func TestRunTasksTyped_OutOfScope_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) }}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, denyScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -110,7 +110,7 @@ func TestRunTasksTyped_ForeignApplyID_404(t *testing.T) {
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 		runExistsRow:    func(string, string) pgx.Row { return staticRow{values: []any{false}} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	requireProblemStatus(t, err, 404)
 }
@@ -119,7 +119,7 @@ func TestRunTasksTyped_ForeignApplyID_404(t *testing.T) {
 // (failed before render / legacy): success, tasks is empty (not an error).
 func TestRunTasksTyped_EmptyPlan_OK(t *testing.T) {
 	db := withPlan(&fakeIncDB{}) // no plan rows
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	if err != nil {
 		t.Fatalf("RunTasksTyped: %v", err)
@@ -149,7 +149,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 			Error: &auditpg.TaskExecutionError{Code: "E_APPLY", Module: "core.pkg.installed", Message: "boom"}},
 		{SID: "host-a", PlanIndex: 1, Status: "TASK_STATUS_OK"}, // no_log → Output nil
 	}}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	h.SetRunTasksAuditReader(audit)
 
 	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
@@ -231,7 +231,7 @@ func TestRunTasksTyped_MaskedParamsFlowThrough(t *testing.T) {
 		planRow{planIndex: 0, name: "set password", module: "core.exec.run", noLog: false, passage: 0,
 			params: []byte(`{"user":"admin","password":"***MASKED***"}`)},
 	)
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 
 	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestRunTasksTyped_BrokenParamsJSON_Nil(t *testing.T) {
 	db := withPlan(&fakeIncDB{},
 		planRow{planIndex: 0, name: "x", module: "core.exec.run", passage: 0, params: []byte(`{not json`)},
 	)
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 
 	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
 	if err != nil {

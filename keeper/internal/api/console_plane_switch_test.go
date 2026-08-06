@@ -67,7 +67,7 @@ func consolePlaneRouter(t *testing.T, enforcer RBACProvider, planeEnabled func()
 		metaVerifier(t),
 		health.NewHandler(health.Deps{}),
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),

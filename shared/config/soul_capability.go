@@ -57,10 +57,17 @@ const (
 	// retryable.
 	CapabilityRetry = "retry"
 
-	// CapabilityDryRun — Soul honors ApplyRequest.dry_run by calling
-	// SoulModule.Plan instead of Apply (Scry, ADR-031). Fail-closed matters most
-	// here: a binary that ignores the flag would MUTATE the host during a
-	// check-drift that promised a pure read.
+	// CapabilityDryRun — Soul honors ApplyRequest.dry_run / ErrandRequest.dry_run
+	// by calling SoulModule.Plan instead of Apply (ADR-031(b)/(c)).
+	//
+	// ANNOUNCE-ONLY since NIM-446: Soul still publishes this in its capability
+	// set, but no Keeper path reads it back. The one gate that did — check-drift,
+	// which refused a roster before dispatch if any host had not announced it —
+	// left with the drift circuit, and the Errand dry-run path (the only
+	// remaining producer of a dry_run request) has never had one. So a Soul old
+	// enough to ignore the flag would MUTATE the host during an operation that
+	// promised a pure read, and nothing currently stops it. Tracked separately;
+	// do not read this constant as evidence of a live check.
 	CapabilityDryRun = "dry_run"
 
 	// CapabilityModulePrefix — namespace of the per-module capability

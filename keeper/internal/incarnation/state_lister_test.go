@@ -81,10 +81,10 @@ func (r stateCountRow) Scan(dest ...any) error {
 	return nil
 }
 
-// incToStaticRow packs an Incarnation into a 16-column staticRow in
-// scanIncarnation order (name, service, service_version, state_schema_version, spec,
+// incToStaticRow packs an Incarnation into a 14-column staticRow in
+// scanIncarnation order (name, service, service_version, state_schema_version,
 // state, status, status_details, created_by_aid, created_at, updated_at, covens,
-// traits, last_drift_check_at, last_drift_summary, created_scenario).
+// traits, created_scenario, applying_apply_id).
 func incToStaticRow(inc *Incarnation) staticRow {
 	stateBytes, _ := json.Marshal(inc.State)
 	now := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
@@ -103,8 +103,6 @@ func incToStaticRow(inc *Incarnation) staticRow {
 		now,
 		nil,          // covens
 		[]byte("{}"), // traits
-		nil,          // last_drift_check_at
-		nil,          // last_drift_summary
 		"create",     // created_scenario
 		nil,          // applying_apply_id
 	}}

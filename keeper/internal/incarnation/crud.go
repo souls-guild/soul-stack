@@ -113,7 +113,7 @@ const selectByNameSQL = `
 SELECT name, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary, created_scenario,
+       created_scenario,
        applying_apply_id
 FROM incarnation
 WHERE name = $1
@@ -414,7 +414,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		statusDetailsBytes []byte
 		createdByAID       *string
 		traitsBytes        []byte
-		driftSummaryBytes  []byte
 	)
 	err := row.Scan(
 		&inc.Name,
@@ -429,8 +428,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&inc.UpdatedAt,
 		&inc.Covens,
 		&traitsBytes,
-		&inc.LastDriftCheckAt,
-		&driftSummaryBytes,
 		&inc.CreatedScenario,
 		&inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, null on terminal
 	)
@@ -454,13 +451,6 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
 			return nil, fmt.Errorf("incarnation: unmarshal status_details: %w", err)
 		}
-	}
-	if len(driftSummaryBytes) > 0 {
-		var summary DriftScanSummary
-		if err := json.Unmarshal(driftSummaryBytes, &summary); err != nil {
-			return nil, fmt.Errorf("incarnation: unmarshal last_drift_summary: %w", err)
-		}
-		inc.LastDriftSummary = &summary
 	}
 	return &inc, nil
 }
@@ -512,7 +502,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 	listSQL := `SELECT name, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary, created_scenario,
+       created_scenario,
        applying_apply_id
 FROM incarnation` + whereSQL + orderSQL +
 		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
@@ -1635,9 +1625,9 @@ const migrationScenarioLabel = "migration"
 // changes only incarnation.state + version in single PG-tx — hosts remain on
 // OLD deployment, actual state diverges from new state. Separate label
 // (not `migration`, under which migration steps go) captures REASON
-// of transition to drift in history — "new version awaits deployment on hosts", so
-// triage distinguishes upgrade-drift from drift found by Scry-scan. Symmetric
-// to other transition-labels (unlock / rerun-last / voyage-orphan-release).
+// of transition to drift in history — "new version awaits deployment on hosts".
+// Symmetric to other transition-labels (unlock / rerun-last /
+// voyage-orphan-release).
 const upgradeDriftScenarioLabel = "upgrade-pending-apply"
 
 // UpgradeInput — input to [UpgradeStateSchema]. Caller (Slice 2) resolves
@@ -1789,7 +1779,7 @@ FOR UPDATE
 
 	switch Status(statusStr) {
 	case StatusReady, StatusDrift:
-		// ready — normal path; drift (ADR-031, Scry) — informational status,
+		// ready — normal path; drift (ADR-031(d)) — informational status,
 		// upgrade does NOT block it (same as normal apply). After upgrade-tx
 		// status — back to drift (hosts await new version deployment, see
 		// final UPDATE), not ready: DB-state change not yet deployed to hosts.
@@ -1867,10 +1857,9 @@ WHERE name = $1
 	}
 
 	// Zero-diff transition-record (state_before == state_after = post-migration
-	// state): legacy → drift-transition under M (label upgrade-pending-apply,
-	// distinguishes upgrade-drift from Scry-drift on triage); found → linkage-snapshot under
-	// R with scenario=slug (mirror of UnlockForRerun-snapshot — links auto-start run
-	// with this upgrade).
+	// state): legacy → drift-transition under M (label upgrade-pending-apply);
+	// found → linkage-snapshot under R with scenario=slug (mirror of
+	// UnlockForRerun-snapshot — links auto-start run with this upgrade).
 	if found {
 		if err := writeUpgradeRunHistory(ctx, tx, in, applyRes.FinalState); err != nil {
 			return nil, err

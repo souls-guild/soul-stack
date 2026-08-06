@@ -62,7 +62,7 @@ This ADR introduces **staged-render** to implement what the canon already promis
 
     **★ The global-vs-local-task_idx class is CLOSED 6/6.** All six instances of the mismatch "global plan-index vs local position in `ApplyRequest.tasks[]`" are closed, all converted to the global `plan_index`/`Index`:
     1. **register correlation** — PK `apply_task_register (apply_id, sid, plan_index)`, migration 079 (Variant B above);
-    2. **checkdrift register resolve** — `buildRegisterByHost` maps `nameByIdx[Index]` against the global `plan_index`;
+    2. **checkdrift register resolve** — `buildRegisterByHost` mapped `nameByIdx[Index]` against the global `plan_index` (consumer removed with the drift circuit, NIM-446; the global-index rule it relied on is unchanged);
     3. **failure channel** — `failed_plan_index` (global), migration 081;
     4. **no_log barrier** — masking of secret fields by the global index (`dispatch.go`);
     5. **audit changed_tasks** — T3, audit of changed tasks by the global `plan_index`;

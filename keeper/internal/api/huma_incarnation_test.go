@@ -7,7 +7,7 @@ package api
 //   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): the event is written by the
 //     huma-audit-middleware (variant B) — guarded via assertMiddlewareAudit (audit
 //     on 2xx with a non-empty payload; empty on 4xx/403).
-//   - SELF-AUDIT (rerun-last/check-drift/destroy/traits-set): the event is
+//   - SELF-AUDIT (rerun-last/destroy/traits-set): the event is
 //     written by the handler ITSELF INSIDE *Typed — guarded via assertSelfAudit
 //     (event with requiredKey).
 //
@@ -51,7 +51,7 @@ import (
 // chi.Walk won't list it (405 in prod). The test requires each route to be hit
 // exactly once (NOT chi.Match — it gives a false-true on a shadowed node).
 func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
-	incH := handlers.NewIncarnationHandler(&incTestDB{}, &incTestStarter{}, &incTestStarter{}, &incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
+	incH := handlers.NewIncarnationHandler(&incTestDB{}, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
 	h := buildRouter(
 		nil, // verifier
 		nil, // healthH
@@ -117,7 +117,6 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		{http.MethodPost, "/v1/incarnations/{name}/unlock"}:                        0,
 		{http.MethodPost, "/v1/incarnations/{name}/upgrade"}:                       0,
 		{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:                    0,
-		{http.MethodPost, "/v1/incarnations/{name}/check-drift"}:                   0,
 		{http.MethodDelete, "/v1/incarnations/{name}"}:                             0,
 		{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        0,
 		{http.MethodGet, "/v1/incarnations/{name}/choirs"}:                         0,
@@ -134,6 +133,11 @@ func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
 		// the field (ADR-044 amendment 2026-07-30, NIM-330). A declared role is
 		// a Voice; POST .../choirs/{choir}/voices above is where it is written.
 		{http.MethodPatch, "/v1/incarnations/{name}/hosts"}: 0,
+		// POST .../check-drift went with the Scry circuit (NIM-446). This entry
+		// is the one that watches the PRODUCTION router:
+		// TestHumaIncarnation_CheckDriftIsGone probes the hand-built test router
+		// below, so a mount resurrected in router.go alone would leave it green.
+		{http.MethodPost, "/v1/incarnations/{name}/check-drift"}: 0,
 	}
 	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		k := route{method: method, path: normalizePath(pattern)}
@@ -175,7 +179,7 @@ func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
 
 // humaIncarnationRouter mounts ALL incarnation routes via huma exactly per the
 // router.go wiring: per-route RBAC + the correct audit class (MIDDLEWARE for
-// create/run/unlock/upgrade; SELF for rerun-last/check-drift/destroy/traits-set;
+// create/run/unlock/upgrade; SELF for rerun-last/destroy/traits-set;
 // read without audit) + a huma op with the full path /{name}[/...] on the
 // /v1/incarnations group. enforcer/auditW/incH are parameterized. injectClaims
 // replaces RequireJWT.
@@ -219,9 +223,6 @@ func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writ
 			r.With(injectClaims, multi("rerun-last")).Group(func(r chi.Router) {
 				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
 			})
-			r.With(injectClaims, multi("check-drift")).Group(func(r chi.Router) {
-				registerHumaIncarnationCheckDrift(newHumaCadenceAPI(r), incH)
-			})
 			r.With(injectClaims, multi("destroy")).Group(func(r chi.Router) {
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
 			})
@@ -258,7 +259,7 @@ func incScopeAllow() *handlers.IncarnationHandler {
 		selectByName:  func(name string) pgx.Row { return incRow(name, "ready", "{}") },
 		soulsExisting: map[string]struct{}{"web1.example.com": {}},
 	}
-	return handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
+	return handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
 }
 
 // === MIDDLEWARE-AUDIT: create ===
@@ -266,7 +267,7 @@ func incScopeAllow() *handlers.IncarnationHandler {
 func TestHumaIncarnation_Create_WireAndMiddlewareAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil) // runner=nil → stub mode
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil) // runner=nil → stub mode
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -430,7 +431,7 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 		started:      &started,
 	}
 	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -508,7 +509,7 @@ func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 	}}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
 	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -548,7 +549,7 @@ func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
 	}}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
 	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -576,7 +577,7 @@ func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
 	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
 	starter := &incPreflightStarter{preflightErr: nil, started: &started}
 	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
-	incH := handlers.NewIncarnationHandler(db, starter, nil, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -600,7 +601,7 @@ func TestHumaIncarnation_Unlock_WireAndMiddlewareAudit(t *testing.T) {
 		selectByName: func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
 		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "error_locked") },
 	}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 
 	rec := httptest.NewRecorder()
@@ -638,7 +639,7 @@ func TestHumaIncarnation_Unlock_MissingReason_422(t *testing.T) {
 func TestHumaIncarnation_Unlock_NotFound_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{selectByName: func(string) pgx.Row { return errRow2{pgx.ErrNoRows} }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/nope/unlock", strings.NewReader(`{"reason":"x"}`))
@@ -659,7 +660,7 @@ func TestHumaIncarnation_Upgrade_MiddlewareAuditClass(t *testing.T) {
 	// mounted/reachable.
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil) // loader=nil
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil) // loader=nil
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade", strings.NewReader(`{"to_version":"v2"}`))
@@ -674,7 +675,7 @@ func TestHumaIncarnation_Upgrade_MiddlewareAuditClass(t *testing.T) {
 
 func TestHumaIncarnation_Upgrade_MissingToVersion_422(t *testing.T) {
 	db := &incTestDB{selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, nil, nil, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade", strings.NewReader(`{}`))
@@ -689,7 +690,7 @@ func TestHumaIncarnation_Upgrade_MissingToVersion_422(t *testing.T) {
 func TestHumaIncarnation_Run_WireAndMiddlewareAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	db := &incTestDB{selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
-	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, nil, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, nil, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/scenarios/converge", strings.NewReader(`{}`))
@@ -719,7 +720,7 @@ func TestHumaIncarnation_RerunLast_SelfAudit(t *testing.T) {
 		selectByName: func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
 		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "error_locked") },
 	}
-	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"retry"}`))
@@ -746,7 +747,7 @@ func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
 		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "ready") }, // not error_locked → ErrNotErrorLocked
 	}
-	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"x"}`))
@@ -759,20 +760,43 @@ func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
 	}
 }
 
-// === SELF-AUDIT: check-drift ===
+// === REMOVED: POST /v1/incarnations/{name}/check-drift (NIM-446) ===
 
-func TestHumaIncarnation_CheckDrift_WireAndSelfAudit(t *testing.T) {
+// TestHumaIncarnation_CheckDriftIsGone pins how the removed endpoint answers.
+// The whole Scry drift circuit was deleted (ADR-031 amendment 2026-08-05), so a
+// caller still holding the old client — the web UI before it re-vendors the
+// spec, a script, a saved curl — must get a clean routing answer: 404 (no such
+// path) or 405 (path exists, method does not).
+//
+// This is the same guard NIM-330 left behind for PATCH .../hosts, and it exists
+// because of what happened without one: the web UI went on calling that dead
+// endpoint for five weeks, green the whole time, because every front-end test
+// mocks fetch. A guard here is the only thing that answers "is this endpoint
+// actually gone" without deploying and curling.
+//
+// The failure it guards against is a 5xx. A half-removal — the huma operation
+// unmounted but the chi group left behind, or the reverse — surfaces as a nil
+// handler panic or an internal error, which reads to the caller as "the endpoint
+// is broken" rather than "the endpoint is gone". A 2xx would be worse still: it
+// would mean the route is somehow live after the domain behind it was deleted.
+func TestHumaIncarnation_CheckDriftIsGone(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	db := &incTestDB{selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
-	incH := handlers.NewIncarnationHandler(db, nil, nil, &incTestDrift{}, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
-	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/check-drift", strings.NewReader(`{}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/check-drift",
+		strings.NewReader(`{}`))
 	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+
+	switch rec.Code {
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		// The two acceptable answers.
+	default:
+		t.Fatalf("POST /v1/incarnations/{name}/check-drift = %d, want 404 or 405 "+
+			"(the endpoint is removed, NIM-446); body=%s", rec.Code, rec.Body.String())
 	}
-	assertSelfAudit(t, auditCap, audit.EventIncarnationDriftChecked, "drift_summary")
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a removed endpoint wrote audit: %v", auditEventTypes(auditCap))
+	}
 }
 
 // === SELF-AUDIT: destroy ===
@@ -804,7 +828,7 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
 		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "ready") }, // Destroy FOR UPDATE select (state, status)
 	}
-	incH := handlers.NewIncarnationHandler(db, nil, &incTestStarter{}, nil, &incTestResolver{ok: true}, &incTestLoader{}, auditCap, nil, nil)
+	incH := handlers.NewIncarnationHandler(db, nil, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, auditCap, nil, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod?allow_destroy=true", http.NoBody)
@@ -923,7 +947,7 @@ func TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario(t *testing.T) 
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRowBare(name, "ready", "{}") },
 	}
-	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
 
 	rec := httptest.NewRecorder()
@@ -978,7 +1002,7 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 	for _, want := range []string{
 		"createIncarnation", "listIncarnations", "getIncarnation", "getIncarnationHistory",
 		"runIncarnationScenario", "unlockIncarnation", "upgradeIncarnation",
-		"rerunLastIncarnation", "checkIncarnationDrift", "destroyIncarnation",
+		"rerunLastIncarnation", "destroyIncarnation",
 	} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("spec does not contain op %q", want)
@@ -990,6 +1014,11 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 	// into a client for an endpoint that answers 404.
 	if strings.Contains(frag, "updateIncarnationHosts") {
 		t.Error("spec still publishes op \"updateIncarnationHosts\" - the endpoint is removed (NIM-330)")
+	}
+	// Same reasoning for checkIncarnationDrift (NIM-446): the whole drift circuit
+	// is gone, and the web UI generates its client from this fragment.
+	if strings.Contains(frag, "checkIncarnationDrift") {
+		t.Error("spec still publishes op \"checkIncarnationDrift\" - the endpoint is removed (NIM-446)")
 	}
 }
 
@@ -1160,15 +1189,14 @@ func incRow(name, status, state string) pgx.Row {
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
-		any(nil), []byte(nil),
-		"create", // created_scenario (migration 089, NOT NULL DEFAULT)
-		any(nil), // applying_apply_id (ADR-068 §A1)
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
 	}}
 }
 
 // incRowBare — like incRow, but created_scenario = NULL (a bare incarnation,
 // migration 090: created without a bootstrap scenario). scanIncarnation reads the
-// 16th column into **string → nil.
+// created_scenario column into **string → nil.
 func incRowBare(name, status, state string) pgx.Row {
 	now := time.Now()
 	return incStaticRow{values: []any{
@@ -1177,9 +1205,8 @@ func incRowBare(name, status, state string) pgx.Row {
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		[]byte("{}"), // traits
-		any(nil), []byte(nil),
-		any(nil), // created_scenario = NULL (bare, migration 090)
-		any(nil), // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // created_scenario = NULL (bare, migration 090)
+		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
 	}}
 }
 
@@ -1308,14 +1335,6 @@ func (incTestLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, er
 	return nil, nil
 }
 
-// incTestDrift — a [handlers.DriftChecker] stub: CheckDrift returns an empty clean report.
-type incTestDrift struct{}
-
-func (incTestDrift) CheckDrift(_ context.Context, _ scenario.CheckDriftSpec) (*scenario.DriftReport, error) {
-	return &scenario.DriftReport{}, nil
-}
-func (incTestDrift) MarkDriftStatus(_ context.Context, _ string, _ bool) error { return nil }
-
 // incTestScoper — a [handlers.PurviewResolver] stub: unrestricted → get/list/history see everything.
 type incTestScoper struct{ unrestricted bool }
 
@@ -1349,8 +1368,7 @@ func TestHumaIncarnation_History_IncludeTransitions(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := &incTestDB{selectByName: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
-			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{},
-				&incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
 				incTestScoper{unrestricted: true}, nil)
 			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
 
@@ -1409,8 +1427,7 @@ func TestHumaIncarnation_History_IncludeArchived(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := &incTestDB{selectByName: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
-			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{},
-				&incTestDrift{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
 				incTestScoper{unrestricted: true}, nil)
 			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
 

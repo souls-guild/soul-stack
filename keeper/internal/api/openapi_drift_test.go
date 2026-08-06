@@ -200,7 +200,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		nil, // verifier — middleware RequireJWT is built lazily, not dereferenced while walking
 		nil, // healthH — r.Get(...) only stores a method-value handler
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(), // telemetryH — telemetry routes are non-opt-in; a non-nil stub makes them appear in chi.Walk (matches the spec)
 		stubRoleHandler(t),

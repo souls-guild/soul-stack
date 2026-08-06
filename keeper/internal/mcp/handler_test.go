@@ -929,8 +929,8 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(res.Tools) != 97 {
-		t.Errorf("tool count = %d, want 97", len(res.Tools))
+	if len(res.Tools) != 96 {
+		t.Errorf("tool count = %d, want 96", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}
@@ -943,7 +943,7 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 		"keeper.role.update", "keeper.role.grant-operator", "keeper.role.revoke-operator",
 		"keeper.incarnation.create", "keeper.incarnation.run", "keeper.incarnation.get",
 		"keeper.incarnation.list", "keeper.incarnation.history", "keeper.incarnation.unlock",
-		"keeper.incarnation.upgrade", "keeper.incarnation.destroy", "keeper.incarnation.check-drift",
+		"keeper.incarnation.upgrade", "keeper.incarnation.destroy",
 		"keeper.soul.create", "keeper.soul.issue-token", "keeper.soul.coven-assign", "keeper.soul.list",
 		"keeper.plugin.allow", "keeper.plugin.revoke", "keeper.plugin.list",
 		"keeper.sigil.key.introduce", "keeper.sigil.key.list", "keeper.sigil.key.set-primary", "keeper.sigil.key.retire",

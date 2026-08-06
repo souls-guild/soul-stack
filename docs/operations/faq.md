@@ -80,29 +80,15 @@ If the scenario uses `serial:` - Acolyte brands the entire serial-blok with one 
 
 **Action:** optimize the scenario or accept that the run is long-running.
 
-## "check-drift returns `422 ErrConvergeMissing`"
+## "`POST /v1/incarnations/{name}/check-drift` returns 404"
 
-**Symptoms.** `POST /v1/incarnations/{name}/check-drift` returns 422 from `"type": "/errors/converge-missing"`.
+**Symptoms.** A saved curl, a script or an old client gets `404` (or `405`) from the drift-check endpoint. The MCP tool `keeper.incarnation.check-drift` is not in `tools/list`. `soulctl incarnation check-drift` is not a command.
 
-**Root.** The service does not support drift detection - there is no `scenario/converge/main.yml` file in the service repo ([ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
+**Root.** The endpoint is gone, not broken. The whole Scry drift-detection circuit was removed in NIM-446 ([ADR-031 closing amendment](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) — REST + MCP + CLI, the `incarnation.check-drift` permission, the `incarnation.drift_checked` audit event, the background `scry_background` Reaper rule and the `last_drift_*` columns. A 404 here is the intended answer; a 5xx would mean a half-removal and IS worth reporting.
 
-**Action:** add `scenario/converge/main.yml` to the service repo, which implements an idempotent check of the current state (a typical destiny-style scenario). After merge + service-ref bump - check-drift will become available.
+**Action:** to check whether hosts still match the declaration, run the service's `converge` scenario as an ordinary run (`soulctl incarnation run <name> converge --wait`) — an all-clean report is the answer, and it also fixes what it finds. See [operator-workflow.md § 2](../guides/operator-workflow.md).
 
-See [`docs/architecture.md` → ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile).
-
-## "check-drift returns `422 ErrDriftInputMissing`"
-
-**Symptoms.** `POST /v1/incarnations/{name}/check-drift` returns 422 from `"type": "/errors/drift-input-missing"`.
-
-**Root.** Converge-scenario requires an input parameter that cannot be auto-resolved from `incarnation.state` (there is no such name) and there is no value in the override-body of the request.
-
-**Action:**
-
-- Or pass override in the body of the request:
-  ```sh
-  curl -X POST .../check-drift -d '{"<param-name>": "<value>"}'
-  ```
-- Either change converge-scenario so that the input parameter has default or is taken from state with a different name.
+**Related.** Grants of `incarnation.check-drift` are deleted by migration 114 — mandatory, since the RBAC catalog is a closed enum and the enforcer refuses to start on a permission it cannot parse. Tiding rules subscribed to `incarnation.drift_checked` are stripped by the same migration (a rule that named only it is deleted whole, and the migration says so in a `NOTICE`).
 
 ## "`Holder.Refresh` errors / RBAC snapshot stale"
 

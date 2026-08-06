@@ -18,7 +18,7 @@ import "sort"
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
-//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / check-drift / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
+//   - incarnation (13): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
 //   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
@@ -118,15 +118,14 @@ var AllowedPermissions = map[string]struct{}{
 	// error_locked and restarts the last failed scenario in one action,
 	// requires a reason. Same scope selector (incarnation/coven/service by
 	// path-{name}).
-	"incarnation.rerun-last":  {},
-	"incarnation.run":         {},
-	"incarnation.get":         {},
-	"incarnation.list":        {},
-	"incarnation.history":     {},
-	"incarnation.unlock":      {},
-	"incarnation.upgrade":     {},
-	"incarnation.destroy":     {},
-	"incarnation.check-drift": {},
+	"incarnation.rerun-last": {},
+	"incarnation.run":        {},
+	"incarnation.get":        {},
+	"incarnation.list":       {},
+	"incarnation.history":    {},
+	"incarnation.unlock":     {},
+	"incarnation.upgrade":    {},
+	"incarnation.destroy":    {},
 	// incarnation.traits-set — a wholesale replacement of an incarnation's
 	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060) via
 	// `PUT /v1/incarnations/{name}/traits`. The labels describe the

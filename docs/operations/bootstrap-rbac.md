@@ -126,7 +126,6 @@ Permission string with a selector is the only mechanism for a narrow scope ([rba
 | Reading audit-log (when `GET /v1/audit` appears) | `audit.read` |
 | Push to hosts | `push.apply on coven=<coven>` |
 | Service-registry CRUD | `service.create`, `service.list`, `service.update`, `service.delete` |
-| Drift-check ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) | `incarnation.check-drift on service=<svc>` |
 
 `cluster-admin` is a built-in role with `*`, it cannot be deleted via `role.delete` (`builtin=true` in `rbac_roles`).
 

@@ -468,8 +468,8 @@ func TestServiceHandler_ListScenarios_200(t *testing.T) {
 
 // Names from LifecycleScenarioNames (create/destroy) are tagged as lifecycle,
 // anything else as operational. `converge` was removed from the set (amend ADR-031,
-// 2026-06-10): it's an operational drift target, not lifecycle. The test guards
-// the handler-level catalog tagging against canon/DTO-tagging drift.
+// 2026-06-10): it's an ordinary operational scenario, not lifecycle. The test
+// guards the handler-level catalog tagging against canon/DTO-tagging drift.
 func TestServiceHandler_ListScenarios_KindByLifecycleCanon(t *testing.T) {
 	lister := &fakeScenariosLister{scenarios: []artifact.Scenario{
 		{Name: "converge", Path: "scenario/converge/main.yml"},

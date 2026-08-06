@@ -8,7 +8,7 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.tiding.*` (
 
 #### `keeper.tiding.create`
 
-Creates a PERMANENT Tiding subscription rule: for which `event_types` (area-glob `scenario_run.*` in the scope of runs - `scenario_run` / `command_run` / `voyage` / `cadence` + point `incarnation.drift_checked` and `incarnation.run_completed`) react → which Herald to deliver. Filters `only_failures` / `only_changes`, opt. selectors `incarnation` / `cadence` / `task`, delivery body control `annotations` / `projection` ([ADR-052(h)](../../adr/0052-herald-notifications.md)). Permission: `tiding.create`. Endpoint: [`POST /v1/tidings`](../operator-api/tidings.md). Async: no.
+Creates a PERMANENT Tiding subscription rule: for which `event_types` (area-glob `scenario_run.*` in the scope of runs - `scenario_run` / `command_run` / `voyage` / `cadence` + the point type `incarnation.run_completed`) react → which Herald to deliver. Filters `only_failures` / `only_changes`, opt. selectors `incarnation` / `cadence` / `task`, delivery body control `annotations` / `projection` ([ADR-052(h)](../../adr/0052-herald-notifications.md)). Permission: `tiding.create`. Endpoint: [`POST /v1/tidings`](../operator-api/tidings.md). Async: no.
 
 `task` (string|null, [ADR-052 §l](../../adr/0052-herald-notifications.md)) - opt. Subscription selector for a specific task at `register ∪ id`. A non-empty `task` narrows the match only to `incarnation.run_completed`, whose `changed_tasks` has an entry with `register == task` OR `id == task` (see [operator-api/tidings.md → "Task selector"](../operator-api/tidings.md)). To trigger the `task` rule in `event_types`, you need `incarnation.run_completed`.
 

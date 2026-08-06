@@ -1,6 +1,6 @@
 # Incarnation - endpoints of the life cycle of runtime instances
 
-Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations*` (creating / running scenarios / reading / unlock / upgrade / drift / destroy, [ADR-009](../../adr/0009-scenario-dsl.md)) + global read-view of runs `/v1/runs*` (page "All Runs"; runs belong to incarnations - handler and permission from the incarnation domain). Conventions, error-format, pagination, secret-masking (including masking `state`/`spec` in GET responses), mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations*` (creating / running scenarios / reading / unlock / upgrade / destroy, [ADR-009](../../adr/0009-scenario-dsl.md)) + global read-view of runs `/v1/runs*` (page "All Runs"; runs belong to incarnations - handler and permission from the incarnation domain). Conventions, error-format, pagination, secret-masking (including masking `state`/`spec` in GET responses), mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
 
 ## Endpoint sections
 
@@ -148,12 +148,10 @@ Permission: `incarnation.get`. MCP-tool: `keeper.incarnation.get`. Path-param: `
 | `created_scenario` | `string` (optional) | The name of the starting (bootstrap) scenario that created the incarnation (the mechanism of several create scenarios). `rerun-last` uses it on the create path (when the last one to fall was the start scenario). For **bare incarnation** (created without bootstrap scenario) - `null`/omitted (field with `omitempty`). |
 | `spec` | `object` | jsonb is what the operator declared ([architecture.md → Incarnation](../../architecture.md)). Sensitive values ​​are masked (`***MASKED***`, see [§ Masking state/spec in GET responses](../operator-api.md)). |
 | `state` | `object` | jsonb - current structured configuration. Sensitive values ​​are masked (see ibid.). |
-| `status` | `enum` | `provisioning` / `ready` / `applying` / `error_locked` / `migration_failed` / `drift` / `destroying`. |
+| `status` | `enum` | `provisioning` / `ready` / `applying` / `error_locked` / `migration_failed` / `drift` / `destroying`. `drift` is informational and non-blocking — the DB state is ahead of the hosts after a legacy upgrade ([ADR-031(d)](../../adr/0031-scry-drift.md)); remediation is a normal apply. |
 | `status_details` | `object` (nullable) | Error details if `status` is locking. |
 | `created_by_aid` | `string` | FK on `operators(aid)`. |
 | `created_at`, `updated_at` | `string` (RFC 3339) | Audit. |
-| `last_drift_check_at` | `string` (RFC 3339, optional) | [ADR-031](../../architecture.md) Slice C: completion time of the last dry_run run `converge` - background (Reaper rule `scry_background`) or on-demand (`POST /v1/incarnations/{name}/check-drift`, Slice B). Absent if incarnation has never been scanned. |
-| `last_drift_summary` | `object` (optional) | [ADR-031](../../architecture.md) Slice C: counts-aggregate of the latest DriftReport. Keys: `hosts_drifted`, `hosts_clean`, `hosts_unsupported`, `hosts_failed`, `total_hosts`, `scanned_at` (RFC 3339). Counts-only - the full DriftReport is not stored in the database (Slice B returns it directly to the check-drift response). Absent if incarnation has never been scanned. |
 
 #### `GET /v1/incarnations` — list of instances
 
@@ -420,57 +418,6 @@ Two mutually exclusive blocks (`paths` without `?to=` / `target` with `?to=`) + 
 | `state_migrations[]` | `array` | Applicable chain `{from, to, path}` ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)); empty if downgrade/broken chain. |
 
 **Errors:** `404 not-found` (no incarnation / out of scope). **Broken migration chain is NOT an error**: `200` with `reachable: false` + `unreachable_reason` (preview gives the unreachable target as data). `502` — ls-remote tags / load snapshot target; `500` - other migration chain failure.
-
-#### `POST /v1/incarnations/{name}/check-drift` — Scry drift check
-
-Permission: `incarnation.check-drift`. MCP-tool: `keeper.incarnation.check-drift`. Path-param: `name`. **Sync operation** (not async, unlike `run`/`upgrade`/`destroy`): handler blocks before building `DriftReport` and returns it with a 200 response.
-
-Implements the on-demand pilot [ADR-031](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile). Keeper parses `scenario/converge/main.yml` from the current git snapshot of the service, renders the plan as for a regular apply, but sends `ApplyRequest{dry_run:true}` to all hosts via work-queue (Acolyte). Soul calls `mod.Plan` (pure-read) instead of `mod.Apply`, returns native `changed` for each task. Keeper collects per-host aggregates and generates `DriftReport`. The information status `drift` is set to post-check if there is hosts_drifted/hosts_failed > 0 (NOT blocking, [ADR-031(d)](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
-
-**Input-resolve convention.** converge-scenario declares `input:` schema; for each parameter the value is taken:
-1. from `input.<name>` body of the request if the operator passed override;
-2. else from `incarnation.state.<name>` ("by name" convention);
-3. else from `default:` schema;
-4. otherwise `required: true` without source → `422 validation-failed` (drift-input-missing).
-
-**Request:**
-
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `input` | `object` | no | Override converge parameters. The names/types match the `input:` schema in the `scenario/converge/main.yml` service. |
-
-**Response `200 OK`:** `DriftReport` (see [openapi.yaml → DriftReport](../openapi.yaml)):
-
-```json
-{
-  "checked_at": "2026-05-26T10:15:30Z",
-  "incarnation": "redis-prod",
-  "scenario_ref": "converge",
-  "hosts": [
-    {
-      "sid": "host-a.example.com",
-      "status": "drifted",
-      "tasks": [
-        {"idx": 0, "module": "core.pkg.installed", "action": "Install redis", "changed": false},
-        {"idx": 1, "module": "core.file.present", "action": "redis.conf", "changed": true}
-      ]
-    }
-  ],
-  "summary": {"hosts_drifted": 1, "hosts_clean": 0, "hosts_unsupported": 0, "hosts_failed": 0}
-}
-```
-
-**Per-host `status`:**
-- `clean` — all host tasks returned `changed=false`;
-- `drifted` - at least one task `changed=true`;
-- `unsupported` — at least one community module without `PlanReadSafe`-capability (default-deny, [ADR-031(f)](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile));
-- `failed` is a real Plan error (different from `unsupported` by code in `TaskError`).
-
-**Errors:** `404 not-found`, `422 validation-failed` (converge is missing in the current service-snapshot - "drift-checker is not available for this service", informational; or drift-input does not resolve), `500` (drift-checker is not configured - the only inline mode is acolytes=0).
-
-**RBAC:** scope is the same as `incarnation.run` - `coven=`/`service=`/`incarnation=` (env-RBAC, OR-Check by `IncarnationCovenContexts`).
-
-**Audit:** `incarnation.drift_checked` is written by the handler after the report is compiled, `correlation_id=apply_id`, payload `{name, scenario, apply_id, drift_summary}`.
 
 #### `DELETE /v1/incarnations/{name}` — delete instance
 

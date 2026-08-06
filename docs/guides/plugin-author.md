@@ -10,7 +10,7 @@ Plugins for [ADR-016](../adr/0016-parity-license.md) live in the companion repos
 
 → **[`soul-stack-plugins/docs/module-author-guide.md`](https://github.com/souls-guild/soul-stack-plugins/blob/main/docs/module-author-guide.md)**
 
-It covers: architectural overview and handshake, `soul-lint plugin-init <namespace>/<name>` scaffold, Validate / Plan (Scry-marker `PlanReadSafe`) / Apply contracts with idempotency invariant, manifest format (`spec.states.<state>.input`, `required_capabilities`, `side_effects`), secret parameters (`pattern: "^vault:.*"`), `ErrandReadSafe`, test levels L0 / L1 / L3b, Sigil-trust before production, official vs community publication. Skeleton scaffold - `soul-lint plugin-init`.
+It covers: architectural overview and handshake, `soul-lint plugin-init <namespace>/<name>` scaffold, Validate / Plan (read-safe marker `PlanReadSafe`) / Apply contracts with idempotency invariant, manifest format (`spec.states.<state>.input`, `required_capabilities`, `side_effects`), secret parameters (`pattern: "^vault:.*"`), `ErrandReadSafe`, test levels L0 / L1 / L3b, Sigil-trust before production, official vs community publication. Skeleton scaffold - `soul-lint plugin-init`.
 
 Do not duplicate this tutorial here: code examples, scaffold tree, step-by-step walk-through are there, and only there they are updated.
 

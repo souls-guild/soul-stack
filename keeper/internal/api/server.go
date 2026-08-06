@@ -283,12 +283,6 @@ type Deps struct {
 	// When nil Destroy answers 500 (endpoint not configured).
 	ScenarioDestroyer handlers.DestroyStarter
 
-	// ScenarioDrift — optional: needed for `POST /v1/incarnations/{name}/check-drift`
-	// (the Scry on-demand pilot, ADR-031). The narrow interface [handlers.DriftChecker]
-	// (CheckDrift + MarkDriftStatus); the production wire-up passes the same
-	// *scenario.Runner. When nil check-drift answers 500.
-	ScenarioDrift handlers.DriftChecker
-
 	// ServiceLoader — optional: needed for `POST /v1/incarnations/{name}/upgrade`
 	// (materializing the snapshot of the target service-ref + assembling the
 	// migration chain). When nil Upgrade answers 500. The production wire-up
@@ -656,7 +650,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	if gate, ok := deps.ProvisioningPolicyReader.(handlers.ProvisioningGate); ok && gate != nil {
 		opH.SetProvisioningGate(gate)
 	}
-	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ScenarioDrift, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
+	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
 	// refs-lister (the same ls-remote cache as ServiceHandler) for the cheap mode of
 	// GET .../upgrade-paths (ADR-0068 §6); late-binding, the constructor isn't extended.
 	incH.SetServiceRefs(deps.ServiceRefs)

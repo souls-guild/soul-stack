@@ -131,7 +131,6 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationUnlock(api, stub)
 			registerHumaIncarnationUpgrade(api, stub)
 			registerHumaIncarnationRerunLast(api, stub)
-			registerHumaIncarnationCheckDrift(api, stub)
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationSetTraits(api, stub)
 			registerHumaIncarnationBindMembers(api, stub)

@@ -40,7 +40,6 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 		[]byte(nil), any(nil),
 		now, now, []string(nil),
 		traitsBytes,
-		any(nil), []byte(nil),
 		"create",
 		any(nil), // applying_apply_id (ADR-068 §A1)
 	}}
@@ -56,7 +55,7 @@ func TestIncarnation_Get_TraitScalarMatch_200(t *testing.T) {
 			return incTraitRow(name, map[string]any{"env": "prod"})
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -72,7 +71,7 @@ func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 			return incTraitRow(name, map[string]any{"env": "stage"})
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
@@ -91,7 +90,7 @@ func TestIncarnation_Get_TraitListLabel_200(t *testing.T) {
 			return incTraitRow(name, map[string]any{"env": []any{"prod", "stage"}})
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -106,7 +105,7 @@ func TestIncarnation_Get_TraitMissingKey_404(t *testing.T) {
 			return incTraitRow(name, map[string]any{"team": "dba"})
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusNotFound {
@@ -122,7 +121,7 @@ func TestIncarnation_Get_TraitNumberMatch_200(t *testing.T) {
 			return incTraitRow(name, map[string]any{"shard": float64(3)})
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"shard:3"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -141,7 +140,7 @@ func TestIncarnation_Get_TraitOR_CovenMatch_200(t *testing.T) {
 			return r
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"prod"}, traitExprs: []string{"env:prod"}}, nil)
 	rec := doIncGet(t, h, "redis-prod")
 	if rec.Code != http.StatusOK {
@@ -160,7 +159,7 @@ func listTraitSQLHandler(traitExprs []string) (*fakeIncDB, *string, *Incarnation
 		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
 		captureListSQL: func(s string) { sql = s },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: traitExprs}, nil)
 	return db, &sql, h
 }
@@ -226,7 +225,7 @@ func TestIncarnation_List_TraitScope_NonEmpty_NotFailClosed(t *testing.T) {
 			return &incRows{rows: []staticRow{incTraitRow("redis-prod", map[string]any{"env": "prod"})}}, nil
 		},
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
 
 	rec := doIncList(t, h, "")
@@ -247,7 +246,7 @@ func TestIncarnation_List_TraitOR_CovenAndTrait_BothReachSQL(t *testing.T) {
 		listRows:       func() (pgx.Rows, error) { return &emptyRows{}, nil },
 		captureListSQL: func(s string) { sql = s },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil,
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
 		fakeIncScoper{covens: []string{"prod"}, traitExprs: []string{"team:dba"}}, nil)
 
 	rec := doIncList(t, h, "")

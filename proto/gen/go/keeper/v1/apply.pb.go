@@ -540,7 +540,7 @@ type ApplyRequest struct {
 	// this field number. Stratifying into N>1 and the stage loop is S2/S3; S1 only
 	// carries the transport + schema.
 	Passage int32 `protobuf:"varint,6,opt,name=passage,proto3" json:"passage,omitempty"`
-	// dry_run: Scry mode (ADR-031): Soul does NOT apply tasks; instead it calls
+	// dry_run (ADR-031(c)): Soul does NOT apply tasks; instead it calls
 	// SoulModule.Plan for each one (pure-read, does NOT mutate the host) and
 	// collects a machine-readable PlanEvent.changed — "would Apply change this
 	// resource?" (drift). The host is left untouched: module.Apply is never
@@ -551,8 +551,13 @@ type ApplyRequest struct {
 	//
 	// false/empty = a regular apply (forward-compat, ADR-012(c) only-add): an old
 	// Keeper that doesn't send this field means Soul runs as before. Never reuse
-	// this field number. Slice A only carries the transport + soul mechanics;
-	// the keeper-side check-drift flow (what exactly to dry-run) is Slice B.
+	// this field number.
+	//
+	// NIM-446 removed the keeper-side drift circuit that used to set this, so NO
+	// Keeper path sets it on ApplyRequest today. The field and the Soul-side
+	// handling stay: ADR-012 forbids deleting a field, Soul is versioned
+	// separately and must tolerate any Keeper, and the same Plan mechanics are
+	// reached through ErrandRequest.dry_run, which IS wired.
 	DryRun        bool `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

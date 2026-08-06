@@ -220,12 +220,6 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// stale duplicate. SendApply additionally routes by SID-lease (apply only
 	// through the stream owner — the first layer of protection against double
 	// execution).
-	//
-	// DryRun=true (Scry, ADR-031) — the Acolyte path for check-drift: Soul
-	// calls Plan instead of Apply. Field threaded from persisted
-	// Recipe.DryRun (a forward-compat Recipe contract mutation: empty field in
-	// old recipes = false). Double dry_run is safe (Plan is read-only), so the
-	// Cancel window / fencing epoch work the same path without special cases.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: run.ApplyID,
 		// ToProtoTasksForHost(run.SID): THIS host's per-host render_context for
@@ -234,7 +228,6 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// is filled with the same per-host variants as in the run-goroutine path.
 		Tasks:   render.ToProtoTasksForHost(hostTasks, run.SID),
 		Attempt: int32(run.Attempt),
-		DryRun:  run.Recipe.DryRun,
 	}
 	if err := c.deps.Deps.Outbound.SendApply(ctx, run.SID, req); err != nil {
 		// SendApply returned an error: delivery is NOT CONFIRMED (a network

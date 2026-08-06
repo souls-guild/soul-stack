@@ -153,15 +153,18 @@ func TestValidateEventTypes(t *testing.T) {
 		{"area glob voyage", []string{"voyage.*"}, false},
 		{"area glob cadence", []string{"cadence.*"}, false},
 		{"exact in scope", []string{"scenario_run.completed"}, false},
-		{"point drift allowed", []string{"incarnation.drift_checked"}, false},
 		{"point run_completed allowed", []string{"incarnation.run_completed"}, false},
-		{"mixed valid", []string{"scenario_run.*", "command_run.failed", "incarnation.drift_checked", "incarnation.run_completed"}, false},
+		{"mixed valid", []string{"scenario_run.*", "command_run.failed", "incarnation.run_completed"}, false},
+		// The point allow-list shrank to one entry with NIM-446: drift_checked
+		// left the audit catalog, so subscribing to it is now out of scope like
+		// any other incarnation.* type.
+		{"point drift_checked no longer allowed", []string{"incarnation.drift_checked"}, true},
 		{"bare wildcard", []string{"*"}, true},
 		{"leading wildcard", []string{"*.created"}, true},
 		{"unknown area glob", []string{"role.*"}, true},
 		{"exact out of scope", []string{"role.created"}, true},
 		{"incarnation glob not whole-scope", []string{"incarnation.*"}, true},
-		{"incarnation point not drift", []string{"incarnation.created"}, true},
+		{"incarnation point not run_completed", []string{"incarnation.created"}, true},
 		{"no dot", []string{"scenariorun"}, true},
 		{"empty element", []string{""}, true},
 		{"mid wildcard", []string{"scenario_run.*x"}, true},

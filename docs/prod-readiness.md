@@ -27,7 +27,7 @@ GA cannot be released without closing these seven points.
 
 ### 1. e2e-live (L3b): prove with green + do blocking
 
-Nightly-job `e2e-live` runs a **real `soul` binary in a privileged container** (full apply/Scry-pipeline), but costs with `continue-on-error: true` ([.github/workflows/nightly.yml](../.github/workflows/nightly.yml)). A real apply can be broken unnoticed - job does not block. You need to: achieve a stable green run and remove `continue-on-error`, making it a blocking gate.
+Nightly-job `e2e-live` runs a **real `soul` binary in a privileged container** (full apply pipeline), but costs with `continue-on-error: true` ([.github/workflows/nightly.yml](../.github/workflows/nightly.yml)). A real apply can be broken unnoticed - job does not block. You need to: achieve a stable green run and remove `continue-on-error`, making it a blocking gate.
 
 ### 2. Clean-room getting-started (DoD-1)
 
@@ -64,7 +64,7 @@ Now informational (merge is not blocked) - structural risk, quiet regression wil
 |---|---|---|
 | `integration` (testcontainers) | [ci.yml](../.github/workflows/ci.yml) | Integration tests |
 | `govulncheck` | [ci.yml](../.github/workflows/ci.yml) | Go Module Vulnerability Scanner |
-| `e2e-live` | [nightly.yml](../.github/workflows/nightly.yml) | Real apply/Scry (see P0-1) |
+| `e2e-live` | [nightly.yml](../.github/workflows/nightly.yml) | Real apply (see P0-1) |
 
 For GA, these three classes must be blocking (with preliminary stabilization by flaky - see P1).
 
@@ -101,7 +101,7 @@ For GA, these three classes must be blocking (with preliminary stabilization by 
 So that the roadmap does not read as "nothing is ready" - this already works for real, not stubs:
 
 - **End-to-end capabilities** - metrics, OTel, hot-reload + writeback config, log rotation, Vault integration, RBAC, OpenAPI - implemented and working ([requirements.md](requirements.md), [observability.md](observability.md)).
-- **Core** - pull mode (daemon agent `soul`), scenario-DSL, Voyage (fleet batch), Scry (probe), RBAC - ready and proven on a live stand.
+- **Core** - pull mode (daemon agent `soul`), scenario-DSL, Voyage (fleet batch), RBAC - ready and proven on a live stand.
 - **SBOM** (CycloneDX, `make sbom` - [Makefile](../Makefile)) - ready (as opposed to signature).
 - **Module-path rename** to `github.com/souls-guild/soul-stack` - done.
 

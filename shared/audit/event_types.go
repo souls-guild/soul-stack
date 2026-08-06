@@ -656,19 +656,6 @@ const (
 	// data from an untrusted source).
 	EventOracleFired EventType = "oracle.fired"
 
-	// EventIncarnationDriftChecked — an operator ran a Scry drift check via
-	// REST/MCP (ADR-031, on-demand pilot). `source: api` / `mcp`, `archon_aid`
-	// is the initiator; payload: `{name, scenario, apply_id, drift_summary}` —
-	// `drift_summary` = `{hosts_drifted, hosts_clean, hosts_unsupported,
-	// hosts_failed}` (aggregates of per-host terminals from the DriftReport).
-	// The incarnation `drift` status after the event is a separate signal; here
-	// it is exactly the fact of running the check and its aggregates that is
-	// recorded. sync-under-200: audit is written after assembling the
-	// DriftReport, not on request acceptance (parity with destroy_completed —
-	// the event is written on the fact, not the initiation). drift is NOT a
-	// blocking status (ADR-031(d)).
-	EventIncarnationDriftChecked EventType = "incarnation.drift_checked"
-
 	// EventPushApplied — an operator initiated a Destiny push run over SSH via
 	// the Operator API (`POST /v1/push/apply`) or the MCP tool
 	// `keeper.push.apply` (Variant C orchestrator, docs/keeper/push.md).
@@ -1025,10 +1012,9 @@ const (
 	// (enabled AND next_run_at <= NOW()) with a permitting overlap_policy →
 	// Insert voyages/voyage_targets with a cadence_id back-link, in one spawn tx
 	// with advancing next_run_at/last_run_at. Area `cadence.*` (a control entity
-	// — keeper-side). `source: background` (a background periodic Reaper rule,
-	// parity with `scry_background`; NB: ADR-046 §8 / naming-rules.md mention
-	// `scheduler` — that value is NOT in the closed audit.Source enum, see
-	// observations), `archon_aid` = the Cadence's `created_by_aid` (spawn on
+	// — keeper-side). `source: background` (scheduled work with no operator
+	// behind it; NB: ADR-046 §8 / naming-rules.md mention `scheduler` — that
+	// value is NOT in the closed audit.Source enum, see observations), `archon_aid` = the Cadence's `created_by_aid` (spawn on
 	// behalf of the creator, ADR-046 §7), `correlation_id` = voyage_id. Payload:
 	// `{cadence_id, voyage_id, scheduled_for, scope_size}` — `scheduled_for` is
 	// the planned moment (next_run_at before recompute); the recipe's `input`

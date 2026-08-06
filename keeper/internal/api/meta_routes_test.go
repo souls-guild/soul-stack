@@ -70,7 +70,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		verifier,
 		healthH,
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),

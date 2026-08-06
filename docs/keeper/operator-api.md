@@ -273,7 +273,6 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 | `GET` | `/v1/incarnations/{name}/runs/{apply_id}` | `incarnation.history` | — (REST only) |
 | `POST` | `/v1/incarnations/{name}/unlock` | `incarnation.unlock` | `keeper.incarnation.unlock` |
 | `POST` | `/v1/incarnations/{name}/upgrade` | `incarnation.upgrade` | `keeper.incarnation.upgrade` |
-| `POST` | `/v1/incarnations/{name}/check-drift` | `incarnation.check-drift` | `keeper.incarnation.check-drift` |
 | `DELETE` | `/v1/incarnations/{name}` | `incarnation.destroy` | `keeper.incarnation.destroy` |
 | `PUT` | `/v1/incarnations/{name}/traits` | `incarnation.traits-set` | `keeper.incarnation.traits-set` |
 | `POST` | `/v1/incarnations/{name}/secrets/reveal` | `incarnation.view-secrets` | — (REST only) |
@@ -433,7 +432,7 @@ CRUD registry `heralds` (notification delivery channel; webhook in MVP). SSRF ci
 
 ### Tiding (5) - register of notification subscription rules, [ADR-052](../adr/0052-herald-notifications.md)
 
-CRUD registry `tidings` (subscription rule: which `event_types` to respond to → which Herald to deliver). `event_types` - area-glob in the scope of runs (`scenario_run.*` / `command_run.*` / `voyage.*` / `cadence.*` + point `incarnation.drift_checked` and `incarnation.run_completed`); arbitrary wildcard is prohibited. `herald` - FK to existing Herald. Opt. selector `task` (address `register ∪ id`) subscribes to change a specific task and matches only `incarnation.run_completed` by its `changed_tasks` ([ADR-052 §l](../adr/0052-herald-notifications.md)). `tiding.*` - NoSelector. Connect only when the registry is configured. The source of truth for semantics, bodies, error codes is [operator-api/tidings.md](operator-api/tidings.md); MCP side - [mcp-tools/tidings.md](mcp-tools/tidings.md).
+CRUD registry `tidings` (subscription rule: which `event_types` to respond to → which Herald to deliver). `event_types` - area-glob in the scope of runs (`scenario_run.*` / `command_run.*` / `voyage.*` / `cadence.*` + the point type `incarnation.run_completed`); arbitrary wildcard is prohibited. `herald` - FK to existing Herald. Opt. selector `task` (address `register ∪ id`) subscribes to change a specific task and matches only `incarnation.run_completed` by its `changed_tasks` ([ADR-052 §l](../adr/0052-herald-notifications.md)). `tiding.*` - NoSelector. Connect only when the registry is configured. The source of truth for semantics, bodies, error codes is [operator-api/tidings.md](operator-api/tidings.md); MCP side - [mcp-tools/tidings.md](mcp-tools/tidings.md).
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -470,7 +469,7 @@ Self-describing read routes for permission-aware UI. **Auth-only** (`RequireJWT`
 | `GET` | `/v1/event-types` | — (auth-only) | — (REST only) |
 | `GET` | `/v1/me/permissions` | — (auth-only) | — (REST only) |
 
-`GET /v1/permissions` - machine-readable RBAC-permissions directory (source - `rbac.catalog.go`), UI fetches real names to assign role rights. `GET /v1/event-types` - machine-readable directory of event-types valid for [Tiding](operator-api/tidings.md) subscription (source - `herald/eventtypes.go`, the same scope that validates CRUD Tiding); UI Tiding forms fetch valid types instead of hardcode. Body - two groups: `areas` (areas of area-glob-subscription, finished form `<area>.*` - `scenario_run.*`/`command_run.*`/`voyage.*`/`cadence.*`) + `point_events` (dot types outside area-glob - `incarnation.drift_checked`/`incarnation.run_completed`). `GET /v1/me/permissions` — effective rights of the current Archon (show/hide buttons). All three are always mounted (static from packages `rbac`/`herald` / snapshot of the enforcer, without external dependencies).
+`GET /v1/permissions` - machine-readable RBAC-permissions directory (source - `rbac.catalog.go`), UI fetches real names to assign role rights. `GET /v1/event-types` - machine-readable directory of event-types valid for [Tiding](operator-api/tidings.md) subscription (source - `herald/eventtypes.go`, the same scope that validates CRUD Tiding); UI Tiding forms fetch valid types instead of hardcode. Body - two groups: `areas` (areas of area-glob-subscription, finished form `<area>.*` - `scenario_run.*`/`command_run.*`/`voyage.*`/`cadence.*`) + `point_events` (dot types outside area-glob - `incarnation.run_completed`). `GET /v1/me/permissions` — effective rights of the current Archon (show/hide buttons). All three are always mounted (static from packages `rbac`/`herald` / snapshot of the enforcer, without external dependencies).
 
 ### Cloud (8) - Cloud-Provider / Cloud-Profile registries, [ADR-017](../adr/0017-keeper-side-core.md) / [cloud.md](cloud.md)
 
@@ -602,7 +601,7 @@ Moved to a domain file - [operator-api/audit.md → Endpoint sections](operator-
 
 ### Incarnation endpoints
 
-Moved to a domain file - [operator-api/incarnations.md → Endpoint sections](operator-api/incarnations.md): `POST /v1/incarnations` (create an instance - select a starting scenario via `create_scenario`, or bare-incarnation if the service does not have create scenarios), `POST …/rerun-last` (restart the last fallen scenario from `error_locked`), `POST …/scenarios/{scenario}` (custom scenario), `GET …/{name}` (spec+state+status), `GET /v1/incarnations` (list), `GET …/history` (state log), `GET …/runs` + `GET …/runs/{apply_id}` (read-view runs: list + per-host details), `POST …/unlock`, `POST …/upgrade`, `GET …/upgrade-paths` (upgrade paths: cheap - registry tags + `is_current`, `?to=` - `direction`/`mode`/`reachable`; [ADR-0068](../adr/0068-service-upgrade-v2.md)), `POST …/check-drift` (Scry), `DELETE …/{name}` (destroy), plus two superseded-by-Voyage Tide sections (historical record). There are also global `GET /v1/runs` + `GET /v1/runs/stats` (page "All Runs", § Runs (2)). MCP side - [mcp-tools/incarnations.md](mcp-tools/incarnations.md).
+Moved to a domain file - [operator-api/incarnations.md → Endpoint sections](operator-api/incarnations.md): `POST /v1/incarnations` (create an instance - select a starting scenario via `create_scenario`, or bare-incarnation if the service does not have create scenarios), `POST …/rerun-last` (restart the last fallen scenario from `error_locked`), `POST …/scenarios/{scenario}` (custom scenario), `GET …/{name}` (spec+state+status), `GET /v1/incarnations` (list), `GET …/history` (state log), `GET …/runs` + `GET …/runs/{apply_id}` (read-view runs: list + per-host details), `POST …/unlock`, `POST …/upgrade`, `GET …/upgrade-paths` (upgrade paths: cheap - registry tags + `is_current`, `?to=` - `direction`/`mode`/`reachable`; [ADR-0068](../adr/0068-service-upgrade-v2.md)), `DELETE …/{name}` (destroy), plus two superseded-by-Voyage Tide sections (historical record). There are also global `GET /v1/runs` + `GET /v1/runs/stats` (page "All Runs", § Runs (2)). MCP side - [mcp-tools/incarnations.md](mcp-tools/incarnations.md).
 
 ### Soul endpoints
 

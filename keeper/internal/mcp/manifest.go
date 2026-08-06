@@ -214,13 +214,12 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Incarnation (11) ---
+	// --- Incarnation (10) ---
 	//
-	// All 11 tools (create/run/get/list/history/unlock/rerun-last/upgrade/
-	// destroy/check-drift/traits-set) implemented: dispatch branches wired,
-	// bodies at parity with REST IncarnationHandler. destroy wired in S-D4
-	// (DELETE /v1/incarnations/{name}). check-drift wired in ADR-031 Slice B
-	// (Scry on-demand pilot). traits-set — ADR-060 amend R1 (PUT
+	// All 10 tools (create/run/get/list/history/unlock/rerun-last/upgrade/
+	// destroy/traits-set) implemented: dispatch branches wired, bodies at
+	// parity with REST IncarnationHandler. destroy wired in S-D4
+	// (DELETE /v1/incarnations/{name}). traits-set — ADR-060 amend R1 (PUT
 	// /v1/incarnations/{name}/traits, relocated from per-soul).
 	{
 		status: toolStatusImplemented,
@@ -301,15 +300,6 @@ var catalogManifest = []toolEntry{
 			Description:  "Tears down an Incarnation. allow_destroy=false - destroy via the 'destroy' teardown scenario; allow_destroy=true - teardown-free destroy (force). Async operation - returns _apply_id. Permission: incarnation.destroy.",
 			InputSchema:  schemaIncarnationDestroyInput,
 			OutputSchema: schemaApplyIDOutput,
-		},
-	},
-	{
-		status: toolStatusImplemented,
-		decl: toolDeclaration{
-			Name:         "keeper.incarnation.check-drift",
-			Description:  "Scry drift check (ADR-031): Keeper renders the 'converge' scenario and sends ApplyRequest{dry_run:true} to all hosts (Soul calls mod.Plan instead of mod.Apply), collects per-host per-task changed and returns a DriftReport. Sync. input - optional override of converge parameters; auto-from-state by naming convention. Permission: incarnation.check-drift. Fails with code=validation-failed if converge is missing from the service snapshot or drift-input doesn't resolve.",
-			InputSchema:  schemaIncarnationCheckDriftInput,
-			OutputSchema: schemaIncarnationCheckDriftOutput,
 		},
 	},
 	{
@@ -1022,7 +1012,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.tiding.create",
-			Description:  "Creates a Tiding subscription rule (ADR-052): which event_types (area-glob scenario_run.* within run scope: scenario_run/command_run/voyage/cadence + incarnation.drift_checked) to react to -> which Herald to deliver via. Filters only_failures/only_changes, opt. incarnation/cadence selectors. Permission: tiding.create. Fails with code=tiding-already-exists (name taken), not-found (herald doesn't exist), validation-failed (malformed name/event_types).",
+			Description:  "Creates a Tiding subscription rule (ADR-052): which event_types (area-glob scenario_run.* within run scope: scenario_run/command_run/voyage/cadence + incarnation.run_completed) to react to -> which Herald to deliver via. Filters only_failures/only_changes, opt. incarnation/cadence selectors. Permission: tiding.create. Fails with code=tiding-already-exists (name taken), not-found (herald doesn't exist), validation-failed (malformed name/event_types).",
 			InputSchema:  schemaTidingCreateInput,
 			OutputSchema: schemaTidingView,
 		},
@@ -1490,50 +1480,6 @@ var (
 "properties":{
 "name":{"type":"string"},
 "allow_destroy":{"type":"boolean"}}}`)
-
-	// check-drift: input override is optional (auto-from-state by naming
-	// convention). Override param names/types are defined by the service's
-	// converge schema, so this stays a free-form map (additionalProperties allowed).
-	schemaIncarnationCheckDriftInput = json.RawMessage(`{
-"$schema":"https://json-schema.org/draft/2020-12/schema",
-"type":"object",
-"additionalProperties":false,
-"required":["name"],
-"properties":{
-"name":{"type":"string","description":"Incarnation name."},
-"input":{"type":"object","description":"Override of converge parameters; overrides auto-from-state by naming convention."}}}`)
-
-	// DriftReport (ADR-031 Slice B): per-host aggregate of task results + summary.
-	// Schema mirrors scenario.DriftReport (Go type in keeper/internal/scenario/checkdrift.go).
-	schemaIncarnationCheckDriftOutput = json.RawMessage(`{
-"$schema":"https://json-schema.org/draft/2020-12/schema",
-"type":"object",
-"additionalProperties":false,
-"required":["checked_at","incarnation","scenario_ref","hosts","summary"],
-"properties":{
-"checked_at":{"type":"string","format":"date-time"},
-"incarnation":{"type":"string"},
-"scenario_ref":{"type":"string","description":"Name of the Scry scenario - 'converge'."},
-"hosts":{"type":"array","items":{"type":"object","additionalProperties":false,
-"required":["sid","status","tasks"],
-"properties":{
-"sid":{"type":"string"},
-"status":{"type":"string","enum":["clean","drifted","unsupported","failed"]},
-"tasks":{"type":"array","items":{"type":"object","additionalProperties":false,
-"required":["idx","module","changed"],
-"properties":{
-"idx":{"type":"integer","minimum":0},
-"module":{"type":"string"},
-"action":{"type":"string"},
-"changed":{"type":"boolean"},
-"message":{"type":"string"}}}}}}},
-"summary":{"type":"object","additionalProperties":false,
-"required":["hosts_drifted","hosts_clean","hosts_unsupported","hosts_failed"],
-"properties":{
-"hosts_drifted":{"type":"integer","minimum":0},
-"hosts_clean":{"type":"integer","minimum":0},
-"hosts_unsupported":{"type":"integer","minimum":0},
-"hosts_failed":{"type":"integer","minimum":0}}}}}`)
 
 	// traits-set: wholesale replacement of incarnation.traits (ADR-060).
 	// 'traits' is the full key→(scalar|list of scalars) set; empty/omitted
@@ -2709,7 +2655,7 @@ var (
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "herald":{"type":"string","description":"Delivery Herald channel name (FK)."},
-"event_types":{"type":"array","items":{"type":"string"},"description":"area-glob scenario_run.* within run scope (scenario_run/command_run/voyage/cadence + incarnation.drift_checked)."},
+"event_types":{"type":"array","items":{"type":"string"},"description":"area-glob scenario_run.* within run scope (scenario_run/command_run/voyage/cadence + incarnation.run_completed)."},
 "only_failures":{"type":"boolean"},
 "only_changes":{"type":"boolean"},
 "incarnation":{"type":["string","null"]},

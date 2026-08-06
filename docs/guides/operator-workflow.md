@@ -22,7 +22,6 @@ soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wa
 `--wait` polls the status until apply completes and prints the final `status` + `history_id`. Without `--wait`, the command returns `apply_id` immediately (the operation is asynchronous). Flags:
 
 - `--input '<json>'` — script input (validated by Keeper against the `input:` contract **before** launch);
-- `--dry-run` — run the script in dry-run mode without mutations (see section 2 - this is the mechanics of Scry);
 - `--wait-timeout 5m` is the waiting ceiling for `--wait`.
 
 Under the hood it's `POST /v1/incarnations/{name}/scenarios/{scenario}` ([operator-api/incarnations.md](../keeper/operator-api/incarnations.md)). Changing the input of the incarnation is a re-run with the new `--input`: state will be rewritten only after success on **all** hosts (cross-host barrier, [orchestration.md → §7](../scenario/orchestration.md)), otherwise the incarnation goes to `error_locked` (section 6).
@@ -45,42 +44,19 @@ That view carries the failed task's address and reason per host, and — below t
 
 Summary of all ways to start work (single run / batch via Voyage / push) - [run-flavors.md](../keeper/run-flavors.md).
 
-## 2. Checking drift (check-drift / Scry)
+## 2. Bringing hosts back to the declaration (`converge`)
 
-**What is drift.** Between runs, someone could change the host manually, another system, or the service itself rewrote its config - and until the next apply, no one will know about it. **Scry** ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) answers the question "would at least one resource be reapplied if we ran reconcile right now." Regulatory: **drift = dry-run reconcile would show `changed=true` on at least one resource** for **declared** resources. This is a declarative drift, and **not** a full host dump: Scry sees the discrepancy only in what is declared in the script, unmanaged resources are invisible to it by design.
+**Drift detection was removed** (NIM-446, [ADR-031 closing amendment](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)). There is no `check-drift` command, no `DriftReport`, and no background scan: Soul Stack no longer answers "has anything changed on the hosts since the last run". If you need that answer, the honest one today is to re-run the declaration and read the changed/no-changes report.
 
-**What you need from the service.** The drift check reads `scenario/converge/main.yml` - this is the "desired state" of the service. In [first-service.md](first-service.md) this script is already located next to `create` (section "Service repo layout"). If there is no file, `check-drift` will return `422 ErrConvergeMissing` and will not touch the incarnation ([faq.md](../operations/faq.md)).
-
-**How to start:**
-
-```sh
-soulctl incarnation check-drift hello-demo
-```
-
-`converge` parameters are auto-resolved: for each input, the value is taken from the `--input` override → `incarnation.state.<name>` → default schema (this gives "auto-drift from state" without manual transmission). The command is synchronous, CLI timeout is 5 minutes (Soul bypasses the entire script in Plan mode). The API equivalent is `POST /v1/incarnations/{name}/check-drift`.
-
-**How to read the result.** The CLI prints a summary and a table by host:
-
-```
-incarnation: hello-demo
-scenario:    converge
-checked_at:  2026-06-16T12:30:00Z
-summary:     drifted=1 clean=3 unsupported=0 failed=0
-
-SID                STATUS    TASKS_DRIFTED
-host-01.internal   drifted   1/2
-host-02.internal   clean     0/2
-```
-
-Per-host `status`: `clean` (everything matches), `drifted` (at least one resource showed `changed`), `unsupported` (module without read-safe-Plan - for example verb modules `core.exec.run`/`core.cmd.shell`, they do not have a "desired state", this normal, not an error), `failed` (Plan fell). For a complete per-task analysis (`idx`/`module`/`action`/`changed`/`message`), take `-o json`.
-
-**What to do with drift.** Status of `drift` on incarnation **informational, non-blocking** ([ADR-031(d)](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): it does not block incarnation. Remediation - normal apply: run `converge` as an operational script, the hosts will converge to the declaration, the status will return to `ready`:
+**How.** A service that describes its desired end state ships `scenario/converge/main.yml`. It is an ordinary operational scenario — run it like any other:
 
 ```sh
 soulctl incarnation run hello-demo converge --wait
 ```
 
-(`converge` is an operational script with a dual role: like `run` it actually reduces hosts to a state, like target `check-drift` it does a declarative dry-run, [ADR-031 amendment 2026-06-10](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile).) If you prefer to repeat the original operation - `run hello-demo create --input ...` (section 1). There is a background periodic scan, but it is turned off by default (`reaper.scry_background.enabled=false`) - it is turned on by a conscious decision in production.
+Hosts converge to the declaration; tasks that were already in the desired state report no change, so an all-clean run IS the "nothing has drifted" answer — with the difference that it also fixes what it finds. Per-task results are in the run detail view (section 1) or `soulctl incarnation runs <name>`.
+
+**Note on the status.** `drift` still exists as an incarnation status, but it now has exactly one source: a **legacy upgrade** — one with no upgrade scenario for the transition — moves the pin and the state in the database while the hosts stay on the old rollout ([ADR-031(d)](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)). It is informational and blocks nothing; the remediation is the same normal apply, after which the incarnation returns to `ready`. See section 4.
 
 ## 3. Targeting by fleet
 
@@ -207,4 +183,4 @@ OTel traces cover the end-to-end path of the run. A complete list of metrics, re
 - **More service operations** - add scripts `scenario/<op>/main.yml`, see [first-service.md → What's next](first-service.md).
 - **Run orchestration** (`serial:` / `run_once:` / probe-idiom, batch via Voyage) - [orchestration.md](../scenario/orchestration.md), [run-flavors.md](../keeper/run-flavors.md).
 - **Cluster operation** (HA, rolling upgrade Keeper/Soul fleet, disaster recovery, sizing) - [operations/](../operations/README.md).
-- **RBAC and Archons** (roles, scoped-visibility, permission `incarnation.unlock`/`upgrade`/`check-drift`) - [operations/bootstrap-rbac.md](../operations/bootstrap-rbac.md), [keeper/rbac.md](../keeper/rbac.md).
+- **RBAC and Archons** (roles, scoped-visibility, permission `incarnation.unlock`/`upgrade`) - [operations/bootstrap-rbac.md](../operations/bootstrap-rbac.md), [keeper/rbac.md](../keeper/rbac.md).

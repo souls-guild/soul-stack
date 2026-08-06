@@ -11,7 +11,7 @@ package handlers
 //   - The view carries DOMAIN types (time.Time as-is, map[string]any, string status). The api
 //     projection casts the status string → native enum (same underlying string → byte-exact) and
 //     wraps map → *map (nil-distinguishability preserved).
-//   - date-time created_at/updated_at/last_drift_check_at/scanned_at — NANOSECOND wire
+//   - date-time created_at/updated_at — NANOSECOND wire
 //     (.UTC() without Truncate; incarnation fields are a bare time.Time — truncation would break the byte).
 //   - covens — non-nil slice (coalesceCoven → `[]` when nil), like the former DTO.
 //   - spec/state run through [audit.MaskSecrets] (defense-in-depth, variant D) exactly
@@ -27,8 +27,8 @@ import (
 // IncarnationGetView — FLAT domain projection of incarnation for the 200 body of GET /v1/incarnations/
 // {name} (also list element and PATCH .../hosts). Package api projects it into native IncarnationGetReply.
 // Status — RAW domain string (the native api type holds the enum form). Spec/State/StatusDetails —
-// map[string]any (nil → `null` via *map in the projection). CreatedByAID/LastDriftCheckAt/
-// LastDriftSummary — pointer-optional. covens — non-nil slice. Traits (operator-set
+// map[string]any (nil → `null` via *map in the projection). CreatedByAID — pointer-optional.
+// covens — non-nil slice. Traits (operator-set
 // labels, ADR-060) and CreatedScenario (start scenario, multi-create mechanism)
 // project with omitempty (empty map / empty string → key omitted).
 type IncarnationGetView struct {
@@ -37,8 +37,6 @@ type IncarnationGetView struct {
 	CreatedAt          time.Time
 	CreatedByAID       *string
 	CreatedScenario    string
-	LastDriftCheckAt   *time.Time
-	LastDriftSummary   *DriftScanSummaryView
 	Name               string
 	Service            string
 	ServiceVersion     string
@@ -48,17 +46,6 @@ type IncarnationGetView struct {
 	StatusDetails      map[string]any
 	Traits             map[string]any
 	UpdatedAt          time.Time
-}
-
-// DriftScanSummaryView — native counts aggregate of last_drift_summary (domain form). int (not
-// int32) — wire parity. ScannedAt — nanosecond time-wire.
-type DriftScanSummaryView struct {
-	HostsClean       int
-	HostsDrifted     int
-	HostsFailed      int
-	HostsUnsupported int
-	ScannedAt        time.Time
-	TotalHosts       int
 }
 
 // StateHistoryView — native history.items element (domain form). ChangedByAID — *string
@@ -107,30 +94,8 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		StatusDetails:      inc.StatusDetails,
 		Traits:             inc.Traits,
 		UpdatedAt:          inc.UpdatedAt.UTC(),
-		LastDriftSummary:   toDriftScanSummaryView(inc.LastDriftSummary),
-	}
-	if inc.LastDriftCheckAt != nil {
-		t := inc.LastDriftCheckAt.UTC()
-		view.LastDriftCheckAt = &t
 	}
 	return view
-}
-
-// toDriftScanSummaryView projects the typed domain [incarnation.DriftScanSummary] into the domain
-// view. nil (NULL column) → nil (the api projection omits the key via omitempty). ScannedAt —
-// nanosecond wire (the same json contract that scry writes).
-func toDriftScanSummaryView(s *incarnation.DriftScanSummary) *DriftScanSummaryView {
-	if s == nil {
-		return nil
-	}
-	return &DriftScanSummaryView{
-		HostsDrifted:     s.HostsDrifted,
-		HostsClean:       s.HostsClean,
-		HostsUnsupported: s.HostsUnsupported,
-		HostsFailed:      s.HostsFailed,
-		TotalHosts:       s.TotalHosts,
-		ScannedAt:        s.ScannedAt,
-	}
 }
 
 // toStateHistoryView projects a state_history row into the domain [StateHistoryView].

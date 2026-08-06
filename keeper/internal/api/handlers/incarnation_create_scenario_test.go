@@ -85,7 +85,7 @@ tasks: []
 func newCreateScenarioHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: createScenarioSnapshot(t)}
-	return NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	return NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 }
 
 // bareScenarioSnapshot writes a service snapshot WITHOUT a single create scenario (only
@@ -112,7 +112,7 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	loader := &fakeLoader{localDir: bareScenarioSnapshot(t)}
-	h := NewIncarnationHandler(db, starter, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-bare","service":"redis"}`)))

@@ -48,7 +48,7 @@ func (f *fakeAuditWriter) Write(_ context.Context, ev *audit.Event) error {
 // fakeLoader (whether the `destroy` scenario is present in the snapshot).
 func newDestroyHandler(db *fakeIncDB, destroyer *fakeDestroyer, aw *fakeAuditWriter, hasScenario bool) *IncarnationHandler {
 	loader := &fakeLoader{hasDestroyScenario: hasScenario}
-	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, nil, &fakeResolver{ok: true}, loader, aw, nil, nil)
+	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, &fakeResolver{ok: true}, loader, aw, nil, nil)
 }
 
 // destroyDB builds a fakeIncDB for the full destroy flow: SelectByName
@@ -111,7 +111,7 @@ func TestIncarnation_Destroy_Teardown_202(t *testing.T) {
 // manifest's lifecycle block (S3: auto_destroy).
 func newDestroyHandlerLifecycle(db *fakeIncDB, destroyer *fakeDestroyer, aw *fakeAuditWriter, hasScenario bool, lc *config.LifecycleConfig) *IncarnationHandler {
 	loader := &fakeLoader{hasDestroyScenario: hasScenario, lifecycle: lc}
-	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, nil, &fakeResolver{ok: true}, loader, aw, nil, nil)
+	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, &fakeResolver{ok: true}, loader, aw, nil, nil)
 }
 
 // sawDeleteIncarnation — whether a direct DELETE of the incarnation row occurred among the execs.
@@ -309,7 +309,7 @@ func TestIncarnation_Destroy_NotDestroyable_409(t *testing.T) {
 func TestIncarnation_Destroy_NotConfigured_500(t *testing.T) {
 	db := destroyDB("redis-prod", "ready")
 	// destroyer/services/loader nil → the endpoint is not configured.
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	_, err := h.DestroyTyped(context.Background(), claims("archon-alice"), "redis-prod", false)
 	wantProblem(t, err, problem.TypeInternalError)
 	if len(db.execCalls) != 0 {

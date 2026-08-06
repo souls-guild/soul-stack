@@ -1743,21 +1743,6 @@ type ReaperRule struct {
 	KeepLastN                *int     `yaml:"keep_last_n,omitempty"`
 	KeepVersionBumpSnapshots *bool    `yaml:"keep_version_bump_snapshots,omitempty"`
 
-	// MaxConcurrentInFlight is a field of the `scry_background` rule (ADR-031
-	// Slice C): the upper bound on concurrent dry_run scans initiated by a Reaper
-	// tick. Other rules ignore it. `*int` to distinguish "unset" (→ the runner
-	// supplies default 10) from explicit 0 ("mute the rule without clearing
-	// enabled"). The active-scan counter is the number of apply_runs rows with
-	// recipe->>'dry_run'='true' and finished_at IS NULL.
-	MaxConcurrentInFlight *int `yaml:"max_concurrent_in_flight,omitempty"`
-
-	// MinIntervalPerIncarnation is a field of the `scry_background` rule (ADR-031
-	// Slice C): the minimum interval between background scans of one incarnation.
-	// Other rules ignore it. Empty string / zero duration = "no lower bound" (the
-	// iterator sort `last_drift_check_at NULLS FIRST` naturally gives round-robin
-	// across incarnations).
-	MinIntervalPerIncarnation string `yaml:"min_interval_per_incarnation,omitempty"`
-
 	// RotateThreshold is a field of the `rotate_due_certs` rule (cert-rotation
 	// Var1): how long before not_after a cert is considered due (e.g. "720h").
 	// Other rules ignore it. Empty string / zero duration → the rule rotates

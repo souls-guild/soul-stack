@@ -79,11 +79,9 @@ const DestroyScenarioName = "destroy"
 // (CreateScenarioName / DestroyScenarioName), not string literals.
 //
 // `converge` is NOT in this set (amend ADR-031, 2026-06-10): it's an
-// operational scenario — runs via a normal run (Apply-reconcile) AND serves
-// as the dry-run target for check-drift. The drift path loads
-// scenario/converge/main.yml via the [ConvergeScenarioName] constant
-// (auto-discover), not via set membership, so converge staying out of this
-// set doesn't affect it.
+// operational scenario — it runs via a normal run (Apply-reconcile) like any
+// other. Its second role, as a dry-run target, left with NIM-446; nothing
+// special-cases the name any more.
 var LifecycleScenarioNames = map[string]struct{}{
 	CreateScenarioName:  {},
 	DestroyScenarioName: {},

@@ -4,7 +4,7 @@
 //
 //   - category A (date-time): same RFC3339Nano bytes;
 //   - category B ([]-vs-null): covens without omitempty;
-//   - category C (omitempty): apply_id/last_drift_*/changed_by_aid — key omitted when nil;
+//   - category C (omitempty): apply_id/changed_by_aid — key omitted when nil;
 //   - category D (nullable): spec/state/status_details/created_by_aid — `null` when nil.
 //
 // Both pointer states covered (nil and non-nil). Mutating the native-struct shape reddens the case.
@@ -70,11 +70,6 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 		IncarnationDestroyReply{ApplyID: apply},
 		`{"apply_id":"01J0APPLYULID"}`)
 
-	// --- DriftScanSummary (nested, date-time) ---
-	goldenIncarnationWire(t, "DriftScanSummary",
-		DriftScanSummary{HostsClean: 3, HostsDrifted: 1, HostsFailed: 0, HostsUnsupported: 2, ScannedAt: ts, TotalHosts: 6},
-		`{"hosts_clean":3,"hosts_drifted":1,"hosts_failed":0,"hosts_unsupported":2,"scanned_at":"2026-06-14T12:34:56.789012345Z","total_hosts":6}`)
-
 	// --- StateHistoryEntry (nested): changed_by_aid omitempty + state_* nullable ---
 	goldenIncarnationWire(t, "StateHistoryEntry/full",
 		StateHistoryEntry{ApplyID: apply, ChangedByAID: &aid, CreatedAt: ts, HistoryID: "h1", Scenario: "create", StateAfter: &stateMap, StateBefore: &specMap},
@@ -84,21 +79,21 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 		`{"apply_id":"01J0APPLYULID","created_at":"2026-06-14T12:34:56.789012345Z","history_id":"h1","scenario":"migration","state_after":null,"state_before":null}`)
 
 	// --- IncarnationGetReply: all categories (date-time + []-vs-null + omitempty + nullable) ---
-	driftN := DriftScanSummary{HostsClean: 5, ScannedAt: ts2, TotalHosts: 5}
+	// status stays `drift` on the wire: NIM-446 removed the drift CHECK, not the
+	// status — a legacy upgrade still leaves an incarnation in it (ADR-031(d)).
 	goldenIncarnationWire(t, "GetReply/full",
 		IncarnationGetReply{
 			Covens: []string{"prod", "eu"}, CreatedAt: ts, CreatedByAID: &aid,
-			LastDriftCheckAt: &ts2, LastDriftSummary: &driftN, Name: "redis-prod", Service: "redis",
+			Name: "redis-prod", Service: "redis",
 			ServiceVersion: "v2.0.0", State: &stateMap, StateSchemaVersion: 3,
 			Status: IncarnationStatusDrift, StatusDetails: &stateMap, UpdatedAt: ts2,
 		},
-		`{"covens":["prod","eu"],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","last_drift_check_at":"2026-06-13T01:02:03.456789012Z","last_drift_summary":{"hosts_clean":5,"hosts_drifted":0,"hosts_failed":0,"hosts_unsupported":0,"scanned_at":"2026-06-13T01:02:03.456789012Z","total_hosts":5},"name":"redis-prod","service":"redis","service_version":"v2.0.0","state":{"users":{"app":true}},"state_schema_version":3,"status":"drift","status_details":{"users":{"app":true}},"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
-	// nil branch: covens empty array; spec/state/status_details/created_by_aid → null;
-	// last_drift_check_at/last_drift_summary → key omitted (omitempty).
+		`{"covens":["prod","eu"],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","name":"redis-prod","service":"redis","service_version":"v2.0.0","state":{"users":{"app":true}},"state_schema_version":3,"status":"drift","status_details":{"users":{"app":true}},"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
+	// nil branch: covens empty array; spec/state/status_details/created_by_aid → null.
 	goldenIncarnationWire(t, "GetReply/nil_optionals",
 		IncarnationGetReply{
 			Covens: []string{}, CreatedAt: ts, CreatedByAID: nil,
-			LastDriftCheckAt: nil, LastDriftSummary: nil, Name: "redis-prod", Service: "redis",
+			Name: "redis-prod", Service: "redis",
 			ServiceVersion: "v2.0.0", State: nil, StateSchemaVersion: 1,
 			Status: IncarnationStatusReady, StatusDetails: nil, UpdatedAt: ts2,
 		},
@@ -114,13 +109,12 @@ func TestGoldenWire_IncarnationProjection(t *testing.T) {
 	m := map[string]any{"k": "v"}
 
 	getV := handlers.IncarnationGetView{
-		Covens: []string{"a"}, CreatedAt: ts, CreatedByAID: &aid, LastDriftCheckAt: &ts,
-		LastDriftSummary: &handlers.DriftScanSummaryView{HostsDrifted: 2, ScannedAt: ts, TotalHosts: 2},
-		Name:             "x", Service: "s", ServiceVersion: "v1", State: m,
+		Covens: []string{"a"}, CreatedAt: ts, CreatedByAID: &aid,
+		Name: "x", Service: "s", ServiceVersion: "v1", State: m,
 		StateSchemaVersion: 7, Status: "applying", StatusDetails: m, UpdatedAt: ts,
 	}
 	goldenIncarnationWire(t, "proj/GetReply", newIncarnationGetReply(getV),
-		`{"covens":["a"],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":"archon-bob","last_drift_check_at":"2026-06-14T12:00:00.123456789Z","last_drift_summary":{"hosts_clean":0,"hosts_drifted":2,"hosts_failed":0,"hosts_unsupported":0,"scanned_at":"2026-06-14T12:00:00.123456789Z","total_hosts":2},"name":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"applying","status_details":{"k":"v"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+		`{"covens":["a"],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":"archon-bob","name":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"applying","status_details":{"k":"v"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
 
 	histV := handlers.StateHistoryView{ApplyID: "ap", ChangedByAID: &aid, CreatedAt: ts, HistoryID: "h", Scenario: "create", StateAfter: m, StateBefore: m}
 	goldenIncarnationWire(t, "proj/StateHistoryEntry", newStateHistoryEntry(histV),

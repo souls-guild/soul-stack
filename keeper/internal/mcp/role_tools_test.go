@@ -477,17 +477,19 @@ func TestRoleTools_InManifest(t *testing.T) {
 	}
 }
 
-// TestCatalog_TotalCount — the catalog must contain exactly 97 tools (72 + 5
+// TestCatalog_TotalCount — the catalog must contain exactly 96 tools (72 + 5
 // keeper.herald.* + 5 keeper.tiding.* per ADR-052 S4 + keeper.soul.traits-assign
 // per ADR-060 + 6 Cloud-CRUD: provider/profile read/list/delete per ADR-017
 // — provider.create/profile.create used to be stubs, now implemented +
 // keeper.incarnation.traits-set per ADR-060 amend R1, relocated per-soul →
 // per-incarnation + 3 keeper.setting.* per ADR-0073 + keeper.soul.run-command
 // per ADR-0074 amendment + 3 membership tools keeper.incarnation.bind-member /
-// .unbind-member / .members per the ADR-008 amendment 2026-07-28, NIM-209).
+// .unbind-member / .members per the ADR-008 amendment 2026-07-28, NIM-209,
+// MINUS keeper.incarnation.check-drift, removed with the drift circuit in
+// NIM-446).
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 97 {
-		t.Errorf("catalog size = %d, want 97", n)
+	if n := len(listAllTools()); n != 96 {
+		t.Errorf("catalog size = %d, want 96", n)
 	}
 }
 

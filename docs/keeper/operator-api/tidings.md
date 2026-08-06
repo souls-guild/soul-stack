@@ -10,9 +10,9 @@ Mapping endpoint ↔ MCP-tool ↔ permission (table of 5 routes) - in the root [
 
 Dispatcher for each successfully recorded audit event of the run matches the enabled Tiding rules by:
 
-- **`event_types`** - non-empty list of audit-event-types with **area-glob** (`scenario_run.*`) in the scope of runs: `scenario_run.*` / `command_run.*` / `voyage.*` / `cadence.*` + dot `incarnation.drift_checked` and `incarnation.run_completed`. Arbitrary wildcard (`*`, `foo.*.bar`) is prohibited → `422`.
+- **`event_types`** - non-empty list of audit-event-types with **area-glob** (`scenario_run.*`) in the scope of runs: `scenario_run.*` / `command_run.*` / `voyage.*` / `cadence.*` + the dot type `incarnation.run_completed`. Arbitrary wildcard (`*`, `foo.*.bar`) is prohibited → `422`.
 - **filters** `only_failures` / `only_changes` (bool);
-- **opt. selectors** `incarnation` / `cadence` / `task` (nullable) - binding to the source of the run. See the separate section "`task` Selector" below.
+- **opt. selectors** `incarnation` / `cadence` / `task` (nullable) - binding to the source of the run. `incarnation` matches **only** `incarnation.run_completed` events of that instance (its payload is the one that names a single incarnation; Voyage terminals span many, cadence events bind to `cadence_id`) - so a rule using it should carry `incarnation.run_completed` in `event_types`. Until NIM-446 the binding came from `incarnation.drift_checked` instead. See the separate section "`task` Selector" below.
 
 Each match is assigned a delivery task via `herald` (FK on `heralds.name`).
 

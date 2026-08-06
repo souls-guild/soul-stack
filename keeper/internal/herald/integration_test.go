@@ -244,7 +244,7 @@ func TestIntegration_Tiding_RoundTrip(t *testing.T) {
 	tg := &Tiding{
 		Name:         "nightly-fail",
 		Herald:       "ch",
-		EventTypes:   []string{"scenario_run.*", "incarnation.drift_checked"},
+		EventTypes:   []string{"scenario_run.*", "incarnation.run_completed"},
 		OnlyFailures: true,
 		Incarnation:  &inc,
 		Enabled:      true,

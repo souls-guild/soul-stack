@@ -57,7 +57,6 @@ var allEventTypes = []EventType{
 	"incarnation.destroy_completed",             // EventIncarnationDestroyCompleted
 	"incarnation.destroy_failed",                // EventIncarnationDestroyFailed
 	"incarnation.destroy_started",               // EventIncarnationDestroyStarted
-	"incarnation.drift_checked",                 // EventIncarnationDriftChecked
 	"incarnation.member_bound",                  // EventIncarnationMemberBound
 	"incarnation.member_unbound",                // EventIncarnationMemberUnbound
 	"incarnation.rerun_last",                    // EventIncarnationRerunLast

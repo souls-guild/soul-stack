@@ -148,7 +148,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 // No plugin-manifest resolver (NIM-228): this entry point is package-level and
 // carries no Deps, and it answers about the submitted INPUT rather than the task
 // bodies. The same file is parsed with a resolver on the paths that act on those
-// tasks — run, pre-flight and check-drift — so nothing goes unchecked; a second
+// tasks — run and pre-flight — so nothing goes unchecked; a second
 // resolve here would only cost a read per call.
 func loadScenarioManifest(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName, op string) (*config.ScenarioManifest, error) {
 	if loader == nil {

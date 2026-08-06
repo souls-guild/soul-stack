@@ -212,7 +212,7 @@ type RenderInput struct {
 	// every emitted [RenderedTask] (and its apply:destiny/loop descendants) from
 	// the originating task — the orchestrator (run.go) filters dispatch/barrier
 	// by RenderedTask.Passage. nil → all tasks in Passage 0 (N=1 / non-staged
-	// callers: Trial, Acolyte RenderForHost, CheckDrift) — bit-for-bit behavior.
+	// callers: Trial, Acolyte RenderForHost) — bit-for-bit behavior.
 	// Length must match the number of top-level tasks after ExpandIncludes
 	// (caller guarantees Stratify runs over the same list).
 	TaskPassage []int
@@ -236,7 +236,7 @@ type RenderInput struct {
 	// transitively vars). The caller (scenario.run) creates [NewSealedSet], puts
 	// it here, and after Render uses Sealed.Paths() for seal-aware masking of
 	// observable channels (audit.MaskSecretsSealed). nil ⇒ collection is off
-	// (push/trial/Acolyte/CheckDrift — seal not needed, bit-for-bit behavior).
+	// (push/trial/Acolyte — seal not needed, bit-for-bit behavior).
 	// The pointer is shared across staged-render passages: paths accumulate
 	// across all Passages of one run.
 	Sealed *SealedSet

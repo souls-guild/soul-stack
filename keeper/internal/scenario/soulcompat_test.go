@@ -125,21 +125,6 @@ func TestRequiredSoulCapabilities_KeeperAndTargetlessSkipped(t *testing.T) {
 	}
 }
 
-func TestWithRunCapability_AddsToEveryHost(t *testing.T) {
-	base := map[string][]string{"host-a": {"module:core.pkg"}}
-	got := withRunCapability(base, []string{"host-a", "host-b"}, config.CapabilityDryRun)
-	want := map[string][]string{
-		"host-a": {"dry_run", "module:core.pkg"},
-		"host-b": {"dry_run"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("required = %v, want %v", got, want)
-	}
-	if !reflect.DeepEqual(base, map[string][]string{"host-a": {"module:core.pkg"}}) {
-		t.Fatalf("input map was mutated: %v", base)
-	}
-}
-
 // --- gate (ADR-0076(i)) ---
 
 func TestGateSoulCapabilities_NilCheckerFailsClosed(t *testing.T) {

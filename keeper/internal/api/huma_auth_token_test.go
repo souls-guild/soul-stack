@@ -57,7 +57,7 @@ func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider
 		verifier,
 		nil, // healthH
 		stubOperatorHandler(t),
-		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t),

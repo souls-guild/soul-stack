@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,20 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
+
+// fakeAuditWriter captures audit event writes. It moved here from the deleted
+// scry_test.go (NIM-446) — the cert-rotation tests are its only consumer now.
+type fakeAuditWriter struct {
+	mu     sync.Mutex
+	events []*audit.Event
+}
+
+func (w *fakeAuditWriter) Write(_ context.Context, ev *audit.Event) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.events = append(w.events, ev)
+	return nil
+}
 
 // --- fake pool/tx for CertRotator ---
 //

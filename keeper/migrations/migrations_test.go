@@ -255,6 +255,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"112_drop_incarnation_spec.up.sql",
 		"113_subject_four_dimensions.down.sql",
 		"113_subject_four_dimensions.up.sql",
+		"114_drop_drift_check.down.sql",
+		"114_drop_drift_check.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
@@ -2326,6 +2328,81 @@ func TestEmbed_IncarnationDriftScanColumns(t *testing.T) {
 		if !strings.Contains(dstr, frag) {
 			t.Errorf("050 down.sql missing %q; content: %.200s", frag, dstr)
 		}
+	}
+}
+
+// TestEmbed_DropDriftCheck -- sanity on 114 (NIM-446): the drift-check circuit
+// leaves the database in three distinct steps, and each has a different failure
+// mode if it is silently dropped from the migration, so each is pinned here.
+//
+//   - the 050 columns (schema): the only destructive half;
+//   - the RBAC grant (data): its ABSENCE is a cluster-wide outage, not a lost
+//     permission — the catalog is a closed enum and the enforcer refuses to
+//     start on an unparseable grant. Both the bare and the scoped ` on ` form
+//     must be matched, which is the bug migration 095 shipped and 109 fixed;
+//   - the tiding subscriptions (data): a rule naming ONLY the removed event
+//     cannot be stripped (CHECK cardinality > 0) and must be DELETEd, while one
+//     naming it alongside others must be stripped and kept. Collapsing those two
+//     into one statement breaks whichever case it did not handle.
+//
+// This is the CHEAP half. What each block actually MATCHES is exercised against
+// a real PG in drop_drift_check_integration_test.go — two of the shapes there
+// (a duplicated event_type, a whitespace-padded grant) were found only after a
+// text-only test like this one passed.
+//
+// Down restores the SCHEMA only — see the file for why the data halves are not
+// re-created — so it is checked for the columns and checked NOT to re-grant.
+func TestEmbed_DropDriftCheck(t *testing.T) {
+	b, err := FS.ReadFile("114_drop_drift_check.up.sql")
+	if err != nil {
+		t.Fatalf("read up: %v", err)
+	}
+	body := string(b)
+	for _, frag := range []string{
+		// 1. columns
+		"DROP COLUMN IF EXISTS last_drift_summary",
+		"DROP COLUMN IF EXISTS last_drift_check_at",
+		// 2. RBAC grant, both forms, matched on a whitespace-normalized copy
+		// (the raw column can hold padded text that a literal predicate misses).
+		"DELETE FROM rbac_role_permissions",
+		`regexp_replace(btrim(permission), '\s+', ' ', 'g') = 'incarnation.check-drift'`,
+		`regexp_replace(btrim(permission), '\s+', ' ', 'g') LIKE 'incarnation.check-drift on %'`,
+		// 3. tidings: "nothing left after stripping", NOT array equality — the
+		// equality form misses a duplicated element and then aborts on the CHECK.
+		"DELETE FROM tidings",
+		"cardinality(array_remove(event_types, 'incarnation.drift_checked')) = 0",
+		"array_remove(event_types, 'incarnation.drift_checked')",
+		// 4. stale planned dry-run runs, or they dispatch as a real apply
+		"UPDATE apply_runs",
+		"status = 'planned'",
+		`recipe->>'dry_run' = 'true'`,
+	} {
+		if !strings.Contains(body, frag) {
+			t.Errorf("114 up.sql missing %q; content head: %.500s", frag, body)
+		}
+	}
+
+	d, err := FS.ReadFile("114_drop_drift_check.down.sql")
+	if err != nil {
+		t.Fatalf("read down: %v", err)
+	}
+	dstr := string(d)
+	for _, frag := range []string{
+		"ADD COLUMN last_drift_check_at TIMESTAMPTZ",
+		"ADD COLUMN last_drift_summary  JSONB",
+		"CREATE INDEX incarnation_last_drift_check_at_idx",
+	} {
+		if !strings.Contains(dstr, frag) {
+			t.Errorf("114 down.sql missing %q; content: %.400s", frag, dstr)
+		}
+	}
+	// Re-granting a permission by guess is how an authorization system acquires
+	// a grant nobody can account for (migration 109 reached the same verdict).
+	if strings.Contains(dstr, "INSERT INTO rbac_role_permissions") {
+		t.Errorf("114 down.sql re-grants incarnation.check-drift; the grant must come back through the audited role API, not a migration")
+	}
+	if strings.Contains(dstr, "INSERT INTO tidings") {
+		t.Errorf("114 down.sql re-creates tidings; a notification rule rebuilt from a guess delivers to a destination nobody chose")
 	}
 }
 

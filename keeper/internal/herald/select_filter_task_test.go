@@ -75,10 +75,10 @@ func TestMatchTask_WrongEventType(t *testing.T) {
 	if matchTask(strPtr("nginx_pkg"), scenarioDone.EventType, scenarioDone.Payload) {
 		t.Fatal("task selector must not match scenario_run.completed (no changed_tasks)")
 	}
-	// drift_checked — different type, also without changed_tasks.
-	drift := ev(audit.EventIncarnationDriftChecked, map[string]any{"name": "web"})
-	if matchTask(strPtr("nginx_pkg"), drift.EventType, drift.Payload) {
-		t.Fatal("task selector must not match incarnation.drift_checked")
+	// incarnation.created — different type, also without changed_tasks.
+	created := ev(audit.EventIncarnationCreated, map[string]any{"name": "web"})
+	if matchTask(strPtr("nginx_pkg"), created.EventType, created.Payload) {
+		t.Fatal("task selector must not match incarnation.created")
 	}
 }
 

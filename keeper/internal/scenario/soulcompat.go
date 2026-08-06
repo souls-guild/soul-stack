@@ -102,31 +102,6 @@ func taskSoulCapabilities(t *render.RenderedTask) []string {
 	return caps
 }
 
-// withRunCapability adds a run-level capability (one that follows from the
-// ApplyRequest rather than from any single task, e.g. dry_run) to every listed
-// SID, creating entries for hosts the plan itself asks nothing of. Returns a new
-// map; req is not mutated.
-func withRunCapability(req map[string][]string, sids []string, capability string) map[string][]string {
-	merged := make(map[string]map[string]struct{}, len(req)+len(sids))
-	for sid, caps := range req {
-		set := make(map[string]struct{}, len(caps)+1)
-		for _, c := range caps {
-			set[c] = struct{}{}
-		}
-		merged[sid] = set
-	}
-	for _, sid := range sids {
-		if sid == "" {
-			continue
-		}
-		if _, ok := merged[sid]; !ok {
-			merged[sid] = make(map[string]struct{}, 1)
-		}
-		merged[sid][capability] = struct{}{}
-	}
-	return sortedCapabilitySets(merged)
-}
-
 func sortedCapabilitySets(in map[string]map[string]struct{}) map[string][]string {
 	out := make(map[string][]string, len(in))
 	for sid, set := range in {

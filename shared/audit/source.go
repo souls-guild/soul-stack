@@ -31,13 +31,13 @@ const (
 	// `correlation_id` = `apply_id`.
 	SourceSoulGRPC Source = "soul_grpc"
 
-	// SourceBackground — a background periodic Reaper rule that initiates a
-	// Scry drift check (ADR-031 Slice C, `scry_background`). Semantically
-	// distinct from [SourceKeeperInternal]: a background dry_run run is a
-	// security signal (an `ApplyRequest{dry_run:true}` is placed on hosts
-	// without operator initiative) and must not fold into the general
-	// `keeper_internal` audit filter. `archon_aid` is always NULL (no
-	// identified initiator), `correlation_id` = the Scry run's `apply_id`.
+	// SourceBackground — a scheduled Keeper subsystem that starts work with no
+	// operator behind it (Cadence spawn, conductor/cadence_spawn.go).
+	// Semantically distinct from [SourceKeeperInternal]: work placed on hosts
+	// without operator initiative is a security signal of its own and must not
+	// fold into the general `keeper_internal` audit filter. `archon_aid` is
+	// always NULL (no identified initiator), `correlation_id` = the spawned
+	// run's `apply_id`.
 	SourceBackground Source = "background"
 
 	// SourceConfigBootstrap — a one-shot legacy import on Keeper startup

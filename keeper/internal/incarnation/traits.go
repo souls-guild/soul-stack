@@ -82,7 +82,7 @@ func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[
 SELECT name, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
-       last_drift_check_at, last_drift_summary, created_scenario,
+       created_scenario,
        applying_apply_id
 FROM incarnation
 WHERE name = $1

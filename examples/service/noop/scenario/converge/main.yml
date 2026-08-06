@@ -1,29 +1,24 @@
 name: converge
 description: |
-  Scry scenario for drift detection (ADR-031 Slice B). Declares the DESIRED
-  final state of the noop service - for a smoke check, the mere fact that the
-  marker file /var/lib/soul-stack/noop-converged exists. Keeper runs this
-  scenario in dry_run mode during check-drift; Soul calls core.file.Plan
-  (read-safe) instead of Apply, compares desired vs actual, and returns
-  per-task changed.
+  Reconcile scenario for the noop service. Declares the DESIRED final state -
+  for a smoke check, the mere fact that the marker file
+  /var/lib/soul-stack/noop-converged exists. Run it like any other operational
+  scenario: core.file.present is idempotent, so a converged host reports no
+  change and an unconverged one is fixed in place.
 
-  A service author drops `scenario/converge/main.yml` ONLY when they want to
-  support the Scry check - this is a specialized scenario-kind (auto-discovered
-  by name). Input-resolution convention: each input field is looked up by name
-  from `incarnation.state.<name>`, or overridden by the operator in the
-  request body.
+  It was also the dry-run target of the Scry drift check until NIM-446 removed
+  that circuit; the name `converge` is now an ordinary scenario name with no
+  special handling in keeper. This copy is also what the L3a Vigil/Oracle e2e
+  fires as its reactor action, so it must stay runnable.
 
-# state_changes is not set: converge is a read-only declaration, the drift
-# check does not commit anything to state (Soul does not call mod.Apply at
-# all on dry_run, and Keeper does not run the state_changes phase for
-# DryRun runs).
+# converge re-declares what create already recorded, so it has nothing to add
+# to state.
 state_changes: {}
 
 tasks:
-  # Convergence marker: we expect the file to exist with fixed content. On a
-  # clean system the file does not exist yet -> Plan returns changed=true
-  # (drift). After a real apply (scenario create / fix) the file appears ->
-  # Plan returns changed=false (clean).
+  # Convergence marker: the file must exist with fixed content. On a clean
+  # system it does not exist yet -> the task reports changed=true and creates
+  # it; on a converged host -> changed=false.
   - name: Ensure converged marker file
     module: core.file.present
     params:

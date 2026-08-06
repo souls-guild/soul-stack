@@ -376,9 +376,8 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				any("archon-alice"),
 				now, now, []string{"prod"},
 				[]byte(`{"team":"dba"}`), // traits
-				any(nil), []byte(nil),    // last_drift_check_at, last_drift_summary
-				"create", // created_scenario
-				any(nil), // applying_apply_id
+				"create",                 // created_scenario
+				any(nil),                 // applying_apply_id
 			}}
 		},
 	}
@@ -430,18 +429,16 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte("{}"), "ready",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
-					any(nil), []byte(nil),
-					"create", // created_scenario
-					any(nil), // applying_apply_id
+					"create",     // created_scenario
+					any(nil),     // applying_apply_id
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
 					[]byte("{}"), "applying",
 					[]byte(nil), any(nil), now, now, []string(nil),
 					[]byte("{}"), // traits
-					any(nil), []byte(nil),
-					"create", // created_scenario
-					any(nil), // applying_apply_id
+					"create",     // created_scenario
+					any(nil),     // applying_apply_id
 				}},
 			}}, nil
 		},
@@ -1546,7 +1543,7 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 					"redis-cluster", "redis", "v1", 1,
 					[]byte("{}"), "ready",
 					[]byte(nil), any(nil), now, now, []string(nil),
-					[]byte("{}"), any(nil), []byte(nil),
+					[]byte("{}"),
 					createdScenario, // created_scenario (string | nil=NULL)
 					any(nil),        // applying_apply_id
 				}}
@@ -1585,7 +1582,7 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 					"redis-cluster", "redis", "v1", 1,
 					[]byte("{}"), "applying",
 					[]byte(nil), any(nil), now, now, []string(nil),
-					[]byte("{}"), any(nil), []byte(nil),
+					[]byte("{}"),
 					"create",        // created_scenario
 					applyingApplyID, // applying_apply_id (string=applying | nil=terminal)
 				}}

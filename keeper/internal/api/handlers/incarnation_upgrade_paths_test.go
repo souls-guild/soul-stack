@@ -22,7 +22,7 @@ func neverInScope(*incarnation.Incarnation) bool  { return false }
 // newUpPathsHandler builds a handler for upgrade-paths: db + resolver(ok) + loader,
 // refs — late-binding via SetServiceRefs (nil → not wired, cheap 500 mode).
 func newUpPathsHandler(db *fakeIncDB, loader *fakeLoader, refs ServiceRefsLister) *IncarnationHandler {
-	h := NewIncarnationHandler(db, nil, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 	if refs != nil {
 		h.SetServiceRefs(refs)
 	}

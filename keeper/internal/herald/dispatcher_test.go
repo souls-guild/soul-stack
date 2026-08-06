@@ -71,7 +71,7 @@ func ev(et audit.EventType, payload map[string]any) *audit.Event {
 
 func TestMatchTiding_Table(t *testing.T) {
 	// Real payload forms (see voyageorch.emitFinalized / emitLegCompleted,
-	// incarnation.go drift_checked, conductor.cadence_spawn).
+	// scenario.Runner run_completed, conductor.cadence_spawn).
 	scenarioCompletedChanged := ev(audit.EventScenarioRunCompleted, map[string]any{
 		"voyage_id": "vy_1", "kind": "scenario", "total_batches": 1,
 		"summary": map[string]any{"total": 3, "succeeded": 3, "failed": 0, "cancelled": 0},
@@ -90,13 +90,15 @@ func TestMatchTiding_Table(t *testing.T) {
 	commandPartialFailed := ev(audit.EventCommandRunPartialFailed, map[string]any{
 		"voyage_id": "vy_1", "kind": "command", "total": 5, "succeeded": 3, "failed": 2,
 	})
-	driftDirty := ev(audit.EventIncarnationDriftChecked, map[string]any{
-		"name": "web", "scenario": "converge", "apply_id": "ap_1",
-		"drift_summary": map[string]any{"hosts_drifted": 2, "hosts_clean": 1, "hosts_unsupported": 0, "hosts_failed": 0},
+	// incarnation.run_completed is the ONLY point event left in run scope after
+	// NIM-446 took incarnation.drift_checked out, so it carries the point-type
+	// and only_changes coverage the drift fixtures used to.
+	runChanged := ev(audit.EventIncarnationRunCompleted, map[string]any{
+		"incarnation": "web", "scenario": "deploy", "apply_id": "ap_1", "status": "success",
+		"changed_tasks": []map[string]any{{"register": "nginx_pkg"}},
 	})
-	driftClean := ev(audit.EventIncarnationDriftChecked, map[string]any{
-		"name": "web", "scenario": "converge", "apply_id": "ap_1",
-		"drift_summary": map[string]any{"hosts_drifted": 0, "hosts_clean": 3, "hosts_unsupported": 0, "hosts_failed": 0},
+	runNoChange := ev(audit.EventIncarnationRunCompleted, map[string]any{
+		"incarnation": "web", "scenario": "deploy", "apply_id": "ap_1", "status": "success",
 	})
 	cadenceSpawned := ev(audit.EventCadenceSpawned, map[string]any{
 		"cadence_id": "cd_nightly", "voyage_id": "vy_1", "scheduled_for": "t", "scope_size": 4,
@@ -127,7 +129,7 @@ func TestMatchTiding_Table(t *testing.T) {
 		{"exact event_type match", rule(func(t *Tiding) { t.EventTypes = []string{"command_run.completed"} }), commandCompletedChanged, true},
 		{"exact event_type miss", rule(func(t *Tiding) { t.EventTypes = []string{"command_run.failed"} }), commandCompletedChanged, false},
 		{"multi event_types any-match", rule(func(t *Tiding) { t.EventTypes = []string{"voyage.*", "command_run.completed"} }), commandCompletedChanged, true},
-		{"point event_type drift_checked", rule(func(t *Tiding) { t.EventTypes = []string{"incarnation.drift_checked"} }), driftDirty, true},
+		{"point event_type run_completed", rule(func(t *Tiding) { t.EventTypes = []string{"incarnation.run_completed"} }), runChanged, true},
 
 		{"only_failures passes failed", rule(func(t *Tiding) { t.OnlyFailures = true }), scenarioFailed, true},
 		{"only_failures blocks completed", rule(func(t *Tiding) { t.OnlyFailures = true }), scenarioCompletedChanged, false},
@@ -142,14 +144,14 @@ func TestMatchTiding_Table(t *testing.T) {
 			t.EventTypes = []string{"command_run.*"}
 			t.OnlyChanges = true
 		}), commandCompletedChanged, true},
-		{"only_changes passes drift dirty", rule(func(t *Tiding) {
-			t.EventTypes = []string{"incarnation.drift_checked"}
+		{"only_changes passes run_completed with changed_tasks", rule(func(t *Tiding) {
+			t.EventTypes = []string{"incarnation.run_completed"}
 			t.OnlyChanges = true
-		}), driftDirty, true},
-		{"only_changes blocks drift clean", rule(func(t *Tiding) {
-			t.EventTypes = []string{"incarnation.drift_checked"}
+		}), runChanged, true},
+		{"only_changes blocks run_completed without changed_tasks", rule(func(t *Tiding) {
+			t.EventTypes = []string{"incarnation.run_completed"}
 			t.OnlyChanges = true
-		}), driftClean, false},
+		}), runNoChange, false},
 		{"only_changes passes leg_completed with succeeded>0", rule(func(t *Tiding) {
 			t.EventTypes = []string{"scenario_run.leg_completed"}
 			t.OnlyChanges = true
@@ -160,14 +162,19 @@ func TestMatchTiding_Table(t *testing.T) {
 			t.OnlyChanges = true
 		}), scenarioFailed, false}, // failed event with succeeded=0 -> changes=false
 
-		{"incarnation selector match on drift", rule(func(t *Tiding) {
-			t.EventTypes = []string{"incarnation.drift_checked"}
+		// The incarnation selector binds through run_completed since NIM-446 took
+		// incarnation.drift_checked (its previous and only source) out. The key is
+		// `incarnation`, not the `name` drift used — reusing the old key silently
+		// returns "" and the selector matches nothing at all, which is exactly the
+		// state these two cases exist to keep out.
+		{"incarnation selector match on run_completed", rule(func(t *Tiding) {
+			t.EventTypes = []string{"incarnation.run_completed"}
 			t.Incarnation = strPtr("web")
-		}), driftDirty, true},
-		{"incarnation selector mismatch on drift", rule(func(t *Tiding) {
-			t.EventTypes = []string{"incarnation.drift_checked"}
+		}), runChanged, true},
+		{"incarnation selector mismatch on run_completed", rule(func(t *Tiding) {
+			t.EventTypes = []string{"incarnation.run_completed"}
 			t.Incarnation = strPtr("db")
-		}), driftDirty, false},
+		}), runChanged, false},
 		{"incarnation selector blocks scenario_run (no incarnation field)", rule(func(t *Tiding) {
 			t.Incarnation = strPtr("web")
 		}), scenarioCompletedChanged, false},

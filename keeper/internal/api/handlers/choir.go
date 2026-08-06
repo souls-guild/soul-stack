@@ -453,7 +453,7 @@ func (h *ChoirHandler) RemoveVoiceTyped(ctx context.Context, claims *jwt.Claims,
 
 // writeAuditCtx writes an audit event best-effort (handler-side self-audit: payload is
 // available only after a successful mutation). nil auditW → no-op (unit tests). An error is
-// logged and does not affect the response (the UpdateHosts / CheckDrift pattern).
+// logged and does not affect the response.
 func (h *ChoirHandler) writeAuditCtx(ctx context.Context, ev *audit.Event) {
 	if h.auditW == nil {
 		return

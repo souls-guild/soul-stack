@@ -13,17 +13,15 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// incRow — pgx.Row for scanIncarnation: 17 columns (name, service,
-// service_version, state_schema_version, spec, state, status, status_details,
-// created_by_aid, created_at, updated_at, covens, traits, last_drift_check_at,
-// last_drift_summary, created_scenario, applying_apply_id). spec/state/
-// status_details/traits/last_drift_summary are serialized as JSONB bytes —
-// exactly how scanIncarnation reads them from a real pool
+// incRow — pgx.Row for scanIncarnation: 14 columns (name, service,
+// service_version, state_schema_version, state, status, status_details,
+// created_by_aid, created_at, updated_at, covens, traits, created_scenario,
+// applying_apply_id). state/status_details/traits are serialized as JSONB
+// bytes — exactly how scanIncarnation reads them from a real pool
 // (db.QueryRow(selectByNameSQL)). covens is text[], scanIncarnation reads it
-// into *[]string (env-RBAC, migration 046); last_drift_* — ADR-031 Slice C,
-// migration 050; created_scenario — multiple create-scenarios mechanism
-// (TEXT NOT NULL DEFAULT 'create'), migration 089; applying_apply_id —
-// ADR-068 §A1.
+// into *[]string (env-RBAC, migration 046); created_scenario — multiple
+// create-scenarios mechanism (TEXT NOT NULL DEFAULT 'create'), migration 089;
+// applying_apply_id — ADR-068 §A1.
 type incRow struct{ vals []any }
 
 func newIncRow(inc *incarnation.Incarnation) incRow {
@@ -37,10 +35,6 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 	var statusDetails []byte
 	if inc.StatusDetails != nil {
 		statusDetails = mustJSON(inc.StatusDetails)
-	}
-	var driftSummary []byte
-	if inc.LastDriftSummary != nil {
-		driftSummary, _ = json.Marshal(inc.LastDriftSummary)
 	}
 	// created_scenario — NULLABLE *string (migrations 089+090): nil = bare
 	// incarnation (NULL). Pass the pointer as-is — scan returns nil on NULL.
@@ -57,8 +51,6 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		inc.UpdatedAt,
 		inc.Covens,
 		mustJSON(inc.Traits),
-		inc.LastDriftCheckAt,
-		driftSummary,
 		inc.CreatedScenario,
 		inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, nil once terminal
 	}}

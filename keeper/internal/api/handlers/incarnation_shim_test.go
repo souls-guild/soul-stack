@@ -246,24 +246,6 @@ func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	return rec
 }
 
-// incCheckDrift — shim for POST /v1/incarnations/{name}/check-drift.
-func incCheckDrift(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
-	rec := httptest.NewRecorder()
-	claims, _ := shimClaims(r)
-	name := chi.URLParam(r, "name")
-	var body struct {
-		Input map[string]any `json:"input"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	report, err := h.CheckDriftTyped(r.Context(), claims, name, body.Input)
-	if err != nil {
-		renderProblem(rec, err)
-		return rec
-	}
-	writeJSON(rec, http.StatusOK, report, shimLogger)
-	return rec
-}
-
 // incSetTraits — shim for PUT /v1/incarnations/{name}/traits: decode body.traits →
 // SetTraitsTyped.
 func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
@@ -285,22 +267,12 @@ func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseReco
 
 // shimGetReplyJSON — the wire shape of IncarnationGetView for test rendering (mirrors the json
 // tags of the former IncarnationGetReply: covens/spec/state/status_details nullable-without-omitempty,
-// last_drift_* omitempty). The tests care about key names/null semantics, not an enum-named schema.
+// The tests care about key names/null semantics, not an enum-named schema.
 func shimGetReplyJSON(v IncarnationGetView) any {
-	type driftJSON struct {
-		HostsClean       int    `json:"hosts_clean"`
-		HostsDrifted     int    `json:"hosts_drifted"`
-		HostsFailed      int    `json:"hosts_failed"`
-		HostsUnsupported int    `json:"hosts_unsupported"`
-		ScannedAt        string `json:"scanned_at"`
-		TotalHosts       int    `json:"total_hosts"`
-	}
 	out := struct {
 		Covens             []string        `json:"covens"`
 		CreatedAt          string          `json:"created_at"`
 		CreatedByAID       *string         `json:"created_by_aid"`
-		LastDriftCheckAt   *string         `json:"last_drift_check_at,omitempty"`
-		LastDriftSummary   *driftJSON      `json:"last_drift_summary,omitempty"`
 		Name               string          `json:"name"`
 		Service            string          `json:"service"`
 		ServiceVersion     string          `json:"service_version"`
@@ -314,17 +286,6 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 		Name: v.Name, Service: v.Service, ServiceVersion: v.ServiceVersion,
 		State: ptrMapShim(v.State), StateSchemaVersion: v.StateSchemaVersion,
 		Status: v.Status, StatusDetails: ptrMapShim(v.StatusDetails), UpdatedAt: rfc3339Nano(v.UpdatedAt),
-	}
-	if v.LastDriftCheckAt != nil {
-		s := rfc3339Nano(*v.LastDriftCheckAt)
-		out.LastDriftCheckAt = &s
-	}
-	if v.LastDriftSummary != nil {
-		d := v.LastDriftSummary
-		out.LastDriftSummary = &driftJSON{
-			HostsClean: d.HostsClean, HostsDrifted: d.HostsDrifted, HostsFailed: d.HostsFailed,
-			HostsUnsupported: d.HostsUnsupported, ScannedAt: rfc3339Nano(d.ScannedAt), TotalHosts: d.TotalHosts,
-		}
 	}
 	return out
 }
