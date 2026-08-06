@@ -78,3 +78,26 @@ func TestWrite_AllKnownTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestTitlesAndStatusesAgree — every registered type must carry BOTH a title and a
+// status. The two maps are hand-maintained and only-add ([problem.go] header), and
+// [TestWrite_AllKnownTypes] enumerates a fixed nine — so a type added to one map
+// and not the other slips through: a missing `statuses` entry makes New() answer
+// with status 0, a missing `titles` entry ships problem+json with an empty
+// `title`. Both are silent, and neither shows up until a client reads the reply.
+// Key parity is the property that actually holds, so it is what is asserted.
+func TestTitlesAndStatusesAgree(t *testing.T) {
+	for typ := range statuses {
+		if titles[typ] == "" {
+			t.Errorf("type %q has a status but no title - problem+json would ship an empty `title`", typ)
+		}
+	}
+	for typ := range titles {
+		if statuses[typ] == 0 {
+			t.Errorf("type %q has a title but no status - New() would answer with status 0", typ)
+		}
+	}
+	if len(statuses) == 0 || len(titles) == 0 {
+		t.Fatal("the type catalog is empty - this guard would pass vacuously")
+	}
+}

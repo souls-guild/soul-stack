@@ -2402,6 +2402,15 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 		lookup = errandLeaseLookup{rc: d.redisClient}
 	}
 
+	// Presence source for the dry-run capability gate (errand/soulcompat.go) — the
+	// same [soulCapChecker] the scenario runner gets, so both gates read one
+	// announcement. Left nil without Redis: a dry_run is then refused fail-closed
+	// rather than sent unconfirmed (ADR-0076(i)); an ordinary Errand is unaffected.
+	var soulCap errand.SoulCapabilityChecker
+	if d.redisClient != nil {
+		soulCap = soulCapChecker{rc: d.redisClient}
+	}
+
 	disp, err := errand.NewDispatcher(errand.Deps{
 		Store:       store,
 		Outbound:    d.outbound,
@@ -2411,6 +2420,7 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 		Logger:      d.logger,
 		Audit:       d.auditWriter,
 		KID:         d.cfg.KID,
+		SoulCap:     soulCap,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build errand dispatcher: %v\n", err)

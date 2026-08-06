@@ -126,7 +126,7 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | **L3b-3** | First L3b example `smoke-nginx-live` (actually installs nginx via apt + systemctl start). | done |
 | **L3b-4** | Container-side asserts (`AssertHostPkgInstalled` / `AssertHostServiceActive` / `AssertHostFileExists` / `AssertHostFileContent`). | done |
 | **L3b-5** | Multi-host (`redis-cluster-live` with 3 soul containers) + YAML expectations loader (`harness.LoadExpectations` / `Stack.AssertExpectations`). | done |
-| **L3b-6** | ~~Drift-live~~ — removed with the drift circuit (NIM-446). It was the only live exercise of `core.file.Plan` end to end; the module's own `Plan` is still covered by its unit tests, but nothing drives it over a real Soul any more (Errand's dry-run would be the natural replacement). | removed |
+| **L3b-6** | ~~Drift-live~~ — removed with the drift circuit (NIM-446). It was the only live exercise of `core.file.Plan` end to end; the module's own `Plan` is still covered by its unit tests, but nothing drives it over a real Soul any more. **Errand's dry-run cannot replace it today** (checked under NIM-456): Errand admits a module only if it is verb-shell or `ErrandReadSafe`, `Plan` runs only if it is `PlanReadSafe`, and **no module is both** — `core.http` / `core.noop` carry the first marker, `core.file` and 12 others carry the second. So every `dry_run: true` Errand ends as `FAILED errand_dry_run_unsupported` and never reaches a `Plan`. Reopening this coverage needs a decision on the marker overlap, not just a test — NIM-455. | removed |
 
 ## Tests
 

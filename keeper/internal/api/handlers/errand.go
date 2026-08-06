@@ -452,6 +452,16 @@ func (h *ErrandHandler) dispatchError(err error) error {
 			"field 'timeout_seconds' must be in ["+strconv.Itoa(errand.MinTimeoutSeconds)+", "+strconv.Itoa(errand.MaxTimeoutSeconds)+"]")}
 	case errors.Is(err, errand.ErrSoulNotConnected):
 		return &problemError{problem.New(problem.TypeNotFound, "", "target soul is not connected to the cluster")}
+	case errors.Is(err, errand.ErrDryRunNotAnnounced):
+		return &problemError{problem.New(problem.TypeSoulCapabilityUnsupported, "",
+			"the target soul's announced capability set does not include 'dry_run', so keeper cannot rule out a binary "+
+				"that ignores the flag and applies for real; refused before dispatch. Usually the agent predates the "+
+				"flag and needs updating; if it is current, its announcement never reached keeper's presence store and "+
+				"reconnecting the agent republishes it")}
+	case errors.Is(err, errand.ErrDryRunUnverifiable):
+		return &problemError{problem.New(problem.TypeSoulCapabilityUnsupported, "",
+			"cannot confirm the target soul honors 'dry_run' (the presence source is unavailable), and dispatching "+
+				"unconfirmed would risk a real apply on a host you asked only to read - refused fail-closed")}
 	default:
 		h.logger.Error("errand.exec: dispatcher failed", slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "errand dispatch failed")}

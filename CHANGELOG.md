@@ -22,6 +22,19 @@ order to act in.
   fleet therefore refuses runs it would previously have mis-executed; a fleet
   newer than its Keeper is fine.
 
+  A third gate on the same axis covers `dry_run` on `POST /v1/souls/{sid}/exec`
+  and its MCP twin `keeper.soul.errand.run`:
+  the target must announce the `dry_run` capability, or the request is refused
+  with `409 soul-capability-unsupported` before dispatch. An agent that predates
+  the flag ignores it and runs `Apply`, so an operator who asked only to read the
+  host would have had a shell command executed for real. Practically nothing
+  working stops working — on a current agent every `dry_run` Errand already ends
+  as `FAILED errand_dry_run_unsupported` — but a dispatch that used to reach an
+  old agent now fails loudly instead of quietly mutating it. A target with no
+  session lease still answers `404` as before: an absent presence record is what
+  the capability check sees for a host that was never connected, so the refusal is
+  cross-checked against the lease rather than blaming that host's binary.
+
 - **Six new permissions land inside `<resource>.*` grants you already issued.**
   The catalog is closed and a wildcard in the action position expands to every
   known action of that resource, so a role written before this release grants

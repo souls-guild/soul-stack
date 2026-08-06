@@ -374,6 +374,16 @@ func (h *Handler) mapErrandDispatchError(id json.RawMessage, toolName string, er
 	case errors.Is(err, errand.ErrTimeoutOutOfRange):
 		return h.toolError(id, toolName, mcpCodeValidationFailed,
 			"field 'timeout_seconds' must be in [1, 300]")
+	case errors.Is(err, errand.ErrDryRunNotAnnounced):
+		return h.toolError(id, toolName, mcpCodeSoulCapabilityUnsupported,
+			"the target soul's announced capability set does not include 'dry_run', so keeper cannot rule out a binary "+
+				"that ignores the flag and applies for real; refused before dispatch. Usually the agent predates the "+
+				"flag and needs updating; if it is current, its announcement never reached keeper's presence store and "+
+				"reconnecting the agent republishes it")
+	case errors.Is(err, errand.ErrDryRunUnverifiable):
+		return h.toolError(id, toolName, mcpCodeSoulCapabilityUnsupported,
+			"cannot confirm the target soul honors 'dry_run' (the presence source is unavailable), and dispatching "+
+				"unconfirmed would risk a real apply on a host you asked only to read - refused fail-closed")
 	case errors.Is(err, errand.ErrSoulNotConnected):
 		return h.toolError(id, toolName, mcpCodeNotFound,
 			"target soul is not connected to the cluster")

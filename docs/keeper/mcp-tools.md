@@ -159,6 +159,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `profile-already-exists` | `name` Profile - I am busy in the registry `profiles` (`keeper.profile.create`). |
 | `provider-has-profiles` | The removal of the Provider is blocked - it is referenced by the Profile (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
 | `errand-not-cancellable` | Errand is already in terminal status - there is nothing to cancel (`keeper.errand.cancel`, ADR-033 slice E5). |
+| `soul-capability-unsupported` | The target Soul is connected, but its announced capability set does not cover the request (REST `409`, [ADR-0076(i)](../adr/0076-engine-compat-window.md)). Sole user: `dry_run` on `keeper.soul.errand.run`, refused before dispatch because a binary that ignores the flag applies for real. Also covers "support could not be confirmed"; the message says which. |
 | `internal-error` | Unplanned error; full diagnostics - in OTel-trace. |
 
 > Unknown-but-valid scenario in `keeper.incarnation.run` - **not** call error: tool returns `_apply_id` (async-accepted), run then goes to `error_locked` (`scenario_load_failed`), status is polled via `keeper.incarnation.get`. Symmetrically [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md).

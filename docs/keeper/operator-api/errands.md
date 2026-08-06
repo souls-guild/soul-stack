@@ -28,11 +28,28 @@ Pull-ad-hoc exec of a single module on a specific Soul via mTLS EventStream. Err
 | `module` | `string` | yes | Module address `core.<class>.<state>` or `core.cmd.shell` / `core.exec.run` (whitelist Soul-side). |
 | `input` | `object` | optional | Module Input (form depends on the module). |
 | `timeout_seconds` | `int` (1..300) | optional | Full timeout. Default `30`. |
-| `dry_run` | `bool` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). |
+| `dry_run` | `bool` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). The target must announce the `dry_run` [Soul-capability](../../adr/0076-engine-compat-window.md); otherwise `409` before dispatch — see below. |
 
 **Response (`ErrandResult` / `ErrandStatus`):** `status` ∈ `running` / `success` / `failed` / `timed_out` / `module_not_allowed`; `exit_code` (NULL for read-safe non-shell); `stdout`/`stderr` (masked output, cap 64 KiB) + `*_truncated` flags; `duration_ms`; `error_message` (masked reason FAILED/TIMED_OUT/MODULE_NOT_ALLOWED); `output` (structural output of read-safe modules, not available for shell/exec).
 
-**Errors:** `404 not-found` (Soul is not connected to the cluster), `422 validation-failed` (empty `module`, `timeout_seconds` outside [1, 300]).
+**Errors:** `404 not-found` (Soul is not connected to the cluster), `409 soul-capability-unsupported` (`dry_run` requested and the target did not announce that capability — see below), `422 validation-failed` (empty `module`, `timeout_seconds` outside [1, 300]).
+
+### `dry_run` is gated on the target's capability
+
+`dry_run` promises a pure read: the Soul calls `SoulModule.Plan` instead of `Apply`
+([ADR-031(b)/(c)](../../adr/0031-scry-drift.md)). The Soul keeps that promise, not
+Keeper — a binary predating the flag reads `ErrandRequest` by the keys it knows,
+misses `dry_run`, and runs `Apply`. For the modules Errand reaches that means a
+shell command executed for real, inside an operation that advertised a read.
+
+So Keeper checks the target's announced capability set before sending, and refuses
+with `409 soul-capability-unsupported` if `dry_run` is not in it
+([ADR-0076(i)](../../adr/0076-engine-compat-window.md), the single-host sibling of
+the roster gate on the scenario path). Fail-closed on every edge: a missing
+announcement, no presence source at all, and a failed check all refuse. `detail`
+says which of the two happened, because the fixes differ — upgrade the agent on
+that host, or restore Redis. Only `dry_run: true` pays for the check; an ordinary
+Errand is dispatched exactly as before.
 
 #### `GET /v1/errands/{errand_id}` / `GET /v1/errands` - reading Errands
 

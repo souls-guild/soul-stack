@@ -1087,7 +1087,7 @@ components:
       additionalProperties: false
       properties:
         dry_run:
-          description: only for PlanReadSafe modules; verb module (shell/exec) -> 400
+          description: only for PlanReadSafe modules; target soul must announce the dry_run capability -> 409 otherwise
           type: boolean
         input:
           additionalProperties: {}
@@ -12620,7 +12620,7 @@ paths:
         - soul
   /v1/souls/{sid}/exec:
     post:
-      description: Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected.
+      description: Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).
       operationId: ErrandExec
       parameters:
         - description: SID (FQDN) of the target Soul
@@ -12670,6 +12670,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
         "422":
           content:
             application/problem+json:

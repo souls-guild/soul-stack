@@ -1052,3 +1052,144 @@ func TestHumaSoul_SpecYAML(t *testing.T) {
 		}
 	}
 }
+
+// --- dry_run capability gate on the wire (ADR-0076(i), NIM-456) ---
+
+// hExecRecordingOutbound captures the ErrandRequest that reached the wire, so a
+// test can assert on the flag rather than on the reply that flag produced.
+type hExecRecordingOutbound struct {
+	mu   sync.Mutex
+	sent []*keeperv1.ErrandRequest
+}
+
+func (o *hExecRecordingOutbound) SendErrand(_ context.Context, _ string, req *keeperv1.ErrandRequest) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.sent = append(o.sent, req)
+	return nil
+}
+
+func (o *hExecRecordingOutbound) SendCancelErrand(context.Context, string, string) error { return nil }
+
+func (o *hExecRecordingOutbound) lastSent() *keeperv1.ErrandRequest {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if len(o.sent) == 0 {
+		return nil
+	}
+	return o.sent[len(o.sent)-1]
+}
+
+// hExecSoulCap — a [errand.SoulCapabilityChecker] for the wire tests. lacking →
+// the SIDs that announced nothing.
+type hExecSoulCap struct{ lacking []string }
+
+func (c hExecSoulCap) SoulsLackingCapability(_ context.Context, sids []string, _ string) ([]string, error) {
+	asked := make(map[string]struct{}, len(sids))
+	for _, sid := range sids {
+		asked[sid] = struct{}{}
+	}
+	var out []string
+	for _, sid := range c.lacking {
+		if _, ok := asked[sid]; ok {
+			out = append(out, sid)
+		}
+	}
+	return out, nil
+}
+
+func buildHExecDryRunDispatcher(t *testing.T, ob errand.OutboundSender, cap errand.SoulCapabilityChecker) *errand.Dispatcher {
+	t.Helper()
+	d, err := errand.NewDispatcher(errand.Deps{
+		Store:     newHExecStore(),
+		Outbound:  ob,
+		ApplyBus:  hExecBus{deliver: execSyncResult()},
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		KID:       "kid-1",
+		ServerCap: time.Second,
+		Clock:     func() time.Time { return hSoulAt },
+		SoulCap:   cap,
+	})
+	if err != nil {
+		t.Fatalf("errand.NewDispatcher: %v", err)
+	}
+	return d
+}
+
+// TestHumaSoul_Exec_DryRunFlag_ReachesTheWire — ★ the flag's own path. `dry_run`
+// crosses four hops between the request body and the Soul: the huma body
+// (ErrandRunRequest.DryRun), toErrandExecRequest, ExecTyped's pointer deref, and
+// buildProtoRequest. Break any one and the capability gate never fires and the
+// Soul never plans — while every gate unit test stays green, because they all
+// start from a DispatchRequest that already has the flag set. Nothing else in the
+// suite posts dry_run over HTTP.
+func TestHumaSoul_Exec_DryRunFlag_ReachesTheWire(t *testing.T) {
+	ob := &hExecRecordingOutbound{}
+	d := buildHExecDryRunDispatcher(t, ob, hExecSoulCap{})
+	r := humaExecRouter(t, hSoulEnforcer{allow: true}, nil, d)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
+		strings.NewReader(`{"module":"core.cmd.shell","timeout_seconds":5,"dry_run":true}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an announcing host must not be gated); body=%s", rec.Code, rec.Body.String())
+	}
+	sent := ob.lastSent()
+	if sent == nil {
+		t.Fatal("no ErrandRequest reached the wire")
+	}
+	if !sent.GetDryRun() {
+		t.Error("* ErrandRequest.dry_run = false after a body carrying dry_run:true - the flag is lost between " +
+			"the wire and the dispatcher, so the capability gate can never fire and the Soul applies instead of planning")
+	}
+}
+
+// TestHumaSoul_Exec_DryRunNotAnnounced_409_NoAudit — the refusal as a client sees
+// it: 409 soul-capability-unsupported, and NO `errand.invoked`. The audit half
+// matters independently — errand.invoked has two producers (the dispatcher's own
+// writeInvoked and this huma middleware), the gate precedes the first by
+// construction, and only a wire test covers the second. An event claiming an
+// invocation that was refused before dispatch is a lie in the audit log.
+func TestHumaSoul_Exec_DryRunNotAnnounced_409_NoAudit(t *testing.T) {
+	ob := &hExecRecordingOutbound{}
+	// No LeaseLookup wired, so the gate cannot cross-check connectivity and the
+	// verdict stays not-announced — the outdated-agent case.
+	d := buildHExecDryRunDispatcher(t, ob, hExecSoulCap{lacking: []string{"host-1.example.com"}})
+	auditCap := &auditCaptureWriter{}
+	r := humaExecRouter(t, hSoulEnforcer{allow: true}, auditCap, d)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
+		strings.NewReader(`{"module":"core.cmd.shell","dry_run":true}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (target did not announce dry_run); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeSoulCapabilityUnsupported)
+	if n := len(auditCap.Events()); n != 0 {
+		t.Errorf("* audit recorded %d event(s) on a refused dry_run: errand.invoked would claim an invocation "+
+			"that never reached a host", n)
+	}
+	if len(ob.sent) != 0 {
+		t.Errorf("* %d ErrandRequest(s) reached the wire on a refused dry_run", len(ob.sent))
+	}
+}
+
+// TestHumaSoul_Exec_NoDryRun_UnwiredCheckerStillDispatches — the gate must not tax
+// the ordinary Errand: with no capability checker at all (the shape of a build
+// without Redis), a plain exec still goes through. Only dry_run fails closed.
+func TestHumaSoul_Exec_NoDryRun_UnwiredCheckerStillDispatches(t *testing.T) {
+	ob := &hExecRecordingOutbound{}
+	d := buildHExecDryRunDispatcher(t, ob, nil)
+	r := humaExecRouter(t, hSoulEnforcer{allow: true}, nil, d)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
+		strings.NewReader(`{"module":"core.cmd.shell"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a non-dry-run Errand must not be gated); body=%s", rec.Code, rec.Body.String())
+	}
+	if sent := ob.lastSent(); sent == nil || sent.GetDryRun() {
+		t.Errorf("wire request = %+v, want one with dry_run=false", sent)
+	}
+}

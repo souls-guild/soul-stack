@@ -76,6 +76,15 @@ const (
 	mcpCodeSoulExists           = "soul-already-exists"
 	mcpCodeBootstrapTokenActive = "bootstrap-token-active"
 
+	// soul-capability-unsupported — the target Soul is connected but its
+	// announced capability set does not cover the request (REST
+	// TypeSoulCapabilityUnsupported, 409). First user: dry_run on
+	// keeper.soul.errand.run, refused before dispatch because a binary that
+	// ignores the flag applies for real (ADR-031(b)/ADR-0076(i), NIM-456). Kept
+	// distinct from not-found, which the errand tools already use for a Soul that
+	// is not connected at all.
+	mcpCodeSoulCapabilityUnsupported = "soul-capability-unsupported"
+
 	// Sigil codes (plugin allow-list, S4b — parity with REST POST/DELETE
 	// /v1/plugins/sigils*). plugin-not-in-cache — plugin (ns, name) not in the
 	// host's single-slot cache (REST TypePluginNotInCache, 404); sigil-already-

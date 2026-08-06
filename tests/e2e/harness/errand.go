@@ -38,12 +38,41 @@ var errandTerminalStatuses = map[string]struct{}{
 // Any other status — t.Fatal with the response body.
 func (s *Stack) ExecErrand(t *testing.T, sid, module string, input map[string]any) ErrandResult {
 	t.Helper()
+	return s.execErrand(t, sid, module, input, false)
+}
+
+// ExecErrandRaw sends the request and hands back the raw status + body without
+// interpreting either. dryRun=true reaches the Keeper-side capability gate
+// (ADR-0076(i), NIM-456), which refuses with 409 unless the target announced
+// `dry_run` — and a 409 is a status [Stack.ExecErrand] would turn into a t.Fatal,
+// so a test that wants to judge the refusal itself has to see it raw.
+func (s *Stack) ExecErrandRaw(t *testing.T, sid, module string, input map[string]any, dryRun bool) (int, string) {
+	t.Helper()
 	c := s.opClient(t)
+	resp, status, err := c.post(context.Background(), "/v1/souls/"+sid+"/exec",
+		errandBody(module, input, dryRun))
+	if err != nil {
+		t.Fatalf("ExecErrandRaw %s/%s: http: %v", sid, module, err)
+	}
+	return status, string(resp)
+}
+
+func errandBody(module string, input map[string]any, dryRun bool) map[string]any {
 	body := map[string]any{"module": module}
 	if input != nil {
 		body["input"] = input
 	}
-	resp, status, err := c.post(context.Background(), "/v1/souls/"+sid+"/exec", body)
+	if dryRun {
+		body["dry_run"] = true
+	}
+	return body
+}
+
+func (s *Stack) execErrand(t *testing.T, sid, module string, input map[string]any, dryRun bool) ErrandResult {
+	t.Helper()
+	c := s.opClient(t)
+	resp, status, err := c.post(context.Background(), "/v1/souls/"+sid+"/exec",
+		errandBody(module, input, dryRun))
 	if err != nil {
 		t.Fatalf("ExecErrand %s/%s: http: %v", sid, module, err)
 	}

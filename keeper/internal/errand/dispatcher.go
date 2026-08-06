@@ -204,6 +204,12 @@ type Deps struct {
 	Clock       func() time.Time
 	ServerCap   time.Duration
 	KID         string
+	// SoulCap — presence source for the dry-run capability gate (soulcompat.go).
+	// Optional at construction like Publisher/LeaseLookup, and for the same
+	// reason: a build without Redis has no announcement to read. Consulted ONLY
+	// on a dry_run dispatch, where nil means fail-closed refusal — an ordinary
+	// Errand never reaches it.
+	SoulCap SoulCapabilityChecker
 }
 
 // Dispatcher — synchronous orchestrator of one Errand. One Dispatch =
@@ -247,13 +253,16 @@ func NewDispatcher(deps Deps) (*Dispatcher, error) {
 //
 // Steps:
 //  1. Validate (sid/module/timeout), clamp TimeoutSec to [Min, Max].
-//  2. Generate errand_id (ULID).
-//  3. INSERT row(status='running', started_by_kid=self).
-//  4. Write audit `errand.invoked`.
-//  5. Subscribe applybus(`apply:<errand_id>`) — BEFORE sending, to not
+//  2. dry_run only — gate on the target's dry_run capability (soulcompat.go).
+//     Fail-closed, and ahead of the INSERT: a host that would apply for real is
+//     refused without an errands row or an `errand.invoked` event.
+//  3. Generate errand_id (ULID).
+//  4. INSERT row(status='running', started_by_kid=self).
+//  5. Write audit `errand.invoked`.
+//  6. Subscribe applybus(`apply:<errand_id>`) — BEFORE sending, to not
 //     miss event on quick Soul response.
-//  6. Resolve holder → SendErrand local or Publish remote.
-//  7. Wait sync until min(TimeoutSec, ServerCap):
+//  7. Resolve holder → SendErrand local or Publish remote.
+//  8. Wait sync until min(TimeoutSec, ServerCap):
 //     - ResultEvent received → MarkTerminal → return sync.
 //     - timeout = TimeoutSec (≤ServerCap) → MarkTerminal(timed_out) →
 //     return sync with status=TIMED_OUT.
@@ -262,6 +271,25 @@ func NewDispatcher(deps Deps) (*Dispatcher, error) {
 func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (DispatchResult, error) {
 	if err := validateDispatch(&req); err != nil {
 		return DispatchResult{}, err
+	}
+
+	// dry_run promises the host is only read (ADR-031(b)/(c)) — a promise the
+	// Soul keeps, not keeper, so it is verified against the target's
+	// announcement before anything leaves this process.
+	if req.DryRun {
+		if err := d.gateDryRun(ctx, req.SID); err != nil {
+			// Logged here rather than in the gate: the refusal writes no errands
+			// row and no audit event (both come later, and a refused request
+			// invoked nothing), so without this line a fail-closed refusal of a
+			// privileged operation would leave no server-side trace at all. Warn,
+			// matching the neighbouring send-path failures.
+			d.deps.Logger.Warn("errand: dry_run refused before dispatch",
+				slog.String("sid", req.SID),
+				slog.String("module", req.Module),
+				slog.String("started_by_aid", req.StartedByAID),
+				slog.Any("error", err))
+			return DispatchResult{}, err
+		}
 	}
 
 	errandID := audit.NewULID()

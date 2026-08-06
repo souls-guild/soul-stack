@@ -123,6 +123,19 @@ const (
 	// terminal status (DELETE /v1/errands/{errand_id}, ADR-033 slice E5).
 	// 409 Conflict — the correct code for "target state unreachable".
 	TypeErrandNotCancellable = "https://soul-stack.com/errors/errand-not-cancellable"
+	// TypeSoulCapabilityUnsupported — the target Soul is connected, but its
+	// announced capability set does not cover what the request needs of it
+	// (ADR-0076(i)); the first user is `dry_run` on POST /v1/souls/{sid}/exec,
+	// refused before dispatch because a binary that ignores the flag would apply
+	// for real (ADR-031(b), NIM-456). 409 Conflict, the same class as
+	// TypeIncarnationLocked — the request is well-formed, the target's state
+	// makes it unserveable — and deliberately NOT 404 TypeNotFound, which the
+	// Errand routes already use for a Soul that is not connected at all: "too old
+	// for this" and "not there" call for different operator actions. Also covers
+	// the unverifiable case (no presence source to confirm against), which
+	// fail-closes the same way; `detail` says which of the two happened, so a
+	// client can tell "upgrade that agent" from "our Redis is down".
+	TypeSoulCapabilityUnsupported = "https://soul-stack.com/errors/soul-capability-unsupported"
 	// TypeBadGateway — keeper itself is healthy, but the external git source returned an
 	// error (`GET /v1/services/{name}/refs` → ls-remote). 502 Bad Gateway — the correct
 	// code for "upstream service unavailable"; detail carries through the original
@@ -222,6 +235,7 @@ var titles = map[string]string{
 	TypeProfileExists:              "Cloud profile already exists",
 	TypeProviderHasProfiles:        "Cloud provider has dependent profiles",
 	TypeErrandNotCancellable:       "Errand is not cancellable",
+	TypeSoulCapabilityUnsupported:  "Soul does not support this operation",
 	TypeBadGateway:                 "Bad gateway",
 	TypeChoirExists:                "Choir already exists",
 	TypeVoiceExists:                "Voice already exists",
@@ -315,6 +329,7 @@ var statuses = map[string]int{
 	TypeProfileExists:              http.StatusConflict,
 	TypeProviderHasProfiles:        http.StatusConflict,
 	TypeErrandNotCancellable:       http.StatusConflict,
+	TypeSoulCapabilityUnsupported:  http.StatusConflict,
 	TypeBadGateway:                 http.StatusBadGateway,
 	TypeChoirExists:                http.StatusConflict,
 	TypeVoiceExists:                http.StatusConflict,

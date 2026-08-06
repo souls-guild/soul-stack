@@ -711,7 +711,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.soul.errand.run",
-			Description:  "Runs a single module on a Soul over the mTLS EventStream (pull-ad-hoc exec, ADR-033). Returns a sync result (terminal status) or async=true with status=running if the server-cap is exceeded - then poll keeper.errand.get. A module whitelist and stdout/stderr cap (64 KiB) are applied by the Soul-side errand-runner. Permission: errand.run; selector host=<sid>. Fails with code=not-found if the Soul isn't connected to the cluster; validation-failed on an empty sid/module and timeout_seconds outside [1,300].",
+			Description:  "Runs a single module on a Soul over the mTLS EventStream (pull-ad-hoc exec, ADR-033). Returns a sync result (terminal status) or async=true with status=running if the server-cap is exceeded - then poll keeper.errand.get. A module whitelist and stdout/stderr cap (64 KiB) are applied by the Soul-side errand-runner. Permission: errand.run; selector host=<sid>. Fails with code=not-found if the Soul isn't connected to the cluster; soul-capability-unsupported if dry_run was requested and the target's announced capability set does not include it (a binary that ignores the flag would apply for real, so the request is refused before dispatch - ADR-0076(i)); validation-failed on an empty sid/module and timeout_seconds outside [1,300].",
 			InputSchema:  schemaErrandRunInput,
 			OutputSchema: schemaErrandRunOutput,
 		},
@@ -2295,7 +2295,7 @@ var (
 "module":{"type":"string","description":"Module address core.<class>.<state> or core.cmd.shell / core.exec.run."},
 "input":{"type":"object","description":"Module input (shape depends on the module)."},
 "timeout_seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Server-cap of the overall timeout. Default 30."},
-"dry_run":{"type":"boolean","description":"true -> Soul calls mod.Plan instead of mod.Apply (read-safe modules only)."}}}`)
+"dry_run":{"type":"boolean","description":"true -> Soul calls mod.Plan instead of mod.Apply (read-safe modules only). The target must announce the dry_run capability, else the call is refused with soul-capability-unsupported before dispatch."}}}`)
 
 	schemaErrandRunOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

@@ -223,6 +223,7 @@ tests/e2e/
 | `TestE2EKeeperSideDispatch_CovenRegistered` | | keeper-side core `core.soul.registered` (`on: keeper` dispatcher). |
 | `TestE2EOracleTypedPortent_*` / `TestOracle_FileChanged_FiresScenario` / `TestL3b_VigilDecreeOracleFlow_Smoke` | | Vigil/Oracle event-driven: portent → fired scenario. |
 | `TestSoulHistory_AggregatesScenarioAndErrand` | | scenario+errand history aggregation by SID. |
+| `TestErrandDryRun_AnnouncedCapabilityPassesTheGate` | 1 | wire-up of the Errand `dry_run` capability gate (ADR-0076(i), NIM-456): the stub announces `dry_run`, so a correctly wired keeper must let the dispatch through. Catches what unit tests cannot — a nil checker in the daemon (fail-closed → every `dry_run` refused) or a checker reading a different heartbeat field than Hello writes. |
 | `TestIncarnationCreate_MissingRequiredInput_422` | | negative: sync validation of required input. |
 | `TestValidApplyRunsStatus_*` | — | guard: `apply_runs.status` enum values haven't drifted from Go. |
 

@@ -18,7 +18,7 @@ Running Errand on a specific Soul. Permission: `errand.run`, selector `host=<sid
 | `module` | `string` | yes | Module address `core.<class>.<state>` or `core.cmd.shell` / `core.exec.run` (whitelist on Soul-side). |
 | `input` | `object` | optional | Module Input (form depends on the module). |
 | `timeout_seconds` | `integer` (1..300) | optional | Full timeout. Default 30. |
-| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). |
+| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). The target must announce the `dry_run` Soul-capability, else the call is refused before dispatch. |
 
 **Output:**
 
@@ -35,7 +35,7 @@ Running Errand on a specific Soul. Permission: `errand.run`, selector `host=<sid
 | `error_message` | `string` | Masked reason FAILED/TIMED_OUT/MODULE_NOT_ALLOWED. |
 | `output` | `object` | Structural output read-safe modules; for shell/exec is missing. |
 
-Errors: `not-found` (Soul is not connected to the cluster), `validation-failed` (empty sid/module, `timeout_seconds` outside [1, 300]).
+Errors: `not-found` (Soul is not connected to the cluster), `soul-capability-unsupported` (`dry_run` requested and the target Soul did not announce that capability — a binary that ignores the flag would apply for real; also covers "support could not be confirmed", the message says which), `validation-failed` (empty sid/module, `timeout_seconds` outside [1, 300]). The `dry_run` gate is [ADR-0076(i)](../../adr/0076-engine-compat-window.md), mirroring REST `409` — see [operator-api → Errand](../operator-api/errands.md).
 
 #### `keeper.errand.list`
 

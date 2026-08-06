@@ -456,7 +456,7 @@ type ErrandRunRequest struct {
 	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state> (core.cmd.shell / core.exec.run / ErrandReadSafe module)"`
 	Input          *map[string]any `json:"input,omitempty" doc:"input for the module (validated against input_schema)"`
 	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"total Errand timeout [1..300]; 0/omitted -> default 30s; > server-cap (30s) -> 202 + Location"`
-	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; verb module (shell/exec) -> 400"`
+	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; target soul must announce the dry_run capability -> 409 otherwise"`
 }
 
 // errandExecOutput — huma output POST /v1/souls/{sid}/exec with TWO success codes under
@@ -475,17 +475,19 @@ type errandExecOutput struct {
 // errandExecOperation — metadata of POST /v1/souls/{sid}/exec. DefaultStatus=200 (sync
 // terminal). 202 (async escalation) — an additional success code (the handler sets
 // Status=202 + Location itself). Permission errand.run + audit errand.invoked. Errors: 202
-// async, 400 unknown/malformed/dry_run-verb, 403 RBAC, 404 soul-not-connected, 422
-// invalid sid/module/timeout, 500.
+// async, 400 unknown/malformed, 403 RBAC, 404 soul-not-connected, 409 the target did not
+// announce dry_run (soul-capability-unsupported, NIM-456), 422 invalid sid/module/timeout,
+// 500.
 func errandExecOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "ErrandExec",
 		Method:        http.MethodPost,
 		Path:          "/{sid}/exec",
 		Summary:       "Run Errand on a Soul",
-		Description:   "Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected.",
+		Description:   "Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).",
 		Tags:          []string{"Errand"},
 		DefaultStatus: http.StatusOK,
-		Errors:        []int{http.StatusAccepted, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+		Errors: []int{http.StatusAccepted, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound,
+			http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }

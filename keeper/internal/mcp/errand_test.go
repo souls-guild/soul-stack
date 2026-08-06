@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
@@ -57,5 +60,88 @@ func TestErrandTools_NilGuard(t *testing.T) {
 				t.Errorf("code = %q, want internal-error", data.Code)
 			}
 		})
+	}
+}
+
+// TestMapErrandDispatchError_DryRunCapability — the MCP twin of the REST mapping
+// (handlers/errand.go::dispatchError): the dry-run capability gate (NIM-456)
+// surfaces as code=soul-capability-unsupported on both surfaces, not as the
+// catch-all internal-error. The two causes keep distinct messages so an agent
+// reading the reply knows whether to upgrade an agent binary or report an outage.
+func TestMapErrandDispatchError_DryRunCapability(t *testing.T) {
+	h, _, _ := newTestHandler(t, &fakePool{}, errandAdminCfg())
+
+	for _, tc := range []struct {
+		name        string
+		err         error
+		wantMessage string
+	}{
+		{
+			name:        "not announced",
+			err:         fmt.Errorf("host h did not announce it: %w", errand.ErrDryRunNotAnnounced),
+			wantMessage: "predates the flag and needs updating",
+		},
+		{
+			name:        "unverifiable",
+			err:         fmt.Errorf("no checker: %w", errand.ErrDryRunUnverifiable),
+			wantMessage: "presence source is unavailable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := h.mapErrandDispatchError(nil, "keeper.soul.errand.run", tc.err)
+			if resp.Error == nil {
+				t.Fatal("expected an error response")
+			}
+			data := mustToolErrorData(t, resp.Error.Data)
+			if data.Code != mcpCodeSoulCapabilityUnsupported {
+				t.Errorf("code = %q, want %q", data.Code, mcpCodeSoulCapabilityUnsupported)
+			}
+			if !strings.Contains(resp.Error.Message, tc.wantMessage) {
+				t.Errorf("message = %q, does not carry %q", resp.Error.Message, tc.wantMessage)
+			}
+			if !strings.Contains(resp.Error.Message, "dry_run") {
+				t.Errorf("message = %q, does not name dry_run", resp.Error.Message)
+			}
+		})
+	}
+}
+
+// TestMapErrandDispatchError_NotConnectedStillNotFound — the new cases must not
+// have shadowed the existing one: a Soul that is not connected is still not-found,
+// which is a different operator action from "too old for dry_run".
+func TestMapErrandDispatchError_NotConnectedStillNotFound(t *testing.T) {
+	h, _, _ := newTestHandler(t, &fakePool{}, errandAdminCfg())
+
+	resp := h.mapErrandDispatchError(nil, "keeper.soul.errand.run", errand.ErrSoulNotConnected)
+	if resp.Error == nil {
+		t.Fatal("expected an error response")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeNotFound {
+		t.Errorf("code = %q, want %q", data.Code, mcpCodeNotFound)
+	}
+}
+
+// TestErrandRunArgs_DryRunTag — the wire name of the flag on the MCP surface.
+// `dry_run` crosses from the tool arguments into errand.DispatchRequest through
+// this one struct tag (errand.go:29 → :109); a rename or typo drops it silently,
+// the capability gate never fires, and an outdated Soul applies for real while
+// every gate test stays green. Cheap guard for a hop nothing else covers.
+func TestErrandRunArgs_DryRunTag(t *testing.T) {
+	var a errandRunArgs
+	if err := strictUnmarshal([]byte(`{"sid":"web-01.example.com","module":"core.cmd.shell","dry_run":true}`), &a); err != nil {
+		t.Fatalf("strictUnmarshal: %v", err)
+	}
+	if !a.DryRun {
+		t.Error("* dry_run:true in the arguments did not reach errandRunArgs.DryRun - check the json tag")
+	}
+	// And the tool must accept the key at all: strict unmarshal rejects unknown
+	// fields, so a manifest advertising `dry_run` against a struct that lost it
+	// would fail above rather than here — this pins the pair together.
+	if !strings.Contains(string(schemaErrandRunInput), `"dry_run"`) {
+		t.Error("schemaErrandRunInput does not declare dry_run, so the tool would reject the flag it accepts")
+	}
+	if !strings.Contains(string(schemaErrandRunInput), "soul-capability-unsupported") {
+		t.Error("schemaErrandRunInput's dry_run description does not mention the capability refusal - " +
+			"this text is what an agent reads before choosing to send the flag")
 	}
 }

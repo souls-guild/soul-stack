@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -370,5 +372,63 @@ func TestNewErrandAcceptedView_FieldProjection(t *testing.T) {
 	v := newErrandAcceptedView("01J0000000000000000000003", errand.StatusRunning)
 	if v.ErrandID != "01J0000000000000000000003" || v.Status != "running" {
 		t.Errorf("accepted view: %+v", v)
+	}
+}
+
+// TestErrandHandler_DispatchError_DryRunCapability — the dry-run capability gate
+// (errand/soulcompat.go, NIM-456) reaches the operator as 409
+// soul-capability-unsupported, and the two refusal causes stay distinguishable in
+// `detail`. Deliberately NOT 404: the errand routes already use that for a Soul
+// that is not connected, and "too old for this" needs a different fix from "not
+// there". Falling through to the default 500 would report the cluster's own bug
+// for what is a target-state problem.
+func TestErrandHandler_DispatchError_DryRunCapability(t *testing.T) {
+	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil)
+
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantDetail string
+	}{
+		{
+			name:       "not announced sends the operator to the binary",
+			err:        fmt.Errorf("host h did not announce it: %w", errand.ErrDryRunNotAnnounced),
+			wantDetail: "predates the flag and needs updating",
+		},
+		{
+			name:       "unverifiable sends the operator to the presence source",
+			err:        fmt.Errorf("no checker: %w", errand.ErrDryRunUnverifiable),
+			wantDetail: "presence source is unavailable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			details, ok := asProblemError(h.dispatchError(tc.err))
+			if !ok {
+				t.Fatalf("dispatchError did not yield a problem error for %v", tc.err)
+			}
+			if !strings.Contains(details.Type, "soul-capability-unsupported") {
+				t.Errorf("problem.Type = %q, want soul-capability-unsupported", details.Type)
+			}
+			if details.Status != http.StatusConflict {
+				t.Errorf("problem.Status = %d, want %d", details.Status, http.StatusConflict)
+			}
+			if !strings.Contains(details.Detail, tc.wantDetail) {
+				t.Errorf("problem.Detail = %q, does not carry %q - the operator cannot tell which fix applies",
+					details.Detail, tc.wantDetail)
+			}
+			if !strings.Contains(details.Detail, "dry_run") {
+				t.Errorf("problem.Detail = %q, does not name dry_run", details.Detail)
+			}
+			// The refusal must never propose re-running without the flag. That is a
+			// real Apply on a host the operator asked only to read — the exact
+			// mutation this gate exists to prevent, and advice a hurried operator
+			// would follow.
+			for _, forbidden := range []string{"without dry_run", "without the dry_run", "dry_run=false", "omit dry_run"} {
+				if strings.Contains(details.Detail, forbidden) {
+					t.Errorf("problem.Detail = %q suggests %q - that is the real Apply the gate refuses",
+						details.Detail, forbidden)
+				}
+			}
+		})
 	}
 }
