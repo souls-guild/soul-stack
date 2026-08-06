@@ -1760,6 +1760,28 @@ order to act in.
   the gate job, which had let one red lint erase the whole e2e tier and render it as
   "skipped".
 
+- **One suite was still deciding that for itself, and the guard could not see
+  it.** The inversion above left `keeper/internal/oracle` reading a bare
+  `REQUIRE_DOCKER` — a name nothing sets, neither the Makefile nor CI — so its
+  `log.Fatalf` was unreachable and a Postgres container that failed to start
+  returned 0 from `TestMain`. The package printed `ok` having run none of its 116
+  tests, and the tier stayed green across the hole. It now calls the shared helper
+  like the other 36 packages: the same failure is fatal, and the only way to get
+  that `ok` back is to declare the skip out loud.
+
+  The drift guard written to prevent exactly this matched two literal names,
+  `SOUL_STACK_INTEGRATION_{SKIP,REQUIRE}_DOCKER` — the vocabulary that same change
+  had just introduced. It could only ever catch a future fork spelled in the new
+  terms, while being blind by construction to the ~35-copy population it exists to
+  finish off, every one of which predates those names. It also walked the `keeper`
+  module alone, leaving `shared/`, `soul/`, `tests/` and `examples/` outside its
+  world — where a second, dormant copy was living in
+  `examples/module/soul-cloud-aws` (inverted here too, before that lane enters the
+  gate rather than after). The guard now matches by property rather than by
+  spelling — any environment variable about docker, or in our own
+  `SOUL_STACK_INTEGRATION_*` namespace, less docker's own client configuration —
+  parses the source instead of grepping it, and walks the whole checkout.
+
 - **Tag-guarded tests are compiled by the gate again.** Nothing built the
   `integration` sources on a normal PR, so they rotted out of sight: the Soul
   failback suite still called `reconnectLoop` with 12 arguments after it grew to

@@ -3,8 +3,8 @@
 // L2 — driver against LocalStack (real EC2 API in a container) through
 // testcontainers. Only AWS supports this out-of-the-box, so AWS is the rollout pilot
 // (GCP/Azure/YC/Proxmox/OpenStack do not have their own LocalStack). L2
-// runs with `go test -tags=integration` when docker is available; without docker,
-// skips unless REQUIRE_DOCKER is set.
+// runs with `go test -tags=integration`; a container that will not start FAILS
+// the suite unless a skip is asked for out loud (see requireDocker below).
 //
 // LocalStack community supports basic EC2 RunInstances/DescribeInstances/
 // TerminateInstances with mock instances (immediately running), enough to
@@ -25,9 +25,26 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
+// requireDocker restates the policy that keeper/internal/integrationenv owns for
+// every other suite: passing -tags=integration is already the statement "run the
+// integration suites", so containers that will not start are a FAILURE, and a
+// skip — a claim that nothing was verified — has to be said out loud.
+//
+// Restated rather than imported, because it cannot be imported. This plugin is a
+// standalone module outside go.work that depends only on the Apache-2.0 surfaces
+// sdk/ and proto/plugin/ (ADR-016), and the helper lives under keeper/internal/,
+// which Go's internal rule puts out of reach of any package not rooted at
+// keeper/. Publishing the policy through sdk/ to close the gap would make a
+// CI-harness detail part of the public plugin-authoring contract; a four-line
+// restatement is the smaller price.
+//
+// Until NIM-481 this copy still carried the pre-NIM-238 default — absent variable
+// meant skip — which is the shape that let a suite report green having executed
+// nothing. It was dormant (make test-plugins runs without -tags=integration, so
+// the file is not even compiled), and inverted here before the cloud L2 lane
+// enters the gate rather than after.
 func requireDocker() bool {
-	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
-	return v == "1" || v == "true"
+	return os.Getenv("SOUL_STACK_INTEGRATION_SKIP_DOCKER") == ""
 }
 
 func TestL2_LocalStack_CreateListDestroy(t *testing.T) {
@@ -37,7 +54,7 @@ func TestL2_LocalStack_CreateListDestroy(t *testing.T) {
 	ctr, err := localstack.Run(ctx, "localstack/localstack:3.6")
 	if err != nil {
 		if requireDocker() {
-			t.Fatalf("localstack setup (REQUIRE_DOCKER): %v", err)
+			t.Fatalf("localstack setup (docker required): %v", err)
 		}
 		t.Skipf("localstack unavailable, skipping L2: %v", err)
 	}

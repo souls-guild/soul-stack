@@ -40,8 +40,8 @@ func run(m *testing.M) int {
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		if os.Getenv("REQUIRE_DOCKER") != "" {
-			log.Fatalf("oracle integration: setup failed (REQUIRE_DOCKER): %v", err)
+		if requireDocker() {
+			log.Fatalf("oracle integration: setup failed (docker required): %v", err)
 		}
 		log.Printf("oracle integration: skipping, docker unavailable: %v", err)
 		return 0
