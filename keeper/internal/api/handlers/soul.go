@@ -778,7 +778,7 @@ func (h *SoulHandler) inScope(claims *jwt.Claims, s *soul.Soul) bool {
 	if scope.Empty() {
 		return false
 	}
-	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits))
+	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsFromJSON(s.TraitsRaw))
 }
 
 // readScopeForClaims derives the single-read scope boundary from the operator's Purview

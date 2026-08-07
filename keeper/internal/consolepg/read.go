@@ -77,8 +77,8 @@ type Recording struct {
 	// fail-closed by construction: a coven-scoped operator can no longer show
 	// the recording is inside their coven, while a `host=`-scoped one still
 	// matches on `sid`, which the recording carries itself.
-	Covens []string
-	Traits map[string]any
+	Covens    []string
+	TraitsRaw []byte
 }
 
 // Live reports whether the recording has no terminal stamp — either the session
@@ -276,19 +276,17 @@ func scanRecording(rows pgx.Rows) (Recording, error) {
 	var (
 		rec    Recording
 		header []byte
-		traits map[string]any
 	)
 	if err := rows.Scan(
 		&rec.RecordingID, &rec.SessionID, &rec.Kind, &rec.SID, &rec.ArchonAID, &header,
 		&rec.StartedAt, &rec.FinishedAt, &rec.CloseReason,
 		&rec.EventCount, &rec.ByteCount, &rec.Truncated,
-		&rec.Covens, &traits,
+		&rec.Covens, &rec.TraitsRaw,
 	); err != nil {
 		return Recording{}, err
 	}
 	// A header that will not parse is not a reason to hide the recording: the
 	// body is the artifact, and a player can size a terminal from a default.
 	_ = json.Unmarshal(header, &rec.Header)
-	rec.Traits = traits
 	return rec, nil
 }

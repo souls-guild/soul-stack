@@ -122,5 +122,5 @@ func HostInScope(ctx context.Context, db ExecQueryRower, sid string, scope soulp
 // is what makes the screening safe to run before the write — there is no way for
 // binding to mint the label that would authorize the bind.
 func hostInScope(scope soulpurview.Scope, s *soul.Soul) bool {
-	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsInput(s.Traits))
+	return soulpurview.InScope(scope, s.SID, s.Coven, soulpurview.TraitsFromJSON(s.TraitsRaw))
 }

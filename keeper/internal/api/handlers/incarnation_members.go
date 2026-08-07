@@ -414,7 +414,7 @@ func (h *IncarnationHandler) ListMembersTyped(ctx context.Context, claims *jwt.C
 
 	items := make([]MemberView, 0, len(members))
 	for _, m := range members {
-		if !soulpurview.InScope(scope, m.SID, m.Covens, soulpurview.TraitsInput(m.Traits)) {
+		if !soulpurview.InScope(scope, m.SID, m.Covens, soulpurview.TraitsFromJSON(m.TraitsRaw)) {
 			continue
 		}
 		items = append(items, MemberView{

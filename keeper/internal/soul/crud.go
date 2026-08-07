@@ -581,7 +581,6 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 		s             Soul
 		transportStr  string
 		statusStr     string
-		traitsJSON    []byte
 		lastSeenAt    *time.Time
 		lastSeenByKID *string
 		createdByAID  *string
@@ -593,7 +592,7 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 		&transportStr,
 		&statusStr,
 		&s.Coven,
-		&traitsJSON,
+		&s.TraitsRaw,
 		&s.RegisteredAt,
 		&lastSeenAt,
 		&lastSeenByKID,
@@ -610,8 +609,8 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	s.Transport = Transport(transportStr)
 	s.Status = Status(statusStr)
 	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → empty map, not nil.
-	if len(traitsJSON) > 0 {
-		if err := json.Unmarshal(traitsJSON, &s.Traits); err != nil {
+	if len(s.TraitsRaw) > 0 {
+		if err := json.Unmarshal(s.TraitsRaw, &s.Traits); err != nil {
 			return nil, fmt.Errorf("soul: unmarshal traits for %q: %w", s.SID, err)
 		}
 	}

@@ -2,7 +2,6 @@ package incarnation
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -116,10 +115,16 @@ func RemoveMembers(ctx context.Context, db ExecQueryRower, incName string, sids 
 // dimensions coven/traits). Not a [soul.Soul] — the read is about membership,
 // and the host columns here exist to serve it.
 type Member struct {
-	SID        string
-	Status     string
-	Covens     []string
-	Traits     map[string]any
+	SID    string
+	Status string
+	Covens []string
+	// TraitsRaw is the host's `souls.traits` jsonb exactly as Postgres
+	// serializes it. It serves the scope check alone (the roster does not
+	// display traits) and is kept RAW on purpose: the souls list compares
+	// against these very bytes, and decoding them first loses the number
+	// token it compares (NIM-401). Project it with
+	// [soulpurview.TraitsFromJSON].
+	TraitsRaw  []byte
 	BoundAt    time.Time
 	BoundByAID *string
 }
@@ -150,14 +155,8 @@ func ListMembers(ctx context.Context, db ExecQueryRower, incName string) ([]Memb
 	out := make([]Member, 0)
 	for rows.Next() {
 		var m Member
-		var traitsJSON []byte
-		if err := rows.Scan(&m.SID, &m.Status, &m.Covens, &traitsJSON, &m.BoundAt, &m.BoundByAID); err != nil {
+		if err := rows.Scan(&m.SID, &m.Status, &m.Covens, &m.TraitsRaw, &m.BoundAt, &m.BoundByAID); err != nil {
 			return nil, fmt.Errorf("incarnation: scan member row: %w", err)
-		}
-		if len(traitsJSON) > 0 {
-			if err := json.Unmarshal(traitsJSON, &m.Traits); err != nil {
-				return nil, fmt.Errorf("incarnation: unmarshal traits for %q: %w", m.SID, err)
-			}
 		}
 		out = append(out, m)
 	}

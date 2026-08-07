@@ -117,13 +117,18 @@ type Soul struct {
 	// Separate axis alongside flat Coven; source is operator (like Coven),
 	// NOT Soul-reported. jsonb column `souls.traits` (migration 087); nil/empty
 	// map = no tags (read/target pilot, write path - next slice).
-	Traits        map[string]any `json:"traits,omitempty"`
-	RegisteredAt  time.Time      `json:"registered_at"`
-	LastSeenAt    *time.Time     `json:"last_seen_at,omitempty"`
-	LastSeenByKID *string        `json:"last_seen_by_kid,omitempty"`
-	CreatedByAID  *string        `json:"created_by_aid,omitempty"`
-	RequestedAt   *time.Time     `json:"requested_at,omitempty"`
-	Note          string         `json:"note,omitempty"`
+	Traits map[string]any `json:"traits,omitempty"`
+	// TraitsRaw is the same column exactly as Postgres serializes it, kept for
+	// the scope check: the souls list compares against these very bytes, and
+	// Traits above has already lost the number token it compares (NIM-401).
+	// Never rendered — see [soulpurview.TraitsFromJSON].
+	TraitsRaw     []byte     `json:"-"`
+	RegisteredAt  time.Time  `json:"registered_at"`
+	LastSeenAt    *time.Time `json:"last_seen_at,omitempty"`
+	LastSeenByKID *string    `json:"last_seen_by_kid,omitempty"`
+	CreatedByAID  *string    `json:"created_by_aid,omitempty"`
+	RequestedAt   *time.Time `json:"requested_at,omitempty"`
+	Note          string     `json:"note,omitempty"`
 }
 
 // ValidStatus / ValidTransport are exported closed-enum checks

@@ -123,26 +123,38 @@ func TestInScope_Trait(t *testing.T) {
 	}
 }
 
-// TestTraitsInput verifies the jsonb-traits → ScopeInput projection: a scalar
-// becomes a one-element slice, a list becomes many, values are stringified like
-// PG's `->>`; an empty/nil map → nil.
-func TestTraitsInput(t *testing.T) {
-	got := TraitsInput(map[string]any{
-		"tier":   "gold",
-		"env":    []any{"prod", "stage"},
-		"shard":  float64(7),
-		"active": true,
-	})
+// TestTraitsFromJSON verifies the raw-jsonb → ScopeInput projection against the
+// forms the SQL pushdown reaches: a scalar becomes a one-element slice, a
+// container contributes its own text plus what `?|` finds inside it, and a
+// number keeps the TOKEN Postgres stores rather than a re-formatted float —
+// that last one is NIM-401, where `1000000` reached the souls list as `1e+06`
+// in Go and the roster hid a host the list had just shown.
+//
+// The authority for these expectations is Postgres itself; they are asserted
+// against a live one by TestIntegration_RosterAgreesWithSoulsList.
+func TestTraitsFromJSON(t *testing.T) {
+	got := TraitsFromJSON([]byte(
+		`{"tier": "gold", "env": ["prod", "stage"], "shard": 7, "active": true,
+		  "asn": 1000000, "ratio": 0.0000001, "wide": 12345678901234567890,
+		  "ports": [6379, 6380], "nested": {"k": "v"}, "gone": null}`))
 	want := map[string][]string{
 		"tier":   {"gold"},
-		"env":    {"prod", "stage"},
+		"env":    {`["prod", "stage"]`, "prod", "stage"},
 		"shard":  {"7"},
 		"active": {"true"},
+		"asn":    {"1000000"},   // NOT "1e+06"
+		"ratio":  {"0.0000001"}, // NOT "1e-07"
+		"wide":   {"12345678901234567890"},
+		"ports":  {"[6379, 6380]"},    // `?|` skips non-string elements
+		"nested": {`{"k": "v"}`, "k"}, // `?|` over an object matches KEYS
+		// "gone" is absent: `->>` over a JSON null is SQL NULL, equal to nothing.
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("TraitsInput = %v; want %v", got, want)
+		t.Fatalf("TraitsFromJSON = %v; want %v", got, want)
 	}
-	if TraitsInput(nil) != nil {
-		t.Fatalf("TraitsInput(nil) → non-nil; want nil (trait condition fails closed)")
+	for _, empty := range [][]byte{nil, []byte(""), []byte("{}"), []byte("not json")} {
+		if TraitsFromJSON(empty) != nil {
+			t.Fatalf("TraitsFromJSON(%q) → non-nil; want nil (trait condition fails closed)", empty)
+		}
 	}
 }

@@ -24,8 +24,6 @@
 package soulpurview
 
 import (
-	"fmt"
-
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
@@ -94,7 +92,7 @@ func (s Scope) WhereSQL(cols rbac.ScopeColumns, startIdx int) (string, []any, in
 //
 // traits is the Soul's traits already projected onto the [rbac.ScopeInput] shape
 // (key → []string), or nil (a trait condition then fails closed). Use
-// [TraitsInput] to project a Soul's raw jsonb traits.
+// [TraitsFromJSON] to project a Soul's raw jsonb traits.
 func InScope(s Scope, sid string, soulCovens []string, traits map[string][]string) bool {
 	return s.p.Match(rbac.ScopeInput{
 		Covens: soulCovens,
@@ -103,34 +101,12 @@ func InScope(s Scope, sid string, soulCovens []string, traits map[string][]strin
 	})
 }
 
-// TraitsInput projects a Soul's traits (jsonb: key → scalar | list) onto the
-// [rbac.ScopeInput] shape (key → []string), stringifying values the way PG's
-// `->>` does so the in-Go check matches the SQL pushdown. A nil/empty map yields
-// nil (a trait condition then fails closed).
-func TraitsInput(traits map[string]any) map[string][]string {
-	if len(traits) == 0 {
-		return nil
-	}
-	out := make(map[string][]string, len(traits))
-	for k, v := range traits {
-		if list, ok := v.([]any); ok {
-			vals := make([]string, 0, len(list))
-			for _, e := range list {
-				vals = append(vals, scalarToString(e))
-			}
-			out[k] = vals
-			continue
-		}
-		out[k] = []string{scalarToString(v)}
-	}
-	return out
-}
-
-// scalarToString renders a scalar trait value as text (string as-is; other JSON
-// scalars via %v, matching PG jsonb `->>`).
-func scalarToString(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return fmt.Sprintf("%v", v)
+// TraitsFromJSON projects a Soul's RAW `souls.traits` jsonb — the bytes a
+// `SELECT traits` returns — onto the [rbac.ScopeInput] shape for [InScope],
+// reproducing what the SQL pushdown reaches. See [rbac.TraitValues] for the
+// rule per JSON kind and for why the raw bytes, not a decoded map, are the
+// input: a decoded map has already lost the number token the SQL side compares
+// against, and no float formatting recovers it (NIM-401).
+func TraitsFromJSON(raw []byte) map[string][]string {
+	return rbac.TraitValues(raw)
 }

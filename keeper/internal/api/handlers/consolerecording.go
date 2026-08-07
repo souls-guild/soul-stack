@@ -235,7 +235,7 @@ func (h *ConsoleRecordingHandler) load(ctx context.Context, claims *keeperjwt.Cl
 	}
 
 	scope := h.scopeFor(claims)
-	if !soulpurview.InScope(scope, rec.SID, rec.Covens, soulpurview.TraitsInput(rec.Traits)) {
+	if !soulpurview.InScope(scope, rec.SID, rec.Covens, soulpurview.TraitsFromJSON(rec.TraitsRaw)) {
 		return zero, consoleRecordingNotFound(recordingID)
 	}
 	return rec, nil
