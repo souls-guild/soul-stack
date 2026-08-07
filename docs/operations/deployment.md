@@ -327,7 +327,7 @@ OpenAPI / MCP (`8080` / `8081`) can be placed behind L7-proxy (TLS termination +
 2. **Vault provision:** write `secret/keeper/postgres` (field `dsn`), `secret/keeper/jwt-signing-key` (field `signing_key`), `secret/keeper/redis` (field `password`). Create AppRole `keeper-prod` + policy ([`docs/keeper/prod-setup.md`](../keeper/prod-setup.md)).
 3. **TLS:** issue Keeper and CA server certificate for SoulSeed.
 4. **Keeper host:** install deb/rpm, create `/etc/keeper/keeper.yml` (minimum above), run via systemd.
-5. **Bootstrap of the first Archon:** `keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml --credential-out=/etc/keeper/archon-alice.jwt` ([`bootstrap-rbac.md`](bootstrap-rbac.md)).
+5. **Bootstrap of the first Archon:** `keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml --credential-out=/etc/keeper/archon-alice.jwt` ([`bootstrap-rbac.md`](bootstrap-rbac.md)). In a container the runtime is distroless — there is no `cat` to read that file back with, so bootstrap with `--credential-out=-` and redirect stdout on the host side ([`bootstrap-rbac.md` → Token on stdout](bootstrap-rbac.md#token-on-stdout)).
 6. **Smoke:** `curl -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)" https://keeper-1.internal:8080/v1/operators` - should return `200` with a list of Archons.
 
 ## Rolling out step by step - multi-keeper HA

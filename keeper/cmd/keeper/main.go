@@ -2,7 +2,7 @@
 //
 // Keeper command runtime helper note.
 //
-//	keeper init    --archon=<aid> [--config=<path>] [--credential-out=<path>] [--display-name=<name>]
+//	keeper init    --archon=<aid> [--config=<path>] [--credential-out=<path>|-] [--display-name=<name>]
 //	keeper run     [--config=<path>] [--initialize]
 //	keeper version
 //	keeper help
@@ -22,6 +22,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -48,6 +49,11 @@ import (
 )
 
 const defaultConfigPath = "/etc/keeper/keeper.yml"
+
+// credentialStdoutArg is the `--credential-out` value that means stdout
+// rather than a path (the usual CLI convention). A file genuinely named
+// `-` is still reachable as `./-`.
+const credentialStdoutArg = "-"
 
 // Keeper command runtime helper note.
 // Keeper command runtime helper note.
@@ -133,7 +139,7 @@ func runInit(args []string) int {
 	fs.SetOutput(os.Stderr)
 	fs.StringVar(&archonAID, "archon", "", "first Archon AID (required, e.g. archon-alice)")
 	fs.StringVar(&configPath, "config", defaultConfigPath, "keeper.yml path")
-	fs.StringVar(&credOut, "credential-out", "", "path to write JWT token (default <user-cache>/keeper/bootstrap-<aid>.token or /var/lib/keeper/bootstrap-<aid>.token)")
+	fs.StringVar(&credOut, "credential-out", "", "path to write JWT token, or \"-\" for stdout (default <user-cache>/keeper/bootstrap-<aid>.token or /var/lib/keeper/bootstrap-<aid>.token)")
 	fs.StringVar(&displayName, "display-name", "", "display name (default = ArchonAID)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: keeper init --archon=<aid> [flags]")
@@ -225,6 +231,34 @@ func runInit(args []string) int {
 
 	auditWriter := auditpg.NewWriter(pool)
 
+	// EPIPE on fd 1 or 2 raises SIGPIPE, whose default disposition kills
+	// the process — right for a filter, wrong for a command that commits
+	// database state before it writes anything. The reader has to be gone
+	// *before* the write for this to bite, and that is the realistic
+	// shape: an interrupted `kubectl exec`, or a consumer that died during
+	// the seconds keeper spends on Vault, the pool and migrations. Such a
+	// run died inside the write with exit 141 and an empty stderr, after
+	// the Archon was committed and the audit written, so the
+	// ErrTokenFileWriteFailed recovery below — the one path that can still
+	// hand the operator their token — never ran. Measured against a build
+	// without this line: 141 / stderr 0 B / no recovery; with it: exit 1,
+	// the reason on stderr, the token printed.
+	//
+	// Not `| head -1`, which does not reproduce it and should not be cited
+	// as if it did: the token is one write that lands in the pipe buffer
+	// before head has read enough to exit, so the write succeeds and the
+	// run ends 0 either way (measured on both builds).
+	//
+	// Notify makes the fd number stop mattering: the write returns EPIPE
+	// instead. Armed here rather than around the stdout sink alone so the
+	// completion line on stderr is covered too — though only from this
+	// point on, so anything printed earlier in startup can still take the
+	// default disposition. That is harmless: nothing is committed yet.
+	// The channel is deliberately never read; that a handler is registered
+	// at all is the entire effect.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+
+	credWriter, credLabel := credentialSink(credOut)
 	bootCfg := bootstrap.Config{
 		ArchonAID:        archonAID,
 		DisplayName:      displayName,
@@ -234,7 +268,8 @@ func runInit(args []string) int {
 		SigningKeyRef:    cfg.Auth.JWT.SigningKeyRef,
 		IssuerFactory:    issuerFactory(jwtIssuerName),
 		AuditWriter:      auditWriter,
-		CredentialOutput: credOut,
+		CredentialOutput: credLabel,
+		CredentialWriter: credWriter,
 	}
 	res, err := bootstrap.Init(ctx, bootCfg)
 	if err != nil {
@@ -280,11 +315,50 @@ func runInit(args []string) int {
 	logger.Info("bootstrap complete",
 		slog.String("aid", archonAID),
 		slog.String("credential_path", res.CredentialPath),
+		slog.Bool("credential_is_stream", res.CredentialIsStream),
 		slog.String("correlation_id", res.CorrelationID),
 		slog.String("audit_id", res.AuditID),
 	)
-	fmt.Fprintf(os.Stdout, "Bootstrap complete. Token written to %s\n", res.CredentialPath)
+	reportInit(os.Stderr, res)
 	return exitOK
+}
+
+// credentialSink maps a `--credential-out` value onto what bootstrap
+// should do with the token: a writer to hand it to, and the label that
+// ends up in [bootstrap.Result.CredentialPath].
+//
+// NIM-420. A distroless image has no shell and no `cat`, so a token
+// written to a file inside the container cannot be read back out —
+// `kubectl exec … cat` has nothing to run and `kubectl cp` needs tar in
+// the container. The fd `kubectl exec` is already attached to is the
+// only way out.
+//
+// A non-nil writer means bootstrap opens no path at all, so the label is
+// a label and not a filename. A file genuinely named `-` is still
+// reachable as `./-`.
+func credentialSink(credOut string) (io.Writer, string) {
+	if credOut == credentialStdoutArg {
+		return os.Stdout, "stdout"
+	}
+	return nil, credOut
+}
+
+// reportInit prints the human-facing outcome of `keeper init`.
+//
+// Everything goes to the one writer the caller passes, and the caller
+// passes stderr: with `--credential-out=-` the token is on stdout, and
+// `keeper init --credential-out=- > archon.jwt` has to yield a file
+// holding the JWT and nothing else.
+func reportInit(errOut io.Writer, res *bootstrap.Result) {
+	if res.CredentialIsStream {
+		fmt.Fprintln(errOut,
+			"keeper init: WARNING — the token went to a stream, not a mode 0400 file.\n"+
+				"        Nothing restricts who can read it from there. Safe when you are\n"+
+				"        holding the other end yourself (kubectl exec, a pipe, a redirect);\n"+
+				"        if this was a container's own stdout, the token is now in the\n"+
+				"        cluster's log pipeline — treat it as COMPROMISED and rotate it.")
+	}
+	fmt.Fprintf(errOut, "Bootstrap complete. Token written to %s\n", res.CredentialPath)
 }
 
 // runDaemon — `keeper run` (M0.6b).

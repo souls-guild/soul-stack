@@ -599,7 +599,10 @@ did not disperse; read the actual steps in the script itself.
 > resolve reads an empty service registry (`services[]` removed from `keeper.dev.yml`).
 >
 > `keeper init` prints `Bootstrap complete. Token written to
-> <path>` (the first Archon's JWT in a file with `mode 0400`).
+> <path>` (with a path argument: the first Archon's JWT in a file with
+> `mode 0400`; with `-`, no file and no mode at all) — on
+> **stderr**, so that `--credential-out=-` can keep stdout for the token
+> alone ([bootstrap-rbac.md → Token on stdout](../operations/bootstrap-rbac.md#token-on-stdout)).
 
 Verified manipulations after `run`:
 

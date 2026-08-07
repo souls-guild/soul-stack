@@ -15,6 +15,7 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -336,6 +338,82 @@ func TestIntegration_Init_HappyPath(t *testing.T) {
 	roles, ok := claims["roles"].([]any)
 	if !ok || len(roles) != 1 || roles[0] != "cluster-admin" {
 		t.Errorf("roles = %v", claims["roles"])
+	}
+}
+
+// NIM-420: `keeper init --credential-out=-`. With CredentialWriter set,
+// Init must hand the token to that writer and touch the filesystem not
+// at all — in a distroless image there is nothing to read a file back
+// with, so a token that lands on disk is a token that is lost.
+//
+// CredentialOutput names a file inside a directory that does not exist,
+// and CredentialWriter is set as well. That combination is the
+// load-bearing part of the setup: the file path would create the
+// directory with mode 0700 in ensureCredentialDir before anything else
+// happens, so the directory still being absent afterwards proves the
+// whole file branch was skipped rather than merely redirected. Passing a
+// label like "stdout" here instead would prove nothing — nothing would
+// create that directory under any implementation.
+func TestIntegration_Init_CredentialWriterSkipsTheFilesystem(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	absentDir := filepath.Join(t.TempDir(), "must-not-be-created")
+	absent := filepath.Join(absentDir, "archon-alice.jwt")
+
+	var out bytes.Buffer
+	writer := auditpg.NewWriter(integrationPool)
+	res, err := Init(ctx, Config{
+		ArchonAID:        "archon-alice",
+		TTLBootstrap:     720 * time.Hour,
+		Pool:             integrationPool,
+		VaultClient:      integrationVaultC,
+		SigningKeyRef:    "vault:" + integrationKVPath,
+		IssuerFactory:    newIssuerFactory(),
+		AuditWriter:      writer,
+		CredentialOutput: absent,
+		CredentialWriter: &out,
+	})
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if !res.CredentialIsStream {
+		t.Errorf("CredentialIsStream = false; the caller would skip the compromise warning")
+	}
+	if res.CredentialPath != absent {
+		t.Errorf("CredentialPath = %q, want %q — the label the caller passed", res.CredentialPath, absent)
+	}
+	if _, statErr := os.Stat(absentDir); !os.IsNotExist(statErr) {
+		t.Errorf("%s exists (err=%v) — ensureCredentialDir ran, so the file branch was not skipped", absentDir, statErr)
+	}
+	if _, statErr := os.Stat(absent); !os.IsNotExist(statErr) {
+		t.Errorf("something was created at %s (err=%v) — the file branch ran anyway", absent, statErr)
+	}
+
+	// The token on the stream must be a usable credential, not just
+	// non-empty: same claims the file path produces, same trailing \n.
+	got := out.String()
+	if !strings.HasSuffix(got, "\n") {
+		t.Errorf("stream output %q has no trailing newline; `--credential-out=- > f` would differ from `--credential-out=f`", got)
+	}
+	parsed, err := jwtv5.Parse(strings.TrimSpace(got), func(_ *jwtv5.Token) (interface{}, error) {
+		return []byte(integrationSigningKey), nil
+	}, jwtv5.WithLeeway(2*time.Second))
+	if err != nil {
+		t.Fatalf("Parse JWT from stream: %v", err)
+	}
+	claims, ok := parsed.Claims.(jwtv5.MapClaims)
+	if !ok {
+		t.Fatalf("claims type = %T", parsed.Claims)
+	}
+	if claims["sub"] != "archon-alice" || claims["bootstrap_initial"] != true {
+		t.Errorf("claims = %v, want the same first-Archon claims the file path issues", claims)
+	}
+
+	// Init returns the token in Result only on the recovery path. A
+	// stream destination is a success, so it must not leak there.
+	if res.Token != "" {
+		t.Errorf("Result.Token is populated on a successful stream write — it is reserved for ErrTokenFileWriteFailed recovery")
 	}
 }
 

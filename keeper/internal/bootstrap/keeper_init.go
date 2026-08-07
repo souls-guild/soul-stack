@@ -4,9 +4,15 @@
 // empty, inserts the first Archon (`created_by_aid: NULL`), issues a JWT
 // (TTL `auth.jwt.ttl_bootstrap`, claim `bootstrap_initial: true`, role
 // `cluster-admin`), writes an `operator.created` audit event (source
-// `keeper_internal`, `archon_aid: NULL`) and saves the token to a file
-// with `mode 0400`. A repeat call on a non-empty registry returns
-// [ErrAlreadyInitialized].
+// `keeper_internal`, `archon_aid: NULL`) and hands the token over. A
+// repeat call on a non-empty registry returns [ErrAlreadyInitialized].
+//
+// The token goes to one of three destinations, all through [Config]:
+// a regular file with `mode 0400` (the default), an already-open fd
+// supplied as [Config.CredentialWriter], or a stream sitting at the
+// given path — a character device, a fifo, `/dev/stdout`. Only the
+// first carries a permission guarantee; [Result.CredentialIsStream]
+// says which one happened.
 //
 // The package does not manage the lifecycle of the Postgres pool / Vault
 // client / JWT issuer — the caller (`keeper/cmd/keeper`) assembles the
@@ -19,8 +25,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -132,16 +140,46 @@ type Config struct {
 
 	// CredentialOutput is the path to the file the JWT token is written
 	// to. Empty string falls back to [defaultCredentialPath].
+	//
+	// When CredentialWriter is set this is not opened at all and serves
+	// only as the label in [Result.CredentialPath].
 	CredentialOutput string
+
+	// CredentialWriter, when non-nil, receives the token instead of any
+	// file: no path is opened, no directory is created and no mode is
+	// enforced. `keeper/cmd/keeper` sets it to os.Stdout for
+	// `--credential-out=-`, which in a distroless image is the only way
+	// to get the token out of the container at all (NIM-420) — there is
+	// no shell and no `cat` to read a file back with.
+	//
+	// The writer must not be buffered, or the caller must flush it:
+	// bootstrap writes once and does not close what it did not open.
+	CredentialWriter io.Writer
 }
 
 // Result is the return value of a successful Init. Used by the caller
-// for the final stdout message; the token in Result is NOT logged
-// (exception: ErrTokenFileWriteFailed recovery, see the Token field).
+// for the final completion message on stderr; the token in Result is NOT
+// logged (exception: ErrTokenFileWriteFailed recovery, see the Token
+// field).
 type Result struct {
 	// CredentialPath is where the token was actually written (after
-	// fallback).
+	// fallback). With [Config.CredentialWriter] set there is no path and
+	// this carries whatever label the caller put in
+	// [Config.CredentialOutput].
 	CredentialPath string
+
+	// CredentialIsStream reports that the token went somewhere no
+	// permission guarantee applies to — an fd handed in through
+	// [Config.CredentialWriter], or a character device / fifo reached at
+	// CredentialPath. When Init returned no error, false means, and only
+	// means, that the token is in a regular file with `mode 0400`. On an
+	// error return the token reached nothing and this field describes
+	// only which destination was attempted.
+	//
+	// The caller uses this to warn: a token on a stream is readable by
+	// whoever is on the other end of it, and if that end is a container's
+	// stdout it has just entered the cluster's log pipeline.
+	CredentialIsStream bool
 
 	// AuditID is the ID of the corresponding audit_log record.
 	AuditID string
@@ -294,6 +332,28 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 	}
 
 	credPath := cfg.CredentialOutput
+
+	// An fd the caller already holds open (`--credential-out=-`). There
+	// is no path to resolve, no directory to create and no mode to
+	// enforce, so the whole file dance below is skipped.
+	if cfg.CredentialWriter != nil {
+		if err := writeTokenStream(cfg.CredentialWriter, token); err != nil {
+			return &Result{
+				CredentialPath:     credPath,
+				CredentialIsStream: true,
+				AuditID:            ev.AuditID,
+				CorrelationID:      correlationID,
+				Token:              token,
+			}, fmt.Errorf("%w: %w", ErrTokenFileWriteFailed, err)
+		}
+		return &Result{
+			CredentialPath:     credPath,
+			CredentialIsStream: true,
+			AuditID:            ev.AuditID,
+			CorrelationID:      correlationID,
+		}, nil
+	}
+
 	if credPath == "" {
 		// Defensive guard (belt-and-suspenders): the AID is embedded into
 		// the file name bootstrap-<aid>.token. The new charset (ADR-014
@@ -323,22 +383,25 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 			Token:          token,
 		}, fmt.Errorf("%w: %w", ErrTokenFileWriteFailed, err)
 	}
-	if err := writeTokenFile(credPath, token); err != nil {
+	isStream, err := writeTokenFile(credPath, token)
+	if err != nil {
 		// See ErrTokenFileWriteFailed: insert + audit are already
 		// committed, the file is lost. Return the token in Result so
 		// the caller can print it to stderr with a rotation warning.
 		return &Result{
-			CredentialPath: credPath,
-			AuditID:        ev.AuditID,
-			CorrelationID:  correlationID,
-			Token:          token,
+			CredentialPath:     credPath,
+			CredentialIsStream: isStream,
+			AuditID:            ev.AuditID,
+			CorrelationID:      correlationID,
+			Token:              token,
 		}, fmt.Errorf("%w: %w", ErrTokenFileWriteFailed, err)
 	}
 
 	return &Result{
-		CredentialPath: credPath,
-		AuditID:        ev.AuditID,
-		CorrelationID:  correlationID,
+		CredentialPath:     credPath,
+		CredentialIsStream: isStream,
+		AuditID:            ev.AuditID,
+		CorrelationID:      correlationID,
 	}, nil
 }
 
@@ -403,15 +466,44 @@ func extractSigningKey(kv map[string]any) ([]byte, error) {
 	}
 }
 
-// writeTokenFile creates/overwrites the path file with 0400 permissions
-// and writes token + a trailing `\n` (for compatibility with tools like
-// `cat | jwt decode` that expect line-terminated input).
+// writeTokenFile writes token + a trailing `\n` to path (line-terminated
+// for the benefit of `cat | jwt decode`-style pipelines), and reports
+// whether the destination turned out to be a stream rather than a
+// regular file.
 //
-// If the file already exists, it is removed first — it cannot be opened
-// O_WRONLY after a previous write (mode 0400 = read-only owner).
-// os.Remove ignores ErrNotExist; on permission-denied (e.g. a /tmp/ file
-// owned by another user) it returns a clear error message.
-func writeTokenFile(path, token string) error {
+// Two shapes, picked by what is at the path:
+//
+//   - nothing, or a regular file → [writeTokenRegularFile], mode 0400;
+//   - anything else → [writeTokenInPlace], no mode at all.
+//
+// The test is os.Lstat and deliberately NOT os.Stat. `/dev/stdout` is a
+// symlink to `/proc/self/fd/1`, which is itself a symlink to whatever fd
+// 1 really is: with stdout redirected to a file, Stat follows the chain
+// and answers "regular file". The regular-file branch starts by
+// unlinking its target, so a Stat here would have this function delete
+// the operator's `/dev/stdout` — as root it would succeed.
+//
+// Lstat classifies the *name*, which is all it can do; whether the name
+// leads to an actual stream is settled by [writeTokenInPlace] against
+// the opened fd.
+func writeTokenFile(path, token string) (isStream bool, err error) {
+	st, lerr := os.Lstat(path)
+	switch {
+	case lerr == nil && !st.Mode().IsRegular():
+		return true, writeTokenInPlace(path, st.Mode(), token)
+	case lerr != nil && !os.IsNotExist(lerr):
+		return false, fmt.Errorf("classify credential path: %w", lerr)
+	}
+	return false, writeTokenRegularFile(path, token)
+}
+
+// writeTokenRegularFile creates/overwrites path with 0400 permissions.
+//
+// An existing file is removed first: after a previous write it is 0400,
+// and its own owner cannot reopen a read-only file O_WRONLY. os.Remove
+// ignores ErrNotExist; on permission-denied (e.g. a /tmp/ file owned by
+// another user) it returns a clear error message.
+func writeTokenRegularFile(path, token string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove existing %s: %w", path, err)
 	}
@@ -419,7 +511,7 @@ func writeTokenFile(path, token string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close() //nolint:errcheck // writeTokenFile's error comes from Sync/Write below
+	defer f.Close() //nolint:errcheck // the reported error comes from Chmod/Write/Sync below
 
 	// `O_CREATE` applies mode only on creation; with a stale umask the
 	// resulting permissions could end up as 0400 & ~umask. An explicit
@@ -432,6 +524,177 @@ func writeTokenFile(path, token string) error {
 	}
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync: %w", err)
+	}
+	return nil
+}
+
+// writeTokenInPlace writes the token to a destination that is already a
+// stream — a character device or a fifo, reached directly or through a
+// symlink; in practice `--credential-out=/dev/stdout` (NIM-420).
+//
+// Nothing here may alter the destination itself. No unlink (removing a
+// device node is the bug this fixes, and on a symlink it would swap the
+// operator's link for a plain file), no Chmod (there is no mode to
+// enforce on a stream, and through a symlink it would repermission a
+// file we do not own), no Sync (fsync on a pipe or character device
+// fails with EINVAL, and a stream has no dirty pages anyway).
+//
+// Because none of those guards apply, the open has to establish what it
+// is really writing to. Lstat only classified the name:
+//
+//   - O_NONBLOCK, so a fifo with no reader fails with ENXIO instead of
+//     blocking forever. This runs after the Archon is committed, and
+//     `signal.NotifyContext` has already taken SIGINT off the default
+//     handler — a hang here is not even interruptible, and leaves a
+//     cluster that is initialized but whose only token reached nobody.
+//   - an fstat of the opened fd, admitting a character device or a fifo
+//     and refusing everything else. An allowlist rather than a denylist,
+//     because the type that got through the denylist was the destructive
+//     one: a block device opens cleanly and takes the write at offset
+//     zero, so a root `keeper init` with `--credential-out` pointing at
+//     /dev/sda — a typo, or a link planted where the credential was
+//     going — laid the JWT over the partition table. A directory and a
+//     socket never reach here at all; the kernel answers EISDIR and
+//     ENXIO at the open.
+//
+// The allowlist narrows the blast radius; it does not close the class,
+// and should not be described as if it did. Every character device is
+// admitted, and some of those are as bad as the block device: writing
+// to /dev/kmsg puts the JWT in the kernel ring buffer and from there in
+// the journal, /dev/mem is admitted too (both measured on this kernel),
+// and merely opening and closing /dev/watchdog reboots the machine —
+// the open happens before any check can run, so no fstat-based rule can
+// prevent it. Refusing devices by number would be worse than the
+// disease. The real boundary is that the path form trusts its target as
+// well as its directory; --credential-out=- trusts neither.
+//
+// A regular file is refused by its own branch. Not as a symlink guard —
+// there isn't one, and claiming otherwise misleads whoever reads this
+// next. Following symlinks is load-bearing here (/dev/stdout is one),
+// and a planted fifo takes delivery of the token whether it is reached
+// through a symlink or planted at the credential path directly (both
+// measured). O_NOFOLLOW would not help, because the bare fifo is the
+// same attack. The path form is unusable in a directory somebody else
+// can write to, full stop; that is a property of the feature, recorded
+// in docs/operations/bootstrap-rbac.md, not something this branch fixes.
+//
+// What the branch actually protects is the guarantee the path form
+// advertises. --credential-out=<path> promises mode 0400, and that can
+// only be kept on a file we created ourselves — not by chmod'ing one we
+// found, for the reason given at the top of this comment: through a
+// symlink that repermissions a file we do not own. A regular file
+// already sitting there carries whatever mode it already has, so
+// writing a cluster-admin JWT into it drops the promise *silently*, and
+// that adverb is the whole distinction. The rule is not "a path gets a
+// path's guarantees or an error" — /dev/stdout is a path, gets no 0400,
+// and is allowed. It is three-valued: the guarantee, a downgrade the
+// operator is told about (the stderr warning and credential_is_stream:
+// true), or an error. A stream announces itself. An existing regular
+// file is the one destination whose result is indistinguishable from
+// the path form working — a file on disk holding the token, exactly as
+// advertised, wearing somebody else's mode.
+//
+// Note what the refusal is NOT about, because the plausible-sounding
+// version invites a fix: it is not about leftover bytes after the
+// token. A tail does survive `>>` and `1<>` (measured — the shell
+// truncates for neither, and the reopened fd writes from offset zero),
+// so an earlier claim here that redirection disposes of the tail held
+// only for plain `>`. It changes nothing either way: O_TRUNC would not
+// make such a file 0400. --credential-out=- serves the redirect,
+// resolves no path at all, and — unlike a path — promises no mode,
+// which is exactly why it is the honest form for one.
+//
+// nameMode is what os.Lstat saw at the name, and is used for one thing:
+// telling the operator which kind of ENXIO they hit. It has no say in
+// whether the write happens — only the fstat below does.
+func writeTokenInPlace(path string, nameMode os.FileMode, token string) error {
+	// The wrappers deliberately do not repeat the path: the *PathError
+	// underneath already carries it, and "open X: open X: ..." tells an
+	// operator less than one mention plus the reason we were opening it
+	// that way.
+	f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		// ENXIO covers two unrelated situations and only one of them is
+		// fixable, so they are not given the same sentence: a fifo says
+		// it when nobody is reading, and a socket says it because open(2)
+		// cannot open a socket at all.
+		if errors.Is(err, syscall.ENXIO) && nameMode&os.ModeNamedPipe != 0 {
+			return fmt.Errorf("nothing is reading it: %w — start the reader "+
+				"first, or use --credential-out=- and pipe", err)
+		}
+		return fmt.Errorf("not usable as a stream: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // the reported error comes from Write below
+
+	st, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("classify the opened stream: %w", err)
+	}
+	if err := streamTypeError(path, st.Mode()); err != nil {
+		return err
+	}
+
+	// O_NONBLOCK was needed only to survive the open, and usually the
+	// runtime already covers the rest: the poller parks the goroutine on
+	// EAGAIN, so Write waits for a full pipe to drain even though the
+	// descriptor is still non-blocking (Fd() clears O_NONBLOCK only when
+	// the runtime set it, not when we passed it to open). Measured on a
+	// fifo, dropping this line changes nothing — which is exactly why it
+	// has no test. What it covers is registration *failing*: epoll
+	// refuses some devices, and then our own O_NONBLOCK reaches a raw
+	// write, where a full buffer is EAGAIN rather than a wait. One fcntl
+	// removes the difference between the two cases.
+	if err := syscall.SetNonblock(int(f.Fd()), false); err != nil {
+		return fmt.Errorf("restore blocking mode on %s: %w", path, err)
+	}
+	if _, err := f.WriteString(token + "\n"); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}
+
+// streamTypeError says why the fd [writeTokenInPlace] opened may not be
+// written to, or nil if it may.
+//
+// It is split out because the branch it guards cannot be tested against
+// the thing it exists for. Creating a device node needs CAP_MKNOD, and a
+// test that pointed the writer at a real /dev/sda to prove it is refused
+// would destroy a disk the first time it regressed. A pure function over
+// a mode can be handed `os.ModeDevice` and asked.
+func streamTypeError(path string, mode os.FileMode) error {
+	switch {
+	case mode&(os.ModeCharDevice|os.ModeNamedPipe) != 0:
+		// The two things a token can stream into. The fifo case is
+		// `--credential-out=/dev/stdout` under a pipe: reopening
+		// /proc/self/fd/1 yields a second fd to the same pipe. Not
+		// `--credential-out=-`, which an earlier version of this comment
+		// named here and which never reaches this function at all — it
+		// sets Config.CredentialWriter, and Run returns from
+		// writeTokenStream well before writeTokenFile is called.
+		return nil
+	case mode.IsRegular():
+		return fmt.Errorf("%s leads to a regular file, not a stream: "+
+			"name that file directly, or use --credential-out=- and redirect", path)
+	case mode&os.ModeDevice != 0:
+		// Char devices matched above, so this is a block device: it opens
+		// cleanly and takes the write at offset zero.
+		return fmt.Errorf("%s leads to a block device, not a stream: refusing to "+
+			"write a credential over it", path)
+	default:
+		return fmt.Errorf("%s leads to neither a stream nor a file (mode %s): "+
+			"refusing to write a credential there", path, mode.Type())
+	}
+}
+
+// writeTokenStream writes the token to an fd the caller already holds
+// open ([Config.CredentialWriter], i.e. `--credential-out=-`).
+//
+// Byte-identical to what the file paths produce, trailing `\n` included:
+// `keeper init --credential-out=- > archon.jwt` has to yield the same
+// file as `keeper init --credential-out=archon.jwt`, modulo its mode.
+func writeTokenStream(w io.Writer, token string) error {
+	if _, err := io.WriteString(w, token+"\n"); err != nil {
+		return fmt.Errorf("write token to stream: %w", err)
 	}
 	return nil
 }

@@ -204,7 +204,7 @@ isolated stand (see also [ADR-039 Amendment 2026-05-26](../adr/0039-e2e-testing.
 | Vault PKI mount | `pki/`, role `soul-seed`, root CA TTL 87600h | `dev/provision.sh` steps 3-5 |
 | Keeper TLS cert | Vault-issued leaf, SAN `127.0.0.1`+`localhost`, TTL 24h | `harness.IssueKeeperServerCert` |
 | Sigil signing-key | NOT pre-seed; `KeyService` introduces runtime | `keeper/internal/sigil/keyservice.go` |
-| Bootstrap of the first Archon | `keeper init --archon=archon-test --config=<path> --credential-out=<tmp>/jwt` | `keeper/cmd/keeper/main.go:99-261` |
+| Bootstrap of the first Archon | `keeper init --archon=archon-test --config=<path> --credential-out=<tmp>/jwt` | `keeper/cmd/keeper/main.go::runInit` |
 | Env keeper run | `SOUL_STACK_ALLOW_FILE_REPOS=1` is required for service-loader with file://-URL | ADR-039 Amendment §5 |
 | Soul-stub pre-auth | Vault PKI leaf + direct SQL INSERT into `souls`/`soul_seeds`; `bootstrap.Bootstrap` passes | ADR-039 Amendment §6 |
 | harness ↔ keeper boundaries | harness does NOT import `keeper/internal/*` (Go internal-rules); all DB-ops - direct SQL, Vault-ops - direct HTTP API | ADR-039 Amendment §1 |

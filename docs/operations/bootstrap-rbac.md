@@ -20,8 +20,41 @@ What's happening:
 3. Record `operators(aid=archon-alice, created_by_aid=NULL, bootstrap_initial=true)` ([ADR-014(a)](../adr/0014-operator-identity.md)) is created. The invariant is exactly one record with `created_by_aid IS NULL` (partial unique index).
 4. Role `cluster-admin` (seed role from migration, `permissions: ["*"]`) is bound - line `rbac_role_operators(cluster-admin, archon-alice)` ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).
 5. Issued JWT with TTL = `auth.jwt.ttl_bootstrap` (default 30 days; configured in `keeper.yml`).
-6. JWT is written to `--credential-out` with **`mode 0400`**, owner is the user running `keeper init`.
+6. JWT is written to `--credential-out` with **`mode 0400`**, owner is the user running `keeper init`. Two values are not that: `-` is a sentinel meaning stdout and opens no path at all, and a path leading to a fifo or a character device (`/dev/stdout`) is written **in place** as a stream. Everything else a path can lead to — a block device, a socket, a directory — is refused. See § Token on stdout below.
 7. Audit: `operator.created` (`source=keeper_internal`, `archon_aid=NULL`, `payload={bootstrap_initial: true, ...}`).
+
+Nothing `keeper init` prints goes to stdout: the completion line and the warnings go to **stderr**, and the structured log line goes wherever `logging` in `keeper.yml` sends it — stderr by default, a file if `logging.file` is set. Stdout carries the token and nothing else, and only when asked for.
+
+### Token on stdout
+
+`--credential-out=-` writes the JWT to stdout instead of opening any path:
+
+```sh
+keeper init \
+  --archon=archon-alice \
+  --config=/etc/keeper/keeper.yml \
+  --credential-out=- > archon-alice.jwt
+```
+
+This exists for containers. A distroless image has no shell and no `cat`, so a token written to a file *inside* the container cannot be read back out — `kubectl exec … cat` has nothing to run, and `kubectl cp` needs `tar` in the container. The fd `kubectl exec` is already attached to is the only way out:
+
+```sh
+kubectl exec -i deploy/keeper -- \
+  keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml --credential-out=- \
+  > archon-alice.jwt
+```
+
+`-i` without `-t`, and it matters: `-t` allocates a TTY, which merges the container's stdout and stderr into one stream. The warning and the completion line would land in `archon-alice.jwt` alongside the JWT.
+
+`--credential-out=/dev/stdout` is the same destination by a different route — the path is opened and written **in place**, never unlinked, never truncated, never `chmod`ed — but only while stdout really is a stream: a terminal, a pipe, the fd `kubectl exec` attached. Redirected into a file, `--credential-out=/dev/stdout > archon-alice.jwt` is **refused**. Not because the write would go wrong — under `>` the shell truncates the file before `keeper` starts, and under the forms that do not truncate (`>>`, `1<>`) a leftover tail is not what makes this unsafe. Because at that point the fd behind `/dev/stdout` is an ordinary file that already exists with a mode of its own, and `--credential-out=<path>` promises `mode 0400` — a promise `keeper init` can only keep on a file it created itself. It refuses rather than dropping the guarantee silently. Use `--credential-out=-` for a redirect, which promises no mode and says so, or name the file directly. A file genuinely named `-` is still reachable as `./-`.
+
+Any other fifo or character device works the same way, and a fifo has one extra condition: **a reader must already be attached**. `keeper init` will not wait for one — a blocked open here would hang after the Archon is committed, with the token reaching nobody and `keeper init` refusing to run a second time — so a readerless fifo fails immediately, saying so. Start the reader first. The error names that remedy only when the fifo was named by its own path; reached through a symlink the name looks like a symlink and nothing else, so the message is the bare `ENXIO`.
+
+**The path form trusts the directory it writes into, and the target it lands on. Neither is checked, and neither can be.** Whoever can create a name in that directory can put a fifo — or a symlink to one — where the credential is about to go and take delivery of the token; `keeper init` cannot tell that apart from an operator pointing at a stream of their own, and refusing to follow symlinks would not help, because a fifo planted at the path directly is the same attack. On the target side, every character device is accepted: `--credential-out=/dev/kmsg` puts the JWT in the kernel ring buffer and from there in the journal, and merely opening `/dev/watchdog` arms a reboot before any check can run. Block devices, sockets and directories are refused. Point `--credential-out` at a directory only trusted uids can write to and at a target you named on purpose — or use `--credential-out=-`, which resolves no path at all and so can be diverted by nothing on disk.
+
+A token on a stream carries **no permission guarantee** — `mode 0400` is a property of a file `keeper init` created itself, and it created nothing here. Every stream write says so on stderr, and the structured log line carries `credential_is_stream: true`. Redirecting into a file you own re-establishes the guarantee only as far as that file's own mode does; `umask 077` before the redirect. If the other end was a container's own stdout, the token is now in the cluster's log pipeline: create a second Archon with it, then revoke the first (§ Archon Revocation) — the last `*`-Archon cannot be revoked, so the order is not optional.
+
+**A failed stream write puts the token on stderr on purpose.** If whatever was reading stdout goes away before the write lands, `keeper init` does not die with it: the Archon is already committed and the audit already written, so the token is the only thing left to salvage and it is printed to stderr between explicit markers. In a container that is the same log pipeline stdout was going to, so the JWT reaches the cluster's logs — deliberately, because the alternative is a bootstrapped cluster nobody holds the credential for. Treat it exactly as above: create a second Archon with it, then revoke the first.
 
 ### Restart semantics
 
@@ -42,6 +75,7 @@ File `--credential-out` - **source material for first setup**, not "long-term to
 - `mode 0400`, owner is a human operator (not `soul-stack`). Hides in the password manager / Vault operator immediately after bootstrap.
 - TTL 30 days - a window to have time to set up further administration (issue tokens for CI, machine-identity, additional people). After using the first Archon to create a second, the original JWT can be revoked (see § Revocation) or allowed to expire.
 - In git, in /etc/keeper/, in systemd-credential-store - **do not put** for a long time. This is an admin-credential with `*` rights.
+- With `--credential-out=-` there is no file and no mode: the token lands wherever the shell pointed stdout. That is fine when you are holding the other end (a redirect into a file you own, a pipe, `kubectl exec`) and not fine when the other end is a log collector.
 
 ## Second+ Archon via Operator API
 

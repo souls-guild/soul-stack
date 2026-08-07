@@ -1610,6 +1610,104 @@ order to act in.
   instead of the 30 the operator asked for, with nothing said anywhere. Both now
   read the field with the parser that validated it.
 
+- **`keeper init --credential-out` could not name anything but a regular file, so a
+  containerised bootstrap had no way to hand the token back.** The writer opened its
+  target by removing whatever was already there and recreating it `mode 0400` — which
+  is how you rewrite a `0400` file without a `chmod` dance, since not even its owner
+  can reopen it `O_WRONLY`. Pointed at `/dev/stdout`, the first step is an unlink of
+  `/dev/stdout` itself: as a normal user it failed outright (`remove /dev/stdout:
+  permission denied`) *after* the Archon was already committed, and running as root —
+  a bare-metal or systemd `keeper init`, not the images we ship, which are `nonroot` —
+  it would have succeeded and left the operator with no `/dev/stdout` at all. The
+  target is now classified with `os.Lstat`, which stops at the symlink instead of
+  resolving through `/proc/self/fd/1` to whatever stdout
+  happens to be that minute; anything that is not a regular file is opened and
+  written **in place**, with no unlink, no `O_TRUNC`, no `chmod` and no `fsync` —
+  none of which are meaningful on a stream and each of which would damage the thing
+  on the other end.
+
+  A name, though, is not a destination, and the in-place write has none of the guards
+  that made the old path safe by construction. So the open re-checks what it actually
+  got: `O_NONBLOCK`, so a fifo nobody is reading fails with `ENXIO` instead of
+  blocking forever after the Archon is committed — with `signal.NotifyContext` holding
+  SIGINT, that hang was not even interruptible, and it left a cluster that reports
+  itself initialized and a token that reached nobody. The `ENXIO` message distinguishes
+  the two things that raise it: a fifo says it when nobody is reading, which the
+  operator fixes by starting the reader, and a socket says it because `open(2)` cannot
+  open a socket at all, which no reader will fix — so the remedy is offered only when
+  the name itself was a fifo, and a fifo reached through a symlink or as `/dev/stdout`
+  does not get it either (NIM-567). Then an `fstat` of the open fd, admitting a
+  **character device or a fifo**
+  and refuses everything else.
+
+  An allowlist, because the type that got through the denylist was the destructive
+  one. `IsRegular()` is false for a block device; a directory and a socket never
+  reach the check at all (`EISDIR`, `ENXIO`); `/dev/sda` opens cleanly and takes the
+  write at offset zero, so root `keeper init` plus a typo in `--credential-out` was
+  the whole distance to a JWT written over a partition table. That corner is now
+  closed — but **only that corner**, and the earlier draft of this entry claimed
+  more. Every character device is still admitted, and some are no better than the
+  block device: `/dev/kmsg` puts the JWT in the kernel ring buffer and thence the
+  journal, `/dev/mem` is accepted too (both measured), and opening `/dev/watchdog`
+  arms a reboot before any check can run, since the open necessarily precedes the
+  `fstat`. Refusing devices by number would be worse than the disease; the honest
+  statement is that the path form trusts its target as well as its directory, and
+  `docs/operations/bootstrap-rbac.md` now says that.
+
+  A **regular file** keeps its own refusal — but it is *not* a symlink guard, and
+  calling it one (as this entry first did) is wrong twice over. Following symlinks
+  is load-bearing, `/dev/stdout` being one; and a fifo planted at the credential
+  path takes delivery of the token whether it is reached through a symlink or sits
+  there directly, so `O_NOFOLLOW` would not close it either. Both were measured.
+  The path form is unusable in a directory somebody else can write to, and that is
+  a property of the feature rather than a bug this branch fixes. What the branch
+  does protect is the promise the flag makes: `--credential-out=<path>` advertises
+  `mode 0400`, which can only be kept on a file `keeper init` created itself, so a
+  regular file that is already there — carrying whatever mode it already has — is
+  refused instead of having a cluster-admin JWT written into it silently.
+  *Silently* is the operative word, and the rule is three-valued rather than two:
+  a path gets the `0400` guarantee, or a downgrade it is told about (the stderr
+  warning plus `credential_is_stream: true`), or an error. `/dev/stdout` is a path
+  and gets no `0400`, and that is fine because a stream announces itself; an
+  existing regular file is the one destination whose outcome is indistinguishable
+  from the path form working — the token on disk exactly as advertised, wearing
+  somebody else's mode. `--credential-out=/dev/stdout > archon.jwt` lands on that
+  branch and is refused there. Not for want of an `O_TRUNC`: a tail does survive
+  `>>` and `1<>` (measured — the shell truncates for neither, and the reopened fd
+  writes from offset zero), so the earlier draft's claim that redirection leaves no
+  tail held only for plain `>`; it changes nothing, because `O_TRUNC` would not make
+  such a file `0400` either. `--credential-out=-` resolves no path, promises no mode
+  and says so, which is what makes it the right form for a redirect.
+
+  `--credential-out=-` is the portable form of the same thing: it hands the token to
+  the already-open stdout and never touches the filesystem at all — no path resolved,
+  no directory created, no mode enforced. This is the only way to bootstrap a
+  distroless image, where a token written to a file inside the container cannot be
+  read back out (`kubectl exec … cat` has nothing to run; `kubectl cp` needs `tar`
+  in the container). A file genuinely named `-` is still reachable as `./-`.
+
+  `keeper init` now also arms `SIGPIPE`. Go lets the default disposition kill the
+  process on `EPIPE` for fd 1 and 2, which is right for a filter and wrong for a
+  command that commits database rows before it writes. With the reader gone before
+  the write — an interrupted `kubectl exec`, a consumer that died during the seconds
+  spent on Vault and migrations — `keeper init --credential-out=-` died inside the
+  write with exit 141 and an empty stderr, past the point of no return and with the
+  token's only copy gone. Measured against a build without the arming: 141, stderr
+  0 B, no recovery; with it, exit 1, the reason on stderr, and the token printed for
+  recovery. (Not `| head -1`, which an earlier draft of this entry cited: the token
+  is one write that fits the pipe buffer, so it lands before `head` exits and the run
+  ends 0 on either build. The example was wrong even though the fix is right.) That
+  recovery print is a deliberate trade — in a container it puts the JWT in the same
+  log pipeline stdout was going to, which beats a bootstrapped cluster nobody holds
+  the credential for; `docs/operations/bootstrap-rbac.md` says so where an operator
+  will see it.
+
+  A token that went to a stream carries **no permission guarantee**, so `keeper init`
+  says so: a warning on stderr and `credential_is_stream: true` on the structured log
+  line. **`Bootstrap complete. Token written to …` moved from stdout to stderr** —
+  unconditionally, so that `--credential-out=- > archon.jwt` yields a file holding the
+  JWT and nothing else. Nothing in the repo parses that line.
+
 - **The Vault AppRole template we ship put a 24-hour stop under every production
   Keeper.** The role operators are told to create — in `docs/keeper/prod-setup.md`,
   `docs/operations/infra.md` and `docs/operations/deb-onboarding.md` — carried
