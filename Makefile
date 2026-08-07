@@ -451,6 +451,9 @@ e2e-live: build-linux
 #    without it `build-linux` only gives keeper-linux-amd64, and NewStack SILENTLY skips.
 #  - `-count=1` - otherwise the go-test cache returns `ok (cached)` in seconds (false-green).
 #  - guard: fails on `(cached)` in the summary, or if any gate test didn't give `--- PASS`.
+#    That grep carries a trailing ` (` on purpose: without it `--- PASS: TestFoo`
+#    is also satisfied by `--- PASS: TestFooBar (12s)`, so a skipped test could be
+#    signed off by a prefix-sharing neighbour (NIM-507).
 # SHELL=bash - for `set -o pipefail` (preserve go test's exit code through tee).
 #
 # NIM-406: on red, the log goes through scripts/classify-e2e-live-failure.py,
@@ -463,7 +466,16 @@ e2e-live: build-linux
 # E2E_GATE_TESTS is the single source for the -run mask, the per-test `--- PASS`
 # guard and the classifier's NOT-RUN list. It used to be spelled out twice, and
 # a test present in one copy but not the other is silently ungated.
-E2E_GATE_TESTS := TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel \
+#
+# Entries are EXACT test names, and scripts/e2e-gate-mask.sh enforces that
+# (NIM-507). Three of them used to be prefixes — `TestL3bPluginChannel` for
+# `TestL3bPluginChannel_CatalogAndAllow`. `-run` takes an unanchored regexp so
+# the gate still ran the right nine, but the other two readers take these as
+# names: the `--- PASS` loop below could be satisfied by a prefix-sharing
+# neighbour's line, and the classifier reported all three as NOT-RUN on every
+# red run. Read the script's header before editing this list.
+E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
+	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow \
 	TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart \
 	TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls
 
@@ -472,6 +484,8 @@ e2e-live-gate: build build-linux
 	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
 	@(cd tests/e2e-live && go test -count=1 ./harness/) \
 		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
+	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS) \
+		|| { echo "e2e-live-gate: the gate list does not name real tests - fix it before spending 20 minutes on a run whose verdict would be about the wrong set" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -481,7 +495,7 @@ e2e-live-gate: build build-linux
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
 		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
-		mask=$$(echo '$(E2E_GATE_TESTS)' | tr ' ' '|'); \
+		mask=$$(scripts/e2e-gate-mask.sh mask $(E2E_GATE_TESTS)) || exit 1; \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
 		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
@@ -491,7 +505,7 @@ e2e-live-gate: build build-linux
 		fi; \
 		missing=""; \
 		for tc in $(E2E_GATE_TESTS); do \
-			grep -q "^--- PASS: $$tc" "$$log" || missing="$$missing $$tc"; \
+			grep -q "^--- PASS: $$tc (" "$$log" || missing="$$missing $$tc"; \
 		done; \
 		if [ $$rc -ne 0 ] || [ -n "$$missing" ]; then \
 			scripts/classify-e2e-live-failure.py "$$log" $(E2E_GATE_TESTS) || true; \
@@ -1220,9 +1234,14 @@ check-integration-set:
 #     pinned so deleting a mapped-port wait is loud instead of silent;
 #   - the e2e-live failure classifier's self-test, which is not Go and so is
 #     invisible to `make test` — the same reason check-integration-set carries
-#     the L1 one.
+#     the L1 one;
+#   - that $(E2E_GATE_TESTS) names tests that exist (NIM-507). check-e2e-set.sh
+#     above counts PACKAGES, which stays green while the list inside the one
+#     package names nothing real — the gate would then run a set nobody checked
+#     and label the rest NOT-RUN forever.
 check-e2e-set:
 	@scripts/check-e2e-set.sh
+	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS)
 	@scripts/classify-e2e-live-failure.py --self-test
 	@echo "go test -count=1 ./harness/ in tests/e2e-live (docker-free stand-readiness guards)"
 	@(cd tests/e2e-live && go test -count=1 ./harness/)

@@ -251,7 +251,10 @@ container + Keeper process on host + mTLS + live apply). The list lives in
 `E2E_GATE_TESTS` in the [Makefile](../../Makefile) and is not repeated here — it
 feeds the `-run` mask, the per-test `--- PASS` guard and the classifier from one
 place, and a copy in prose is a copy that goes stale (it named three of the nine
-for a while). Four groups:
+for a while). Entries there must be **exact** test names: the mask tolerates a
+prefix, the other two readers do not, and `make check` now refuses a list whose
+entries are not tests the suite really has
+([scripts/e2e-gate-mask.sh](../../scripts/e2e-gate-mask.sh)). Four groups:
 
 - **Delivery mechanics `SoulModule`** (fixture `tests/e2e-live/module-delivery-live`,
 `TestL3bModuleDeliveryLive_*`) - flagship check for which the gate was opened:

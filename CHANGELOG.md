@@ -1618,6 +1618,22 @@ order to act in.
   test is retried, and a setup failure that survives a solitary rerun on an idle
   machine is a finding about the machine.
 
+- **The same gate's list of tests held prefixes, not names.** Three of the nine
+  entries in `E2E_GATE_TESTS` were the leading part of a test's name rather than
+  the name — `TestL3bPluginChannel` for `TestL3bPluginChannel_CatalogAndAllow`.
+  `go test -run` takes an unanchored regexp, so the gate did select and run the
+  right nine and nobody had reason to look. The two readers that take that list
+  as a *name* were the ones being lied to. The per-test `--- PASS` guard — the
+  one that exists so a skipped test cannot be reported as covered — matched by
+  prefix, so a neighbour named `TestL3bPluginChannel_Other` would have signed off
+  for a test that never ran. And the new classifier matches names exactly, so
+  every red run printed three `NOT-RUN` lines for tests that had just passed:
+  a tool whose only job is making a red gate legible was adding three false
+  statements to each one. The entries are now exact names, the mask is anchored,
+  the `--- PASS` grep is anchored, and `make check` fails if any entry is not a
+  test the suite really has — the list is used in three places, so nothing about
+  it is allowed to be checked only by the 20-minute job it configures.
+
 - **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
   is written for a feature branch, where only the newest commit matters. A release
   branch is the opposite case: it *is* the integration target, every squash-merge

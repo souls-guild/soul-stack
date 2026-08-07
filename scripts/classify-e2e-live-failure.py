@@ -143,22 +143,22 @@ def classify(result: str, blob: str, marker: str) -> str:
 SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
     (
         "declared bring-up failure -> STAND-SETUP",
-        [("TestL3bSmokeNginxLive", "STAND-SETUP")],
-        "=== RUN   TestL3bSmokeNginxLive\n"
+        [("TestL3bSmokeNginxLive_InstallAndStart", "STAND-SETUP")],
+        "=== RUN   TestL3bSmokeNginxLive_InstallAndStart\n"
         "    stack.go:187: NewStack: vault: InitVaultTestSecrets: enable pki mount: "
         "Put \"http://127.0.0.1:33242/v1/sys/mounts/pki\": dial tcp 127.0.0.1:33242: "
         "connect: connection refused\n"
         "    setupdecl.go:57: @@MARKER@@ — no assertion in this test ever ran\n"
-        "--- FAIL: TestL3bSmokeNginxLive (4.02s)\n"
+        "--- FAIL: TestL3bSmokeNginxLive_InstallAndStart (4.02s)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t4.115s\n",
     ),
     (
         "assertion failure, no declaration -> TEST-FAILURE",
-        [("TestL3bModuleDeliveryLive", "TEST-FAILURE")],
-        "=== RUN   TestL3bModuleDeliveryLive\n"
+        [("TestL3bModuleDeliveryLive_SynthesisFetchHotRegister", "TEST-FAILURE")],
+        "=== RUN   TestL3bModuleDeliveryLive_SynthesisFetchHotRegister\n"
         "    module_delivery_live_test.go:212: apply run finished with status=failed, "
         "want succeeded\n"
-        "--- FAIL: TestL3bModuleDeliveryLive (312.44s)\n"
+        "--- FAIL: TestL3bModuleDeliveryLive_SynthesisFetchHotRegister (312.44s)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t312.51s\n",
     ),
     (
@@ -167,14 +167,14 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # classify-l1-failure.py pointed at another log. Whichever single label
         # that tool picked here, it would speak for the other test too.
         [
-            ("TestL3bPluginChannel", "STAND-SETUP"),
+            ("TestL3bPluginChannel_CatalogAndAllow", "STAND-SETUP"),
             ("TestL3bRedisLive_Day2AddUser", "TEST-FAILURE"),
         ],
-        "=== RUN   TestL3bPluginChannel\n"
+        "=== RUN   TestL3bPluginChannel_CatalogAndAllow\n"
         "    stack.go:181: NewStack: postgres: keeper init: pg ping: "
         "dial tcp 127.0.0.1:34492: connect: connection refused\n"
         "    setupdecl.go:57: @@MARKER@@ — no assertion in this test ever ran\n"
-        "--- FAIL: TestL3bPluginChannel (3.88s)\n"
+        "--- FAIL: TestL3bPluginChannel_CatalogAndAllow (3.88s)\n"
         "=== RUN   TestL3bRedisLive_Day2AddUser\n"
         "    redis_ops_adduser_live_test.go:118: ACL GETUSER alice: got \"\", want the "
         "created user\n"
@@ -219,17 +219,17 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # because a skip that reads as green is how a gate reports success for
         # work it never did. Nothing asserted, so it cannot be a pass here
         # either.
-        [("TestL3bPluginChannel", "NOT-RUN")],
-        "=== RUN   TestL3bPluginChannel\n"
+        [("TestL3bPluginChannel_CatalogAndAllow", "NOT-RUN")],
+        "=== RUN   TestL3bPluginChannel_CatalogAndAllow\n"
         "    stack.go:158: L3b: keeper binary not found (stat keeper/bin/keeper: no such "
         "file or directory); export KEEPER_BIN or run `make build`\n"
-        "--- SKIP: TestL3bPluginChannel (0.00s)\n",
+        "--- SKIP: TestL3bPluginChannel_CatalogAndAllow (0.00s)\n",
     ),
     (
         "a pass stays a pass",
-        [("TestL3bSmokeNginxLive", "PASS")],
-        "=== RUN   TestL3bSmokeNginxLive\n"
-        "--- PASS: TestL3bSmokeNginxLive (241.02s)\n",
+        [("TestL3bSmokeNginxLive_InstallAndStart", "PASS")],
+        "=== RUN   TestL3bSmokeNginxLive_InstallAndStart\n"
+        "--- PASS: TestL3bSmokeNginxLive_InstallAndStart (241.02s)\n",
     ),
 ]
 
