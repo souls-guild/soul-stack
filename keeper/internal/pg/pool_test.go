@@ -3,7 +3,6 @@ package pg
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -90,7 +89,7 @@ func TestNewPool_RejectsMalformedDSN(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewPool with bogus DSN returned nil err")
 	}
-	if !strings.Contains(err.Error(), "parse DSN") {
-		t.Errorf("err = %v, want substring \"parse DSN\"", err)
+	if !errors.Is(err, ErrMalformedDSN) {
+		t.Errorf("err = %v, want errors.Is ErrMalformedDSN", err)
 	}
 }

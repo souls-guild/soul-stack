@@ -1107,6 +1107,46 @@ order to act in.
 
 ### Security
 
+- **A DSN the Keeper could not parse printed its password to stderr.** `keeper run`
+  opens the Postgres pool and then applies migrations; both steps reported a bad
+  DSN by handing the parser's own error to the log. Under Kubernetes that line is
+  a pod log, shipped to central collection and retained like any other, and the
+  DSN behind `dsn_ref` is a credential the operator is otherwise told to read only
+  from Vault.
+
+  The pool is the branch an operator actually reaches, because it runs first.
+  `pgconn.ParseConfigError` quotes the whole connection string and redacts it with
+  a regular expression over `password=`, which misses `password = …` and
+  `password= …` — both legal libpq — in *every* branch, including failures about
+  an unrelated setting such as a mistyped `sslmode`. And when `net/url` is what
+  refused the DSN, pgx returns that error with its wrapper stripped: a `#`, `/` or
+  `?` in a password ends the authority early, so the message becomes
+  `invalid port ":<password>" after host`. pgx notes the hazard in a comment on
+  that method — a static string, it says, would be the safe thing to return.
+  Migrations disclosed the same DSN two ways of their own: verbatim (`%q`) when
+  the scheme was not a Postgres URL, and through the `*url.Error` golang-migrate
+  returns unchanged.
+
+  Both steps now name the **form** and never the value. The pool reports
+  `pg: dsn cannot be parsed (…)`, carrying either pgx's own diagnosis with the
+  connection string stripped out of it — `sslmode is invalid`,
+  `cannot parse pool_max_conns` — or, when the DSN's syntax is what failed, a
+  class read off the error's type: `contains an invalid percent-escape`,
+  `contains an invalid character in the host name`, or `cause withheld: naming it
+  would quote the dsn`. Migrations report
+  `migrate: dsn must be postgres:// or postgresql:// URL (got scheme "mysql")`, or
+  `got no URL scheme` for the keyword/value form; the scheme is named only when
+  the prefix is one by RFC 3986, since `password=p://x` would otherwise hand a
+  naive split the password as its "scheme".
+
+  Nothing that worked stops working. Both steps parse with `net/url` before the
+  library does, and pgx dispatches on the same two prefixes and runs the same
+  parser — so the gate refuses only what pgx was going to refuse anyway.
+  Multi-host, IPv6 literals, `?host=/var/run/postgresql`, `@` and `:` inside a
+  password, an empty password and percent-encoded passwords all still parse. See
+  [deb-onboarding.md §9](docs/operations/deb-onboarding.md) for what each refusal
+  means, since the message deliberately does not quote the value to go fix.
+
 - **Federated role reconciliation could empty the cluster's admin set, and no
   operator had to be involved** ([ADR-058(d)](docs/adr/0058-operator-auth-ldap-oidc.md)
   amendment 2026-07-29). LDAP/OIDC login revokes the mapped roles a user's groups no

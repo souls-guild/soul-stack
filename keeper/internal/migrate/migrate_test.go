@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -37,8 +38,8 @@ func TestToMigrateURL_AlreadyPGX5(t *testing.T) {
 
 func TestToMigrateURL_RejectsUnsupportedScheme(t *testing.T) {
 	_, err := toMigrateURL("host=localhost user=keeper password=keeper dbname=keeper")
-	if err == nil {
-		t.Fatal("toMigrateURL with keyvalue DSN returned nil err")
+	if !errors.Is(err, ErrUnsupportedDSNScheme) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSNScheme", err)
 	}
 	if !strings.Contains(err.Error(), "must be postgres://") {
 		t.Errorf("err = %v, want hint about schemes", err)
