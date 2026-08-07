@@ -49,10 +49,23 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKER_SOURCE = REPO_ROOT / "tests" / "e2e-live" / "harness" / "setupdecl.go"
 MARKER_DECL = re.compile(r'standSetupMarker\s*=\s*"([^"]+)"')
 
-# Top-level tests only: subtests arrive as `TestX/sub` and belong to their
-# parent's block. `-p 1` in the gate makes the package serial, so a top-level
-# `=== RUN` reliably opens the next block.
-TOP_RUN = re.compile(r"^=== RUN\s+(Test[^/\s]+)\s*$")
+# Whose block the following lines belong to. Go's chatty printer moves
+# attribution with three lines and only three: `=== RUN` when a test starts,
+# `=== CONT` when a paused one resumes, `=== NAME` when output goes back to a
+# test already running. Subtests (`TestX/sub`) fold into their parent.
+#
+# Reading all three rather than just `=== RUN` is what makes this correct when
+# tests run concurrently, and the reason is not a hypothetical. The gate passes
+# `-p 1`, which bounds how many PACKAGES run at once and says nothing about one
+# package's binary — `-parallel` and t.Parallel() are what would interleave
+# these, and the gate sets neither. So today the suite is serial by the fact
+# that no e2e-live test calls t.Parallel(), not by any flag. Keying only on
+# `=== RUN` made a whole block's output land on its neighbour the moment that
+# stopped being true, and the marker lands with it: SELF_TEST pins the
+# interleaving that used to print STAND-SETUP on the assertion failure and
+# TEST-FAILURE on the bring-up one — both labels wrong, one of them in the
+# direction this tool exists to never be wrong in.
+TOP_SWITCH = re.compile(r"^=== (?:RUN|CONT|NAME)\s+(Test\S+)\s*$")
 TOP_RESULT = re.compile(r"^--- (PASS|FAIL|SKIP): (Test[^/\s]+)")
 
 
@@ -87,32 +100,34 @@ def partition(lines: list[str]) -> list[tuple[str, str, str]]:
 
     `result` is PASS/FAIL/SKIP, or "" when the block never closed — which is
     what a timeout or a panic mid-test leaves behind.
-    """
-    out: list[tuple[str, str, str]] = []
-    name = ""
-    buf: list[str] = []
 
-    def flush(result: str) -> None:
-        nonlocal name, buf
-        if name:
-            out.append((name, result, "\n".join(buf)))
-        name, buf = "", []
+    One buffer per test rather than one buffer for "the current test", so a log
+    that switches back and forth between tests still gives each its own lines.
+    A result line is attributed by the name ON IT, not by whichever block was
+    open, because those are the same thing only when nothing interleaves.
+    """
+    blocks: dict[str, list[str]] = {}
+    results: dict[str, str] = {}
+    name = ""
 
     for line in lines:
-        run = TOP_RUN.match(line)
-        if run:
-            flush("")
-            name = run.group(1)
+        switch = TOP_SWITCH.match(line)
+        if switch:
+            name = switch.group(1).split("/", 1)[0]
+            blocks.setdefault(name, [])
             continue
         res = TOP_RESULT.match(line)
-        if res and res.group(2) == name:
-            buf.append(line)
-            flush(res.group(1))
+        if res:
+            blocks.setdefault(res.group(2), []).append(line)
+            results[res.group(2)] = res.group(1)
+            # The test is closed; what follows is the package trailer until
+            # something claims it.
+            name = ""
             continue
         if name:
-            buf.append(line)
-    flush("")
-    return out
+            blocks[name].append(line)
+
+    return [(test, results.get(test, ""), "\n".join(buf)) for test, buf in blocks.items()]
 
 
 def classify(result: str, blob: str, marker: str) -> str:
@@ -180,6 +195,55 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         "created user\n"
         "--- FAIL: TestL3bRedisLive_Day2AddUser (288.10s)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t291.99s\n",
+    ),
+    (
+        "interleaved output -> each label follows its own test, not the open block",
+        # The parallel shape, pinned because getting it wrong is not a near-miss
+        # — it INVERTS both labels. Keyed on `=== RUN` alone, everything after
+        # the second RUN lands on the second test: the marker included. The tool
+        # then printed TEST-FAILURE on the bring-up failure (a person hunts a
+        # defect that is not there) and STAND-SETUP on the real regression (a
+        # person reruns and moves on). The second is how a regression is retired
+        # by a tool built to prevent exactly that.
+        #
+        # Nothing in the suite calls t.Parallel() today. That is a property of
+        # the tests, not of the gate's flags, and it is not one this tool should
+        # depend on being noticed if it changes.
+        [
+            ("TestL3bSmokeNginxLive_InstallAndStart", "STAND-SETUP"),
+            ("TestL3bRedisLive_Day2AddUser", "TEST-FAILURE"),
+        ],
+        "=== RUN   TestL3bSmokeNginxLive_InstallAndStart\n"
+        "=== PAUSE TestL3bSmokeNginxLive_InstallAndStart\n"
+        "=== RUN   TestL3bRedisLive_Day2AddUser\n"
+        "=== PAUSE TestL3bRedisLive_Day2AddUser\n"
+        "=== CONT  TestL3bSmokeNginxLive_InstallAndStart\n"
+        "    stack.go:187: NewStack: vault: InitVaultTestSecrets: enable pki mount: "
+        "Put \"http://127.0.0.1:33242/v1/sys/mounts/pki\": dial tcp 127.0.0.1:33242: "
+        "connect: connection refused\n"
+        "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
+        "--- FAIL: TestL3bSmokeNginxLive_InstallAndStart (4.02s)\n"
+        "=== CONT  TestL3bRedisLive_Day2AddUser\n"
+        "    redis_ops_adduser_live_test.go:118: ACL GETUSER alice: got \"\", want the "
+        "created user\n"
+        "--- FAIL: TestL3bRedisLive_Day2AddUser (288.10s)\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t292.20s\n",
+    ),
+    (
+        "subtest output belongs to its parent's block",
+        # This one guards a risk the fix above introduced rather than a defect it
+        # found. TOP_SWITCH matches `Test\S+` where the old pattern stopped at
+        # the slash, so subtest lines now reach the switch branch — and reporting
+        # `TestX/sub` as its own test would hand main() a name the mask never
+        # named, which then also makes the parent's `--- FAIL` land in an empty
+        # block. Splitting on `/` is what prevents that, and this pins it.
+        [("TestL3bRedisLive_Day2Restart", "STAND-SETUP")],
+        "=== RUN   TestL3bRedisLive_Day2Restart\n"
+        "=== RUN   TestL3bRedisLive_Day2Restart/sentinel\n"
+        "=== CONT  TestL3bRedisLive_Day2Restart/sentinel\n"
+        "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
+        "    --- FAIL: TestL3bRedisLive_Day2Restart/sentinel (0.51s)\n"
+        "--- FAIL: TestL3bRedisLive_Day2Restart (3.94s)\n",
     ),
     (
         "transport text WITHOUT a declaration stays TEST-FAILURE",

@@ -210,6 +210,108 @@ func TestStandBringUpBoundCoversItsParts(t *testing.T) {
 	}
 }
 
+// TestStandBringUpBoundIsTheOneApplied — the derived budget is the one NewStack
+// hands the containers.
+//
+// TestStandBringUpBoundCoversItsParts checks the arithmetic of a constant. It
+// says nothing about whether anyone uses it, and that gap is not theoretical:
+// NIM-406's original defect WAS a literal at the application site — a flat
+// `5 * time.Minute` ctx that no file mentioning the per-container budgets ever
+// referred to. Restoring that literal is a one-line edit that leaves every other
+// guard in this file green, which makes those guards decorative for the one
+// mistake they were written about.
+//
+// The declaring file is excluded so that the constant's own definition cannot
+// satisfy this, the same way TestStandStrategiesAreWiredIn excludes the home of
+// each constructor.
+func TestStandBringUpBoundIsTheOneApplied(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	applied := false
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			if filepath.Base(path) == "waitstrategy.go" {
+				continue
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 2 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "WithTimeout" {
+					return true
+				}
+				if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "context" {
+					return true
+				}
+				if arg, ok := call.Args[1].(*ast.Ident); ok && arg.Name == "standBringUpTimeout" {
+					applied = true
+				}
+				return true
+			})
+		}
+	}
+	if !applied {
+		t.Fatalf("no context.WithTimeout(_, standBringUpTimeout) outside waitstrategy.go. " +
+			"The stands' shared ctx is then some other number, and every budget derived " +
+			"from standReadyTimeout is bounded by a figure nothing here compares them " +
+			"against — the outer-bound trap NIM-406 is a case of, one level up.")
+	}
+}
+
+// TestNoBareWaitStrategyOption — the stands' deadlines are not silently replaced
+// by the library's 60 s.
+//
+// testcontainers.WithWaitStrategy(s...) is WithWaitStrategyAndDeadline(60s, s...)
+// verbatim (options.go), and WithAdditionalWaitStrategy is the same. Either one
+// re-wraps the strategy in a fresh wait.ForAll with a 60-second deadline, which
+// overrides the .WithDeadline(standReadyTimeout) the constructors set. So the
+// edit that undoes half of NIM-406 is deleting one word: postgres and redis go
+// back to an effective 60 s, TestStandBudgetIsSharedNotSummed keeps passing
+// because it inspects the CONSTRUCTOR rather than what the container received,
+// and nothing else notices either.
+//
+// stack.go warns about this in prose. NIM-406 is about prose not holding.
+func TestNoBareWaitStrategyOption(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	banned := map[string]bool{"WithWaitStrategy": true, "WithAdditionalWaitStrategy": true}
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			base := filepath.Base(path)
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !banned[sel.Sel.Name] {
+					return true
+				}
+				t.Errorf("%s:%d: %s() takes the library's hard-coded 60 s deadline and wraps "+
+					"the strategy in it, discarding the standReadyTimeout (%v) the constructor "+
+					"set. Use %sAndDeadline(standReadyTimeout, …), or set ContainerRequest."+
+					"WaitingFor directly.",
+					base, fset.Position(call.Pos()).Line, sel.Sel.Name, standReadyTimeout, sel.Sel.Name)
+				return true
+			})
+		}
+	}
+}
+
 // TestStandStrategiesAreWiredIn — the strategies guarded above are the ones the
 // containers actually get.
 //

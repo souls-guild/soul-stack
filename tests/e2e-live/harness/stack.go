@@ -150,11 +150,18 @@ type Stack struct {
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
 
-	// Everything from here to `return s` is bring-up, not assertion. Declared as
-	// such on the way out so a red gate distinguishes "the stand never came up"
-	// from "a test caught something" — see declareStandSetupFailure (NIM-406).
-	brought := false
-	defer declareStandSetupFailure(t, &brought)
+	// From here to `infraUp = true` below is INFRASTRUCTURE — docker, tempdirs,
+	// TLS material, three third-party containers — and its failures are facts
+	// about the machine. Declared as such on the way out so a red gate
+	// distinguishes "the stand never came up" from "a test caught something"
+	// (NIM-406).
+	//
+	// The flag is deliberately NOT set on the last line. Everything after it —
+	// `keeper init`, `keeper run`, POST /v1/services, `soul init`/`soul run` —
+	// is this repo's own code, and a regression there must read as a finding,
+	// not as a bad day for docker. See declareStandSetupFailure.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
 	if cfg.Souls < 0 {
 		cfg.Souls = 0
@@ -244,6 +251,14 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	s.db = pool
 	s.cleanups = append(s.cleanups, func() { pool.Close() })
 
+	// End of the infrastructure region. Everything below runs binaries this repo
+	// builds — `keeper init` (ADR-013 bootstrap + migrations + the JWT signing
+	// key), `keeper run`, service registration against examples/ (NIM-211 makes
+	// those the subject of the tests, not scenery), and the Soul onboarding path,
+	// which no other suite exercises with a real soul binary. A failure in any of
+	// them is a finding about the code and must arrive as TEST-FAILURE.
+	infraUp = true
+
 	// Bootstrap: keeper init --credential-out=...
 	credPath := s.runKeeperInit(keeperYAMLPath)
 	jwtBytes, err := os.ReadFile(credPath)
@@ -275,7 +290,6 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		s.SoulContainers = append(s.SoulContainers, container)
 	}
 
-	brought = true
 	return s
 }
 

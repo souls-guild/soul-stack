@@ -315,10 +315,35 @@ and labels every gate test:
 Unlike the L1 classifier this one carries **no signature lists**. `NewStack` and
 `BuildCommunityRedisPlugin` defer `declareStandSetupFailure`, so the harness
 *states* which layer died instead of the reader guessing it from library text —
-and guessing is what produces a false infra label. The residual error only points
-one way: an entry point that forgets the defer gets read as TEST-FAILURE, so the
-mistake costs someone a look at code that turns out to be fine. The opposite
-mistake, an infra label on a real regression, is not reachable this way.
+and guessing is what produces a false infra label. Forgetting the defer therefore
+fails safe: that entry point's failures read as TEST-FAILURE, and the mistake
+costs someone a look at code that turns out to be fine.
+
+The opposite mistake — an infra label on a real regression — is the one that
+makes a regression disappear, and dropping the signature lists does **not** put it
+out of reach. It stays reachable through the mechanism's own two moving parts,
+and both were wrong at some point in NIM-406:
+
+- **Where the declared region ends.** The defer covers a *range* of the entry
+  point, and everything in that range is claimed to be infrastructure. The first
+  cut set the flag on the last line of `NewStack`, putting `keeper init`,
+  `keeper run`, `POST /v1/services` and the whole Soul onboarding path inside it
+  — and that onboarding path runs in no other suite. A regression there would
+  have printed STAND-SETUP on all nine gate tests, which reads as a bad day for
+  docker. Pinned by `TestDeclaredRegionsEndBeforeTheProductRuns`, which parses
+  the harness and fails if a call that runs this repo's own binaries falls
+  between the defer and `infraUp = true`.
+- **Which test a log line belongs to.** The classifier reads the marker out of a
+  per-test block. Keyed on `=== RUN` alone it followed only the most recently
+  *started* test, so interleaved output moved the marker onto a neighbour —
+  labelling the bring-up failure TEST-FAILURE and the real regression
+  STAND-SETUP, both wrong, in one step. It now switches on `=== CONT` and
+  `=== NAME` as well and attributes each result by the name on its own line;
+  `--self-test` pins the interleaving.
+
+So the guarantee is not "unreachable", it is "reachable only by breaking one of
+those two, and each is held by a check that runs in `make check`". Treat an
+edit to either as an edit to the gate's meaning.
 
 The labelling downgrades nothing — the gate still exits non-zero, and a
 STAND-SETUP that survives a solitary rerun is a finding whatever it was labelled.
@@ -339,16 +364,32 @@ There is a **fourth** bound above all of them — `go test -timeout 45m` on the 
 — and it is deliberately *not* derived from the three, which is worth saying
 because the rule just above invites the opposite. It is not the same kind of
 bound. The stacked three reallocate silently: the last stand in line gets the
-remainder and fails without naming itself. `-timeout` cannot do that. It kills
-the binary with a panic that names the test it was in, the finished tests keep
-their verdicts, and the rest are already labelled NOT-RUN. So its correct value
-is "comfortably above an honest run", not "above the worst case its contents can
-ask for": an honest 9-test gate is ~10-15 min (a passing test costs 44-105 s),
-and reaching 45 m needs seven consecutive full-budget bring-up timeouts — a
-machine so broken that the gate is comprehensively red either way and the last
-two verdicts buy nothing. Sizing it to that sum would only mean a genuinely hung
-run burns an hour before anyone hears about it, which is the one job this bound
-has.
+remainder and fails without naming itself. `-timeout` is loud — it kills the
+binary with a panic naming the test it was in, tests that already reported keep
+their printed verdicts, and tests that never started are labelled NOT-RUN. So its
+correct value is "comfortably above an honest run", not "above the worst case its
+contents can ask for": an honest 9-test gate is ~10-15 min (a passing test costs
+44-105 s), and reaching 45 m needs six consecutive full-budget bring-up timeouts
+(6 × `standBringUpTimeout` = 42 min) — a machine so broken that the gate is
+comprehensively red either way and the last verdicts buy nothing. Sizing it to
+that sum would only mean a genuinely hung run burns an hour before anyone hears
+about it, which is the one job this bound has.
+
+**One test is not covered by that, and it is the interesting one.** The test
+running when the wall hits gets no result line, and its label is a guess. Go's
+timeout panic comes from a watchdog goroutine (`time.AfterFunc` in
+`(*M).startAlarm`), so the process dies without unwinding the test goroutine —
+`declareStandSetupFailure` is a `defer` and never fires. A stand that hangs
+forever therefore produces no marker, and `classify()` falls through to
+TEST-FAILURE. That is the safe direction (someone looks) but it is not knowledge:
+the layer is genuinely unknown there, and the tool currently reports it as if it
+were not. A distinct TIMEOUT verdict is tracked in **NIM-511**; until then, read
+"TEST-FAILURE on the test the panic names" as "unknown", and check whether the
+gate's `-timeout` was the thing that expired before treating it as a finding.
+
+The wall itself is also not derived from anything, and the two runs disagree:
+`make e2e-live` gives the whole 19-test package 30 m while the 9-test gate gets
+45 m, so the larger run has the tighter budget. Tracked in **NIM-512**.
 
 **What it DOESN'T cover** (this is stand/cloud/PHASE 2/L3c-k8s, not local gate):
 cloud provision (`CloudDriver`), `install_method=binary` (there is no public source of

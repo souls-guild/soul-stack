@@ -53,13 +53,19 @@ var (
 func BuildCommunityRedisPlugin(t *testing.T) string {
 	t.Helper()
 
-	// Tests call this BEFORE NewStack, so its failures are outside that
-	// function's declaration and would otherwise read as assertions. Building a
-	// fixture is bring-up: nothing has been asserted when it dies (NIM-406).
-	brought := false
-	defer declareStandSetupFailure(t, &brought)
-
+	// The build stays OUTSIDE the declared region on purpose. It is `go build`
+	// over this repo's own community-redis plugin, so a failure here is a
+	// finding — an SDK change that stopped compiling against it, most likely —
+	// and calling that "the stand didn't come up" is the one direction this
+	// mechanism must never be wrong in (NIM-406).
 	bin := buildCommunityRedisBinary(t)
+
+	// From here on it is fixture plumbing — tempdirs, file copies, a throwaway
+	// git repo — whose failures are facts about the machine. Tests call this
+	// BEFORE NewStack, so without a declaration of its own those would read as
+	// assertions.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
 	repoDir := filepath.Join(t.TempDir(), "soul-mod-community-redis-repo")
 	distDir := filepath.Join(repoDir, "dist")
@@ -91,7 +97,7 @@ func BuildCommunityRedisPlugin(t *testing.T) string {
 	// require a message.
 	runGit(t, repoDir, "-c", "tag.gpgsign=false", "tag", CommunityRedisPluginRef)
 
-	brought = true
+	infraUp = true
 	return "file://" + repoDir
 }
 

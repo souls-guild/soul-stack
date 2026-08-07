@@ -1618,6 +1618,26 @@ order to act in.
   test is retried, and a setup failure that survives a solitary rerun on an idle
   machine is a finding about the machine.
 
+  Dropping the signature lists removes one way to get the dangerous answer, not
+  the possibility of it, and the mechanism's own two moving parts are now each
+  held by a docker-free check in `make check`. **Where the declared region ends**
+  decides what gets called infrastructure: an early cut of this work set the flag
+  on the last line of `NewStack`, which swallowed `keeper init`, `keeper run`,
+  service registration and the entire Soul onboarding path — the one path no
+  other suite exercises against a real soul binary — so a regression in it would
+  have printed STAND-SETUP on all nine gate tests, which reads as a bad day for
+  docker. A guard now parses the harness and fails if a call that runs this
+  repo's own binaries falls inside a declared region. **Which test a log line
+  belongs to** decides who the declaration speaks for: the classifier followed
+  only `=== RUN`, so interleaved output moved the marker to a neighbour and
+  inverted both labels at once; it now also follows `=== CONT` and `=== NAME`
+  and attributes each result by the name on its own line. Two further guards pin
+  the budgets to their application sites rather than to their definitions — the
+  stands' shared ctx must be the derived constant, and `WithWaitStrategy` is
+  refused outright because it silently re-wraps a strategy in the library's
+  hard-coded 60 s. Each of the four was proven by reverting the code to the
+  defect it describes and watching exactly that check go red.
+
 - **The same gate's list of tests held prefixes, not names.** Three of the nine
   entries in `E2E_GATE_TESTS` were the leading part of a test's name rather than
   the name — `TestL3bPluginChannel` for `TestL3bPluginChannel_CatalogAndAllow`.
