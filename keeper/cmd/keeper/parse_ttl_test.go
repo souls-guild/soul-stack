@@ -18,9 +18,18 @@ func TestParseTTL_Bootstrap(t *testing.T) {
 		{"empty defaults to 720h", "", 720 * time.Hour, ""},
 		{"1h ok", "1h", time.Hour, ""},
 		{"24h ok", "24h", 24 * time.Hour, ""},
+		// NIM-419: `<N>d` is the documented `duration` convention
+		// (docs/keeper/config.md -> "Type conventions") and the semantic phase
+		// accepts it. Parsed with stdlib time.ParseDuration these failed, so a
+		// config that passed validation broke `keeper init` at the point of use.
+		{"30d ok (the shipped example)", "30d", 720 * time.Hour, ""},
+		{"1d ok", "1d", 24 * time.Hour, ""},
 		{"invalid string", "not-a-duration", 0, "invalid auth.jwt.ttl_bootstrap"},
+		{"composite 1d2h rejected", "1d2h", 0, "invalid auth.jwt.ttl_bootstrap"},
 		{"negative duration", "-1h", 0, "must be positive"},
+		{"negative day form rejected", "-1d", 0, "invalid auth.jwt.ttl_bootstrap"},
 		{"zero duration", "0s", 0, "must be positive"},
+		{"zero day form", "0d", 0, "must be positive"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

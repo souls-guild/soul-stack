@@ -81,6 +81,13 @@ func (d *daemon) consolePlaneEnabledProvider() func() bool {
 // store apply its own default; the semantic phase already rejected a malformed
 // duration, so an unparsable value here just falls through to it.
 //
+// Parsed with config.ParseDuration, not time.ParseDuration: the field is typed
+// `duration` (docs/keeper/config.md → "Type conventions") — Go duration plus the
+// `<N>d` day suffix — and the semantic phase validates it with that parser. Read
+// back through the narrower stdlib one, a legal `retention: 30d` came out an
+// error and collapsed to "use the default": 90d, three times the window the
+// operator asked for, on a path with no way to report it (NIM-419).
+//
 // Unlike the three above this one is still read once, at store construction:
 // the retention is stamped into the row when a recording is created, and the
 // store that stamps it lives in internal/consolepg. Moving it to a provider is
@@ -91,7 +98,7 @@ func consoleRecordingRetention(cfg *config.KeeperConfig) time.Duration {
 	if cfg == nil || cfg.Console == nil || cfg.Console.Recording == nil {
 		return 0
 	}
-	d, err := time.ParseDuration(cfg.Console.Recording.Retention)
+	d, err := config.ParseDuration(cfg.Console.Recording.Retention)
 	if err != nil || d <= 0 {
 		return 0
 	}
@@ -101,11 +108,14 @@ func consoleRecordingRetention(cfg *config.KeeperConfig) time.Duration {
 // parseConsoleIdleTimeout converts the configured duration. An unparsable value
 // resolves to 0, i.e. the package default — the semantic config phase already
 // rejects a malformed `duration`, so this is only the belt to that braces.
+// config.ParseDuration for the same reason as consoleRecordingRetention above:
+// `1d` is a legal value of a `duration` field, and the stdlib parser turned it
+// into a silent default.
 func parseConsoleIdleTimeout(raw string) time.Duration {
 	if raw == "" {
 		return 0
 	}
-	d, err := time.ParseDuration(raw)
+	d, err := config.ParseDuration(raw)
 	if err != nil || d < 0 {
 		return 0
 	}

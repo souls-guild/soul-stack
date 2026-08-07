@@ -1464,6 +1464,26 @@ order to act in.
 
 ### Fixed
 
+- **`keeper init` refused the reference `keeper.yml` we ship.**
+  `auth.jwt.ttl_bootstrap: 30d` in `examples/keeper/keeper.yml` is a well-formed
+  `duration`: the convention is a Go duration plus an `<N>d` suffix for days, and
+  the config validation phase accepts it — which is why `keeper run` came up on
+  that file without a word. The `auth.jwt.*` TTLs were then read back with stdlib
+  `time.ParseDuration`, a narrower dialect that has never known the day suffix, so
+  bootstrapping the first Archon died on `invalid auth.jwt.ttl_bootstrap "30d"`.
+  Config that passes validation and then fails at the point of use is the whole
+  defect; the example was right and the reader was wrong. All three TTLs
+  (`ttl_bootstrap`, `ttl_default`, `exchange_ttl`) now go through
+  `shared/config.ParseDuration`, the convention's single entry point, and the
+  shipped example bootstraps as written.
+
+  The same split ran through `console.idle_timeout` and
+  `console.recording.retention`, where it was quieter and therefore worse: neither
+  resolver has anywhere to report an error, so a legal `retention: 30d` came back
+  unparsable and collapsed to "take the default" — recordings kept for 90 days
+  instead of the 30 the operator asked for, with nothing said anywhere. Both now
+  read the field with the parser that validated it.
+
 - **The `keeper` and `soul` packages could not start the service they install.**
   The package drops its binary at `/usr/bin/<name>`, but the systemd unit shipped
   alongside it declared `ExecStart=/usr/local/bin/<name>` — so on a host installed

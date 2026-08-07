@@ -490,19 +490,20 @@ type pgxPool interface {
 	Ping(ctx context.Context) error
 }
 
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
+// parseTTL resolves an `auth.jwt.*` TTL field; an empty value takes def.
 //
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
+// It parses via config.ParseDuration — the Soul Stack `duration` convention
+// (docs/keeper/config.md → "Type conventions"): Go duration plus the `<N>d`
+// suffix for days. Plain time.ParseDuration here was a second, narrower
+// dialect: the semantic phase validates all three fields with the convention
+// parser (shared/config/semantic.go → checkDuration), so `30d` passed config
+// validation and then failed at the point of use — `keeper init` refusing to
+// bootstrap on the config we ship as the reference (NIM-419).
 func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 	if raw == "" {
 		return def, nil
 	}
-	d, err := time.ParseDuration(raw)
+	d, err := config.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("invalid %s %q: %w", fieldName, raw, err)
 	}
