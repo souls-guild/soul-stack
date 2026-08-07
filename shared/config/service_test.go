@@ -776,3 +776,62 @@ telemetry:
 		t.Fatal("expected unknown_key for the bogus typo under telemetry")
 	}
 }
+
+// TestLoadServiceManifest_ConflictingModuleRef — two entries under one alias
+// pinning different refs is a contradiction, not a last-writer-wins race.
+//
+// One alias is one slot holding one artifact (ADR-065 amendment 2026-08-07), so
+// once NIM-524 collapsed the several `modules[]` entries of one artifact into a
+// single synthesized install there is no longer a ref per entry to honour. The
+// synthesizer takes one of them; without this diagnostic the other `ref:` would
+// be read, ignored, and the pin check would fail later naming a ref the author
+// never wrote beside the module that failed.
+func TestLoadServiceManifest_ConflictingModuleRef(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+modules:
+  - { name: community.redis, ref: v1.0.0 }
+  - { name: community.sentinel, ref: v2.0.0 }
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if n := countCode(diags, "conflicting_module_ref"); n != 1 {
+		dump(t, diags)
+		t.Fatalf("conflicting_module_ref fired %d times, want exactly 1", n)
+	}
+	if !hasCodeAt(diags, "conflicting_module_ref", "$.modules[1].ref") {
+		dump(t, diags)
+		t.Fatal("expected conflicting_module_ref on the disagreeing entry, $.modules[1].ref")
+	}
+}
+
+// TestLoadServiceManifest_SharedAliasSameRefIsClean — the load-bearing half.
+//
+// Several entries under one alias is the NORMAL way to declare one artifact
+// serving several modules, and NIM-524's collapse-into-one-install depends on
+// that shape staying legal. A diagnostic firing here would make the very thing
+// the alias exists to express unusable, so this asserts an absence — the
+// direction a test written only for the error case leaves open.
+func TestLoadServiceManifest_SharedAliasSameRefIsClean(t *testing.T) {
+	src := `name: svc-golden
+state_schema_version: 1
+state_schema:
+  type: object
+modules:
+  - { name: community.redis, ref: v1.0.0 }
+  - { name: community.sentinel, ref: v1.0.0 }
+  - { name: acme-tools.probe, ref: v0.3.1 }
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "conflicting_module_ref") {
+		dump(t, diags)
+		t.Fatal("conflicting_module_ref on entries that agree on ref")
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			dump(t, diags)
+			t.Fatalf("unexpected error diagnostic on a valid manifest: %s at %s", d.Code, d.YAMLPath)
+		}
+	}
+}

@@ -102,14 +102,21 @@ plugins:
   # { name: example, source: "ssh://git.example.com/cloud-plugins", ref: "<tag>" }.
   cloud_drivers:
     - { name: example, source: "file:///dev/null/soul-cloud-example-manual-slot", ref: "manual-0001" }
-  # SoulModule catalog (epic core.module.installed, S1). source is a git repo with a
-  # BUILT binary (dist/soul-mod-redis + manifest.yaml), materialized by
-  # dev/provision.sh (step 9b). plugingit clones it (file:// scheme, enabled by
-  # SOUL_STACK_ALLOW_FILE_REPOS=1 - set by keeper-run.sh), caches the slot
-  # community-redis/<sha> -> current: the plugin becomes available for Sigil-allow (POST
-  # /v1/plugins/sigils) and routine redis operations. `name` = manifest.name (redis) for FilterByCatalog.
+  # SoulModule catalog (epic core.module.installed, S1). source is a git repo holding an
+  # ALREADY-BUILT artifact: `dist/` with exactly one executable, and no manifest.yaml -
+  # NIM-377 removed both the manifest file and the filename convention, so the schema
+  # rides in the artifact's own trailer. dev/provision.sh (step 9b) materializes it.
+  # plugingit clones it (file:// scheme, enabled by SOUL_STACK_ALLOW_FILE_REPOS=1 - set
+  # by keeper-run.sh) and caches the slot <alias>/<sha> -> current: the plugin becomes
+  # available for Sigil-allow (POST /v1/plugins/sigils) and routine redis operations.
+  #
+  # `name` is the REGISTRATION ALIAS - address level 1, chosen here and nowhere else,
+  # since the artifact declares no name of its own. It has to be `community`: the
+  # artifact declares ONE module named `redis`, the registry key is `<alias>.<module>`,
+  # and the scenarios address `community.redis.<state>`. Registering it as `redis` would
+  # key it `redis.redis` and nothing would resolve (NIM-524).
   soul_modules:
-    - { name: redis, source: "file:///tmp/keeper-dev/plugin-repos/community-redis", ref: "v1.0.0" }
+    - { name: community, source: "file:///tmp/keeper-dev/plugin-repos/community-redis", ref: "v1.0.0" }
 
 plugin_runtime:
   socket_dir: /tmp/keeper-dev/plugin-sockets

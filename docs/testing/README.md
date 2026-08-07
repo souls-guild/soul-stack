@@ -289,10 +289,18 @@ soul-container calls Keeper-on-host) **auto-detected by target** via
 `hostname -I`. On **WSL2** this matters: the container cannot reach `localhost`,
 so a LAN IP is required. Override manually - `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.
 
-**Run in isolation**, without parallel docker/build load: L3b tests
-raise docker containers (keeper + PG + Redis + Vault + soul) also on WSL2
-sensitive to competitive docker load - when running in parallel with another
-heavy docker/build work the stand can take far longer to come up than on an idle box.
+**Run in isolation** where you can: L3b tests raise docker containers (keeper +
+PG + Redis + Vault + soul), and on WSL2 competing docker/build load stretches
+bring-up. Measured over four gate runs (NIM-406): 503s on an idle box against
+662-805s at a loadavg of 20-42.
+
+Slower is not the same as red, and the difference matters more than the
+advice. In that same measurement the gate came back **green at a loadavg of
+20**, and neither red run failed bring-up at all - both died inside a test
+reaching the internet (`core.url` on github.com, `core.pkg` on
+deb.debian.org; NIM-542). So a red gate is not evidence that the box was
+busy, and rerunning it quietly until it passes buries exactly the failures
+worth reading. What actually failed is a question with an answer - see below.
 
 ### Reading a red gate (NIM-406)
 

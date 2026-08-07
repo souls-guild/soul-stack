@@ -1974,6 +1974,32 @@ order to act in.
   test the suite really has — the list is used in three places, so nothing about
   it is allowed to be checked only by the 20-minute job it configures.
 
+- **The live acceptance ran, and it did not produce three matching runs.**
+  Reading a red gate is the repair above; *trusting* the gate is what the repair
+  serves, and only a live run says whether it arrived. Four runs on a pinned
+  slice, three of them under synthetic load inside the 12-25 band the ticket
+  names: 9/9 green in 503s idle, then 8/9, 8/9, 9/9 at a loadavg of 20-42.
+  Three consecutive runs, three different answers, on a subject that did not
+  change by a byte.
+
+  Neither red was a defect and neither was a container. One died in `core.url`
+  resolving github.com, the other in `core.pkg` fetching a `.deb` from
+  deb.debian.org. Both were labelled TEST-FAILURE, and correctly so — the
+  harness makes no bring-up claim at either point, and the classifier carries no
+  signature lists to guess with. What the runs establish is that this gate's
+  verdict is decided partly OUTSIDE its slice, which is a larger trust defect
+  than the one repaired here and is filed as its own: `NIM-542`.
+
+  The half that is in this repo's hands was demonstrated rather than argued, in
+  both directions. A wrong image tag inside the declared bring-up region
+  (`postgres:16.99-alpine`) gave STAND-SETUP in 2.7s, the harness's own
+  declaration sitting in the transcript. A real product regression — the
+  resolver naming a slot's artifact by its filename again instead of by the
+  registration alias, the convention NIM-377 removed — gave TEST-FAILURE in
+  12.2s. The second is the load-bearing one: it fails while the stand is still
+  being built, past `infraUp = true`, and still reads as a finding. That is
+  precisely why the flag is not set on the last line.
+
 - **L3a passed test-by-test and failed as a suite, and nothing in a red run said
   which of those it was.** `make e2e` is the tier that drives a real Keeper
   against real containers. Every test in it passed when run alone; a full run
