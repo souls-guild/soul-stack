@@ -338,6 +338,16 @@ func TestWriteTokenFile_CharDeviceIsWrittenInPlace(t *testing.T) {
 	if err != nil || before.Mode()&os.ModeCharDevice == 0 {
 		t.Skipf("%s is not a character device here (err=%v)", os.DevNull, err)
 	}
+	// Under an unprivileged uid the chmod this test is watching for
+	// would fail anyway; as root it would succeed, and the assertion
+	// below would report it while leaving /dev/null at 0400 for the
+	// life of the container. Detecting the damage is not a licence to
+	// leave it.
+	t.Cleanup(func() {
+		if now, err := os.Stat(os.DevNull); err == nil && now.Mode().Perm() != before.Mode().Perm() {
+			_ = os.Chmod(os.DevNull, before.Mode().Perm())
+		}
+	})
 
 	isStream, err := writeTokenFile(os.DevNull, "header.payload.signature")
 	if err != nil {

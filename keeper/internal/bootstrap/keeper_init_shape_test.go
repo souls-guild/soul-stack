@@ -99,7 +99,7 @@ func fdStatComplaints(fn *ast.FuncDecl) []string {
 	var out []string
 	file := openedFileVar(fn)
 	if file == "" {
-		return []string{"no os.OpenFile result to re-check — this guard now guards nothing"}
+		return []string{"no single os.OpenFile result to re-check — this guard now guards nothing"}
 	}
 
 	var sawFdStat bool
@@ -122,9 +122,24 @@ func fdStatComplaints(fn *ast.FuncDecl) []string {
 }
 
 // openedFileVar returns the name the os.OpenFile result is bound to, or
-// "" if there is no such call.
+// "" if the function does not open exactly one file.
+//
+// Refusing to answer for two opens is not pedantry. ast.Inspect walks in
+// source order with no notion of scope, so with a second open the last
+// one in the text simply wins, and the guard would then be satisfied by
+// a stat of a file that is not the one being written to — the F1 defect
+// again, a predicate answering the adjacent question. One open is the
+// only case where reading the source order is the same as reading the
+// program, so anything else goes to the loud branch above.
+//
+// If a second legitimate open ever appears in writeTokenInPlace — in a
+// closure or a goroutine as much as inline — this fails, and the failure
+// is asking which file the re-check is about, not reporting a
+// regression. Answer it here. Do not widen it back to whichever came
+// last.
 func openedFileVar(fn *ast.FuncDecl) string {
 	var name string
+	var opens int
 	ast.Inspect(fn, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
 		if !ok || len(assign.Lhs) == 0 || len(assign.Rhs) != 1 {
@@ -133,11 +148,15 @@ func openedFileVar(fn *ast.FuncDecl) string {
 		if qualifiedName(assign.Rhs[0]) != "os.OpenFile" {
 			return true
 		}
+		opens++
 		if id, ok := assign.Lhs[0].(*ast.Ident); ok {
 			name = id.Name
 		}
 		return true
 	})
+	if opens != 1 {
+		return ""
+	}
 	return name
 }
 
@@ -171,6 +190,22 @@ func qualifiedName(n ast.Node) string {
 // that passed the previous version of the fd guard while reintroducing
 // the TOCTOU window, and `syscall.Fstat` is the legitimate spelling that
 // same version would have rejected.
+//
+// Two details keep this table from catching the forbidden spelling by
+// accident, and both were got wrong in the version of it that first
+// closed that hole:
+//
+// Every known-bad source that is about a forbidden spelling also
+// contains a legitimate one. Without it, each guard's "this guard now
+// guards nothing" fallback fires on its own, and a case named for
+// `syscall.Stat` stays green with `syscall.Stat` deleted from pathStat —
+// the original bug reproduced one storey up, in the test that exists to
+// prevent it. Measured, not reasoned: with the legitimate stat removed,
+// deleting that map entry left the whole package passing.
+//
+// And a case asserts the complaint it is named for, not merely that some
+// complaint came back, so a source rejected by the wrong arm reads as a
+// failure rather than as a pass.
 func TestShapeGuards_CatchWhatTheyClaimTo(t *testing.T) {
 	t.Parallel()
 
@@ -180,16 +215,23 @@ func TestShapeGuards_CatchWhatTheyClaimTo(t *testing.T) {
 	byName := func(body string) string {
 		return "package p\nfunc writeTokenFile() {\n" + body + "\n}\n"
 	}
+	// The legitimate half of a known-bad fd source: an open, and a stat
+	// of what it returned. The forbidden spelling is appended to it.
+	opened := "f, _ := os.OpenFile(path, 0, 0)\nst, _ := f.Stat()\n_ = st\n"
+	// Likewise for the name guard: a target classified as it should be.
+	classified := "lst, _ := os.Lstat(path)\n_ = lst\n"
 
 	cases := []struct {
-		name    string
-		src     string
-		fn      string
-		check   func(*ast.FuncDecl) []string
-		wantBad bool
+		name  string
+		src   string
+		fn    string
+		check func(*ast.FuncDecl) []string
+		// want is the substring the complaint must contain; "" means
+		// the source must be accepted with no complaint at all.
+		want string
 	}{{
 		name:  "fd guard accepts a method call on the opened file",
-		src:   inPlace("f, _ := os.OpenFile(path, 0, 0)\nst, _ := f.Stat()\n_ = st"),
+		src:   inPlace(opened),
 		fn:    "writeTokenInPlace",
 		check: fdStatComplaints,
 	}, {
@@ -203,64 +245,90 @@ func TestShapeGuards_CatchWhatTheyClaimTo(t *testing.T) {
 		fn:    "writeTokenInPlace",
 		check: fdStatComplaints,
 	}, {
-		name:    "fd guard rejects syscall.Stat on the path",
-		src:     inPlace("f, _ := os.OpenFile(path, 0, 0)\nvar raw syscall.Stat_t\n_ = syscall.Stat(path, &raw)"),
-		fn:      "writeTokenInPlace",
-		check:   fdStatComplaints,
-		wantBad: true,
+		name:  "fd guard rejects syscall.Stat on the path",
+		src:   inPlace(opened + "var raw syscall.Stat_t\n_ = syscall.Stat(path, &raw)"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "syscall.Stat looks the path up a second time",
 	}, {
-		name:    "fd guard rejects os.Stat on the path",
-		src:     inPlace("f, _ := os.OpenFile(path, 0, 0)\nst, _ := os.Stat(path)\n_ = st"),
-		fn:      "writeTokenInPlace",
-		check:   fdStatComplaints,
-		wantBad: true,
+		name:  "fd guard rejects os.Stat on the path",
+		src:   inPlace(opened + "st2, _ := os.Stat(path)\n_ = st2"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "os.Stat looks the path up a second time",
 	}, {
-		name:    "fd guard rejects a re-check that never happens",
-		src:     inPlace("f, _ := os.OpenFile(path, 0, 0)\n_ = f"),
-		fn:      "writeTokenInPlace",
-		check:   fdStatComplaints,
-		wantBad: true,
+		name:  "fd guard rejects os.Lstat on the path",
+		src:   inPlace(opened + "st2, _ := os.Lstat(path)\n_ = st2"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "os.Lstat looks the path up a second time",
 	}, {
-		name:    "fd guard reports itself empty when the open is gone",
-		src:     inPlace("st, _ := os.Stat(path)\n_ = st"),
-		fn:      "writeTokenInPlace",
-		check:   fdStatComplaints,
-		wantBad: true,
+		name:  "fd guard rejects syscall.Lstat on the path",
+		src:   inPlace(opened + "var raw syscall.Stat_t\n_ = syscall.Lstat(path, &raw)"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "syscall.Lstat looks the path up a second time",
+	}, {
+		name:  "fd guard rejects a re-check that never happens",
+		src:   inPlace("f, _ := os.OpenFile(path, 0, 0)\n_ = f"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "no longer stat'ed through its descriptor",
+	}, {
+		name:  "fd guard reports itself empty when the open is gone",
+		src:   inPlace("st, _ := os.Stat(path)\n_ = st"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "no single os.OpenFile result to re-check",
+	}, {
+		// Source order decides which open wins, and it is not the
+		// one being written to. The guard must refuse rather than
+		// be satisfied by a stat of the wrong file.
+		name: "fd guard refuses to guess between two opens",
+		src: inPlace("f, _ := os.OpenFile(a, 0, 0)\ng, _ := os.OpenFile(b, 0, 0)\n" +
+			"st, _ := g.Stat()\n_ = st\n_, _ = f.WriteString(tok)"),
+		fn:    "writeTokenInPlace",
+		check: fdStatComplaints,
+		want:  "no single os.OpenFile result to re-check",
 	}, {
 		name:  "name guard accepts os.Lstat",
-		src:   byName("st, _ := os.Lstat(path)\n_ = st"),
+		src:   byName(classified),
 		fn:    "writeTokenFile",
 		check: nameStatComplaints,
 	}, {
-		name:    "name guard rejects os.Stat",
-		src:     byName("st, _ := os.Stat(path)\n_ = st"),
-		fn:      "writeTokenFile",
-		check:   nameStatComplaints,
-		wantBad: true,
+		name:  "name guard accepts syscall.Lstat",
+		src:   byName("var raw syscall.Stat_t\n_ = syscall.Lstat(path, &raw)"),
+		fn:    "writeTokenFile",
+		check: nameStatComplaints,
 	}, {
-		name:    "name guard rejects syscall.Stat",
-		src:     byName("var raw syscall.Stat_t\n_ = syscall.Stat(path, &raw)"),
-		fn:      "writeTokenFile",
-		check:   nameStatComplaints,
-		wantBad: true,
+		name:  "name guard rejects os.Stat",
+		src:   byName(classified + "st, _ := os.Stat(path)\n_ = st"),
+		fn:    "writeTokenFile",
+		check: nameStatComplaints,
+		want:  "os.Stat resolves the symlink chain",
 	}, {
-		name:    "name guard rejects classifying nothing at all",
-		src:     byName("_ = path"),
-		fn:      "writeTokenFile",
-		check:   nameStatComplaints,
-		wantBad: true,
+		name:  "name guard rejects syscall.Stat",
+		src:   byName(classified + "var raw syscall.Stat_t\n_ = syscall.Stat(path, &raw)"),
+		fn:    "writeTokenFile",
+		check: nameStatComplaints,
+		want:  "syscall.Stat resolves the symlink chain",
+	}, {
+		name:  "name guard rejects classifying nothing at all",
+		src:   byName("_ = path"),
+		fn:    "writeTokenFile",
+		check: nameStatComplaints,
+		want:  "no longer classified with Lstat",
 	}}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := tc.check(parseFuncSrc(t, tc.src, tc.fn))
+			got := strings.Join(tc.check(parseFuncSrc(t, tc.src, tc.fn)), "; ")
 			switch {
-			case tc.wantBad && len(got) == 0:
-				t.Errorf("guard passed a source it must reject:\n%s", tc.src)
-			case !tc.wantBad && len(got) > 0:
-				t.Errorf("guard rejected a source it must accept: %s\n%s",
-					strings.Join(got, "; "), tc.src)
+			case tc.want == "" && got != "":
+				t.Errorf("guard rejected a source it must accept: %s\n%s", got, tc.src)
+			case tc.want != "" && !strings.Contains(got, tc.want):
+				t.Errorf("guard did not report %q — it said %q\n%s", tc.want, got, tc.src)
 			}
 		})
 	}
