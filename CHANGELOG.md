@@ -1555,6 +1555,41 @@ order to act in.
   paragraph. The declaration stays an address — it is what a scenario writes, and
   a service naming only the slot would not be saying which module it calls.
 
+- **`dry_run` on `POST /v1/souls/{sid}/exec` reached no module at all.**
+  The flag is in [ADR-033](docs/adr/0033-errand.md), in OpenAPI, in the MCP tool
+  and — since the previous entry — behind a fail-closed capability gate, and it
+  was terminal for every module in the tree. Errand admission and the Plan/Apply
+  choice were two different questions answered by one condition: a request had to
+  clear `ErrandReadSafe` (or be verb-shell) to be admitted at all, and only then
+  was `PlanReadSafe` consulted to decide whether `Plan` ran instead of `Apply`.
+  Nothing carries both markers — `ErrandReadSafe` is on `core.http` and
+  `core.noop`, `PlanReadSafe` on `core.file` and 12 others — so `dry_run: true`
+  ended as `module_not_allowed` before any `Plan` was reached. The ADR never asked
+  for that: its item 2 governs **`Apply`**, its contract row for `dry_run` governs
+  **`Plan`**.
+
+  Admission is now asked per path. `dry_run: true` requires `PlanReadSafe`, so
+  `core.file.present` can be asked what it would change on a host; a module
+  without it (including `core.cmd.shell` / `core.exec.run` / `core.http.probe`,
+  which have no pure-read `Plan`) answers `failed` +
+  `errand_dry_run_unsupported`, exactly as the contract row states. **No module
+  gained a write path:** `ErrandReadSafe` is still the only marker that opens
+  `Apply` through an Errand, so `core.file` remains refused for ad-hoc apply under
+  an explicit `dry_run: false` and under an omitted field alike. Handing
+  `core.file` the `ErrandReadSafe` marker would have read like a label and worked
+  like a rights extension — arbitrary file writes outside any scenario, with no
+  `state_changes` — and was rejected for that reason.
+
+  The module catalog publishes one boolean about Errand, `errand_safe`, and it
+  is an Apply-path fact; nothing in it says a module can be planned. For dry-run
+  it selects the exact complement of the right answer: the three entries that
+  carry it — `core.cmd.shell`, `core.exec.run`, `core.http.probe` — are precisely
+  the ones a `dry_run` request is now refused on, and all 13 `PlanReadSafe`
+  modules it can reach are marked `false`. Any consumer filtering on it (the Run
+  wizard does) therefore offers only modules that cannot be planned, so the new
+  capability is reachable through the API and MCP but not through the module
+  picker; the catalog needs a way to say this at all (NIM-556).
+
 - **`keeper init` refused the reference `keeper.yml` we ship.**
   `auth.jwt.ttl_bootstrap: 30d` in `examples/keeper/keeper.yml` is a well-formed
   `duration`: the convention is a Go duration plus an `<N>d` suffix for days, and

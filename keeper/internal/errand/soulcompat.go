@@ -16,10 +16,14 @@ import (
 // the Soul calls SoulModule.Plan instead of Apply, so the operator can ask "what
 // would this do" without touching the host. That promise is structural only if
 // the binary on the far end implements the flag — a Soul predating it reads
-// ErrandRequest by the keys it knows, misses `dry_run`, and runs Apply. For the
-// modules Errand can actually reach that means a shell command executed for real
-// (`core.cmd.shell` / `core.exec.run`) or a live HTTP call (`core.http.probe`):
-// a mutation inside an operation that advertised a read.
+// ErrandRequest by the keys it knows, misses `dry_run`, and runs Apply. Since
+// NIM-488 the modules a dry_run Errand reaches are the PlanReadSafe ones, so on
+// such a Soul the operator's "what would this do" is `core.file.present` writing
+// the file, `core.pkg.installed` installing the package, `core.service.running`
+// starting the unit: a mutation inside an operation that advertised a read. (The
+// verb modules named in ADR-033 — `core.cmd.shell` / `core.exec.run` /
+// `core.http.probe` — have no pure-read Plan and are now refused on the dry_run
+// path outright, so they never get this far.)
 //
 // So the capability the Soul announces (config.CapabilityDryRun) is checked
 // BEFORE the request goes out. The check-drift gate on the scenario side used to

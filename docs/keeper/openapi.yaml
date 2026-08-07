@@ -1094,7 +1094,7 @@ components:
           description: input for the module (validated against input_schema)
           type: object
         module:
-          description: fully-qualified <ns>.<name>.<state> (core.cmd.shell / core.exec.run / ErrandReadSafe module)
+          description: fully-qualified <ns>.<name>.<state>; without dry_run - core.cmd.shell / core.exec.run / an ErrandReadSafe module, with dry_run - a PlanReadSafe module
           type: string
         timeout_seconds:
           description: total Errand timeout [1..300]; 0/omitted -> default 30s; > server-cap (30s) -> 202 + Location

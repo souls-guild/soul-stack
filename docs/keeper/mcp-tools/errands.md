@@ -18,7 +18,7 @@ Running Errand on a specific Soul. Permission: `errand.run`, selector `host=<sid
 | `module` | `string` | yes | Module address `core.<class>.<state>` or `core.cmd.shell` / `core.exec.run` (whitelist on Soul-side). |
 | `input` | `object` | optional | Module Input (form depends on the module). |
 | `timeout_seconds` | `integer` (1..300) | optional | Full timeout. Default 30. |
-| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). The target must announce the `dry_run` Soul-capability, else the call is refused before dispatch. |
+| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` instead of `Apply`. Admitted for `PlanReadSafe` modules only; one without it (incl. `core.cmd.shell` / `core.exec.run` / `core.http.probe`) answers `failed` + `errand_dry_run_unsupported`. The target must also announce the `dry_run` Soul-capability, else the call is refused before dispatch. |
 
 **Output:**
 

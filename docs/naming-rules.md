@@ -211,10 +211,12 @@ Optional marker interfaces in `sdk/module/`. The module implements them to decla
 
 | Interface | Declares | Who checks | Default-deny if absent |
 |---|---|---|---|
-| **`PlanReadSafe`** | Plan - pure-read (does NOT mutate the host) | Soul-runner (apply-stream) | dry_run task → `plan.unsupported` |
-| **`ErrandReadSafe`** | The module is safe to call via Errand (does NOT mutate incarnation.state) | Soul-side Errand-runner | reject from `errand_module_not_allowed` |
+| **`PlanReadSafe`** | Plan - pure-read (does NOT mutate the host) | Soul-runner (apply-stream); Soul-side Errand-runner on `dry_run: true` | dry_run task → `plan.unsupported`; dry_run Errand → `errand_dry_run_unsupported` |
+| **`ErrandReadSafe`** | The module's **Apply** is safe to call ad-hoc via Errand (does NOT mutate incarnation.state) | Soul-side Errand-runner on `dry_run: false` | reject from `errand_module_not_allowed` |
 
 `BaseModule` does NOT implement any marker by default.
+
+The two markers describe **different methods** and are checked on **different paths**; neither implies the other, and neither is consulted on the path it does not describe (see [ADR-033 → Amendment 2026-08-07](adr/0033-errand.md), NIM-488). A module carrying only `PlanReadSafe` — `core.file` and 12 others — can be asked what it *would* change through an Errand, and still cannot be applied through one.
 
 ## Service / Incarnation / Scenario
 

@@ -49,12 +49,21 @@ type readSafeModule struct{ fakeModule }
 
 func (readSafeModule) ErrandReadSafe() {}
 
-// planSafeModule is a fakeModule with both markers (ErrandReadSafe + PlanReadSafe);
-// exercises the dry_run branch.
-type planSafeModule struct{ fakeModule }
+// planOnlyFake carries ONLY PlanReadSafe — the shape of core.file and the 12
+// other modules with a pure-read Plan. This is the shape that matters for
+// dry_run: it must reach Plan, and it must NEVER reach Apply through Errand.
+type planOnlyFake struct{ fakeModule }
 
-func (planSafeModule) ErrandReadSafe() {}
-func (planSafeModule) PlanReadSafe()   {}
+func (planOnlyFake) PlanReadSafe() {}
+
+// bothMarkersFake carries ErrandReadSafe + PlanReadSafe. NO module in the tree
+// has this shape — until NIM-488 the dry_run tests ran on it, so they proved
+// nothing about the real modules and the empty intersection went unnoticed.
+// Kept only to pin that the two paths stay independent.
+type bothMarkersFake struct{ fakeModule }
+
+func (bothMarkersFake) ErrandReadSafe() {}
+func (bothMarkersFake) PlanReadSafe()   {}
 
 func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	t.Helper()
@@ -238,11 +247,53 @@ func TestRun_DryRun_NotPlanReadSafe(t *testing.T) {
 	}
 }
 
+// TestRun_DryRun_PlanReadSafeOK is side (a) of the NIM-488 guard at the Run
+// level: a module carrying ONLY PlanReadSafe reaches Plan on dry_run. The
+// module address is core.file.present — the real one NIM-455 needs — and the
+// fixture carries no ErrandReadSafe, so the test fails if admission goes back
+// to asking for it.
 func TestRun_DryRun_PlanReadSafeOK(t *testing.T) {
 	t.Parallel()
 	planCalled := false
+	var gotState string
 	reg := mapRegistry{
-		"core.http": &planSafeModule{fakeModule: fakeModule{
+		"core.file": &planOnlyFake{fakeModule: fakeModule{
+			planFunc: func(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+				planCalled = true
+				gotState = req.GetState()
+				return stream.Send(&pluginv1.PlanEvent{Changed: true})
+			},
+			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+				t.Errorf("Apply called on dry_run; should have been Plan")
+				return nil
+			},
+		}},
+	}
+	r := New(reg, nil, nil)
+	res := r.Run(context.Background(), &keeperv1.ErrandRequest{
+		ErrandId: "e-8",
+		Module:   "core.file.present",
+		Input:    mustStruct(t, map[string]any{"path": "/etc/motd", "content": "hi"}),
+		DryRun:   true,
+	})
+	if res.GetStatus() != keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS {
+		t.Fatalf("status = %v; want SUCCESS (err=%q)", res.GetStatus(), res.GetErrorMessage())
+	}
+	if !planCalled {
+		t.Fatalf("Plan not called — dry_run on a PlanReadSafe module must reach Plan")
+	}
+	if gotState != "present" {
+		t.Errorf("Plan got state %q; want present", gotState)
+	}
+}
+
+// TestRun_DryRun_BothMarkersStillPlans pins the paths as independent: carrying
+// ErrandReadSafe as well must not divert a dry_run into Apply.
+func TestRun_DryRun_BothMarkersStillPlans(t *testing.T) {
+	t.Parallel()
+	planCalled := false
+	reg := mapRegistry{
+		"core.demo": &bothMarkersFake{fakeModule: fakeModule{
 			planFunc: func(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 				planCalled = true
 				return stream.Send(&pluginv1.PlanEvent{Changed: false})
@@ -255,8 +306,8 @@ func TestRun_DryRun_PlanReadSafeOK(t *testing.T) {
 	}
 	r := New(reg, nil, nil)
 	res := r.Run(context.Background(), &keeperv1.ErrandRequest{
-		ErrandId: "e-8",
-		Module:   "core.http.probe",
+		ErrandId: "e-8b",
+		Module:   "core.demo.present",
 		DryRun:   true,
 	})
 	if res.GetStatus() != keeperv1.ErrandStatus_ERRAND_STATUS_SUCCESS {
@@ -264,6 +315,53 @@ func TestRun_DryRun_PlanReadSafeOK(t *testing.T) {
 	}
 	if !planCalled {
 		t.Errorf("Plan not called")
+	}
+}
+
+// TestRun_ApplyPathUnreachableForPlanReadSafe is side (b) of the NIM-488
+// guard, and the half that carries the security weight: opening dry_run on
+// core.file must not open ad-hoc Apply on it. Both wire shapes that select the
+// Apply path are covered — an explicit `dry_run: false` and an omitted field
+// (proto3 bool defaults to false, so the zero value must fail closed).
+//
+// applyFunc fails the test on entry: if admission ever lets a PlanReadSafe-only
+// module through to Apply, this reports the breach rather than a status
+// mismatch alone.
+func TestRun_ApplyPathUnreachableForPlanReadSafe(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		req  *keeperv1.ErrandRequest
+	}{
+		{"explicit false", &keeperv1.ErrandRequest{ErrandId: "e-8c", Module: "core.file.present", DryRun: false}},
+		{"field omitted", &keeperv1.ErrandRequest{ErrandId: "e-8d", Module: "core.file.present"}},
+		{"state absent", &keeperv1.ErrandRequest{ErrandId: "e-8e", Module: "core.file.absent"}},
+		{"state rendered", &keeperv1.ErrandRequest{ErrandId: "e-8f", Module: "core.file.rendered"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reg := mapRegistry{
+				"core.file": &planOnlyFake{fakeModule: fakeModule{
+					applyFunc: func(*pluginv1.ApplyRequest, grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+						t.Errorf("Apply reached through Errand on a PlanReadSafe-only module — ad-hoc write path is open")
+						return nil
+					},
+					planFunc: func(*pluginv1.PlanRequest, grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+						t.Errorf("Plan called without dry_run")
+						return nil
+					},
+				}},
+			}
+			r := New(reg, nil, nil)
+			res := r.Run(context.Background(), tc.req)
+			if res.GetStatus() != keeperv1.ErrandStatus_ERRAND_STATUS_MODULE_NOT_ALLOWED {
+				t.Fatalf("status = %v; want MODULE_NOT_ALLOWED (err=%q)", res.GetStatus(), res.GetErrorMessage())
+			}
+			if !strings.HasPrefix(res.GetErrorMessage(), "errand_module_not_allowed:") {
+				t.Errorf("error_message = %q; want errand_module_not_allowed prefix", res.GetErrorMessage())
+			}
+		})
 	}
 }
 

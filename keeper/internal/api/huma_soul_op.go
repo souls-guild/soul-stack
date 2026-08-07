@@ -453,7 +453,7 @@ type errandExecInput struct {
 // via dispatcher); input/timeout_seconds/dry_run — optional-pointer (the handler dereferences).
 // timeout range / dry_run-for-verb / module format — domain validation (422/400 in ExecTyped).
 type ErrandRunRequest struct {
-	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state> (core.cmd.shell / core.exec.run / ErrandReadSafe module)"`
+	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state>; without dry_run - core.cmd.shell / core.exec.run / an ErrandReadSafe module, with dry_run - a PlanReadSafe module"`
 	Input          *map[string]any `json:"input,omitempty" doc:"input for the module (validated against input_schema)"`
 	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"total Errand timeout [1..300]; 0/omitted -> default 30s; > server-cap (30s) -> 202 + Location"`
 	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; target soul must announce the dry_run capability -> 409 otherwise"`

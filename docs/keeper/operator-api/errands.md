@@ -17,7 +17,7 @@ Mapping endpoint ↔ MCP-tool ↔ permission (table of 4 routes) - in the root [
 
 Permission: `errand.run` (selector `host=<sid>`, [rbac.md §Errand](../rbac.md)). MCP-tool: `keeper.soul.errand.run`. Path-param: `sid` (FQDN, URL-encoded).
 
-Pull-ad-hoc exec of a single module on a specific Soul via mTLS EventStream. Errand **NOT mutates** `incarnation.state` is a separate registry `errands`. Whitelist of modules - Soul-side defense-in-depth: hard list `core.cmd.shell` / `core.exec.run` or marker interface `ErrandReadSafe` in `sdk/module/`.
+Pull-ad-hoc exec of a single module on a specific Soul via mTLS EventStream. Errand **NOT mutates** `incarnation.state` is a separate registry `errands`. Whitelist of modules - Soul-side defense-in-depth, and it depends on which method the request reaches: without `dry_run` the Soul calls `Apply`, admitted by the hard list `core.cmd.shell` / `core.exec.run` or the marker interface `ErrandReadSafe` in `sdk/module/`; with `dry_run: true` it calls `Plan`, admitted by `PlanReadSafe` alone. Neither marker grants the other's path — `core.file` plans on request and stays unappliable ad-hoc ([ADR-033 → Amendment 2026-08-07](../../adr/0033-errand.md)).
 
 **Sync-primary flow (server-cap 30s):** `200` + `ErrandResult` if terminal received before cap; otherwise `202` + `{errand_id}` + `Location: /v1/errands/{errand_id}`, continuation in background to `timeout_seconds` (max 300s) → `ErrandStatus.TIMED_OUT`.
 
@@ -28,7 +28,7 @@ Pull-ad-hoc exec of a single module on a specific Soul via mTLS EventStream. Err
 | `module` | `string` | yes | Module address `core.<class>.<state>` or `core.cmd.shell` / `core.exec.run` (whitelist Soul-side). |
 | `input` | `object` | optional | Module Input (form depends on the module). |
 | `timeout_seconds` | `int` (1..300) | optional | Full timeout. Default `30`. |
-| `dry_run` | `bool` | optional | `true` → Soul calls `mod.Plan` (read-safe modules only). The target must announce the `dry_run` [Soul-capability](../../adr/0076-engine-compat-window.md); otherwise `409` before dispatch — see below. |
+| `dry_run` | `bool` | optional | `true` → Soul calls `mod.Plan` instead of `Apply`. Admitted for `PlanReadSafe` modules only; a module without it (incl. `core.cmd.shell` / `core.exec.run` / `core.http.probe`, which have no pure-read Plan) answers `failed` + `errand_dry_run_unsupported`. The target must also announce the `dry_run` [Soul-capability](../../adr/0076-engine-compat-window.md); otherwise `409` before dispatch — see below. |
 
 **Response (`ErrandResult` / `ErrandStatus`):** `status` ∈ `running` / `success` / `failed` / `timed_out` / `module_not_allowed`; `exit_code` (NULL for read-safe non-shell); `stdout`/`stderr` (masked output, cap 64 KiB) + `*_truncated` flags; `duration_ms`; `error_message` (masked reason FAILED/TIMED_OUT/MODULE_NOT_ALLOWED); `output` (structural output of read-safe modules, not available for shell/exec).
 

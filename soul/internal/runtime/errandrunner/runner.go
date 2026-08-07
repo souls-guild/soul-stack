@@ -7,8 +7,10 @@
 //   - does NOT mutate incarnation.state (`state_changes` are ignored);
 //   - one [keeperv1.ErrandRequest] → one [keeperv1.ErrandResult], no
 //     intermediate TaskEvent / RunResult;
-//   - module whitelist: hardcoded `core.cmd.shell` / `core.exec.run` +
-//     marker interface [sdkmodule.ErrandReadSafe] (see [IsAllowed]);
+//   - module admission is per-path (see [IsAllowed]): reaching Apply needs the
+//     hardcoded `core.cmd.shell` / `core.exec.run` or the marker interface
+//     [sdkmodule.ErrandReadSafe]; a dry_run reaches Plan instead and needs
+//     [sdkmodule.PlanReadSafe];
 //   - stdout/stderr are captured from the final ApplyEvent.Output, capped at
 //     64 KiB per channel + secret-masking (defense-in-depth — Keeper-side
 //     does the same when receiving the result, see
@@ -123,14 +125,22 @@ func (r *Runner) registerActive(errandID string, cancel context.CancelFunc) func
 // the caller (eventstream dispatcher) sends it back to Keeper as one message.
 //
 // ADR-033 contract:
-//  1. Whitelist check BEFORE any action (defense-in-depth, Keeper does too).
-//  2. Resolve the module through the same Registry as applyrunner.
+//  1. Resolve the module through the same Registry as applyrunner.
+//  2. Admission check BEFORE any action (defense-in-depth, Keeper does too),
+//     on the path selected by dry_run — see [IsAllowed].
 //  3. dry_run=true → mod.Plan(...) ONLY for [sdkmodule.PlanReadSafe];
 //     otherwise FAILED with `errand_dry_run_unsupported`.
-//  4. dry_run=false → mod.Apply(synthetic ApplyRequest).
+//  4. dry_run=false → mod.Apply(synthetic ApplyRequest) ONLY for verb-shell
+//     modules or [sdkmodule.ErrandReadSafe]; otherwise MODULE_NOT_ALLOWED.
 //  5. Output capped at 64 KiB per stdout/stderr channel + masking via
 //     [MaskSecrets].
 //  6. state_changes are ignored (Errand doesn't write them).
+//
+// dryRun is read from the request ONCE, into a local, and that same local
+// picks both the admission condition (3/4) and the method actually invoked
+// below. Re-reading req.GetDryRun() at the call site would let the two drift
+// apart, and the drift is exactly the hole the gate exists to close
+// (guarded by TestRun_ApplyPathUnreachable*).
 //
 // If ctx expires via timeout_seconds — status is TIMED_OUT (not FAILED).
 func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1.ErrandResult {
@@ -171,36 +181,31 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 		)
 	}
 
-	if ok, reason := IsAllowed(req.GetModule(), mod); !ok {
-		// Whitelist rejection is a security event (attempt to call a
-		// non-read-safe module via Errand). Warn level: keeper validate also
-		// rejects such requests; they only reach Soul on an early
-		// pre-validation client build or a keeper-side bug, worth seeing in
-		// logs.
-		r.logger.Warn("errand: whitelist reject",
+	// Read ONCE: this local selects the admission condition below AND the
+	// method invoked further down. See the Run doc comment.
+	dryRun := req.GetDryRun()
+
+	if ok, reason := IsAllowed(req.GetModule(), mod, dryRun); !ok {
+		// Admission rejection is a security event (an attempt to reach a
+		// module through a path it isn't cleared for). Warn level: keeper
+		// validate also rejects such requests; they only reach Soul on an
+		// early pre-validation client build or a keeper-side bug, worth
+		// seeing in logs.
+		//
+		// A dry_run refused for want of a pure-read Plan is a capability gap,
+		// not a whitelist breach — ADR-033 pins that case to FAILED
+		// `errand_dry_run_unsupported`, so it keeps its own terminal status.
+		status := keeperv1.ErrandStatus_ERRAND_STATUS_MODULE_NOT_ALLOWED
+		if reason == ReasonDryRunUnsupported {
+			status = keeperv1.ErrandStatus_ERRAND_STATUS_FAILED
+		}
+		r.logger.Warn("errand: admission reject",
 			slog.String("errand_id", errandID),
 			slog.String("module", req.GetModule()),
+			slog.Bool("dry_run", dryRun),
 			slog.String("reason", reason))
-		r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_MODULE_NOT_ALLOWED, started)
-		return r.terminalNoMetric(errandID, started,
-			keeperv1.ErrandStatus_ERRAND_STATUS_MODULE_NOT_ALLOWED,
-			reason,
-		)
-	}
-
-	// Dry-run validation: only modules with [sdkmodule.PlanReadSafe]. ADR-031's
-	// Plan is pure-read; for verb modules (cmd.shell/exec.run) Plan isn't
-	// PlanReadSafe, so dry_run on shell/exec returns
-	// `errand_dry_run_unsupported`. Deliberate constraint, not a bug (see
-	// core.cmd's doc comment).
-	if req.GetDryRun() {
-		if _, planReadSafe := mod.(sdkmodule.PlanReadSafe); !planReadSafe {
-			r.recordTerminal(req.GetModule(), keeperv1.ErrandStatus_ERRAND_STATUS_FAILED, started)
-			return r.terminalNoMetric(errandID, started,
-				keeperv1.ErrandStatus_ERRAND_STATUS_FAILED,
-				"errand_dry_run_unsupported",
-			)
-		}
+		r.recordTerminal(req.GetModule(), status, started)
+		return r.terminalNoMetric(errandID, started, status, reason)
 	}
 
 	// Timeout applies to the sub-ctx; expiry → TIMED_OUT (distinct from
@@ -228,7 +233,7 @@ func (r *Runner) Run(ctx context.Context, req *keeperv1.ErrandRequest) *keeperv1
 	}
 
 	var modErr error
-	if req.GetDryRun() {
+	if dryRun {
 		// PlanEvent from the Plan stream is collected by a separate collector
 		// (a different stream type), but for Errand the final only matters as
 		// "didn't fail" — Plan for read-safe modules doesn't write
