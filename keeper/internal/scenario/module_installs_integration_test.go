@@ -4,6 +4,8 @@
 // from service.yml::modules[] (ADR-065, NIM-8): a run with modules[] carries
 // a synthesized RenderedTask with params {name, ref} in the ApplyRequest
 // BEFORE the consumer; an explicit operator step (takeover) suppresses the
+// synthesis. params.name is address level 1 — the registration ALIAS naming
+// the slot, not the whole modules[] entry (NIM-524).
 
 package scenario
 
@@ -113,7 +115,8 @@ func installIndexes(tasks []*keeperv1.RenderedTask) []int {
 // TestIntegration_ModuleInstallSynthesis runs a scenario WITHOUT an explicit
 // install step: the ApplyRequest carries a synthesized
 // core.module.installed RenderedTask with params
-// {name: community.echo, ref: v1.2.0} BEFORE the consumer.
+// {name: community, ref: v1.2.0} BEFORE the consumer — name is the ALIAS of
+// the community.echo entry, which is what core.module.installed installs.
 func TestIntegration_ModuleInstallSynthesis(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -152,8 +155,8 @@ tasks:
 		t.Fatalf("task[0].module = %q, want core.module.installed (synth BEFORE the consumer)", install.GetModule())
 	}
 	fields := install.GetParams().GetFields()
-	if got := fields["name"].GetStringValue(); got != "community.echo" {
-		t.Errorf("install params.name = %q, want community.echo", got)
+	if got := fields["name"].GetStringValue(); got != "community" {
+		t.Errorf("install params.name = %q, want community (address level 1 - the alias core.module.installed installs into, not the modules[] entry)", got)
 	}
 	if got := fields["ref"].GetStringValue(); got != "v1.2.0" {
 		t.Errorf("install params.ref = %q, want v1.2.0 (ref of the modules[] entry)", got)
@@ -164,8 +167,8 @@ tasks:
 }
 
 // TestIntegration_ModuleInstallTakeover_NoDuplicate: an explicit install step
-// with a literal params.name suppresses synthesis — the plan has EXACTLY ONE
-// core.module.installed (the operator's, without ref).
+// whose literal params.name is the alias suppresses synthesis — the plan has
+// EXACTLY ONE core.module.installed (the operator's, without ref).
 func TestIntegration_ModuleInstallTakeover_NoDuplicate(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -177,7 +180,7 @@ tasks:
   - name: Operator installs the plugin explicitly
     module: core.module.installed
     params:
-      name: community.echo
+      name: community
   - name: Use the echo plugin
     module: community.echo.run
     params:
@@ -266,8 +269,8 @@ tasks:
 		t.Fatalf("claim task[0].module = %q, want core.module.installed (synth on the claim path)", tasks[0].Module)
 	}
 	fields := tasks[0].Params.GetFields()
-	if got := fields["name"].GetStringValue(); got != "community.echo" {
-		t.Errorf("claim install params.name = %q, want community.echo", got)
+	if got := fields["name"].GetStringValue(); got != "community" {
+		t.Errorf("claim install params.name = %q, want community (the alias, as on the run path)", got)
 	}
 	if got := fields["ref"].GetStringValue(); got != "v1.2.0" {
 		t.Errorf("claim install params.ref = %q, want v1.2.0", got)

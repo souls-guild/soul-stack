@@ -223,10 +223,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	warnCompatFloorTooLow(serviceCompatEntity(art),
 		append(config.KeeperFeaturesOfService(art.Manifest), config.KeeperFeaturesOfScenario(scn)...), log)
 
-	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
+	// The log names the ALIASES installed, not the `modules[]` entries: one alias
+	// can cover several entries (one artifact, several modules), and it is the
+	// alias the slot, the grant and the failure message all speak in.
+	if synthed, aliases := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(aliases) > 0 {
 		scn.Tasks = synthed
 		log.Info("scenario: synthesized module install steps from manifest.modules[] (ADR-065)",
-			slog.Any("modules", names))
+			slog.Any("aliases", aliases))
 	}
 
 	// 2.5. Provision-aware effective run-timeout (ADR-0061). Deadline moved here

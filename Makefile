@@ -463,6 +463,15 @@ e2e-live: build-linux
 # illegible is one people learn to rerun until green. Nothing is downgraded: the
 # recipe still exits non-zero either way.
 #
+# The transcript is a fresh file per invocation, and the recipe prints where it
+# put it. The name used to be fixed - $TMPDIR/soul-e2e-live-gate.log - which is
+# one path shared by every worktree on the machine, and this repo is worked in
+# several at once. Two gates running together then read a file the other one is
+# writing: `tee` truncates it at start, so the checks below can see a foreign
+# run's `--- PASS` lines in place of a missing one of their own, and on red the
+# classifier explains someone else's failure. Both are the NIM-406 defect -
+# a verdict that is not about this run.
+#
 # E2E_GATE_TESTS is the single source for the -run mask, the per-test `--- PASS`
 # guard and the classifier's NOT-RUN list. It used to be spelled out twice, and
 # a test present in one copy but not the other is silently ungated.
@@ -494,8 +503,9 @@ e2e-live-gate: build build-linux
 		exit 1; \
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
-		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
+		log=$$(mktemp "$${TMPDIR:-/tmp}/soul-e2e-live-gate.XXXXXXXX.log") || exit 1; \
 		mask=$$(scripts/e2e-gate-mask.sh mask $(E2E_GATE_TESTS)) || exit 1; \
+		echo "e2e-live-gate: transcript -> $$log"; \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
 		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \

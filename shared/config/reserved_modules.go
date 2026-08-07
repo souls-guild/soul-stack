@@ -28,14 +28,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// reservedModuleAddr reports whether a two-level `<namespace>.<module>` address names a
-// reserved namespace at level 1.
+// reservedModuleAddr reports whether a two-level `<alias>.<module>` address claims a
+// reserved name at level 1.
 //
 // A single-level name (a destiny, `redis`) is never a module address and is left alone —
 // the same helper is on the path that validates both lists.
 func reservedModuleAddr(addr string) bool {
-	ns, _, twoLevel := strings.Cut(addr, ".")
-	return twoLevel && plugin.IsReserved(ns)
+	alias, twoLevel := ModuleAlias(addr)
+	return twoLevel && plugin.IsReserved(alias)
 }
 
 // reservedModuleDiag renders the finding for an address [reservedModuleAddr] rejected.

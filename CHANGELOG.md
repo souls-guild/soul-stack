@@ -1464,6 +1464,38 @@ order to act in.
 
 ### Fixed
 
+- **Every service declaring `modules:` was unappliable on every host.** The two
+  ends of the auto-synthesis path (`ADR-065`) disagreed about what address level 1
+  means, and each was internally consistent, tested, and green. `NIM-377` renamed
+  that level: it stopped being a namespace the artifact declares about itself and
+  became the **alias an operator registers it under** — which is why the artifact
+  no longer carries a name at all. `core.module.installed` was updated to the new
+  meaning and rejects anything but a bare alias; the synthesizer — the only thing
+  that produces its steps — kept passing the whole `<alias>.<module>` entry from
+  `service.yml::modules[]` verbatim. No value satisfies both, so a manifest
+  declaration that is supposed to save the author from writing an install step
+  produced a step that could never run. Level 1 is now what reaches
+  `params.name`, and a property test asserts the shape of every synthesized step
+  rather than one expected string, because the string is exactly what agreed with
+  itself across the break.
+
+  Two things the same reading corrected. Several `modules[]` entries served by one
+  artifact — `community.redis` and `community.sentinel` are one binary — used to
+  synthesize one install **each**, re-fetching the same slot; they now collapse to
+  a single step before the earliest consumer, and pinning them to disagreeing
+  `ref`s is a schema-validation error (`conflicting_module_ref`) instead of a
+  race to overwrite the slot. And the documented escape hatch — write the install
+  step yourself and synthesis stands aside — had been silently dead since
+  `NIM-377`: takeover was recorded under the alias the operator wrote and looked
+  up under the dotted entry, so the operator got an unrequested duplicate next to
+  their own step.
+
+  `ADR-065` carries the amendment, because the contradiction was written down
+  before it was compiled: the `NIM-377` amendment declared `modules[].name` to
+  *be* the alias and left the field's two-level regex standing in the same
+  paragraph. The declaration stays an address — it is what a scenario writes, and
+  a service naming only the slot would not be saying which module it calls.
+
 - **`keeper init` refused the reference `keeper.yml` we ship.**
   `auth.jwt.ttl_bootstrap: 30d` in `examples/keeper/keeper.yml` is a well-formed
   `duration`: the convention is a Go duration plus an `<N>d` suffix for days, and
@@ -1707,11 +1739,32 @@ order to act in.
   and the document is read *outside* the declaration, next to `go build`, for the
   same reason the build already was.
 
-  The gate is **still not passing**, and not for a reason this work can reach: the
-  same breaking change left `service.yml::modules[]` declaring a two-level name
-  that `core.module.installed` refuses to accept, which is `NIM-524`, waiting on
-  the addressing decision in `NIM-376`. What this entry claims is narrower than a
-  green gate — a red one that names the right layer.
+  None of that would have caught `NIM-377` either: the harness's picture of what
+  an artifact **is** had no check that did not cost twenty minutes and a docker
+  daemon. It has one now — a second-long test, in the gate's docker-free
+  pre-step, holding the five things the fixture builder assumes (the document is
+  published where it looks, `manifest.yaml` is still gone, the bytes are
+  canonical, the trailer round-trips, and the module the artifact declares is the
+  one half of `community.redis` the operator's alias does not supply). It reads
+  the model through `sdk/schema` rather than restating it, because a restatement
+  is a second definition that keeps agreeing with the model the product has left —
+  which is the bug, not a check for it. All five arms were proven by putting each
+  defect back.
+
+  What the relabelled gate then reported was not a fixture problem at all but a
+  product one — `NIM-524`, the entry above titled "Every service declaring
+  `modules:` was unappliable on every host". That is the whole point of the
+  label: the first honest run pointed at the code, and the code was where the
+  defect was.
+
+  One last way the verdict could be about the wrong run: the transcript the
+  recipe greps had a **fixed** path, `$TMPDIR/soul-e2e-live-gate.log`. That is
+  one file shared by every worktree on the machine, and this repo is worked in
+  several at once — so two gates running together read a file the other is
+  writing, `tee` having truncated it at start. A missing `--- PASS` of your own
+  can then be supplied by a neighbour's line, and on red the classifier explains
+  somebody else's failure. The transcript is now a fresh file per invocation and
+  the recipe prints where it put it, which it never did before.
 
 - **The same gate's list of tests held prefixes, not names.** Three of the nine
   entries in `E2E_GATE_TESTS` were the leading part of a test's name rather than

@@ -52,7 +52,8 @@ import (
 //
 // SoulModules - the `plugins.soul_modules[]` catalog of keeper.yml (ADR-065(b)):
 // SoulModule plugins that keeper git-resolves into cache_root at startup
-// (plugingit, slot `<ns>-<name>/current/`). A non-empty list automatically
+// (plugingit, slot `<alias>/current/` - the entry's `name`, since NIM-377 the
+// artifact declares none of its own). A non-empty list automatically
 // enables Sigil (config_builder writes the sigil block, NewStack seeds an
 // ed25519 signing key into Vault) - without a Signer the allow flow doesn't come up.
 type Config struct {
@@ -96,7 +97,7 @@ type Stack struct {
 
 	// PluginCacheRoot - `plugins.cache_root` from keeper.yml (filled in by
 	// buildKeeperYAML): the plugingit resolver materializes the plugin catalog
-	// slots `<ns>-<name>/current/` here (ADR-065(b)/(g)). Plugin-channel tests
+	// slots `<alias>/current/` here (ADR-065(b)/(g)). Plugin-channel tests
 	// assert the slot at this path.
 	PluginCacheRoot string
 

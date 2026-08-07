@@ -346,21 +346,24 @@ The step itself `core.module.installed` - **Soul-side** (delivery of the SoulMod
 
 **Synthesis point.** Immediately after expanding `include:` (flat task list, [scenario/orchestration.md §6](../scenario/orchestration.md)) and before Stratify - the same in all places that build the run plan: scenario-runner (apply), claim-render Acolyte (reproduces the run-goroutine plan - correlation plan_index/TaskEvent) and L0-trial-harness. Pre-flight/parsing/UI-plane surfaces do not mutate.
 
-**What is inserted.** For each record `modules[]`, which has a consumer task in the plan (task `module:` with the prefix `<ns>.<module>.`), a regular plan task with a marker name is synthesized:
+**What is inserted.** For each record `modules[]`, which has a consumer task in the plan (task `module:` with the prefix `<alias>.<module>.`), a regular plan task with a marker name is synthesized:
 
 ```yaml
-- name: install community.redis (service manifest)   # synthesis step marker name
+- name: install community (service manifest)   # synthesis step marker name
   module: core.module.installed
-  params: { name: community.redis, ref: v1.2.0 }     # name+ref - from the manifest entry
+  params: { name: community, ref: v1.2.0 }     # the ALIAS + the entry's ref
 ```
 
+**`params.name` is address level 1, not the manifest entry.** `modules[].name` is `<alias>.<module>`; `core.module.installed` installs an artifact into the slot the alias names and has nothing to do with level 2, so it rejects a dotted value (`soul/internal/coremod/module`, `reAlias`). NIM-377 renamed level 1 from an artifact-declared namespace to an operator-chosen alias and left the synthesizer passing both levels through — every service declaring `modules:` then failed at apply on every host, with the producer and the consumer each carrying passing tests of their own (NIM-524).
+
 - **Position** - immediately before the first consumer task; consumer inside `block:` → insertion before the entire block. Several synthesis steps before one task - in manifest order.
+- **One step per alias.** Two entries served by one artifact (`community.redis`, `community.sentinel`) install once, before the **earlier** of their consumers — they name one slot, and installing before the later one would leave the earlier consumer unresolvable. `service.yml` validation requires such entries to agree on `ref` (`conflicting_module_ref`).
 - **Without `on:`/`where:`** - a regular roster task: stratified as its consumer, incl. goes **after** roster-refresh-border ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) - provision-from-zero works without special logic.
 - **A module without consumers in the plan is NOT synthesized**; `core.*` entries are skipped (they are already prohibited by manifest validation, `core_module_in_modules_list`).
 - `ref` in params - **pin-verification** ([ADR-065(c)](../adr/0065-core-module-installed.md)): the active Sigil permit must be on this ref, otherwise step `failed`.
 - The synthesis step goes through render → dispatch → TaskEvent like any task and is visible in the run-view by its marker name.
 
-**Takeover - an explicit step disables synthesis.** An explicit `core.module.installed` with the same **literal** `params.name` in plan suppresses the synthesis of this name - the operator controls the position itself, `ref` and `when:`. `${…}`-CEL in `params.name` cannot be compared literally: synthesis will not be suppressed, a double step is possible - harmless (idempotency by sha256: the binary is already installed → `changed=false`, fetch is not executed).
+**Takeover - an explicit step disables synthesis.** An explicit `core.module.installed` whose **literal** `params.name` is that alias suppresses synthesis for it - the operator controls the position itself, `ref` and `when:`. `${…}`-CEL in `params.name` cannot be compared literally: synthesis will not be suppressed, a double step is possible - harmless (idempotency by sha256: the binary is already installed → `changed=false`, fetch is not executed).
 
 **Idempotency and errors.** Skip is modular only (sha256 of installed binary == sha of active Sigil permission); plan-level skip no - Keeper does not maintain a register of the installed per-host, the roster changes mid-run. The absence of an entry in `plugins.soul_modules[]` / active Sigil-permission catches the Soul-side allow-check of the step (`module_not_allowed`) - like an explicit step; There is no keeper-side pre-flight gate in MVP (together with the validation-hint "the module is used but not declared" - post-MVP).
 

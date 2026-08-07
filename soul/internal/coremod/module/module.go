@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 
@@ -36,10 +37,15 @@ const stateInstalled = "installed"
 // kebab-case grammar as a module name, and a single path element, since the alias also
 // names the slot directory and the artifact inside it.
 //
+// The pattern is [sharedplugin.AliasPattern], not a copy of it: this predicate and the
+// Keeper-side producer of these params are the two ends NIM-524 found disagreeing, and
+// the guard that now pins them together ([config.SynthesizeModuleInstalls]'s property
+// test) is only worth anything if both ends read the same rule.
+//
 // This is a FORM check only. Whether an alias is reserved (`core`, `keeper`, `soul`, …)
 // is decided at registration on the Keeper, where the operator picks it; by the time a
 // grant reaches a Soul the name has already been accepted.
-var reAlias = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var reAlias = regexp.MustCompile(sharedplugin.AliasPattern)
 
 // Fetcher — the FetchModule transport ([ADR-012] third RPC, ADR-065(a)).
 // Implemented by soulgrpc.StreamSession; reaches the run via context

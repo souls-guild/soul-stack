@@ -379,9 +379,12 @@ destiny:
   - { name: redis-exporter, ref: v1.0.0 }
   - { name: vector, ref: v1.0.0 }
 
-# Custom modules for the service. The two-level form <namespace>.<module> (kebab-case)
-# is mandatory (docs/service/manifest.md → modules[]). community.redis — the MAIN
-# interface to a live Redis (examples/module/soul-mod-community-redis/).
+# Custom modules for the service. The two-level form <alias>.<module> (kebab-case) is
+# mandatory (docs/service/manifest.md → modules[]). Level 1 is the REGISTRATION ALIAS
+# the operator gives the artifact — the scenarios here address community.redis.*, so a
+# cluster running this service registers soul-mod-community-redis as `community`.
+# That artifact is the MAIN interface to a live Redis
+# (examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
 

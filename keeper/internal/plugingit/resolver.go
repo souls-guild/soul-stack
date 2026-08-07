@@ -56,7 +56,7 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// currentLink — name of symlink to active commit_sha slot inside <ns>-<name>/.
+// currentLink — name of symlink to active commit_sha slot inside <alias>/.
 const currentLink = "current"
 
 // Sentinel errors for resolve of one catalog entry. ResolveCatalog maps them to

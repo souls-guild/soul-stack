@@ -32,7 +32,7 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 		ServiceName: "redis",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: "redis", Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
 		},
 	})
 	t.Cleanup(stack.Cleanup)
@@ -45,7 +45,7 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+redisDay2AdminUser, map[string]any{"password": redisDay2AdminPass})
 
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
-	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
 
 	// Seed the incarnation row -> bind the roster -> run create. The order is
 	// owned by CreateIncarnationOnRoster (NIM-192): membership carries an FK on

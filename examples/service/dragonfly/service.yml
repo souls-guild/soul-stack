@@ -217,8 +217,10 @@ destiny:
   - { name: node-exporter, ref: v1.0.0 }
   - { name: vector, ref: v1.0.0 }
 
-# Service custom modules. community.redis - the MAIN interface to the live DragonFly (redis-
-# compatible: PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-community-redis/).
+# Service custom modules, in the two-level form <alias>.<module>: level 1 is the alias
+# the operator registers the artifact under, and these scenarios address community.redis.*.
+# soul-mod-community-redis is the MAIN interface to the live DragonFly (redis-compatible:
+# PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
 

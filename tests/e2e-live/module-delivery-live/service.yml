@@ -16,8 +16,10 @@ state_schema:
   properties: {}
 
 # modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
-# keeper synthesizes core.module.installed {name, ref} before the first consumer of
-# community.redis.* in the plan. There is NO consumer in create → no synthesis in the
-# create plan; the consumer is only in the operational-scenario verify_live.
+# keeper synthesizes core.module.installed {name: community, ref} before the first
+# consumer of community.redis.* in the plan — params.name is address level 1, the
+# registration alias naming the slot, not this whole entry (NIM-524). There is NO
+# consumer in create → no synthesis in the create plan; the consumer is only in the
+# operational-scenario verify_live.
 modules:
   - { name: community.redis, ref: v1.0.0 }

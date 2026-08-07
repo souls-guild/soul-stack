@@ -34,7 +34,7 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 		ServiceName: "redis",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: "redis", Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
 		},
 	})
 	defer stack.Cleanup()
@@ -62,7 +62,7 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	// Allowlist community.redis@v1.0.0 via the operator Sigil API (AllowSoulModule). Ref-pin
 	// is mandatory (ADR-065): auto-deps synthesizes install with ref=v1.0.0, allowing main
 	// would not work.
-	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
 
 	// Create the standalone-equivalent: sentinel + 0 replicas (standalone/sentinel_only modes
 	// have been removed from the service). provision:{enabled:false} - deploy onto a READY soul roster

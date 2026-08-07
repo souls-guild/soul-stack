@@ -92,10 +92,11 @@ assert:
         path: /etc/redis/redis.conf
 
     # ★ Synthesis from service.yml::modules[] is present even without provision (ADR-065);
-    # ref comes from the manifest record.
+    # ref comes from the manifest record. params.name is address level 1 — the alias
+    # `community` the artifact registers under, not the whole modules[] entry (NIM-524).
     - module: core.module.installed
       params_subset:
-        name: community.redis
+        name: community
         ref: v1.0.0
 
   task_absent:

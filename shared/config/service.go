@@ -162,9 +162,9 @@ func (t *TelemetryConfig) CollectorsOrDefault() []string {
 
 // DependencyRef — an entry in `destiny[]` / `modules[]`: `{name, ref}` + optional `git`.
 //
-// `name` — a destiny name (kebab-case, single-level) or a module name (two-level
-// `<namespace>.<module>`); a different regex applies per context (see
-// schemaValidateService → pass over the slices).
+// `name` — a destiny name (kebab-case, single-level) or a module address (two-level
+// `<alias>.<module>`, level 1 being the registration alias); a different regex
+// applies per context (see schemaValidateService → pass over the slices).
 // `ref` — a git tag or branch (ADR-007). MVP accepts any non-empty string;
 // detailed ref-form checks (semver-tag / branch-naming) are backlog.
 // `git` — optional per-entry override of the dependency's full git URL. Supported
@@ -218,10 +218,12 @@ var (
 	// separate regex copy was a source of drift.
 	reDependencyDestinyName = reDestinyName
 
-	// reDependencyModuleName — strict two-level form `<namespace>.<module>` for
-	// custom modules in `service.yml → modules[]`. Symmetric with `reRequiredModule`
-	// (destiny.go); canonical kebab-case in each half (no trailing/leading/double
-	// dash), no underscore, naming-rules.md §57/§186.
+	// reDependencyModuleName — strict two-level form `<alias>.<module>` for custom
+	// modules in `service.yml → modules[]`. Level 1 is the registration alias the
+	// artifact is expected to be installed under (it stopped being an artifact-declared
+	// namespace in NIM-377); level 2 is one of the modules that artifact serves.
+	// Symmetric with `reRequiredModule` (destiny.go); canonical kebab-case in each half
+	// (no trailing/leading/double dash), no underscore, naming-rules.md §57/§186.
 	reDependencyModuleName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 )
 
@@ -338,8 +340,30 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	for i, dep := range m.Destiny {
 		out = append(out, validateDependencyRef(root, "destiny", i, dep, reDependencyDestinyName)...)
 	}
+	// Entries sharing an alias are the normal way to declare one artifact serving
+	// several modules, and they all land in the SAME slot — so they must name the
+	// same ref. Left unchecked, the synthesized install (NIM-524) silently picks
+	// the first entry's ref and the pin check fails later, naming a ref the reader
+	// never wrote next to the module that failed.
+	aliasRef := make(map[string]string, len(m.Modules))
+	aliasAt := make(map[string]int, len(m.Modules))
 	for i, dep := range m.Modules {
 		out = append(out, validateDependencyRef(root, "modules", i, dep, reDependencyModuleName)...)
+		alias, ok := ModuleAlias(dep.Name)
+		if !ok || dep.Ref == "" {
+			continue
+		}
+		if prev, seen := aliasRef[alias]; seen && prev != dep.Ref {
+			out = append(out, atPath(root, fmt.Sprintf("$.modules[%d].ref", i), diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code: "conflicting_module_ref",
+				Message: fmt.Sprintf("modules[%d] %q pins ref %q, but modules[%d] pins ref %q for the same alias %q",
+					i, dep.Name, dep.Ref, aliasAt[alias], prev, alias),
+				Hint: "modules sharing address level 1 are served by ONE artifact in ONE slot; give them one ref, or register the second artifact under a different alias",
+			}))
+			continue
+		}
+		aliasRef[alias], aliasAt[alias] = dep.Ref, i
 	}
 
 	// 6) revealable_secrets[] — reveal declarations (NIM-74).
@@ -594,7 +618,7 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 
 func nameHint(listKey string) string {
 	if listKey == "modules" {
-		return "two-level address <namespace>.<module> per architecture.md -> \"Module addressing\"; core-modules are not listed here"
+		return "two-level address <alias>.<module> per architecture.md -> \"Module addressing\"; level 1 is the registration alias, core-modules are not listed here"
 	}
 	return "kebab-case: lowercase letters, digits, dashes; must start with letter"
 }

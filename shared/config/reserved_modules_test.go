@@ -55,7 +55,7 @@ func TestRequiredModules_ReservedNameIsRejected(t *testing.T) {
 }
 
 // The reserved check must beat the format check on a name that is regex-valid: telling
-// the author "does not match <namespace>.<module>" about `core.haproxy` sends them
+// the author "does not match <alias>.<module>" about `core.haproxy` sends them
 // hunting for a typo in a string they spelled exactly as they meant it.
 func TestRequiredModules_ReservedBeatsFormatDiagnostic(t *testing.T) {
 	diags := destinyDiags(t, "name: x\nrequired_modules: [core.haproxy]\n")

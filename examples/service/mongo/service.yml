@@ -93,7 +93,9 @@ state_schema:
 # monitoring/scenario/create (redis-exporter renders from scenario-local templates without destiny).
 destiny: []
 
-# Custom service modules. Two-level form <namespace>.<module>. community.mongo —
-# the MAIN interface to live MongoDB (examples/module/soul-mod-community-mongo/).
+# Custom service modules. Two-level form <alias>.<module>, level 1 being the alias the
+# operator registers the artifact under (these scenarios address community.mongo.*).
+# soul-mod-community-mongo is the MAIN interface to live MongoDB
+# (examples/module/soul-mod-community-mongo/).
 modules:
   - { name: community.mongo, ref: v1.0.0 }

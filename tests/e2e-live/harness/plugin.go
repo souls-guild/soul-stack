@@ -24,20 +24,9 @@ import (
 // (the Signer signs the binary from the cache_root slot on POST
 // /v1/plugins/sigils), no seal artifact is needed in the plugin git repo.
 
-// communityRedisPluginDir - plugin sources relative to the repo root.
-const communityRedisPluginDir = "examples/module/soul-mod-community-redis"
-
-// CommunityRedisPluginRef - tag under which the harness publishes the plugin
-// in the per-test git repo; ref for the catalog entry and Sigil-allow.
-const CommunityRedisPluginRef = "v1.0.0"
-
-// communityRedisBinaryName - the filename `dist/` gives the artifact in the
-// published repo. Since NIM-377 it means NOTHING to any reader: `Manifest.BinaryName()`
-// is gone, the resolver takes the one executable in `dist/` whatever it is called
-// (plugingit TestResolveEntry_ArtifactNameIsIrrelevant) and renames it to the
-// registration alias in the slot. Kept only so the fixture repo looks like a real
-// one an author would publish.
-const communityRedisBinaryName = "soul-mod-redis"
+// The fixture's identity - plugin directory, ref, alias, module, artifact
+// filename - is in pluginfixture.go, untagged, so the docker-free guard can hold
+// it against the artifact model without a stand.
 
 // Build cache - once per process (go build of the plugin isn't fast; Go's
 // build cache makes repeated processes cheap, but we don't rebuild within one run).
@@ -179,48 +168,58 @@ func buildCommunityRedisBinary(t *testing.T) string {
 	return communityRedisBinPath
 }
 
-// AllowSoulModule allows a plugin (namespace, name, ref) via Operator API
-// POST /v1/plugins/sigils (ADR-026 S4a): keeper reads the binary+manifest from
-// the `<cache_root>/<ns>-<name>/current/` slot, signs it with the Signer, and
-// writes the allow entry to plugin_sigils. Returns the sha256 of the allowed
-// binary from the 201 response.
+// AllowSoulModule allows the artifact registered under `alias` on the identity
+// (source, ref) via Operator API POST /v1/plugins/sigils (ADR-026 S4a, re-keyed
+// by NIM-377): keeper reads the artifact from the `<cache_root>/<alias>/current/`
+// slot, signs it with the Signer, and writes the allow entry to plugin_sigils.
+// Returns the sha256 of the allowed binary from the 201 response.
+//
+// The body carries the two identities NIM-377 separated: `alias` is the
+// registration (address level 1, and the slot to read), `source`+`ref` are what
+// the operator asserts about the artifact in it. The artifact carries no
+// self-name, so there is no third "plugin name" to send — the request schema is
+// additionalProperties:false and a stale `{namespace, name}` body is rejected
+// 400 before it reaches any of this.
 //
 // The slot must be materialized BEFORE this call - normally `keeper run` does
 // this at startup (plugingit.ResolveCatalog over `plugins.soul_modules[]`), so
 // it's enough to pass the entry in Config.SoulModules.
-func (s *Stack) AllowSoulModule(t *testing.T, namespace, name, ref string) string {
+func (s *Stack) AllowSoulModule(t *testing.T, alias, source, ref string) string {
 	t.Helper()
 	c := s.opClient(t)
 	resp, status, err := c.post(context.Background(), "/v1/plugins/sigils", map[string]any{
-		"namespace": namespace,
-		"name":      name,
-		"ref":       ref,
+		"alias":  alias,
+		"source": source,
+		"ref":    ref,
 	})
 	if err != nil {
-		t.Fatalf("AllowSoulModule %s/%s/%s: http: %v", namespace, name, ref, err)
+		t.Fatalf("AllowSoulModule %s (%s@%s): http: %v", alias, source, ref, err)
 	}
 	if status != http.StatusCreated {
-		t.Fatalf("AllowSoulModule %s/%s/%s: status %d, body=%s", namespace, name, ref, status, string(resp))
+		t.Fatalf("AllowSoulModule %s (%s@%s): status %d, body=%s", alias, source, ref, status, string(resp))
 	}
 	var out struct {
 		SHA256 string `json:"sha256"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
-		t.Fatalf("AllowSoulModule %s/%s/%s: decode: %v (body=%s)", namespace, name, ref, err, string(resp))
+		t.Fatalf("AllowSoulModule %s (%s@%s): decode: %v (body=%s)", alias, source, ref, err, string(resp))
 	}
 	if out.SHA256 == "" {
-		t.Fatalf("AllowSoulModule %s/%s/%s: empty sha256 in 201 body=%s", namespace, name, ref, string(resp))
+		t.Fatalf("AllowSoulModule %s (%s@%s): empty sha256 in 201 body=%s", alias, source, ref, string(resp))
 	}
 	return out.SHA256
 }
 
 // PluginSigilItem - an items[] element of GET /v1/plugins/sigils (subset of
-// PluginSigilView wire fields needed by the asserts).
+// PluginSigilView wire fields needed by the asserts). Keyed by (source, ref)
+// with the alias as a plain column since NIM-377 — the pre-NIM-377
+// {namespace, name} pair is not on the wire at all, and a struct still naming
+// it would decode to two empty strings and match nothing.
 type PluginSigilItem struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Ref       string `json:"ref"`
-	SHA256    string `json:"sha256"`
+	Alias  string `json:"alias"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
+	SHA256 string `json:"sha256"`
 }
 
 // ListPluginSigils returns active Sigil allows via Operator API

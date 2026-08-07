@@ -26,6 +26,7 @@ package e2e_live_test
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,8 +35,10 @@ import (
 )
 
 const (
-	moduleDeliverySID  = "soul-live-a.example.com"
-	moduleDeliverySlot = "/var/lib/soul-stack/modules/community-redis" // ADR-065(g) <paths.modules>/<ns>-<name>
+	moduleDeliverySID = "soul-live-a.example.com"
+	// ADR-065(g) <paths.modules>/<alias>, the alias being address level 1 of the
+	// modules[] entry - `community` of `community.redis` (NIM-377/NIM-524).
+	moduleDeliverySlot = "/var/lib/soul-stack/modules/" + harness.CommunityRedisAlias
 	// createAuthoredTasks - number of authored tasks in scenario/create (pkg+service),
 	// baseline for assert 1 (create plan without synthesis). Bump when adding a
 	// task to scenario/create/main.yml.
@@ -50,7 +53,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 		ServiceName: "module-delivery-live",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: "redis", Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
 		},
 	})
 	defer stack.Cleanup()
@@ -107,8 +110,11 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	if mod != "core.module" {
 		t.Fatalf("assert2: install step error.module=%q, expected core.module (this is the synthesis step)", mod)
 	}
-	if !strings.Contains(msg, "module_not_allowed") || !strings.Contains(msg, "community.redis") {
-		t.Fatalf("assert2: install step error.message=%q, expected module_not_allowed + community.redis", msg)
+	// The message names the ALIAS whose grant is missing, not the module address
+	// the consumer uses: this step installs a slot, and `community.redis` is not a
+	// thing that can be granted (installed.go, "no active Sigil grant for %q").
+	if !strings.Contains(msg, "module_not_allowed") || !strings.Contains(msg, strconv.Quote(harness.CommunityRedisAlias)) {
+		t.Fatalf("assert2: install step error.message=%q, expected module_not_allowed + the alias %q", msg, harness.CommunityRedisAlias)
 	}
 	// NO fetch bytes: allow-check happens BEFORE fetch -> the host slot is NOT materialized.
 	assertHostFileAbsent(t, stack, 0, moduleDeliverySlot)
@@ -116,7 +122,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	// -- allow + unlock + repeat verify_live -----------------------------------
 	// AllowSoulModule (keeper-side seal) -> active Sigil. Unlock clears
 	// error_locked after the intentional failure (otherwise lockRun rejects the repeat).
-	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
 	stack.Unlock(t, incName, "e2e NIM-32: unlock after negative fail-closed")
 
 	okApply := stack.RunScenario(t, incName, "verify_live", nil)
@@ -143,10 +149,14 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	stack.AssertTaskRegisterField(t, okApply, sid, 1, "result", "PONG")
 
 	// -- ASSERT 5: host slot layout ADR-065(g) ---------------------------------
-	// <paths.modules>/community-redis/{manifest.yaml, soul-mod-redis}; the binary is executable.
-	stack.AssertHostFileExists(t, 0, moduleDeliverySlot+"/manifest.yaml")
-	stack.AssertHostFileExists(t, 0, moduleDeliverySlot+"/soul-mod-redis")
-	assertHostFileExecutable(t, stack, 0, moduleDeliverySlot+"/soul-mod-redis")
+	// <paths.modules>/<alias>/<alias> - the artifact carries no self-name since
+	// NIM-377, so the slot and the file in it are both named by the registration
+	// alias. There is NO manifest.yaml: it is what NIM-377 removed, and its absence
+	// is asserted so a resurrected copy beside the signed bytes is caught here.
+	slotArtifact := moduleDeliverySlot + "/" + harness.CommunityRedisAlias
+	stack.AssertHostFileExists(t, 0, slotArtifact)
+	assertHostFileExecutable(t, stack, 0, slotArtifact)
+	assertHostFileAbsent(t, stack, 0, moduleDeliverySlot+"/manifest.yaml")
 
 	// -- ASSERT 6: idempotency of a repeat run (ADR-065(c)) --------------------
 	// sha256 of the installed binary == active allow -> install changed=false,

@@ -162,13 +162,5 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// repoRoot returns the repository root (tests/e2e-live/<test>.go ->
-// wd/../..), symmetric with locateKeeperBinary.
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("repoRoot: getwd: %v", err)
-	}
-	return filepath.Clean(filepath.Join(wd, "..", ".."))
-}
+// repoRoot lives in repo.go, untagged: the docker-free guards need it, and it is
+// the single name the bring-up declaration guard keys on.

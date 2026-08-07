@@ -67,7 +67,7 @@ The root file contains only the service metadata and the contract for the runtim
 | `state_schema_version` | yes | integer (≥1) | Structure version `incarnation.state` in Postgres. **NOT** version of the service (this is the git tag by [ADR-007](../adr/0007-versioning-git-ref.md)). Increments explicitly when breaking schema changes; requires appropriate migration to `migrations/`. |
 | `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
 | `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
-| `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <namespace>.<module>, ref: <git-tag-or-branch> }`. Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
+| `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <alias>.<module>, ref: <git-tag-or-branch> }`, where the alias is the registration name the artifact was allowed under (see below). Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
 | `compat` | no | object | Declared **engine-compatibility window**: which keeper versions this definition was authored and tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today — `keeper: {min, max}`. No section → unbounded (existing services keep working). Semantics and example — ["`compat` Section"](#compat-section). |
 | `certificate_rotation` | no | object | Enables and configures **auto-rotation** of the incarnation's service TLS certs by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md)): fields `enable`/`scenario`/`threshold`/`pki_role`. No section (or `enable: false`) → rotation off. Semantics and example — ["`certificate_rotation` Section"](#certificate_rotation-section). |
 
@@ -98,13 +98,17 @@ Each record is an object:
 
 | Field | Obligation | Type | Meaning |
 |---|---|---|---|
-| `name` | yes | string | Name destiny (for `destiny:`) or `<namespace>.<module>` (for `modules:`). |
+| `name` | yes | string | Name destiny (for `destiny:`) or `<alias>.<module>` (for `modules:`). |
 | `ref` | yes | string | Git ref - tag (`v2.0.0`) or branch (`main`). No semver-range - exact ref ([ADR-007](../adr/0007-versioning-git-ref.md)). |
 | `git` | no | string (full git-URL) | **`destiny[]` only.** Per-entry override source. When `git:` is specified, Keeper loads destiny directly from this URL, ignoring `default_destiny_source` (keeper.yml). In `modules[]` the field is prohibited - the parser rejects with `unknown_key`. |
 
 `name` format:
 - `destiny[].name` - kebab-case single-level name destiny, regex `^[a-z][a-z0-9-]*$`.
-- `modules[].name` — strict two-level form `<namespace>.<module>`, regex `^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`. Symmetrical to `destiny.yml → required_modules[]` (see [`docs/destiny/manifest.md`](../destiny/manifest.md)). Core modules are not listed in `modules:`.
+- `modules[].name` — strict two-level form `<alias>.<module>`, regex `^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`. Symmetrical to `destiny.yml → required_modules[]` (see [`docs/destiny/manifest.md`](../destiny/manifest.md)). Core modules are not listed in `modules:`.
+
+**Level 1 is a registration alias, not a namespace.** Since [NIM-377](../adr/0065-core-module-installed.md) an artifact carries no name of its own: the operator picks the alias when they register it (`keeper.plugin.allow alias=…`), and that alias names the host-cache slot and address level 1. A service declaring `modules:` is therefore asserting *which alias its scenarios address*, and a cluster that registered the same artifact under a different one will not resolve those tasks. Reserved names (`core`, `keeper`, `soul`, the Soul Stack dictionary — see [`shared/plugin/reserved.go`](../../shared/plugin/reserved.go)) are rejected here as well as at registration.
+
+Several entries **may** share an alias — that is one artifact serving several modules (`community.redis` + `community.sentinel`). They must then agree on `ref`: one alias is one slot holding one artifact, and two refs for it is `conflicting_module_ref`.
 
 **Hybrid of destiny source** (how Keeper outputs git-URL for dependency):
 - entry **without** `git:` → standard path: git-URL = `default_destiny_source` (keeper.yml) with `{name}` substitution;
@@ -116,10 +120,13 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 
 ### `modules[]` - source of auto-synthesis of install steps (ADR-065)
 
-`modules[]` is not just a dependency declaration for validation and UI. Keeper from each record **synthesizes** Soul-side step `core.module.installed` with `params: {name, ref}` and inserts it into the run plan immediately before the first consumer task of the module (task `module: <ns>.<module>.<state>`; consumer inside `block:` → insertion before the entire block). The dependency is declared once per service - install-boilerplate is not needed in each scenario ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+`modules[]` is not just a dependency declaration for validation and UI. Keeper from each record **synthesizes** Soul-side step `core.module.installed` with `params: {name, ref}` and inserts it into the run plan immediately before the first consumer task of the module (task `module: <alias>.<module>.<state>`; consumer inside `block:` → insertion before the entire block). The dependency is declared once per service - install-boilerplate is not needed in each scenario ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+
+`params.name` of the synthesized step is the **alias alone** — address level 1, not the whole `modules[].name`. `core.module.installed` installs an artifact into the slot the alias names, and it rejects a dotted value outright; passing the entry through verbatim is what made every service declaring `modules:` fail at apply on every host between NIM-377 and NIM-524.
 
 - **A module without consumer tasks is not synthesized in the script.**
-- **Takeover:** an explicit step `core.module.installed` with the same literal `params.name` disables the synthesis of this name - the operator itself controls the position, `ref` and `when:`.
+- **One install per alias.** Two entries of one artifact (`community.redis`, `community.sentinel`) produce a single step, before the earlier of their consumers.
+- **Takeover:** an explicit step `core.module.installed` whose literal `params.name` is that alias disables synthesis for it - the operator itself controls the position, `ref` and `when:`.
 - `ref` records go into the params of the synthesis step as **pin-verification**: the active Sigil tolerance must be on this ref.
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
 
@@ -214,9 +221,11 @@ state_schema:
 destiny:
   - { name: redis, ref: v1.0.0 }      # mode-agnostic brick: install + render redis.conf
 
-# Custom modules needed by scripts (two-level form <namespace>.<module>).
+# Custom modules needed by scripts (two-level form <alias>.<module>).
 # Keeper synthesizes from the entry the install step core.module.installed before the first
 # by the consumer in the run plan (ADR-065) - an explicit step in the script is not needed.
+# params.name of that step is level 1 alone - `community`, the slot the alias names -
+# because a slot holds an artifact, and level 2 addresses a module inside it (NIM-524).
 modules:
   - { name: community.redis, ref: v1.0.0 }  # live Redis runtime (CONFIG SET, ACL, cluster, sentinel)
 ```
@@ -300,7 +309,7 @@ Migration is triggered by an explicit operator operation (`keeper.incarnation.up
   - `description` — string (if any).
   - `state_schema_version` — integer ≥1.
   - `state_schema` - valid JSON Schema; `type: object` on the root.
-  - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<namespace>.<module>`. Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
+  - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<alias>.<module>`, level 1 not a reserved name, and entries sharing an alias agree on `ref` (`conflicting_module_ref`). Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
   - Unknown top-level keys → `unknown_key` with hint about deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
 
 - **Correspondence between `state_schema_version` and `migrations/`:**

@@ -46,7 +46,7 @@ type DestinyManifest struct {
 // `destiny-<name>/` folder name without the prefix.
 var reDestinyName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// reRequiredModule — two-level `<namespace>.<module>` form for custom modules in
+// reRequiredModule — two-level `<alias>.<module>` form for custom modules in
 // `required_modules:`. Core modules are not listed. Kebab-case, no underscore
 // (naming-rules.md §57/§186). Single source of truth with
 // `reDependencyModuleName` (service.go) — a duplicate regex was a drift source.
@@ -117,10 +117,13 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 		}))
 	}
 
-	// 3) required_modules — two-level `<namespace>.<module>` form, and level 1 must
-	// not be a reserved name. The reserved check runs FIRST because `core.haproxy`
-	// is regex-valid: reporting it as a format error would send the author looking
-	// for a typo in a string that is spelled exactly as they meant it.
+	// 3) required_modules — two-level `<alias>.<module>` form, and level 1 must
+	// not be a reserved name. Unlike `service.yml::modules[]` this list synthesizes
+	// nothing: it is a declaration soul-lint reads, so it carries no install step
+	// and no producer/consumer pair to disagree (NIM-524 is the twin field's bug).
+	// The reserved check runs FIRST because `core.haproxy` is regex-valid: reporting
+	// it as a format error would send the author looking for a typo in a string that
+	// is spelled exactly as they meant it.
 	for i, mod := range m.RequiredModules {
 		yamlPath := fmt.Sprintf("$.required_modules[%d]", i)
 		switch {
@@ -130,7 +133,7 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 			out = append(out, atPath(root, yamlPath, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "required_module_invalid_format",
-				Message: fmt.Sprintf("required_modules[%d] = %q does not match <namespace>.<module>", i, mod),
+				Message: fmt.Sprintf("required_modules[%d] = %q does not match <alias>.<module>", i, mod),
 				Hint:    "two-level address per architecture.md -> \"Module addressing\"; core-modules are not listed here",
 			}))
 		}

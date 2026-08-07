@@ -2,13 +2,21 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 // Guard tests for synthesizing `core.module.installed` install steps from
 // `service.yml::modules[]` (ADR-065, NIM-8): Keeper inserts the Soul-side
 // install step IMMEDIATELY BEFORE the module's first consumer; an explicit
 // literal operator step (takeover) suppresses synthesis.
+//
+// The step names the ALIAS — address level 1 — not the `<alias>.<module>` entry
+// (NIM-524). Every assertion below therefore states the alias it expects, and
+// TestSynthesizeModuleInstalls_ParamNameIsAnAliasNotAnAddress states the property
+// once for the whole file.
 
 // synthTasks parses the YAML plan with the same parser as prod (a flat top-level
 // task list, as after ExpandIncludes).
@@ -29,16 +37,16 @@ func synthTasks(t *testing.T, src string) []Task {
 // assertSynthTask checks the shape of a synthesized task: name, module address,
 // params {name, ref}, and the absence of orchestration fields (on/where/serial =
 // the whole roster).
-func assertSynthTask(t *testing.T, task Task, module, ref string) {
+func assertSynthTask(t *testing.T, task Task, alias, ref string) {
 	t.Helper()
-	wantName := "install " + module + " (service manifest)"
+	wantName := "install " + alias + " (service manifest)"
 	if task.Name != wantName {
 		t.Errorf("synth name = %q, want %q", task.Name, wantName)
 	}
 	if task.Module == nil || task.Module.Module != "core.module.installed" {
 		t.Fatalf("synth module = %+v, want core.module.installed", task.Module)
 	}
-	wantParams := map[string]any{"name": module, "ref": ref}
+	wantParams := map[string]any{"name": alias, "ref": ref}
 	if !reflect.DeepEqual(task.Module.Params, wantParams) {
 		t.Errorf("synth params = %v, want %v", task.Module.Params, wantParams)
 	}
@@ -48,6 +56,58 @@ func assertSynthTask(t *testing.T, task Task, module, ref string) {
 	}
 	if task.IncludeGroupID != 0 || task.IncludeWhen != "" {
 		t.Errorf("synth is bound to an include group (%d, %q), want outside any group", task.IncludeGroupID, task.IncludeWhen)
+	}
+}
+
+// TestSynthesizeModuleInstalls_ParamNameIsAnAliasNotAnAddress — the regression
+// guard for NIM-524, stated as a property over every synthesized step rather than
+// as one expected string.
+//
+// `modules[].name` is `<alias>.<module>`; `core.module.installed` takes the alias,
+// and rejects anything with a dot (soul/internal/coremod/module: reAlias). Between
+// NIM-377 and this fix the synthesizer passed the entry's name through verbatim, so
+// EVERY service declaring `modules:` failed at apply on EVERY host — with the two
+// ends of the contradiction sitting in the same repository, each with its own
+// passing tests.
+func TestSynthesizeModuleInstalls_ParamNameIsAnAliasNotAnAddress(t *testing.T) {
+	tasks := synthTasks(t, `
+name: create
+state_changes: {}
+tasks:
+  - name: Configure redis
+    module: community.redis.config
+    params:
+      settings: {}
+  - name: Probe with the other artifact
+    module: acme-tools.probe.run
+    params: {}
+`)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{
+		{Name: "community.redis", Ref: "v1.0.0"},
+		{Name: "acme-tools.probe", Ref: "v2.0.0"},
+	})
+	if !reflect.DeepEqual(aliases, []string{"community", "acme-tools"}) {
+		t.Fatalf("aliases = %v, want [community acme-tools]", aliases)
+	}
+	synthesized := 0
+	for _, task := range out {
+		if task.Module == nil || task.Module.Module != moduleInstalledAddr {
+			continue
+		}
+		synthesized++
+		name, _ := task.Module.Params["name"].(string)
+		if strings.Contains(name, ".") {
+			t.Errorf("params.name = %q — a dotted address, not a registration alias; "+
+				"core.module.installed rejects it and the service cannot be applied on any host (NIM-524)", name)
+		}
+		// The same predicate the registration end applies, from the same list —
+		// asserting a hand-written shape here is how the two ends drift.
+		if !plugin.ValidAlias(name) {
+			t.Errorf("params.name = %q is not a well-formed registration alias", name)
+		}
+	}
+	if synthesized != 2 {
+		t.Fatalf("synthesized %d install steps, want 2", synthesized)
 	}
 }
 
@@ -72,14 +132,14 @@ tasks:
     params:
       users: []
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.2.3"}})
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.2.3"}})
 	if len(out) != 4 {
 		t.Fatalf("len(out) = %d, want 4", len(out))
 	}
-	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Errorf("names = %v, want [community.redis]", names)
+	if !reflect.DeepEqual(aliases, []string{"community"}) {
+		t.Errorf("aliases = %v, want [community]", aliases)
 	}
-	assertSynthTask(t, out[1], "community.redis", "v1.2.3")
+	assertSynthTask(t, out[1], "community", "v1.2.3")
 	if out[0].Name != "Warmup" || out[2].Name != "Configure redis" || out[3].Name != "ACL redis" {
 		t.Errorf("task order shifted: %q %q %q", out[0].Name, out[2].Name, out[3].Name)
 	}
@@ -111,7 +171,7 @@ tasks:
 	if len(out) != 3 {
 		t.Fatalf("len(out) = %d, want 3", len(out))
 	}
-	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
+	assertSynthTask(t, out[1], "community", "v1.0.0")
 	if out[2].Block == nil {
 		t.Fatalf("out[2] must remain a block (insertion before the whole block)")
 	}
@@ -129,9 +189,9 @@ tasks:
     params:
       cmd: "true"
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if len(names) != 0 {
-		t.Errorf("names = %v, want empty", names)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if len(aliases) != 0 {
+		t.Errorf("aliases = %v, want empty", aliases)
 	}
 	if len(out) != 1 || out[0].Name != "Warmup" {
 		t.Errorf("plan changed with no consumers: %+v", out)
@@ -139,8 +199,13 @@ tasks:
 }
 
 // (d) Takeover: an explicit top-level core.module.installed with a LITERAL
-// params.name suppresses synthesis of that name (even standing AFTER the
+// params.name suppresses synthesis for that alias (even standing AFTER the
 // consumer — the operator decided).
+//
+// The literal is an ALIAS, because that is what the step takes. Before NIM-524 the
+// takeover map was filled with aliases and read with `<alias>.<module>` keys, so
+// the documented escape hatch silently did nothing and the operator got a second,
+// unasked-for install step next to their own.
 func TestSynthesizeModuleInstalls_TakeoverTopLevel(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
@@ -149,15 +214,15 @@ tasks:
   - name: Operator installs plugin explicitly
     module: core.module.installed
     params:
-      name: community.redis
+      name: community
   - name: Configure redis
     module: community.redis.config
     params:
       settings: {}
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if len(names) != 0 {
-		t.Errorf("names = %v, want empty (takeover)", names)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if len(aliases) != 0 {
+		t.Errorf("aliases = %v, want empty (takeover)", aliases)
 	}
 	if len(out) != 2 {
 		t.Errorf("len(out) = %d, want 2 (no synthesis)", len(out))
@@ -175,15 +240,15 @@ tasks:
       - name: Install plugin
         module: core.module.installed
         params:
-          name: community.redis
+          name: community
   - name: Configure redis
     module: community.redis.config
     params:
       settings: {}
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if len(names) != 0 || len(out) != 2 {
-		t.Errorf("takeover in a block not recognized: names=%v len=%d, want empty/2", names, len(out))
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if len(aliases) != 0 || len(out) != 2 {
+		t.Errorf("takeover in a block not recognized: aliases=%v len=%d, want empty/2", aliases, len(out))
 	}
 }
 
@@ -203,14 +268,14 @@ tasks:
     params:
       settings: {}
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Fatalf("names = %v, want [community.redis] (a CEL name does not suppress synthesis)", names)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if !reflect.DeepEqual(aliases, []string{"community"}) {
+		t.Fatalf("aliases = %v, want [community] (a CEL name does not suppress synthesis)", aliases)
 	}
 	if len(out) != 3 {
 		t.Fatalf("len(out) = %d, want 3", len(out))
 	}
-	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
+	assertSynthTask(t, out[1], "community", "v1.0.0")
 }
 
 // (f+) params.name NOT a string — also not a takeover, synthesis is not
@@ -222,14 +287,14 @@ func TestSynthesizeModuleInstalls_NonStringNameNotTakeover(t *testing.T) {
 		{Name: "Weird install", Module: &ModuleTask{Module: "core.module.installed", Params: map[string]any{"name": 42}}},
 		{Name: "Configure redis", Module: &ModuleTask{Module: "community.redis.config", Params: map[string]any{}}},
 	}
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Fatalf("names = %v, want [community.redis] (a non-string name does not suppress synthesis)", names)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if !reflect.DeepEqual(aliases, []string{"community"}) {
+		t.Fatalf("aliases = %v, want [community] (a non-string name does not suppress synthesis)", aliases)
 	}
 	if len(out) != 3 {
 		t.Fatalf("len(out) = %d, want 3", len(out))
 	}
-	assertSynthTask(t, out[1], "community.redis", "v1.0.0")
+	assertSynthTask(t, out[1], "community", "v1.0.0")
 }
 
 // (h) Empty/nil modules[] → input byte-for-byte (the same slice, no copies).
@@ -244,9 +309,9 @@ tasks:
       settings: {}
 `)
 	for _, modules := range [][]DependencyRef{nil, {}} {
-		out, names := SynthesizeModuleInstalls(tasks, modules)
-		if names != nil {
-			t.Errorf("names = %v, want nil", names)
+		out, aliases := SynthesizeModuleInstalls(tasks, modules)
+		if aliases != nil {
+			t.Errorf("aliases = %v, want nil", aliases)
 		}
 		if len(out) != len(tasks) || &out[0] != &tasks[0] {
 			t.Errorf("modules=%v: input must return byte-for-byte (the same slice)", modules)
@@ -266,22 +331,22 @@ tasks:
     params:
       name: curl
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "core.pkg", Ref: "v1.0.0"}})
-	if len(names) != 0 || len(out) != 1 {
-		t.Errorf("core.* entry not skipped: names=%v len=%d", names, len(out))
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "core.pkg", Ref: "v1.0.0"}})
+	if len(aliases) != 0 || len(out) != 1 {
+		t.Errorf("core.* entry not skipped: aliases=%v len=%d", aliases, len(out))
 	}
 }
 
-// (j) Several modules: each gets its own position (before ITS OWN first
+// (j) Several ARTIFACTS: each gets its own position (before ITS OWN first
 // consumer), the order of the source tasks does not shift; with a shared first
 // consumer — manifest order.
-func TestSynthesizeModuleInstalls_MultipleModules(t *testing.T) {
+func TestSynthesizeModuleInstalls_MultipleArtifacts(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
 state_changes: {}
 tasks:
   - name: Use b
-    module: community.b.setup
+    module: beta.tool.setup
     params: {}
   - name: Warmup
     module: core.exec.run
@@ -289,29 +354,29 @@ tasks:
     params:
       cmd: "true"
   - name: Use a
-    module: community.a.setup
+    module: alpha.tool.setup
     params: {}
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{
-		{Name: "community.a", Ref: "v1"},
-		{Name: "community.b", Ref: "v2"},
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{
+		{Name: "alpha.tool", Ref: "v1"},
+		{Name: "beta.tool", Ref: "v2"},
 	})
-	if !reflect.DeepEqual(names, []string{"community.a", "community.b"}) {
-		t.Fatalf("names = %v, want [community.a community.b] (manifest order)", names)
+	if !reflect.DeepEqual(aliases, []string{"alpha", "beta"}) {
+		t.Fatalf("aliases = %v, want [alpha beta] (manifest order)", aliases)
 	}
 	if len(out) != 5 {
 		t.Fatalf("len(out) = %d, want 5", len(out))
 	}
-	assertSynthTask(t, out[0], "community.b", "v2")
+	assertSynthTask(t, out[0], "beta", "v2")
 	if out[1].Name != "Use b" || out[2].Name != "Warmup" {
 		t.Errorf("positions shifted: %q %q", out[1].Name, out[2].Name)
 	}
-	assertSynthTask(t, out[3], "community.a", "v1")
+	assertSynthTask(t, out[3], "alpha", "v1")
 	if out[4].Name != "Use a" {
 		t.Errorf("out[4] = %q, want Use a", out[4].Name)
 	}
 
-	// Shared first consumer (both modules inside one block) → insertions in
+	// Shared first consumer (both artifacts inside one block) → insertions in
 	// manifest order before the block.
 	shared := synthTasks(t, `
 name: create
@@ -320,26 +385,70 @@ tasks:
   - name: Deploy group
     block:
       - name: Use a
-        module: community.a.setup
+        module: alpha.tool.setup
         params: {}
       - name: Use b
-        module: community.b.setup
+        module: beta.tool.setup
         params: {}
 `)
-	out2, names2 := SynthesizeModuleInstalls(shared, []DependencyRef{
-		{Name: "community.a", Ref: "v1"},
-		{Name: "community.b", Ref: "v2"},
+	out2, aliases2 := SynthesizeModuleInstalls(shared, []DependencyRef{
+		{Name: "alpha.tool", Ref: "v1"},
+		{Name: "beta.tool", Ref: "v2"},
 	})
-	if !reflect.DeepEqual(names2, []string{"community.a", "community.b"}) {
-		t.Fatalf("names2 = %v, want [community.a community.b]", names2)
+	if !reflect.DeepEqual(aliases2, []string{"alpha", "beta"}) {
+		t.Fatalf("aliases2 = %v, want [alpha beta]", aliases2)
 	}
 	if len(out2) != 3 {
 		t.Fatalf("len(out2) = %d, want 3", len(out2))
 	}
-	assertSynthTask(t, out2[0], "community.a", "v1")
-	assertSynthTask(t, out2[1], "community.b", "v2")
+	assertSynthTask(t, out2[0], "alpha", "v1")
+	assertSynthTask(t, out2[1], "beta", "v2")
 	if out2[2].Block == nil {
 		t.Errorf("out2[2] must remain a block")
+	}
+}
+
+// (j+) One artifact serving TWO modules is ONE install, before the earliest of
+// their consumers.
+//
+// This is the documented shape — "an artifact serving `acl`, `config` and `info`
+// registers three addresses" (shared/pluginhost) — and the two entries name one
+// slot, so a second step would fetch the same bytes over the same directory. The
+// position is the EARLIER consumer's: installing before the second one would leave
+// the first unresolvable.
+func TestSynthesizeModuleInstalls_OneArtifactManyModules(t *testing.T) {
+	tasks := synthTasks(t, `
+name: create
+state_changes: {}
+tasks:
+  - name: Warmup
+    module: core.exec.run
+    changed_when: false
+    params:
+      cmd: "true"
+  - name: Configure redis
+    module: community.redis.config
+    params:
+      settings: {}
+  - name: Set up sentinel
+    module: community.sentinel.present
+    params: {}
+`)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{
+		{Name: "community.sentinel", Ref: "v1.0.0"},
+		{Name: "community.redis", Ref: "v1.0.0"},
+	})
+	if !reflect.DeepEqual(aliases, []string{"community"}) {
+		t.Fatalf("aliases = %v, want [community] — two modules of one artifact are ONE install", aliases)
+	}
+	if len(out) != 4 {
+		t.Fatalf("len(out) = %d, want 4 (one synthesized step)", len(out))
+	}
+	// The sentinel entry comes first in the manifest and would have planted the
+	// install before task #3; the redis consumer at #2 pulls it earlier.
+	assertSynthTask(t, out[1], "community", "v1.0.0")
+	if out[2].Name != "Configure redis" || out[3].Name != "Set up sentinel" {
+		t.Errorf("install landed after a consumer: %q %q", out[2].Name, out[3].Name)
 	}
 }
 
@@ -364,9 +473,9 @@ tasks:
     params:
       settings: {}
 `)
-	out, names := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
-	if !reflect.DeepEqual(names, []string{"community.redis"}) {
-		t.Fatalf("names = %v, want [community.redis]", names)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+	if !reflect.DeepEqual(aliases, []string{"community"}) {
+		t.Fatalf("aliases = %v, want [community]", aliases)
 	}
 	p, err := Stratify(out)
 	if err != nil {
