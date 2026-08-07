@@ -168,7 +168,7 @@ Vault is a required Keeper dependency: service-vars secrets, PKI for SoulSeed re
 `vault.auth.method` selects the Keeper authentication method in Vault ([ADR-014](../adr/0014-operator-identity.md)):
 
 - `token` (**default**) - static token from `vault.token`. Dev-shortcut: `dev/docker-compose.yml` raises Vault in dev mode with a root token. The `auth` block can be omitted entirely - this is the equivalent of `method: token` (forward-compat for existing `keeper.yml`).
-- `approle` — prod-path: Keeper does `auth/approle/login` with `role_id` + `secret_id` and receives a renewable client-token, which is further renewed in the background (token auto-renew, [requirements.md](../requirements.md)).
+- `approle` — prod-path: Keeper does `auth/approle/login` with `role_id` + `secret_id` and receives a renewable client-token, which is further renewed in the background (token auto-renew). The login happens once, at startup, and background renewal cannot carry a token past the maximum lifetime the role gave it, so the role must issue a **periodic** token — see [prod-setup.md → Why `token_period` and not `token_max_ttl`](prod-setup.md#why-token_period-and-not-token_max_ttl).
 
 **Where does `secret_id` come from.** AppRole-credentials are NOT read from Vault itself (no `vault:`-ref): with these credentials Keeper logs in, and then resolves the remaining `*_ref`-fields (`postgres.dsn_ref`, `auth.jwt.signing_key_ref`, ...) - this would be cyclic addiction. Therefore, the source is local, before the Vault client is raised:
 

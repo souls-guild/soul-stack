@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1150,6 +1150,7 @@ sign:
 GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
+	check-approle-template \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
@@ -1358,6 +1359,15 @@ check-gen:
 # scripts/doc-links-allowlist.txt and cleared out in batches during the ADR migration to docs/adr/.
 check-doc-links:
 	@python3 scripts/check-doc-links.py
+
+# check-approle-template - the Vault AppRole role template we ship to operators
+# must issue a PERIODIC token (NIM-429). Grouped with the doc checks rather than
+# with check-template/check-stand-template: those compare a rendered artifact
+# against its source, this one asserts on doc CONTENT, because no artifact is
+# rendered from it - the only executor of that snippet is a human copying it out
+# of the docs. Rationale in full: scripts/check-approle-template.sh.
+check-approle-template:
+	@scripts/check-approle-template.sh
 
 # govulncheck - the supply-chain CI gate across all go.work modules (security audit, pre-beta).
 # Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
@@ -1640,6 +1650,7 @@ help:
 	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"
 	@echo "  check-gen         protogen idempotency (gen-drift in proto/gen/go)"
 	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
+	@echo "  check-approle-template  shipped Vault AppRole role template issues a periodic token"
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"

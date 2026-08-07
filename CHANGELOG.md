@@ -1484,6 +1484,37 @@ order to act in.
   instead of the 30 the operator asked for, with nothing said anywhere. Both now
   read the field with the parser that validated it.
 
+- **The Vault AppRole template we ship put a 24-hour stop under every production
+  Keeper.** The role operators are told to create — in `docs/keeper/prod-setup.md`,
+  `docs/operations/infra.md` and `docs/operations/deb-onboarding.md` — carried
+  `token_ttl=1h token_max_ttl=24h`. Keeper logs in through AppRole exactly once, at
+  startup, inside `vault.NewClient`, and nothing in the process ever logs in a second
+  time; `TokenRenewer` only calls `renew-self`, and `renew-self` cannot carry a token
+  past its maximum lifetime. A Keeper that simply stays up for a day therefore loses
+  Vault: `vault:`-ref resolution on hot-reload, SoulSeed issuance during onboarding,
+  `core.vault.kv-read` and the Sigil signing-key read on anchor reload all begin to
+  fail, and the affected instance has to be restarted. The template now hands out a
+  **periodic** token (`token_period=1h`) — one that renewal has nothing to run out of.
+  `examples/keeper/vault-policy.hcl` stated the opposite of the truth in the same
+  breath ("renews it up to `token_max_ttl`, so Keeper doesn't lose access to Vault over
+  a long uptime") and now says where the property actually comes from: the role, not
+  the policy.
+
+  **Existing installations have to rewrite the role**; nothing in the binary changed.
+  Rewriting it is enough on its own for a Keeper that is still renewing — AppRole
+  re-reads the role at every renewal — and only the instances whose token already
+  expired need a restart. The template also passes `token_max_ttl=0` and
+  `token_explicit_max_ttl=0`, because `vault write` on an existing role updates only
+  the fields you name: the first clears the stale ceiling (harmless once the token is
+  periodic, but it stops the role contradicting itself), the second clears the one
+  field that really does cap a periodic token.
+
+  Nothing in the repo executes that snippet — no provisioning path creates a Keeper
+  AppRole role at all, dev and all three e2e harnesses run Vault on a root token — so
+  no tier could ever have observed the template rotting. `make check` now carries
+  `check-approle-template`, which asserts on the role-parameter line itself in all four
+  places we ship it.
+
 - **The `keeper` and `soul` packages could not start the service they install.**
   The package drops its binary at `/usr/bin/<name>`, but the systemd unit shipped
   alongside it declared `ExecStart=/usr/local/bin/<name>` — so on a host installed

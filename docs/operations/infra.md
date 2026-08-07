@@ -309,7 +309,7 @@ vault auth enable approle
 vault policy write keeper-prod /path/to/vault-policy.hcl   # see examples/keeper/vault-policy.hcl
 vault write auth/approle/role/keeper-prod \
     token_policies=keeper-prod \
-    secret_id_ttl=720h token_ttl=1h token_max_ttl=24h
+    secret_id_ttl=720h token_period=1h token_max_ttl=0 token_explicit_max_ttl=0   # periodic token — see prod-setup.md
 vault read auth/approle/role/keeper-prod/role-id           # role_id → keeper.yml
 vault write -f auth/approle/role/keeper-prod/secret-id     # secret_id → /etc/keeper/vault-secret-id mode 0400
 ```

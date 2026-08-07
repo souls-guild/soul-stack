@@ -22,7 +22,7 @@ The dev shortcut `vault.token: "root"` must **not** be used in production — th
 
 ### Keeper AppRole authentication
 
-In production, Keeper authenticates to Vault via AppRole (ADR-014; in code — `shared/config.AuthMethodAppRole`). Keeper performs `auth/approle/login` with a `role_id` + `secret_id` pair, obtains a renewable client token, and renews it (TokenRenewer, `keeper/internal/.../renewer.go`).
+In production, Keeper authenticates to Vault via AppRole (ADR-014; in code — `shared/config.AuthMethodAppRole`). Keeper performs `auth/approle/login` with a `role_id` + `secret_id` pair, obtains a renewable client token, and renews it (TokenRenewer, `keeper/internal/.../renewer.go`). The login happens once, at startup, and renewal on its own does not keep a token alive indefinitely — the role has to issue a periodic one, see [Why `token_period` and not `token_max_ttl`](#why-token_period-and-not-token_max_ttl) below.
 
 The `keeper.yml::vault` block:
 
@@ -50,12 +50,29 @@ Configuring the role on the Vault side (binding the least-privilege policy from 
 vault policy write keeper-prod examples/keeper/vault-policy.hcl
 vault write auth/approle/role/keeper-prod \
     token_policies=keeper-prod \
-    secret_id_ttl=720h token_ttl=1h token_max_ttl=24h
+    secret_id_ttl=720h token_period=1h token_max_ttl=0 token_explicit_max_ttl=0
 # role_id — hand it to the operator (into keeper.yml):
 vault read auth/approle/role/keeper-prod/role-id
 # secret_id — place into /etc/keeper/vault-secret-id (mode 0400):
 vault write -f auth/approle/role/keeper-prod/secret-id
 ```
+
+#### Why `token_period` and not `token_max_ttl`
+
+Keeper logs in through AppRole **exactly once**, at startup, inside `vault.NewClient` — nothing in the process ever logs in a second time. From then on it lives on the token it was issued, and [`TokenRenewer`](../../keeper/internal/vault/renewer.go) keeps that token alive with `renew-self` calls. `renew-self` cannot push a token past its maximum lifetime, so a role with `token_max_ttl=24h` and no period on it is a hard stop: after 24 hours of uptime the renewals stop extending anything and the token expires. Every Vault-backed operation then starts failing — `vault:`-ref resolution on hot-reload, SoulSeed issuance during onboarding, `core.vault.kv-read`, the Sigil signing-key read on anchor reload — and an instance that got there has to be restarted. Shortly before it happens the log carries the warning `vault: token auto-renew exhausted (lease at threshold), token will expire`.
+
+Rewriting the role does not need a restart of its own: AppRole re-reads the role on every renewal, so an instance that is still renewing becomes periodic at its next one. Only the instances whose token already expired — the ones that logged that warning — have to be restarted.
+
+`token_period=1h` makes the token **periodic**: it has no maximum lifetime as long as it is renewed within the period, which is exactly what `TokenRenewer` does. What goes away is the 24-hour cliff for a healthy process — not every way the token can die:
+
+- Keeper gives up before the period is out, not at the end of it. `TokenRenewer` stops as soon as the remaining lease is inside the lifetime watcher's grace window (10–20% of the lease, so six to twelve minutes of a one-hour period), and it never tries again.
+- Deleting the role stops the renewals — `renew-self` then fails with `role ... does not exist during renewal` — and the token dies at the end of its current period. Destroying the `secret_id`, by contrast, does **not** touch a token already issued from it; it only blocks the next login. Revoke by accessor if you need a live token gone now.
+- The `secret_id` in `/etc/keeper/vault-secret-id` still expires on its own `secret_id_ttl` (720h above). A running Keeper does not care, but the next start — including an unplanned one after a crash — cannot log in unless the file was refreshed (rotation table in [infra.md](../operations/infra.md)).
+- `token_type` has to stay `service` (the default). A batch token can be neither periodic nor renewed.
+
+`token_max_ttl=0` is hygiene, not the fix. Once `token_period` is non-zero Vault consults `token_max_ttl` only to cap the period value itself, never to bound the token's life, so the old ceiling would have stopped mattering on its own. It is in the command so that the role does not go on saying two things at once.
+
+The field that *would* keep a ceiling is **`token_explicit_max_ttl`** — a hard cap even on a periodic token — which is why the command clears that too. Our template never set it, so a role created from these docs cannot carry one; a role created by another hand can. `vault write` on an **existing** role updates only the fields you name and every other field keeps its stored value, so after converting a role read it back with `vault read auth/approle/role/keeper-prod` and check that `token_period`, `token_max_ttl` and `token_explicit_max_ttl` are what you meant.
 
 ### Least-privilege Vault policy
 

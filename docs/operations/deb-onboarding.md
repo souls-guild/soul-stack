@@ -167,10 +167,15 @@ In production, Keeper authenticates to Vault via an AppRole (not a root token). 
 # Narrow policy (template with commented paths - examples/keeper/vault-policy.hcl)
 vault policy write keeper-prod examples/keeper/vault-policy.hcl
 
-# Role with policy binding
+# Role with policy binding. token_period (not token_ttl/token_max_ttl) —
+# Keeper logs in once at startup and afterwards only renews; a role with a
+# maximum token lifetime therefore takes Vault away from a healthy Keeper
+# the moment that lifetime runs out. The two zeroes are for converting a role
+# that already exists: `vault write` updates only the fields you name, and
+# token_explicit_max_ttl caps even a periodic token.
 vault write auth/approle/role/keeper-prod \
   token_policies=keeper-prod \
-  secret_id_ttl=720h token_ttl=1h token_max_ttl=24h
+  secret_id_ttl=720h token_period=1h token_max_ttl=0 token_explicit_max_ttl=0
 
 # role_id - NOT a secret, will go to keeper.yml::vault.auth.role_id
 vault read auth/approle/role/keeper-prod/role-id

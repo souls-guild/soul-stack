@@ -12,7 +12,7 @@
 # Apply (after `vault policy write keeper-prod vault-policy.hcl`):
 #   vault write auth/approle/role/keeper-prod \
 #       token_policies=keeper-prod \
-#       secret_id_ttl=... token_ttl=... token_max_ttl=...
+#       secret_id_ttl=... token_period=... token_max_ttl=0 token_explicit_max_ttl=0
 #
 # IMPORTANT: the paths below match the dev-provisioning defaults
 # (dev/provision.sh): KV mount `secret/`, PKI mount `pki/` + role `soul-seed`.
@@ -100,10 +100,20 @@ path "secret/metadata/keeper/sigil-keys/*" {
 
 # --- Self-renew client token ------------------------------------------------
 #
-# Keeper logs in via AppRole and gets a renewable client token; TokenRenewer
-# (keeper renewer.go) renews it up to token_max_ttl, so Keeper doesn't lose
-# access to Vault over a long uptime. Needs exactly one capability for renew-self
-# of its own token - without the right to create/revoke other tokens.
+# Keeper logs in via AppRole once, at startup, and never logs in again;
+# TokenRenewer (keeper/internal/vault/renewer.go) then keeps the issued token
+# alive with renew-self. renew-self extends a token, it cannot carry one past
+# its maximum lifetime - so "renewable" on its own does NOT mean "alive over a
+# long uptime". That property comes from the ROLE, not from this policy: the
+# role has to hand out a PERIODIC token (token_period=...), and only then is
+# there nothing for the renewals to run out of. A role with token_max_ttl=24h
+# takes Vault away from a perfectly healthy Keeper after 24 hours of uptime.
+# Rewriting the role repairs the instances that are still renewing, at their
+# next renewal; only the ones whose token already expired need a restart - see
+# docs/keeper/prod-setup.md -> "Why token_period and not token_max_ttl".
+#
+# One capability, on the keeper's own token - no right to create or revoke any
+# other token.
 path "auth/token/renew-self" {
   capabilities = ["update"]
 }
