@@ -247,8 +247,11 @@ on a real `soul` binary that the key mechanics are alive before the edits go to
 commit.
 
 **What runs** (build-tag `e2e_live`: real `soul` in privileged Debian-12
-container + Keeper process on host + mTLS + live apply). Mask -
-`TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel`:
+container + Keeper process on host + mTLS + live apply). The list lives in
+`E2E_GATE_TESTS` in the [Makefile](../../Makefile) and is not repeated here — it
+feeds the `-run` mask, the per-test `--- PASS` guard and the classifier from one
+place, and a copy in prose is a copy that goes stale (it named three of the nine
+for a while). Four groups:
 
 - **Delivery mechanics `SoulModule`** (fixture `tests/e2e-live/module-delivery-live`,
 `TestL3bModuleDeliveryLive_*`) - flagship check for which the gate was opened:
@@ -260,6 +263,9 @@ delivered module vs real redis.
 `core.service` systemd-start on a live host - checks that normal apply is not broken.
 - **Smoke plugin channel** (`TestL3bPluginChannel_*`): module directory + allow mechanics
 gRPC-stdio plugin channel.
+- **Day-2 operations on a live redis** (`TestL3bRedisLive_Day2*`: add-user, update-config,
+restart, update-users, destroy, rotate-tls) — the incarnation scripts an operator
+actually runs after `create`, each against a real redis in a real container.
 
 **When required.** Before a batch commit of a feature that meets the "major" criterion -
 same triggers that escalate to architect: **>5 files are affected** OR being corrected
@@ -283,9 +289,63 @@ LAN-IP. Override manually - `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.
 **Run in isolation**, without parallel docker/build load: L3b tests
 raise docker containers (keeper + PG + Redis + Vault + soul) also on WSL2
 sensitive to competitive docker load - when running in parallel with another
-heavy docker/build work may cause the Vault container to fail to rise (connection
-refused). When raising containers (infrastructure, not code regression) -
-restart the gate.
+heavy docker/build work the stand can take far longer to come up than on an idle box.
+
+### Reading a red gate (NIM-406)
+
+A failure while the **stand** comes up and a failure of an **assertion** arrive in
+the same `--- FAIL: TestX` shape and have opposite answers. On a red gate the
+target runs
+[`scripts/classify-e2e-live-failure.py`](../../scripts/classify-e2e-live-failure.py)
+and labels every gate test:
+
+- **STAND-SETUP** — the harness itself declared that bring-up failed, so no
+  assertion in that test ever ran and nothing in its output is a statement about
+  the code. Rerun that one test alone. If it fails the same way twice on an idle
+  machine, the machine is the finding.
+- **TEST-FAILURE** — anything else that failed: the test got as far as asserting,
+  or it died somewhere nothing declared. Treat it as a finding.
+- **NOT-RUN** — skipped or never started (a missing `keeper`/`soul-linux` binary
+  skips; a whole-run timeout kills the rest). Never a pass: the `--- PASS` guard
+  fails the gate for exactly these.
+
+Unlike the L1 classifier this one carries **no signature lists**. `NewStack` and
+`BuildCommunityRedisPlugin` defer `declareStandSetupFailure`, so the harness
+*states* which layer died instead of the reader guessing it from library text —
+and guessing is what produces a false infra label. The residual error only points
+one way: an entry point that forgets the defer gets read as TEST-FAILURE, so the
+mistake costs someone a look at code that turns out to be fine. The opposite
+mistake, an infra label on a real regression, is not reachable this way.
+
+The labelling downgrades nothing — the gate still exits non-zero, and a
+STAND-SETUP that survives a solitary rerun is a finding whatever it was labelled.
+No readiness wait was loosened to get here either; NIM-406 made them **stricter**
+(each stand now waits for its own mapped port, and vault for an unsealed API) on
+one shared, explicitly named budget.
+
+One thing to know before touching those numbers: the budget a container really
+gets is the **smallest** bound above it, and there are three stacked (the check's
+own, the set's deadline, and `NewStack`'s ctx over all three stands in sequence).
+Raising the per-container budget without the outer one silently gives the last
+stand in line whatever the first two left, and it then fails as a parent-context
+deadline that names nobody. So `standBringUpTimeout` is **computed** from
+`standReadyTimeout`, never written beside it, and `waitstrategy_test.go` fails if
+the outer bound drops below what its contents can ask for.
+
+There is a **fourth** bound above all of them — `go test -timeout 45m` on the gate
+— and it is deliberately *not* derived from the three, which is worth saying
+because the rule just above invites the opposite. It is not the same kind of
+bound. The stacked three reallocate silently: the last stand in line gets the
+remainder and fails without naming itself. `-timeout` cannot do that. It kills
+the binary with a panic that names the test it was in, the finished tests keep
+their verdicts, and the rest are already labelled NOT-RUN. So its correct value
+is "comfortably above an honest run", not "above the worst case its contents can
+ask for": an honest 9-test gate is ~10-15 min (a passing test costs 44-105 s),
+and reaching 45 m needs seven consecutive full-budget bring-up timeouts — a
+machine so broken that the gate is comprehensively red either way and the last
+two verdicts buy nothing. Sizing it to that sum would only mean a genuinely hung
+run burns an hour before anyone hears about it, which is the one job this bound
+has.
 
 **What it DOESN'T cover** (this is stand/cloud/PHASE 2/L3c-k8s, not local gate):
 cloud provision (`CloudDriver`), `install_method=binary` (there is no public source of

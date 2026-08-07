@@ -111,6 +111,14 @@ points to the DD-VM gateway, not the WSL2 host):
 On native-Linux env-override is not needed (CI default `host.docker.internal`).
 Environment details and recipe - [tests/e2e-live/README.md](tests/e2e-live/README.md).
 
+**If it goes red, read the label before deciding anything.** `make e2e-live-gate`
+classifies each gate test as **STAND-SETUP** (the harness declared that bring-up
+failed - no assertion ran, rerun that test alone), **TEST-FAILURE** (a finding) or
+**NOT-RUN** (skipped or never started - never a pass). A tag is cut on a run where
+every gate test says `--- PASS`, and on nothing else: STAND-SETUP is a reason to
+rerun one test, not a reason to tag. Details - [docs/testing/README.md, "Reading a
+red gate"](docs/testing/README.md#reading-a-red-gate-nim-406).
+
 The release is not tagged until `make check` and all `make e2e-live` cases are green.
 
 ### (f) Annotated git tag

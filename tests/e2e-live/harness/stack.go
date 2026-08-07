@@ -37,7 +37,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // Config - parameters for constructing a Stack.
@@ -150,6 +149,13 @@ type Stack struct {
 // Missing either binary - t.Skip with a hint about `make build` / `make build-linux`.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
+
+	// Everything from here to `return s` is bring-up, not assertion. Declared as
+	// such on the way out so a red gate distinguishes "the stand never came up"
+	// from "a test caught something" — see declareStandSetupFailure (NIM-406).
+	brought := false
+	defer declareStandSetupFailure(t, &brought)
+
 	if cfg.Souls < 0 {
 		cfg.Souls = 0
 	}
@@ -172,7 +178,10 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Derived from the per-container budget, not chosen next to it: this ctx is
+	// what actually caps the waits below, and an outer bound smaller than the sum
+	// of what it contains makes the inner budgets unreadable (NIM-406).
+	ctx, cancel := context.WithTimeout(context.Background(), standBringUpTimeout)
 	defer cancel()
 
 	if err := s.startPostgres(ctx); err != nil {
@@ -266,6 +275,7 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		s.SoulContainers = append(s.SoulContainers, container)
 	}
 
+	brought = true
 	return s
 }
 
@@ -292,17 +302,19 @@ func (s *Stack) runCleanups() {
 }
 
 // startPostgres brings up a PG container via testcontainers-go/modules/postgres.
+//
+// WithWaitStrategyAndDeadline, not WithWaitStrategy: the latter re-wraps the
+// strategies in a set with a hard 60 s deadline, and that deadline bounds the
+// whole context — so the per-check budgets in waitstrategy.go would read like
+// 2 minutes and behave like one. Same shape of trap as the one this function
+// used to be an instance of (NIM-406).
 func (s *Stack) startPostgres(ctx context.Context) error {
 	pgC, err := tcpostgres.RunContainer(ctx,
 		testcontainers.WithImage("postgres:16-alpine"),
 		tcpostgres.WithDatabase("keeper"),
 		tcpostgres.WithUsername("keeper"),
 		tcpostgres.WithPassword("keeper"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
+		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, postgresWaitStrategy()),
 	)
 	if err != nil {
 		return fmt.Errorf("postgres container: %w", err)
@@ -322,9 +334,14 @@ func (s *Stack) startPostgres(ctx context.Context) error {
 	return nil
 }
 
+// startRedis brings up a Redis container via testcontainers-go/modules/redis.
+//
+// The module's own wait set already checks the mapped port; what it does not do
+// is give that check a budget this repo chose. See redisWaitStrategy.
 func (s *Stack) startRedis(ctx context.Context) error {
 	rC, err := tcredis.RunContainer(ctx,
 		testcontainers.WithImage("redis:7-alpine"),
+		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, redisWaitStrategy()),
 	)
 	if err != nil {
 		return fmt.Errorf("redis container: %w", err)
@@ -351,12 +368,14 @@ func (s *Stack) startVault(ctx context.Context) error {
 	const rootToken = "root-test-token"
 	req := testcontainers.ContainerRequest{
 		Image:        "hashicorp/vault:1.15",
-		ExposedPorts: []string{"8200/tcp"},
+		ExposedPorts: []string{vaultContainerPort},
 		Env: map[string]string{
 			"VAULT_DEV_ROOT_TOKEN_ID":  rootToken,
 			"VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
 		},
-		WaitingFor: wait.ForLog("Root Token:").WithStartupTimeout(45 * time.Second),
+		// Assigned, not wrapped: a raw ContainerRequest takes the strategy as
+		// written, so vaultWaitStrategy's own deadline is the one that applies.
+		WaitingFor: vaultWaitStrategy(),
 	}
 	vc, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -376,7 +395,7 @@ func (s *Stack) startVault(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("vault host: %w", err)
 	}
-	port, err := vc.MappedPort(ctx, "8200")
+	port, err := vc.MappedPort(ctx, vaultContainerPort)
 	if err != nil {
 		return fmt.Errorf("vault port: %w", err)
 	}

@@ -1587,6 +1587,37 @@ order to act in.
   against a second derivation that shares no machinery with the first (grep for
   build-constraint lines, not `go list`) and fails on a shortfall.
 
+- **The blocking pre-tag gate went red without meaning anything was broken.**
+  `make e2e-live` is step (e) of `RELEASING.md` — no tag is cut until it is green
+  — and three consecutive runs on one unchanged slice produced three different
+  sets of failures, none of which reproduced. Each of those tests died in 3-15
+  seconds where the same test passing takes 45-105, i.e. it never reached the
+  thing it asserts; the text was always a refused connection to a container the
+  suite had just started, on the line after testcontainers reported that the
+  container was ready. This is the mirror of the tier problems above and costs
+  the same: there, green said less than it appeared to; here, **red did not mean
+  broken**, and the only way to tell was to read timings by eye.
+
+  The waits were the cause and are now **stricter**, not longer-and-looser.
+  Readiness had been signalled from inside each container while the harness then
+  dials the mapped port from the host, and under load that gap is real: postgres
+  waited only on log lines and never checked its port at all, vault waited on
+  `Root Token:` — printed before dev-mode Vault finishes unsealing, while the
+  harness's next act needs an unsealed API — and redis had a correct port check
+  on an inherited 10-second budget nobody here had chosen. Each stand now waits
+  for the property the harness is about to use (vault for `/v1/sys/health`
+  returning 200), on one named budget, with the bound covering all three stands
+  *computed* from it rather than written beside it.
+
+  Distinguishing the two outcomes is now the harness's own statement rather than
+  a reader's guess. Bring-up entry points declare their failure, and the gate
+  labels every test **STAND-SETUP** / **TEST-FAILURE** / **NOT-RUN** from that
+  declaration — deliberately with no list of error signatures to match, because
+  guessing infrastructure from library text is what produces a false infra label
+  on a real regression. Nothing is downgraded: the gate still exits non-zero, no
+  test is retried, and a setup failure that survives a solitary rerun on an idle
+  machine is a finding about the machine.
+
 - **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
   is written for a feature branch, where only the newest commit matters. A release
   branch is the opposite case: it *is* the integration target, every squash-merge

@@ -52,6 +52,13 @@ var (
 // NewStack already sets for keeper processes (stack.go::runKeeperInit/startKeeperRun).
 func BuildCommunityRedisPlugin(t *testing.T) string {
 	t.Helper()
+
+	// Tests call this BEFORE NewStack, so its failures are outside that
+	// function's declaration and would otherwise read as assertions. Building a
+	// fixture is bring-up: nothing has been asserted when it dies (NIM-406).
+	brought := false
+	defer declareStandSetupFailure(t, &brought)
+
 	bin := buildCommunityRedisBinary(t)
 
 	repoDir := filepath.Join(t.TempDir(), "soul-mod-community-redis-repo")
@@ -84,6 +91,7 @@ func BuildCommunityRedisPlugin(t *testing.T) string {
 	// require a message.
 	runGit(t, repoDir, "-c", "tag.gpgsign=false", "tag", CommunityRedisPluginRef)
 
+	brought = true
 	return "file://" + repoDir
 }
 

@@ -452,11 +452,26 @@ e2e-live: build-linux
 #  - `-count=1` - otherwise the go-test cache returns `ok (cached)` in seconds (false-green).
 #  - guard: fails on `(cached)` in the summary, or if any gate test didn't give `--- PASS`.
 # SHELL=bash - for `set -o pipefail` (preserve go test's exit code through tee).
+#
+# NIM-406: on red, the log goes through scripts/classify-e2e-live-failure.py,
+# which says PER TEST whether the stand failed to come up or the test body did.
+# Those two arrive identically formatted and have opposite answers, and this is
+# a blocking pre-tag gate (RELEASING.md step e) - a blocking step whose red is
+# illegible is one people learn to rerun until green. Nothing is downgraded: the
+# recipe still exits non-zero either way.
+#
+# E2E_GATE_TESTS is the single source for the -run mask, the per-test `--- PASS`
+# guard and the classifier's NOT-RUN list. It used to be spelled out twice, and
+# a test present in one copy but not the other is silently ungated.
+E2E_GATE_TESTS := TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel \
+	TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart \
+	TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls
+
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
-	@echo "e2e-live-gate: harness unit-guard (docker-free) - WaitApplySuccess apply bracket NIM-46"
-	@(cd tests/e2e-live && go test -run '^TestApplySettled$$' -count=1 ./harness/) \
-		|| { echo "e2e-live-gate: FALSE-GREEN - harness unit-guard TestApplySettled failed" >&2; exit 1; }
+	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
+	@(cd tests/e2e-live && go test -count=1 ./harness/) \
+		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -466,7 +481,7 @@ e2e-live-gate: build build-linux
 	else \
 		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
 		log="$${TMPDIR:-/tmp}/soul-e2e-live-gate.log"; \
-		mask='TestL3bModuleDeliveryLive|TestL3bSmokeNginxLive|TestL3bPluginChannel|TestL3bRedisLive_Day2AddUser|TestL3bRedisLive_Day2UpdateConfig|TestL3bRedisLive_Day2Restart|TestL3bRedisLive_Day2UpdateUsers|TestL3bRedisLive_Day2Destroy|TestL3bRedisLive_Day2RotateTls'; \
+		mask=$$(echo '$(E2E_GATE_TESTS)' | tr ' ' '|'); \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
 		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
@@ -474,12 +489,18 @@ e2e-live-gate: build build-linux
 		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
 			echo "e2e-live-gate: FALSE-GREEN - '(cached)' in summary (cache not disabled, -count=1 lost)" >&2; exit 1; \
 		fi; \
-		for tc in TestL3bModuleDeliveryLive TestL3bSmokeNginxLive TestL3bPluginChannel TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls; do \
-			grep -q "^--- PASS: $$tc" "$$log" || { \
-				echo "e2e-live-gate: FALSE-GREEN - $$tc didn't give '--- PASS' (skip/fail/not run)" >&2; exit 1; }; \
+		missing=""; \
+		for tc in $(E2E_GATE_TESTS); do \
+			grep -q "^--- PASS: $$tc" "$$log" || missing="$$missing $$tc"; \
 		done; \
-		[ $$rc -eq 0 ] && echo "e2e-live-gate: OK - all gate tests actually ran (not cached, not skipped)"; \
-		exit $$rc; \
+		if [ $$rc -ne 0 ] || [ -n "$$missing" ]; then \
+			scripts/classify-e2e-live-failure.py "$$log" $(E2E_GATE_TESTS) || true; \
+			if [ $$rc -eq 0 ] && [ -n "$$missing" ]; then \
+				echo "e2e-live-gate: FALSE-GREEN - go test exited 0, yet these gave no '--- PASS':$$missing" >&2; \
+			fi; \
+			exit 1; \
+		fi; \
+		echo "e2e-live-gate: OK - all gate tests actually ran (not cached, not skipped)"; \
 	fi
 
 # docker-build-keeper - builds the `keeper:e2e-k8s` image for the L3c kind cluster.
@@ -1190,8 +1211,21 @@ check-integration-set:
 # the failure it guards against is a green, fast, empty suite, and that has to be
 # caught by the gate everyone runs rather than by the job that would be doing the
 # lying. Details and the second derivation: scripts/check-e2e-set.sh.
+#
+# It also carries the two docker-free guards the e2e-live tier owns (NIM-406),
+# because `test` iterates $(MODULES) and that list has no tests/* in it — so
+# without this line the only thing running them is `e2e-live-gate`, i.e. the
+# 20-minute job they exist to keep honest:
+#   - tests/e2e-live/harness untagged tests: the stand's readiness properties,
+#     pinned so deleting a mapped-port wait is loud instead of silent;
+#   - the e2e-live failure classifier's self-test, which is not Go and so is
+#     invisible to `make test` — the same reason check-integration-set carries
+#     the L1 one.
 check-e2e-set:
 	@scripts/check-e2e-set.sh
+	@scripts/classify-e2e-live-failure.py --self-test
+	@echo "go test -count=1 ./harness/ in tests/e2e-live (docker-free stand-readiness guards)"
+	@(cd tests/e2e-live && go test -count=1 ./harness/)
 
 # check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
 # decides whether a tier ran and what it said, so a regression there misreports
