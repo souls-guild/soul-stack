@@ -92,7 +92,17 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Same bring-up declaration as NewStack (setupdecl.go): shared PG/Redis/
+	// Vault and the TLS material are the machine, the keeper subprocesses below
+	// them are the product.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
+
+	// Same derived bound as NewStack (waitstrategy.go), for the same reason: the
+	// three stands come up in sequence on this one ctx, so a flat literal here
+	// caps all of them together and the last in line silently gets whatever the
+	// first two left over.
+	ctx, cancel := context.WithTimeout(context.Background(), standBringUpTimeout)
 	defer cancel()
 
 	// Shared infra (as in NewStack).
@@ -137,6 +147,10 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 
 	// PG DSN into Vault (keeper.yml::postgres.dsn_ref points here).
 	s.seedPostgresDSN()
+
+	// Shared infrastructure is up; the loop below runs `keeper init` and N
+	// `keeper run` subprocesses, which are the product.
+	infraUp = true
 
 	// Render per-keeper YAML + allocate ports. The first keeper (i==0) is the
 	// soul-holder primary: its HTTP/gRPC addresses are set on the Stack
@@ -183,6 +197,14 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		s.keepers = append(s.keepers, kp)
 	}
 
+	// Every keeper answered /readyz, but /readyz is anonymous and the primary's
+	// address is the one every later call goes to — confirm the process holding
+	// it is ours before any test builds on that (NIM-469).
+	if err := s.assertOwnKeeper(); err != nil {
+		s.runCleanups()
+		t.Fatalf("multi-keeper: %v", err)
+	}
+
 	// Pre-auth soul stubs (shared; ConnectSoulStub opens a stream to the primary).
 	for i := 0; i < cfg.Souls; i++ {
 		sid := fmt.Sprintf("soul-mk-%d.example.com", i)
@@ -199,11 +221,19 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 // rule. Writes the YAML to tmpDir/<kid>.yml. Returns (yamlPath, httpURL,
 // grpcEventStreamAddr).
 func (s *Stack) buildMultiKeeperYAML(kid, certPath, keyPath, caPath string, leaseTTL time.Duration, voyageWorkers int, reconcileStaleAfter time.Duration) (string, string, string) {
-	bootstrapAddr := allocLoopback(s.t)
-	eventStreamAddr := allocLoopback(s.t)
-	httpAddr := allocLoopback(s.t)
-	mcpAddr := allocLoopback(s.t)
-	metricsAddr := allocLoopback(s.t)
+	bootstrapAddr := s.reserveLoopback()
+	eventStreamAddr := s.reserveLoopback()
+	httpAddr := s.reserveLoopback()
+	mcpAddr := s.reserveLoopback()
+	metricsAddr := s.reserveLoopback()
+
+	// One issuer for the whole cluster — its keepers validate each other's
+	// tokens — but unique to THIS stack rather than the constant `keeper-mk`
+	// every multi-keeper test shared (NIM-469, see Stack.assignIdentity). Set
+	// on the first keeper, reused by the rest.
+	if s.issuer == "" {
+		s.assignIdentity("keeper-mk", httpAddr)
+	}
 
 	pluginsCacheDir := filepath.Join(s.tmpDir, kid, "plugins")
 	socketsDir := filepath.Join(s.tmpDir, kid, "plugin-sockets")
@@ -253,7 +283,7 @@ vault:
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
-    issuer: keeper-mk
+    issuer: %s
     ttl_default: 24h
     ttl_bootstrap: 720h
 
@@ -322,6 +352,7 @@ reaper:
 		httpAddr, mcpAddr, metricsAddr,
 		s.RedisAddr,
 		s.VaultAddr, s.vaultToken,
+		s.issuer,
 		pluginsCacheDir, socketsDir,
 		voyageWorkers, durationYAML(leaseTTL), durationYAML(leaseRenew),
 		durationYAML(reconcileStaleAfter),
@@ -348,8 +379,15 @@ func (s *Stack) spawnKeeperProc(kid, yamlPath, httpURL, grpcAddr string) (*keepe
 		"KEEPER_DESTINY_CACHE_DIR="+destinyCacheDir,
 		"KEEPER_PLUGIN_WORK_DIR="+pluginWorkDir,
 	)
-	cmd.Stdout = &testLogWriter{t: s.t, prefix: kid + "-stdout"}
-	cmd.Stderr = &testLogWriter{t: s.t, prefix: kid + "-stderr"}
+	stdoutLog := &testLogWriter{t: s.t, prefix: kid + "-stdout"}
+	stderrLog := &testLogWriter{t: s.t, prefix: kid + "-stderr"}
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
+
+	// Release this keeper's reserved ports in the last instant before it binds
+	// them (NIM-469, see allocLoopback). Per-keeper: the list is emptied on
+	// release, so the next keeper of the cluster reserves and releases its own.
+	s.releasePortReservations()
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start: %w", err)
@@ -357,6 +395,14 @@ func (s *Stack) spawnKeeperProc(kid, yamlPath, httpURL, grpcAddr string) (*keepe
 	kp := &keeperProc{kid: kid, cmd: cmd, httpURL: httpURL, grpcAddr: grpcAddr}
 
 	s.cleanups = append(s.cleanups, func() {
+		// Detaching the log writers from t is the one step every path needs:
+		// a killed keeper's pipes are still being drained too, and after the
+		// test returns any write through them panics the run in somebody
+		// else's name.
+		defer func() {
+			stdoutLog.stop()
+			stderrLog.stop()
+		}()
 		if kp.killed || cmd.Process == nil {
 			return
 		}

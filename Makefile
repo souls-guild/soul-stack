@@ -369,6 +369,22 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 # a real Keeper process + a soul-stub with live gRPC-mTLS. A separate go module
 # tests/e2e/ under the `e2e` build tag (testcontainers deps don't leak into the main
 # keeper/soul). NOT part of `check` (requires docker); details in tests/e2e/README.md.
+#
+# Flags, each earned rather than copied (NIM-469):
+#   -count=1  the tier is judged by whether it passes REPEATEDLY, and without
+#             this a second `make e2e` prints the first one's verdict from the
+#             test cache. A tier that cannot be re-run has no way to show that a
+#             fix to an intermittent failure worked (same trap as NIM-388).
+#   -timeout  was 10m. A full local run measures ~666s, so the budget sat BELOW
+#             the runtime: the suite was killed mid-flight and every test still
+#             queued never ran, which arrives as one panic plus a silently
+#             truncated tier. 30m matches e2e-live and leaves the timeout doing
+#             its actual job — catching a hang, not enforcing a schedule.
+#   -p 1      one test package at a time. Each L3a test owns three containers
+#             and a keeper process; overlapping packages double that and put two
+#             independent binaries in the same ephemeral port range.
+# bash + pipefail so `| tee` cannot swallow a non-zero status.
+e2e: SHELL := /bin/bash
 e2e:
 	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./...)" ]; then \
 		echo "tests/e2e: the e2e package set is EMPTY - this tier has no tests to run."; \
@@ -377,8 +393,13 @@ e2e:
 		echo "  vanished from the tree or the toolchain stopped reporting it."; \
 		exit 1; \
 	else \
-		echo "go test -tags=e2e ./... in tests/e2e"; \
-		(cd tests/e2e && go test -tags=e2e -timeout=10m ./...) || exit 1; \
+		set -o pipefail; \
+		log="$$(mktemp -t soul-stack-l3a-XXXXXX.log)"; rc=0; \
+		trap 'rm -f "$$log"' EXIT; \
+		echo "go test -tags=e2e -count=1 -p 1 ./... in tests/e2e"; \
+		(cd tests/e2e && go test -tags=e2e -count=1 -p 1 -timeout=30m ./... 2>&1 | tee "$$log") || rc=1; \
+		if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l3a-failure.py "$$log" || true; fi; \
+		exit "$$rc"; \
 	fi
 
 # Cross-compiles a single binary for Linux amd64 into its `bin/` with the
@@ -1250,12 +1271,32 @@ check-integration-set:
 #     above counts PACKAGES, which stays green while the list inside the one
 #     package names nothing real — the gate would then run a set nobody checked
 #     and label the rest NOT-RUN forever.
+#
+# L3a gets the same two things, for the same reasons (NIM-469):
+#   - scripts/classify-l3a-failure.py's self-test. Same argument as its L1 and
+#     e2e-live twins: the classifier is not Go, so `make test` never sees it,
+#     and a label that silently goes wrong is worse than no label — it sends
+#     someone hunting a defect that does not exist. Pinned fixtures, one per
+#     family, taken from real L3a failure shapes.
+#   - tests/e2e/harness's own guards. Ordinary Go tests behind the e2e tag that
+#     touch no docker — AST and pure functions over the harness sources — and
+#     they hold the properties the stands' readiness rests on: that each
+#     container is waited on through its mapped port rather than a log line,
+#     that the budgets are stated rather than inherited, and that every place
+#     raising the stands bounds them by the derived one. Those are what made
+#     L3a green alone and red in company, so they belong in the gate everyone
+#     runs and not only in the tier that needs a docker daemon to say anything
+#     at all. They cost ~0.05s. The package is its own module, hence the
+#     subshell.
 check-e2e-set:
 	@scripts/check-e2e-set.sh
 	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS)
 	@scripts/classify-e2e-live-failure.py --self-test
 	@echo "go test -count=1 ./harness/ in tests/e2e-live (docker-free stand-readiness guards)"
 	@(cd tests/e2e-live && go test -count=1 ./harness/)
+	@scripts/classify-l3a-failure.py --self-test
+	@echo "go test -tags=e2e -count=1 ./harness/... in tests/e2e (docker-free stand-readiness guards)"
+	@(cd tests/e2e && go test -tags=e2e -count=1 ./harness/...)
 
 # check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
 # decides whether a tier ran and what it said, so a regression there misreports

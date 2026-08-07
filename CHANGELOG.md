@@ -1782,6 +1782,76 @@ order to act in.
   test the suite really has — the list is used in three places, so nothing about
   it is allowed to be checked only by the 20-minute job it configures.
 
+- **L3a passed test-by-test and failed as a suite, and nothing in a red run said
+  which of those it was.** `make e2e` is the tier that drives a real Keeper
+  against real containers. Every test in it passed when run alone; a full run
+  dropped two or three, a different two or three each time, across families that
+  read as unrelated — a `401 invalid token` on an operator call, an
+  incarnation-state assert reading an untouched database, a container that never
+  came up, a panic naming a test that had done nothing wrong. Taken one at a time
+  those are four investigations. They were symptoms of two things, and neither of
+  them was flakiness.
+
+  **The stands were waited on by signals that hold on an idle machine and stop
+  holding under contention.** Postgres had no port check at all — the
+  testcontainers module sets no `WaitingFor` of its own and the host-port check
+  lives in an opt-in customizer this harness never called — so the harness
+  declared the stand up and `keeper init` then died on `dial tcp 127.0.0.1:32840:
+  connect: connection refused`. Vault waited on `Root Token:`, which dev-mode
+  Vault prints before it finishes unsealing, while the harness's next act is a KV
+  write. Redis was passed no strategy at all and so inherited the module's
+  10-second default, the shortest of the three budgets and nobody's decision.
+  Each container is now waited on through its **mapped host port** — the hop that
+  actually failed — on one named budget, with Vault additionally held until
+  `/v1/sys/health` returns 200. The waits get stricter, never looser: a readiness
+  wait relaxed to quieten a suite trades a loud infrastructure failure for a
+  silent one. The bound covering all three stands in sequence is *computed* from
+  that budget rather than written beside it, because a literal there caps all
+  three and the last stand in line inherits the remainder and fails as
+  `context deadline exceeded` from the parent without naming itself.
+
+  **Three ways one test could reach into another, all closed.** The keeper's log
+  writer had no detach: cleanup Kills the process after 15 s and returns while
+  `cmd.Wait()` is still draining its pipes into a `*testing.T` whose test has
+  finished, and Go answers a log-after-test with a panic in the name of whichever
+  test is running by then — the bystander is blamed and the culprit leaves no
+  trace. Port reservation closed its listener immediately and returned only an
+  address, leaving that address a suggestion across a window that spans a whole
+  `keeper init`, inside the same ephemeral range every outgoing connection on the
+  host draws from; losing that race either stops the keeper binding (a `/readyz`
+  deadline that never mentions a port) or hands the test a **foreign process**
+  that an unauthenticated 2xx on `/readyz` is happy to accept. Stacks now hold
+  their ports until the last instant and, after `/readyz`, verify that the
+  process answering is the keeper they started, using a token their own keeper
+  minted seconds earlier. Container teardown reports its errors instead of
+  discarding them, which is why "do containers survive a run?" had no answer in
+  any log.
+
+  **A red run now labels itself.** `scripts/classify-l3a-failure.py` gives L3a
+  what L1 has had since NIM-238 and e2e-live since NIM-406: every test labelled
+  **STAND-SETUP** / **TEST-FAILURE** / **TIMEOUT** / **NOT-RUN** from the
+  harness's own declaration rather than from matched error text, plus a family
+  axis, since L3a is effectively one package and L1's per-package axis carries no
+  information here. Nothing is downgraded to a pass and nothing is retried. `make
+  e2e` also gains `-count=1` — a tier judged by repeated passes cannot be served
+  from the test cache — and a timeout above its ~666 s runtime rather than below
+  it; at 10m the suite was being killed mid-flight, which arrives as one panic
+  plus a silently truncated tier.
+
+  **What this does not claim.** Three consecutive full runs from the fixed tree,
+  on a deliberately busy machine, gave **red / green / red** — so the suite is
+  not yet reliably green. Both reds were correctly declared STAND-SETUP, and both
+  are outside what harness code can reach: one was the ryuk reaper hitting
+  testcontainers' hard-coded 60 s startup timeout, which the library exposes no
+  option for, and one was the Docker daemon failing to answer a container inspect
+  for the full 120 s budget. What the fix demonstrably removed is the class that
+  produced Postgres's refused connection at 4 s and Redis's death at 14.70 s
+  against a 10 s budget it never chose. Of the ticket's families, the
+  incarnation-state and staged-failover failures did not reproduce in six full
+  runs; the assert that reports the first already prints both the actual state
+  and the expected subset, and has since the beta. Follow-ups: NIM-532 (ryuk's
+  unreachable timeout), NIM-533 (the daemon stalls and the residual red).
+
 - **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
   is written for a feature branch, where only the newest commit matters. A release
   branch is the opposite case: it *is* the integration target, every squash-merge

@@ -27,21 +27,23 @@ func (s *Stack) buildKeeperYAML(certPath, keyPath, caPath string) string {
 	// Dynamic listener addresses: reserve free TCP ports up front so Stack
 	// fields and the YAML consistently point at the same port numbers
 	// (probeReady hits KeeperHTTPURL).
-	bootstrapAddr := allocLoopback(s.t)
-	eventStreamAddr := allocLoopback(s.t)
-	httpAddr := allocLoopback(s.t)
-	mcpAddr := allocLoopback(s.t)
-	metricsAddr := allocLoopback(s.t)
+	bootstrapAddr := s.reserveLoopback()
+	eventStreamAddr := s.reserveLoopback()
+	httpAddr := s.reserveLoopback()
+	mcpAddr := s.reserveLoopback()
+	metricsAddr := s.reserveLoopback()
 
 	s.KeeperBootstrapGRPC = bootstrapAddr
 	s.KeeperGRPCAddr = eventStreamAddr
 	s.KeeperHTTPURL = "http://" + httpAddr
 	s.MetricsURL = "http://" + metricsAddr
 
+	s.assignIdentity("keeper-test", httpAddr)
+
 	pluginsCacheDir := s.tmpDir + "/plugins"
 	socketsDir := s.tmpDir + "/plugin-sockets"
 
-	tmpl := `kid: keeper-test-01
+	tmpl := `kid: %s
 
 listen:
   grpc:
@@ -79,7 +81,7 @@ vault:
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
-    issuer: keeper-test-01
+    issuer: %s
     ttl_default: 24h
     ttl_bootstrap: 720h
 
@@ -125,11 +127,13 @@ reaper:
   enabled: false
 `
 	yaml := fmt.Sprintf(tmpl,
+		s.issuer,
 		bootstrapAddr, certPath, keyPath,
 		eventStreamAddr, certPath, keyPath, caPath,
 		httpAddr, mcpAddr, metricsAddr,
 		s.RedisAddr,
 		s.VaultAddr, s.vaultToken,
+		s.issuer,
 		pluginsCacheDir, socketsDir,
 	)
 
@@ -151,20 +155,93 @@ func (s *Stack) seedPostgresDSN() {
 }
 
 // allocLoopback reserves a free TCP port on 127.0.0.1 and returns
-// `127.0.0.1:<port>`. The listener is closed immediately — there's a small
-// race (the port may be taken between alloc and the actual bind), which is
-// acceptable for a test environment.
+// `127.0.0.1:<port>` together with the listener still holding it. The caller
+// owns the listener and must close it immediately before the real bind — see
+// Stack.releasePortReservations.
+//
+// It used to close the listener at once and return only the address, with a
+// comment calling the resulting race small and acceptable (NIM-469). It is
+// neither. The gap between allocation and the keeper's actual bind spans a whole
+// `keeper init` — schema migrations against a cold Postgres container, seconds
+// on a loaded box — and 127.0.0.1's ephemeral range is exactly where every
+// outgoing connection on the host also draws from: the pgx pool, the Vault and
+// Redis clients, testcontainers' own traffic, and any neighbouring suite. Losing
+// that race is not benign in either direction:
+//
+//   - the keeper fails to bind and the test dies on the /readyz deadline with
+//     nothing about a port in the message;
+//   - or something else is already listening there, and probeReady's 2xx check
+//     accepts it, after which the test drives a foreign process for its whole
+//     duration.
+//
+// Holding the listener until the last instant does not make the race
+// theoretically impossible — only the kernel could, by binding the fd the keeper
+// will use — but it collapses the window from seconds to milliseconds.
 func allocLoopback(t interface {
 	Fatalf(format string, args ...any)
-}) string {
+}) (string, net.Listener) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("allocLoopback: %v", err)
 	}
-	defer l.Close()
 	addr := l.Addr().String()
 	if !strings.Contains(addr, ":") {
+		_ = l.Close()
 		t.Fatalf("allocLoopback: unexpected addr %q", addr)
+	}
+	return addr, l
+}
+
+// releasePortReservations closes every held listener. Idempotent: called
+// immediately before the keeper binds, and again from cleanup for the stacks
+// that never got that far.
+func (s *Stack) releasePortReservations() {
+	for _, l := range s.portReservations {
+		_ = l.Close()
+	}
+	s.portReservations = nil
+}
+
+// reserveLoopback allocates a port and records the reservation on the stack.
+func (s *Stack) reserveLoopback() string {
+	addr, l := allocLoopback(s.t)
+	s.portReservations = append(s.portReservations, l)
+	return addr
+}
+
+// assignIdentity derives this stack's JWT identity — the `kid` it signs with
+// and the `iss` its keeper pins — and records it on the stack.
+//
+// One identity per stack, not one identity for the whole suite (NIM-469):
+// `kid` and `iss` were both the literal `keeper-test-01` everywhere, so nothing
+// in a keeper's config, and nothing in a failure report, said WHICH of the forty
+// stacks in a run it belonged to. That is what this buys — attribution.
+//
+// What it does NOT buy is a different rejection, and the first version of this
+// comment claimed it did. Each stack writes its own randomly generated signing
+// key into its own Vault (vault.go, generateHS256Key), and Verify checks the
+// signature INSIDE ParseWithClaims, before it ever compares `iss`
+// (keeper/internal/jwt/verifier.go). A token that reaches another stack's keeper
+// therefore fails on the signature and collapses to the generic
+// `{"detail":"invalid token"}` — the same 401 an actual auth regression
+// produces. `token issuer not trusted` is UNREACHABLE between two stacks of this
+// harness and must not be relied on to tell them apart. assertOwnKeeper
+// (probe.go) is what detects a wrong endpoint, and it needs no help from the
+// issuer: any 401 at all, against a token this stack's own keeper minted seconds
+// earlier, already means the answering process is not ours.
+//
+// The port is the source of uniqueness because the kernel already guarantees
+// it: no two stacks alive at the same moment hold the same one.
+func (s *Stack) assignIdentity(prefix, httpAddr string) string {
+	s.issuer = prefix + "-" + portOf(httpAddr)
+	return s.issuer
+}
+
+// portOf returns the port part of `host:port`. Used to key a stack's identity
+// to something already unique among concurrently live stacks.
+func portOf(addr string) string {
+	if i := strings.LastIndex(addr, ":"); i >= 0 {
+		return addr[i+1:]
 	}
 	return addr
 }

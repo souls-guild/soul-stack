@@ -22,12 +22,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,7 +37,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // Config — parameters for constructing a Stack.
@@ -83,6 +84,18 @@ type Stack struct {
 	// Internal state.
 	vaultToken string
 	tmpDir     string
+
+	// issuer — this stack's JWT `iss` / keeper `kid`. Unique per stack
+	// (NIM-469): it used to be the constant `keeper-test-01` for every stack in
+	// the suite, which made one stack's keeper indistinguishable from another's
+	// on the wire. See buildKeeperYAML.
+	issuer string
+
+	// portReservations — listeners held open on the addresses written into
+	// keeper.yml, released immediately before the keeper binds them. See
+	// allocLoopback for why the reservation is held rather than dropped at
+	// allocation time.
+	portReservations []net.Listener
 
 	db *pgxpool.Pool
 
@@ -136,7 +149,17 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Everything from here to `infraUp = true` is docker, Vault and the
+	// filesystem; a failure in it is a fact about the machine, not a finding
+	// about the code, and it says so instead of arriving as a bare
+	// `--- FAIL: TestX`. See setupdecl.go for why the region ends where it does.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
+
+	// Derived from the per-container budgets, never its own number: the stands
+	// come up in sequence on this one ctx, so a flat literal here would cap them
+	// all and the last in line would silently get the remainder.
+	ctx, cancel := context.WithTimeout(context.Background(), standBringUpTimeout)
 	defer cancel()
 
 	if err := s.startPostgres(ctx); err != nil {
@@ -192,6 +215,13 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	s.db = pool
 	s.cleanups = append(s.cleanups, func() { pool.Close() })
 
+	// The third-party plumbing is up. Everything below runs this repo's own
+	// binaries, so from here a failure is a finding and must not be labelled
+	// infrastructure — every L3a test passes through this line, so a region that
+	// swallowed `keeper init` would hide a regression across the whole tier at
+	// once.
+	infraUp = true
+
 	// Bootstrap: keeper init --credential-out=...
 	credPath := s.runKeeperInit(keeperYAMLPath)
 	jwtBytes, err := os.ReadFile(credPath)
@@ -205,6 +235,13 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	if err := s.startKeeperRun(keeperYAMLPath); err != nil {
 		s.runCleanups()
 		t.Fatalf("NewStack: keeper run: %v", err)
+	}
+
+	// /readyz answered, but /readyz is anonymous — confirm it was OUR keeper
+	// that answered before any test builds on the assumption (NIM-469).
+	if err := s.assertOwnKeeper(); err != nil {
+		s.runCleanups()
+		t.Fatalf("NewStack: %v", err)
 	}
 
 	// Pre-auth registration of soul-stubs in the DB. Save each SID's mTLS
@@ -244,7 +281,29 @@ func (s *Stack) Cleanup() {
 	s.runCleanups()
 }
 
+// terminateContainer tears one container down and says so when it fails.
+//
+// The three call sites used to discard the error outright (`_ = c.Terminate()`),
+// which is why "do containers survive a run?" had no answer anywhere in the log
+// (NIM-469): a container that refused to die left no trace at all, and every
+// later test just started against a busier daemon. Cleanup still never fails a
+// test — a teardown problem is not a verdict on the code under test — it simply
+// stops being invisible.
+func (s *Stack) terminateContainer(name string, c testcontainers.Container) {
+	ctxTo, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := c.Terminate(ctxTo); err != nil {
+		s.t.Logf("[teardown] %s container did not terminate: %v — it stays on the daemon "+
+			"for every test after this one", name, err)
+	}
+}
+
 func (s *Stack) runCleanups() {
+	// Idempotent, and needed for the stacks that never reached the keeper: a
+	// bring-up that fails between reserving the ports and binding them would
+	// otherwise leak the listeners for the rest of the run, holding addresses
+	// the following tests still have to allocate from.
+	s.releasePortReservations()
 	for i := len(s.cleanups) - 1; i >= 0; i-- {
 		func(fn func()) {
 			defer func() {
@@ -265,20 +324,17 @@ func (s *Stack) startPostgres(ctx context.Context) error {
 		tcpostgres.WithDatabase("keeper"),
 		tcpostgres.WithUsername("keeper"),
 		tcpostgres.WithPassword("keeper"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(60*time.Second),
-		),
+		// AndDeadline, not the bare WithWaitStrategy: that one is
+		// WithWaitStrategyAndDeadline(60s, …) verbatim (options.go), so it would
+		// re-wrap the strategy and discard the deadline the constructor set.
+		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, postgresWaitStrategy()),
 	)
 	if err != nil {
 		return fmt.Errorf("postgres container: %w", err)
 	}
 	s.containers = append(s.containers, pgC)
 	s.cleanups = append(s.cleanups, func() {
-		ctxTo, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		_ = pgC.Terminate(ctxTo)
+		s.terminateContainer("postgres", pgC)
 	})
 
 	dsn, err := pgC.ConnectionString(ctx, "sslmode=disable")
@@ -292,15 +348,17 @@ func (s *Stack) startPostgres(ctx context.Context) error {
 func (s *Stack) startRedis(ctx context.Context) error {
 	rC, err := tcredis.RunContainer(ctx,
 		testcontainers.WithImage("redis:7-alpine"),
+		// Stated rather than inherited. Without this the module default's 10 s
+		// applies — the shortest budget of the three, on checks that themselves
+		// make docker-daemon round-trips.
+		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, redisWaitStrategy()),
 	)
 	if err != nil {
 		return fmt.Errorf("redis container: %w", err)
 	}
 	s.containers = append(s.containers, rC)
 	s.cleanups = append(s.cleanups, func() {
-		ctxTo, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		_ = rC.Terminate(ctxTo)
+		s.terminateContainer("redis", rC)
 	})
 
 	addr, err := rC.ConnectionString(ctx)
@@ -318,12 +376,14 @@ func (s *Stack) startVault(ctx context.Context) error {
 	const rootToken = "root-test-token"
 	req := testcontainers.ContainerRequest{
 		Image:        "hashicorp/vault:1.15",
-		ExposedPorts: []string{"8200/tcp"},
+		ExposedPorts: []string{vaultContainerPort},
 		Env: map[string]string{
 			"VAULT_DEV_ROOT_TOKEN_ID":  rootToken,
 			"VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
 		},
-		WaitingFor: wait.ForLog("Root Token:").WithStartupTimeout(45 * time.Second),
+		// Set directly rather than through a testcontainers option, so nothing
+		// re-wraps it in the library's 60 s deadline.
+		WaitingFor: vaultWaitStrategy(),
 		// vault dev-mode wants IPC_LOCK / cap_add, otherwise it logs a
 		// warning but still starts. Ignored in the test environment.
 	}
@@ -336,16 +396,14 @@ func (s *Stack) startVault(ctx context.Context) error {
 	}
 	s.containers = append(s.containers, vc)
 	s.cleanups = append(s.cleanups, func() {
-		ctxTo, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		_ = vc.Terminate(ctxTo)
+		s.terminateContainer("vault", vc)
 	})
 
 	host, err := vc.Host(ctx)
 	if err != nil {
 		return fmt.Errorf("vault host: %w", err)
 	}
-	port, err := vc.MappedPort(ctx, "8200")
+	port, err := vc.MappedPort(ctx, vaultContainerPort)
 	if err != nil {
 		return fmt.Errorf("vault port: %w", err)
 	}
@@ -396,8 +454,15 @@ func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 		"KEEPER_DESTINY_CACHE_DIR="+destinyCacheDir,
 		"KEEPER_PLUGIN_WORK_DIR="+pluginWorkDir,
 	)
-	cmd.Stdout = &testLogWriter{t: s.t, prefix: "keeper-stdout"}
-	cmd.Stderr = &testLogWriter{t: s.t, prefix: "keeper-stderr"}
+	stdoutLog := &testLogWriter{t: s.t, prefix: "keeper-stdout"}
+	stderrLog := &testLogWriter{t: s.t, prefix: "keeper-stderr"}
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
+
+	// Hand the reserved listener ports back to the kernel in the last instant
+	// before the keeper binds them, so the window in which anything else on the
+	// host can take one is milliseconds rather than the whole of `keeper init`.
+	s.releasePortReservations()
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start keeper run: %w", err)
@@ -415,6 +480,11 @@ func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 		case <-time.After(15 * time.Second):
 			_ = cmd.Process.Kill()
 		}
+		// Unconditional, and inside cleanup rather than after it: on the Kill
+		// branch the Wait goroutine is still draining the pipes, and this is the
+		// last moment at which the test is guaranteed to still exist.
+		stdoutLog.stop()
+		stderrLog.stop()
 	})
 
 	// Wait /readyz.
@@ -463,14 +533,49 @@ func locateKeeperBinary() (string, error) {
 }
 
 // testLogWriter forwards the keeper process's stdout/stderr to t.Log.
+// The stop/done guard is not decoration (NIM-469). Cleanup gives the keeper 15s
+// to exit on SIGINT, then Kills it and returns immediately — but `cmd.Wait()`
+// runs in a goroutine that is still draining these pipes, so a keeper that takes
+// its time dying writes into a test that has already finished. Go answers that
+// with `panic: Log in goroutine after TestX has completed`, and the TestX it
+// names is whichever test happens to be running by then: a bystander. One slow
+// shutdown therefore kills an unrelated, innocent test — precisely the "green
+// alone, red in company, a different test each time" shape this ticket is about.
 type testLogWriter struct {
-	t      *testing.T
+	// t is held through an interface so the stop guard is testable without a
+	// finished *testing.T — the very state that cannot be staged on purpose.
+	t      testLogger
 	prefix string
+
+	mu   sync.Mutex
+	done bool
+}
+
+// testLogger is the one method testLogWriter needs from *testing.T.
+type testLogger interface {
+	Logf(format string, args ...any)
+}
+
+// stop detaches the writer from t. It must be called while the test is still
+// alive — that is, from cleanup, before cleanup returns.
+func (w *testLogWriter) stop() {
+	w.mu.Lock()
+	w.done = true
+	w.mu.Unlock()
 }
 
 func (w *testLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
 		if line == "" {
+			continue
+		}
+		if w.done {
+			// The test is gone, so t is off limits — but the output is not
+			// dropped: a keeper too slow to die is usually a keeper with
+			// something to say about why.
+			fmt.Fprintf(os.Stderr, "[%s after test] %s\n", w.prefix, line)
 			continue
 		}
 		w.t.Logf("[%s] %s", w.prefix, line)
