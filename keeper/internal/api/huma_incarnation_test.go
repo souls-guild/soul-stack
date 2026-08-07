@@ -16,13 +16,17 @@ package api
 // RBAC-deny→403; read→NoAudit.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +38,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -827,8 +832,11 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 	db := &incTestDB{
 		selectByName: func(name string) pgx.Row { return incRow(name, "ready", "{}") },
 		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "ready") }, // Destroy FOR UPDATE select (state, status)
+		memberSIDs:   []string{"vm-1.example.com", "vm-2.example.com"},
 	}
-	incH := handlers.NewIncarnationHandler(db, nil, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, auditCap, nil, nil)
+	var logs bytes.Buffer
+	incH := handlers.NewIncarnationHandler(db, nil, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, auditCap, nil,
+		slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod?allow_destroy=true", http.NoBody)
@@ -837,7 +845,12 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 	var reply struct {
-		ApplyID string `json:"apply_id"`
+		ApplyID    string `json:"apply_id"`
+		Unreleased *struct {
+			Provider string   `json:"provider"`
+			VMIDs    []string `json:"vm_ids"`
+			SIDs     []string `json:"sids"`
+		} `json:"unreleased"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
 		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
@@ -845,11 +858,88 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 	if reply.ApplyID == "" {
 		t.Errorf("reply.apply_id is empty")
 	}
+	// NIM-395: force-destroy skips teardown, so the cloud VMs the incarnation
+	// provisioned are still running when this 202 comes back. A bare apply_id
+	// reads as "done, everything cleaned up" — the operator must be told, on the
+	// response itself, what was NOT released, because the record that named
+	// those VMs is gone a moment later.
+	if reply.Unreleased == nil {
+		t.Fatalf("force-destroy replied with no `unreleased` block — 202 alone says the resources were freed; body=%s",
+			rec.Body.String())
+	}
+	if reply.Unreleased.Provider != "example-dev" {
+		t.Errorf("unreleased.provider = %q, want example-dev", reply.Unreleased.Provider)
+	}
+	if len(reply.Unreleased.VMIDs) != 2 {
+		t.Errorf("unreleased.vm_ids = %q, want the two still-running VMs", reply.Unreleased.VMIDs)
+	}
+	// The member hosts are a dimension of their own, not a restatement of the vm
+	// ids: a create that failed before the driver committed its ids leaves
+	// registered Souls and nothing else, and the membership rows naming them
+	// CASCADE away with the record.
+	if got := reply.Unreleased.SIDs; len(got) != 2 || got[0] != "vm-1.example.com" || got[1] != "vm-2.example.com" {
+		t.Errorf("unreleased.sids = %q, want the two member hosts; body=%s", got, rec.Body.String())
+	}
 	// destroy_started + destroy_completed are written by the service layer INSIDE
 	// Destroy/DeleteAfterTeardown (SELF-AUDIT) — at least destroy_started must be there.
 	if !hasAuditEvent(auditCap, audit.EventIncarnationDestroyStarted) {
 		t.Errorf("incarnation.destroy_started NOT written (SELF-AUDIT broken); events=%v", auditEventTypes(auditCap))
 	}
+	// The reply reaches exactly one reader — whoever made the call. A force-destroy
+	// run from a script, a retry loop or a UI that shows only the status code
+	// leaves the abandoned VMs named nowhere an on-call operator would look, so the
+	// same list goes to the log at WARN. It is a second channel, not a restatement:
+	// every dimension has to be in it, or the channel reports a smaller leak than
+	// the one that happened.
+	warn := logs.String()
+	for _, want := range []string{"example-dev", "i-aaa111", "i-bbb222", "vm-1.example.com", "vm-2.example.com"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("force-destroy WARN does not name %q — the only operator-facing copy that outlives the reply is short; log=%s",
+				want, warn)
+		}
+	}
+}
+
+// TestUnreleasedResourcesReply_CoversEveryDimension — GUARD: the wire type must
+// name every dimension the domain records. The archive and the audit event both
+// marshal [incarnation.UnreleasedResources] whole, while newIncarnationDestroyReply
+// copies it field by field — so a fourth kind of abandoned resource (block
+// volumes, floating ips, load balancers) added to the domain lands in the two
+// durable places and silently stops at the HTTP boundary. The operator would
+// then read a reply that says less than a record they can no longer query, which
+// is NIM-395 restated one dimension over. `make check-openapi` does not see it
+// either: the committed yaml is generated from the reply type, so it agrees with
+// whatever the reply type happens to say.
+//
+// Compared by json name, not by Go field: the name is the contract, and renaming
+// one breaks a client exactly as hard as dropping it. That each declared field is
+// also assigned a value is pinned by
+// TestHumaIncarnation_Destroy_ForceWireAndSelfAudit.
+func TestUnreleasedResourcesReply_CoversEveryDimension(t *testing.T) {
+	domain := jsonFieldNames(t, incarnation.UnreleasedResources{})
+	wire := jsonFieldNames(t, UnreleasedResourcesReply{})
+	if !slices.Equal(domain, wire) {
+		t.Errorf("UnreleasedResourcesReply names %v, the domain records %v — "+
+			"a resource the force-destroy abandoned never reaches the destroy reply",
+			wire, domain)
+	}
+}
+
+// jsonFieldNames — sorted json names of v's fields.
+func jsonFieldNames(t *testing.T, v any) []string {
+	t.Helper()
+	rt := reflect.TypeOf(v)
+	names := make([]string, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			t.Fatalf("%s.%s carries no json name — it cannot reach any wire surface",
+				rt.Name(), rt.Field(i).Name)
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // === REMOVED: PATCH /v1/incarnations/{name}/hosts (NIM-330) ===
@@ -1079,6 +1169,11 @@ type incTestDB struct {
 	selectByName  func(name string) pgx.Row
 	unlockSelect  func() pgx.Row
 	soulsExisting map[string]struct{}
+	// memberSIDs answers the incarnation_membership roster query. Empty is a
+	// legitimate answer for most tests, which is exactly why the force-destroy
+	// test sets it: an unset roster and a roster the code never read look the
+	// same in the reply.
+	memberSIDs []string
 	// seenSQL records every statement the handler issued. Some behaviour is only
 	// observable in the SQL: a filter that never reaches the WHERE clause returns
 	// the same rows from a fake as one that does, so a body assertion would pass
@@ -1120,6 +1215,16 @@ func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return errRow2{pgx.ErrNoRows}
 	case strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at"):
 		return staticRow1Time(time.Now().UTC())
+	case strings.Contains(sql, "SELECT state") && strings.Contains(sql, "status = 'destroying'"):
+		// NIM-395: the force-destroy path reads the live state to record what it
+		// is about to abandon, before archive+DELETE. jsonb arrives as []byte,
+		// the way pgx delivers it — and with real provisioned resources in it,
+		// so the `unreleased` field is observable at the HTTP boundary rather
+		// than being an empty object that any implementation would produce.
+		// Must precede the `WHERE name = $1` case: this SQL matches that too.
+		return incStaticRow{values: []any{
+			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
+		}}
 	case strings.Contains(sql, "WHERE name = $1") || strings.Contains(sql, "FROM incarnation\nWHERE name"):
 		if f.selectByName != nil {
 			return f.selectByName(args[0].(string))
@@ -1142,6 +1247,9 @@ func (f *incTestDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 			}
 		}
 		return &incStringRows{values: found}, nil
+	}
+	if strings.Contains(sql, "FROM incarnation_membership") {
+		return &incStringRows{values: f.memberSIDs}, nil
 	}
 	return &incEmptyRows{}, nil
 }

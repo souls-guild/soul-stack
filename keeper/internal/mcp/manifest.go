@@ -299,7 +299,7 @@ var catalogManifest = []toolEntry{
 			Name:         "keeper.incarnation.destroy",
 			Description:  "Tears down an Incarnation. allow_destroy=false - destroy via the 'destroy' teardown scenario; allow_destroy=true - teardown-free destroy (force). Async operation - returns _apply_id. Permission: incarnation.destroy.",
 			InputSchema:  schemaIncarnationDestroyInput,
-			OutputSchema: schemaApplyIDOutput,
+			OutputSchema: schemaIncarnationDestroyOutput,
 		},
 	},
 	{
@@ -1132,6 +1132,27 @@ var (
 "required":["_apply_id"],
 "properties":{
 "_apply_id":{"type":"string","description":"ULID of the run."}}}`)
+
+	// schemaIncarnationDestroyOutput — schemaApplyIDOutput plus what a force
+	// destroy walked away from (NIM-395). It cannot be an extension of the shared
+	// schema: `additionalProperties:false` there is what three other tools rely
+	// on, and a tool that emits a field its own declaration forbids has its
+	// warning dropped by exactly the schema-validating client that would act on
+	// it. Absent when the force abandoned nothing, and on the teardown path,
+	// where the resources are gone by definition.
+	schemaIncarnationDestroyOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["_apply_id"],
+"properties":{
+"_apply_id":{"type":"string","description":"ULID of the run."},
+"unreleased":{"type":"object","additionalProperties":false,
+"description":"Resources this destroy did NOT release, because allow_destroy=true skipped the teardown scenario. They are still running and still billed; the record naming them is gone from the live table. Absent when nothing was abandoned.",
+"properties":{
+"provider":{"type":"string","description":"Cloud Provider that holds the machines."},
+"vm_ids":{"type":["array","null"],"items":{"type":"string"},"description":"Provider-side machine ids, from incarnation.state. Empty if the run that provisioned them never committed its state."},
+"sids":{"type":["array","null"],"items":{"type":"string"},"description":"Member hosts, from incarnation_membership. The FK cascade deletes that relation, so this is the only surviving list."}}}}}`)
 
 	schemaApplyIDOutputWithIncarnation = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

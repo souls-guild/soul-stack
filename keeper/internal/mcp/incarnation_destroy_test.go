@@ -1,10 +1,14 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -144,9 +148,14 @@ func TestToolsCall_IncarnationDestroy_NoScenario_NoForce(t *testing.T) {
 // --- force path (allow_destroy=true, no scenario) → DELETE -----------
 
 func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
-	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
+	pool := &fakePool{
+		incFn:      incWithStatus(incarnation.StatusReady),
+		memberSIDs: []string{"vm-1.example.com", "vm-2.example.com"},
+	}
 	destroyer := &mcpDestroyer{}
 	h, rec := newTestHandlerDestroy(t, pool, destroyerRBAC(), destroyer, false)
+	var logs bytes.Buffer
+	h.deps.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
 		`{"name":"redis-prod","allow_destroy":true}`)
@@ -166,6 +175,93 @@ func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
 	if ev := recEvent(rec, audit.EventIncarnationDestroyStarted); ev == nil || ev.Payload["force"] != true {
 		t.Errorf("destroy_started force payload = %v, want true", ev)
 	}
+	// NIM-395: the tool result must name what force-destroy did NOT release.
+	// An agent driving this tool sees only the result — a bare `_apply_id`
+	// reads as "cleaned up", while the provisioned VMs are still running and
+	// the record that named them is already gone.
+	var out struct {
+		Structured struct {
+			ApplyID    string `json:"_apply_id"`
+			Unreleased *struct {
+				Provider string   `json:"provider"`
+				VMIDs    []string `json:"vm_ids"`
+				SIDs     []string `json:"sids"`
+			} `json:"unreleased"`
+		} `json:"structuredContent"`
+	}
+	raw, err := json.Marshal(resp.Result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal result: %v; raw=%s", err, raw)
+	}
+	if out.Structured.Unreleased == nil {
+		t.Fatalf("force-destroy tool result carries no `unreleased` block; raw=%s", raw)
+	}
+	if out.Structured.Unreleased.Provider != "example-dev" || len(out.Structured.Unreleased.VMIDs) != 2 {
+		t.Errorf("unreleased = %+v, want example-dev with the two still-running VMs", out.Structured.Unreleased)
+	}
+	// The member SIDs are a separate dimension: a create that failed before the
+	// driver committed vm ids still leaves registered hosts behind, and the
+	// membership rows that named them are about to CASCADE away.
+	if got := out.Structured.Unreleased.SIDs; len(got) != 2 || got[0] != "vm-1.example.com" || got[1] != "vm-2.example.com" {
+		t.Errorf("unreleased.sids = %v, want the two member hosts; raw=%s", got, raw)
+	}
+	// The `unreleased` block must survive a schema-validating client: a tool that
+	// emits a key its own OutputSchema does not declare has it stripped, which is
+	// exactly the warning this ticket exists to deliver.
+	assertStructuredMatchesOutputSchema(t, "keeper.incarnation.destroy", raw)
+	// The tool result is read by the agent that made the call and by nobody else
+	// — it is not persisted anywhere an operator can query later. The same list
+	// therefore goes to the keeper log at WARN, and it has to be the whole list:
+	// a WARN naming fewer resources than were abandoned understates the leak to
+	// the one reader who is not the caller.
+	warn := logs.String()
+	for _, want := range []string{"example-dev", "i-aaa111", "i-bbb222", "vm-1.example.com", "vm-2.example.com"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("force-destroy WARN does not name %q — the operator-facing copy that outlives the tool result is short; log=%s",
+				want, warn)
+		}
+	}
+}
+
+// TestUnreleasedResourcesOutput_CoversEveryDimension — GUARD, twin of the REST
+// one in internal/api: callIncarnationDestroy copies
+// [incarnation.UnreleasedResources] field by field, so a fourth kind of
+// abandoned resource added to the domain reaches the archive and the audit
+// event — both marshal the struct whole — and stops silently here. An agent
+// driving this tool would act on a list shorter than the record, and the record
+// is in a table with no read API.
+//
+// assertStructuredMatchesOutputSchema does not cover this: it checks the payload
+// against the tool's declared schema, and a dimension missing from BOTH agrees
+// with itself.
+func TestUnreleasedResourcesOutput_CoversEveryDimension(t *testing.T) {
+	domain := mcpJSONFieldNames(t, incarnation.UnreleasedResources{})
+	out := mcpJSONFieldNames(t, unreleasedResourcesOutput{})
+	if !slices.Equal(domain, out) {
+		t.Errorf("unreleasedResourcesOutput names %v, the domain records %v — "+
+			"a resource the force-destroy abandoned never reaches the tool result",
+			out, domain)
+	}
+}
+
+// mcpJSONFieldNames — sorted json names of v's fields.
+func mcpJSONFieldNames(t *testing.T, v any) []string {
+	t.Helper()
+	rt := reflect.TypeOf(v)
+	names := make([]string, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			t.Fatalf("%s.%s carries no json name — it cannot reach any wire surface",
+				rt.Name(), rt.Field(i).Name)
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // --- force-DELETE no-op (RowsAffected==0) → success, no completed ----

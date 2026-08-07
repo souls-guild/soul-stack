@@ -23,9 +23,26 @@ type incarnationDestroyArgs struct {
 }
 
 // incarnationDestroyOutput — output of keeper.incarnation.destroy
-// (schemaApplyIDOutput): apply_id of a single destroy operation.
+// (schemaIncarnationDestroyOutput): apply_id of a single destroy operation, plus
+// what a force walked away from. The tool left the shared schemaApplyIDOutput in
+// NIM-395 — that one is `additionalProperties:false`, so a schema-validating
+// client would have dropped the `unreleased` key it does not declare.
+//
+// Unreleased is present ONLY on the force path (teardown skipped) — parity with
+// the REST reply (NIM-395). An agent calling this tool with allow_destroy=true
+// must not read a bare apply_id as "everything was cleaned up": the cloud VMs
+// listed here are still running.
 type incarnationDestroyOutput struct {
-	ApplyID string `json:"_apply_id"`
+	ApplyID    string                     `json:"_apply_id"`
+	Unreleased *unreleasedResourcesOutput `json:"unreleased,omitempty"`
+}
+
+// unreleasedResourcesOutput — MCP projection of
+// [incarnation.UnreleasedResources]; see the REST twin UnreleasedResourcesReply.
+type unreleasedResourcesOutput struct {
+	Provider string   `json:"provider,omitempty"`
+	VMIDs    []string `json:"vm_ids,omitempty"`
+	SIDs     []string `json:"sids,omitempty"`
 }
 
 // destroyForceDeleteTimeout — timeout for the detached-ctx force-DELETE
@@ -167,7 +184,8 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 	if effectiveForce {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyForceDeleteTimeout)
 		defer cancel()
-		if _, err := incarnation.DeleteAfterTeardown(dctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.Name, effectiveForce, h.deps.Logger); err != nil {
+		res, err := incarnation.DeleteAfterTeardown(dctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.Name, effectiveForce, h.deps.Logger)
+		if err != nil {
 			h.deps.Logger.Error("mcp: incarnation.destroy force delete failed",
 				slog.String("name", a.Name),
 				slog.String("apply_id", applyID),
@@ -175,7 +193,26 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 			)
 			return h.toolError(req.ID, toolName, mcpCodeInternalError, "force-destroy delete failed")
 		}
-		return h.toolResult(req.ID, incarnationDestroyOutput{ApplyID: applyID})
+		out := incarnationDestroyOutput{ApplyID: applyID}
+		// Gate on IsEmpty, not on the pointer: the domain sets Unreleased only for
+		// a non-empty set, but that is its rule, not this handler's. Reading the
+		// same predicate the REST handler reads keeps the two surfaces from
+		// drifting if the domain ever starts returning an empty record.
+		if res != nil && !res.Unreleased.IsEmpty() {
+			out.Unreleased = &unreleasedResourcesOutput{
+				Provider: res.Unreleased.Provider,
+				VMIDs:    res.Unreleased.VMIDs,
+				SIDs:     res.Unreleased.SIDs,
+			}
+			h.deps.Logger.Warn("mcp: incarnation.destroy force-destroy left resources unreleased",
+				slog.String("name", a.Name),
+				slog.String("apply_id", applyID),
+				slog.String("provider", res.Unreleased.Provider),
+				slog.Any("vm_ids", res.Unreleased.VMIDs),
+				slog.Any("sids", res.Unreleased.SIDs),
+			)
+		}
+		return h.toolResult(req.ID, out)
 	}
 
 	// effectiveForce=false → S-D2b: async teardown scenario `destroy` (TerminalDestroy).

@@ -107,8 +107,14 @@ const (
 	// cascade V3). `source: keeper_internal` (write-path — the scenario
 	// runner after the barrier, not HTTP middleware; the initiator's AID is
 	// unavailable here, archon_aid column NULL). `correlation_id` is empty.
-	// Payload: `{name, force}` — the fact of removal; carries no secrets
-	// (state/spec are NOT duplicated in audit, they live in the archive).
+	// Payload: `{name, force, archive_status}` — the fact of removal and which
+	// terminal status the archived row was stamped with. On the force path also
+	// `teardown: "skipped"` and, when the record left anything behind,
+	// `unreleased: {provider, vm_ids, sids}` (NIM-395). The archive has no read
+	// API, so this event is the only operator-readable record of what a force
+	// abandoned. `provider`/`vm_ids` come from `incarnation.state` and are the
+	// one deliberate exception to "state is not duplicated in audit"; they are
+	// masked before they are read.
 	// Written AFTER the archive+DELETE transaction commits; single-winner —
 	// only the owner of the destroying transition writes this event
 	// (RowsAffected==0 → no-op, event not written).

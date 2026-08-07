@@ -62,6 +62,18 @@ type fakeTx struct {
 	execSQLs []string
 	execArgs [][]any
 	execN    int
+
+	// rowsResult — scripted response for Query (see the method). nil → empty.
+	rowsResult *fakeRows
+
+	// calls — every statement in one sequence, tagged by kind ("exec"/"queryrow"/
+	// "query"). execSQLs orders the Execs against each other but says nothing
+	// about where the reads fell, and the fake replays scripted rows no matter
+	// when it is asked — so without this a read moved AFTER the statement that
+	// destroys its source still passes (NIM-395: the membership roster is wiped
+	// by the DELETE's FK cascade). Recording one sequence makes that ordering
+	// checkable without a real database.
+	calls []string
 }
 
 func (f *fakeTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -69,6 +81,7 @@ func (f *fakeTx) Exec(_ context.Context, sql string, args ...any) (pgconn.Comman
 	f.execN++
 	f.execSQLs = append(f.execSQLs, sql)
 	f.execArgs = append(f.execArgs, args)
+	f.calls = append(f.calls, "exec")
 	if f.execErr != nil && idx == f.execErrAt {
 		return pgconn.CommandTag{}, f.execErr
 	}
@@ -79,6 +92,7 @@ func (f *fakeTx) Exec(_ context.Context, sql string, args ...any) (pgconn.Comman
 }
 
 func (f *fakeTx) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	f.calls = append(f.calls, "queryrow")
 	if f.queryN < len(f.queryRows) {
 		row := f.queryRows[f.queryN]
 		f.queryN++
@@ -88,6 +102,13 @@ func (f *fakeTx) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
 }
 
 func (f *fakeTx) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	f.calls = append(f.calls, "query")
+	// rowsResult — scripted multi-row response (e.g. the membership read in
+	// DeleteAfterTeardown's force path). nil → an empty result, the original
+	// behavior every other test relies on.
+	if f.rowsResult != nil {
+		return f.rowsResult, nil
+	}
 	return &fakeRows{}, nil
 }
 

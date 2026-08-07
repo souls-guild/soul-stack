@@ -431,7 +431,75 @@ Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal 
 |---|---|---|---|
 | `allow_destroy` | `bool` | yes | Mandatory confirmation flag (absent or non-boolean → `400 malformed-request`). `false` - destroy via teardown scenario `destroy`; if there is no scenario in the service snapshot `destroy` → `422 validation-failed` (there is nothing to perform teardown with, pass `true`). `true` - demolition without teardown (force). Mapped to internal `force` (status `destroying`, [`status_details.force`]). Symmetry with MCP-tool [`keeper.incarnation.destroy`](../mcp-tools/incarnations.md#keeperincarnationdestroy). |
 
-**Response `202 Accepted`:** `{"apply_id": "<ULID>"}`. **Errors:** `400 malformed-request` (`allow_destroy` is missing/not a boolean), `404 not-found`, `409 incarnation-locked` (status does not allow destroy - `applying` / `destroying`), `422 validation-failed` (`allow_destroy=false` and no scenario `destroy`).
+**Response `202 Accepted`:** `{"apply_id": "<ULID>"}`, plus `unreleased` on the force path (see below). **Errors:** `400 malformed-request` (`allow_destroy` is missing/not a boolean), `404 not-found`, `409 incarnation-locked` (status does not allow destroy - `applying` / `destroying`), `422 validation-failed` (`allow_destroy=false` and no scenario `destroy`).
+
+**`unreleased` — what a force-destroy did NOT release (NIM-395).** Deleting the
+record and releasing the resource are different operations, and `allow_destroy=true`
+performs only the first: no teardown runs, so cloud VMs keep running (and billing)
+and member hosts keep their soul, seed and bootstrap token. The response therefore
+carries an extra object on the force path — omitted entirely when the incarnation
+was holding nothing:
+
+```json
+{
+  "apply_id": "01J...",
+  "unreleased": {
+    "provider": "example-dev",
+    "vm_ids": ["i-aaa111", "i-bbb222"],
+    "sids": ["vm-1.example.com", "vm-2.example.com"]
+  }
+}
+```
+
+`provider` / `vm_ids` are read best-effort from the incarnation `state` keys
+`provisioned_provider` / `provisioned_vm_ids` (the convention used by `examples/`
+services — a service that does not write them reports no VMs, and a missing or
+malformed value never fails the destroy). Being state, they are masked before they
+are read, so a vault reference stored under those keys comes back as `***MASKED***`
+rather than in four places at once. **The masking here is weaker than the one
+`GET /v1/incarnations/{name}` applies: it covers the vault-ref and key-name layers,
+not the service `state_schema` layer** — a key a service
+declares `secret: true` whose value is not a vault reference and whose name is not
+secret-shaped is masked in the incarnation view and not here (NIM-531). `sids` are
+the `incarnation_membership` rows, which the FK cascade removes with the record;
+they are keeper-owned FQDNs and are not masked. All of it is captured **inside**
+the deleting transaction: after the call there is no live row left to read it from.
+
+**Read the three fields as three separate statements, not one.** Empty `vm_ids`
+does **not** mean no machines exist. The ids reach `state` only when a run
+commits its `state_changes`, so the case this response exists for — a `create`
+that provisioned machines and then failed — leaves the machines running with no
+ids recorded. `sids` is the field that still names the hosts there. Conversely a
+service that provisions no cloud reports hosts and no `provider`.
+The same set is written into `incarnation_archive.status_details.unreleased` and
+into the `incarnation.destroy_completed` audit event, so it stays queryable via
+[`GET /v1/audit`](audit.md) once the response is gone. keeper also logs it at WARN.
+A force that abandoned nothing omits the key in all three places rather than
+writing an empty object — `force_destroyed` already records that teardown was
+skipped, and `{}` would only raise the question of whether it means "checked,
+clean" or "could not tell".
+
+**A failed capture refuses the delete.** Collecting the three fields happens inside
+the deleting transaction, so a database error while reading `state` or the
+membership roster aborts the destroy instead of removing the record with an
+incomplete report — losing the only surviving list of abandoned machines is worse
+than not deleting.
+
+⚠️ The row is then left in `destroying`, and **that status has no operator exit**:
+a repeat `DELETE` is refused (`409`, `destroying` is not a destroyable status),
+`POST /v1/incarnations/{name}/unlock` is refused too (it accepts only
+`error_locked` / `migration_failed` / `destroy_failed`), and nothing reclaims a
+stale `destroying` in the background. Recovery today means a direct database
+update. This is a pre-existing gap — the archive INSERT and the DELETE could
+already strand a row the same way — that the capture step adds two more entry
+points to; tracked as NIM-534.
+
+**Archive status is terminal.** `incarnation_archive.status` records the *outcome*,
+not the moment of the request: `destroyed` when the teardown scenario ran to
+completion, `force_destroyed` when it was skipped. (Rows archived before NIM-395
+carry `destroying` — the live status copied verbatim — and are distinguishable only
+by `status_details.force`.) These two values exist only in the archive and are not
+`incarnation.status` values.
 
 **Manifest `lifecycle.auto_destroy` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_destroy: false`, deletion is **always** direct (DELETE without teardown), priority over `allow_destroy` - even `allow_destroy=false` does not run a teardown scenario and does not run into `422` "no scenario `destroy`." By default (`true`, backcompat), deletion follows the usual `allow_destroy` logic. Resolved from a snapshot of the deployed service-ref.
 

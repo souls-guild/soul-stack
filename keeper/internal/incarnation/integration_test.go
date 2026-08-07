@@ -722,8 +722,13 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	if archName != "redis-prod" || archService != "redis" || archVersion != "v1.2.3" {
 		t.Errorf("archive cols = %q/%q/%q, want redis-prod/redis/v1.2.3", archName, archService, archVersion)
 	}
-	if archStatus != "destroying" {
-		t.Errorf("archive status = %q, want destroying (snapshot at delete)", archStatus)
+	// The archived status is TERMINAL, not the `destroying` the live row carried
+	// at delete time (NIM-395). A compliance archive whose every row reads
+	// `destroying` records the moment of the request, not the outcome — and
+	// makes a clean teardown indistinguishable from a force-destroy that left
+	// cloud VMs running.
+	if archStatus != ArchiveStatusDestroyed {
+		t.Errorf("archive status = %q, want %q (teardown ran to completion)", archStatus, ArchiveStatusDestroyed)
 	}
 	if len(archSpec) != 0 {
 		t.Errorf("archive spec = %v, want the empty default — nothing writes a spec any more", archSpec)
@@ -743,6 +748,148 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	if len(aw.events) != 1 || aw.events[0].EventType != audit.EventIncarnationDestroyCompleted {
 		t.Errorf("audit events = %+v, want one destroy_completed", aw.events)
 	}
+}
+
+// TestIntegration_DeleteAfterTeardown_ForceRecordsAbandonedResources —
+// force-destroy (teardown SKIPPED) against real Postgres: the record is
+// removed, but what it was holding is written down first (NIM-395).
+//
+// This is the guard for the whole defect. "Delete the record" and "release the
+// resource" are different things, and force means only the first: the cloud VMs
+// listed in `provisioned_vm_ids` are still running and still billing after this
+// call returns. Before the fix the operator got a bare 202 and the archive said
+// `destroying` — the VM IDs and the member SIDs were gone with the row and
+// there was nowhere left to look them up.
+//
+// The ordering claim is what only a real database can prove: the member SIDs
+// live in `incarnation_membership`, which the FK cascade wipes on DELETE. If
+// the capture were moved after the DELETE (or out of the transaction), the
+// roster would come back empty here — the membership count below is 0 by the
+// time the call returns, so the recorded SIDs could only have been read while
+// the rows still existed.
+func TestIntegration_DeleteAfterTeardown_ForceRecordsAbandonedResources(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+	creator := "archon-alice"
+
+	// A destroying row that a `create` scenario had provisioned cloud VMs for.
+	// `provisioned_provider` / `provisioned_vm_ids` is the service-author
+	// convention used by examples/, not a keeper contract — read best-effort.
+	inc := &Incarnation{
+		Name: "redis-prod", Service: "redis", ServiceVersion: "v1.2.3",
+		StateSchemaVersion: 1,
+		State: map[string]any{
+			"provisioned_provider": "example-dev",
+			"provisioned_vm_ids":   []any{"i-aaa111", "i-bbb222"},
+		},
+		Status:        StatusDestroying,
+		StatusDetails: map[string]any{"force": true},
+		CreatedByAID:  &creator,
+	}
+	if err := Create(ctx, integrationPool, inc); err != nil {
+		t.Fatalf("Create destroyable: %v", err)
+	}
+	seedSoul(t, "vm-1.example.com", nil)
+	seedSoul(t, "vm-2.example.com", nil)
+	seedMembership(t, "redis-prod", "vm-1.example.com", "vm-2.example.com")
+
+	aw := &fakeAuditWriter{}
+	res, err := DeleteAfterTeardown(ctx, integrationPool, aw, "redis-prod", true, nil)
+	if err != nil {
+		t.Fatalf("DeleteAfterTeardown: %v", err)
+	}
+	if !res.Deleted {
+		t.Fatal("Deleted = false, want true")
+	}
+
+	// (1) The caller is told what was left behind — not a bare success.
+	if res.Unreleased == nil || res.Unreleased.IsEmpty() {
+		t.Fatalf("Unreleased = %+v, want the provider/VMs/hosts the force-destroy did not release", res.Unreleased)
+	}
+	if res.Unreleased.Provider != "example-dev" {
+		t.Errorf("Unreleased.Provider = %q, want example-dev", res.Unreleased.Provider)
+	}
+	if got, want := res.Unreleased.VMIDs, []string{"i-aaa111", "i-bbb222"}; !equalStrings(got, want) {
+		t.Errorf("Unreleased.VMIDs = %q, want %q — these VMs are still running", got, want)
+	}
+	if got, want := res.Unreleased.SIDs, []string{"vm-1.example.com", "vm-2.example.com"}; !equalStrings(got, want) {
+		t.Errorf("Unreleased.SIDs = %q, want %q", got, want)
+	}
+
+	// (2) The membership rows are gone — so (1) could only have been read
+	// inside the deleting transaction, before the cascade.
+	var members int
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM incarnation_membership WHERE incarnation_name = 'redis-prod'`).Scan(&members); err != nil {
+		t.Fatalf("count incarnation_membership: %v", err)
+	}
+	if members != 0 {
+		t.Fatalf("incarnation_membership rows = %d, want 0 — the cascade did not fire, so the ordering claim is untested", members)
+	}
+
+	// (3) The durable record: a terminal archive status that says HOW it ended,
+	// plus the abandoned resources merged into status_details next to the
+	// pre-existing `force` key (merged, not replaced — `force` is the
+	// destroy-intent written by Destroy).
+	var (
+		archStatus  string
+		archDetails map[string]any
+	)
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT status, status_details FROM incarnation_archive WHERE name = 'redis-prod'`).
+		Scan(&archStatus, &archDetails); err != nil {
+		t.Fatalf("select incarnation_archive: %v", err)
+	}
+	if archStatus != ArchiveStatusForceDestroyed {
+		t.Errorf("archive status = %q, want %q — a force-destroy must not be filed as a completed teardown",
+			archStatus, ArchiveStatusForceDestroyed)
+	}
+	if archDetails["force"] != true {
+		t.Errorf("archive status_details.force = %v, want true (the patch replaced the details instead of merging)", archDetails["force"])
+	}
+	unreleased, ok := archDetails["unreleased"].(map[string]any)
+	if !ok {
+		t.Fatalf("archive status_details.unreleased = %v, want the abandoned-resource record", archDetails["unreleased"])
+	}
+	if unreleased["provider"] != "example-dev" {
+		t.Errorf("archived provider = %v, want example-dev", unreleased["provider"])
+	}
+	if got := jsonStringSlice(unreleased["vm_ids"]); !equalStrings(got, []string{"i-aaa111", "i-bbb222"}) {
+		t.Errorf("archived vm_ids = %q, want the two provisioned VMs", got)
+	}
+	if got := jsonStringSlice(unreleased["sids"]); !equalStrings(got, []string{"vm-1.example.com", "vm-2.example.com"}) {
+		t.Errorf("archived sids = %q, want the two member hosts", got)
+	}
+
+	// (4) The same facts reach the audit trail, which is the surface an
+	// operator can still query after the row is gone (GET /v1/audit).
+	if len(aw.events) != 1 || aw.events[0].EventType != audit.EventIncarnationDestroyCompleted {
+		t.Fatalf("audit events = %+v, want one destroy_completed", aw.events)
+	}
+	payload := aw.events[0].Payload
+	if payload["archive_status"] != ArchiveStatusForceDestroyed {
+		t.Errorf("audit archive_status = %v, want %q", payload["archive_status"], ArchiveStatusForceDestroyed)
+	}
+	if payload["teardown"] != "skipped" {
+		t.Errorf("audit teardown = %v, want \"skipped\"", payload["teardown"])
+	}
+	if payload["unreleased"] == nil {
+		t.Error("audit payload carries no unreleased record — the trail says the incarnation was destroyed, not abandoned")
+	}
+}
+
+// equalStrings — order-sensitive slice compare (member SIDs come back sorted).
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestIntegration_DeleteAfterTeardown_SingleWinner — two concurrent calls on

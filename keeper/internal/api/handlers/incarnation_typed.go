@@ -801,8 +801,14 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 
 // IncarnationDestroyView — FLAT domain projection of the 202 body of DELETE /v1/incarnations/{name}
 // (handler-native). Package api projects it into native IncarnationDestroyReply.
+//
+// Unreleased is set ONLY on the force path, where the record is removed without
+// running teardown: the operator must SEE which cloud VMs and hosts outlived the
+// incarnation rather than get a bare success (NIM-395). nil on the regular path —
+// teardown runs asynchronously there, and nothing is abandoned by construction.
 type IncarnationDestroyView struct {
-	ApplyID string
+	ApplyID    string
+	Unreleased *incarnation.UnreleasedResources
 }
 
 // DestroyTyped — extracted domain function DELETE /v1/incarnations/{name}
@@ -880,12 +886,27 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 	if effectiveForce {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		if _, err := incarnation.DeleteAfterTeardown(dctx, h.db, h.auditW, name, effectiveForce, h.logger); err != nil {
+		res, err := incarnation.DeleteAfterTeardown(dctx, h.db, h.auditW, name, effectiveForce, h.logger)
+		if err != nil {
 			h.logger.Error("incarnation.destroy: force delete failed",
 				slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
 			return zero, incProblem(problem.TypeInternalError, "force-destroy delete failed")
 		}
-		return IncarnationDestroyView{ApplyID: applyID}, nil
+		// Teardown was skipped: surface what stayed behind (NIM-395). Logged at
+		// WARN as well as returned — an abandoned VM keeps billing, and the reply
+		// is only read by whoever happened to make the call.
+		if res != nil && !res.Unreleased.IsEmpty() {
+			h.logger.Warn("incarnation.destroy: force-destroy left resources unreleased",
+				slog.String("name", name), slog.String("apply_id", applyID),
+				slog.String("provider", res.Unreleased.Provider),
+				slog.Any("vm_ids", res.Unreleased.VMIDs),
+				slog.Any("sids", res.Unreleased.SIDs))
+		}
+		var unreleased *incarnation.UnreleasedResources
+		if res != nil {
+			unreleased = res.Unreleased
+		}
+		return IncarnationDestroyView{ApplyID: applyID, Unreleased: unreleased}, nil
 	}
 
 	serviceRef, ok := h.services.Resolve(inc.Service)

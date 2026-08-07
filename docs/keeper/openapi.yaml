@@ -1467,6 +1467,8 @@ components:
         apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
+        unreleased:
+          $ref: "#/components/schemas/UnreleasedResourcesReply"
       required:
         - apply_id
       type: object
@@ -4950,6 +4952,27 @@ components:
       required:
         - herald
         - event_types
+      type: object
+    UnreleasedResourcesReply:
+      additionalProperties: false
+      properties:
+        provider:
+          description: cloud Provider name in the registry that owns the VMs below; empty when the incarnation recorded no provisioned cloud — either it provisions none, or the create failed before the driver committed one
+          type: string
+        sids:
+          description: member hosts (incarnation_membership) whose souls, seeds and bootstrap tokens were NOT revoked — the membership rows themselves are gone with the record
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        vm_ids:
+          description: "provider VM ids NOT destroyed — these machines are still running at the provider and must be reclaimed by hand. Empty does NOT mean no machines exist: the ids are read from incarnation.state, which a failed create never committed"
+          items:
+            type: string
+          type:
+            - array
+            - "null"
       type: object
     UpgradePathRef:
       additionalProperties: false

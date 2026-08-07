@@ -167,6 +167,16 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		}
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
+	// NIM-395 force-destroy capture: SELECT state … status = 'destroying', read
+	// inside the deleting tx to record what teardown never released. Must come
+	// BEFORE the generic "WHERE name = $1" match (the same predicate is here
+	// too). Carries real provisioned resources rather than `{}` — an empty
+	// object would be produced by an implementation that captures nothing.
+	if strings.Contains(sql, "SELECT state") && strings.Contains(sql, "status = 'destroying'") {
+		return staticRow{values: []any{
+			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
+		}}
+	}
 	if strings.Contains(sql, "FROM incarnation\nWHERE name") || strings.Contains(sql, "WHERE name = $1") {
 		if f.selectByNameRow != nil {
 			return f.selectByNameRow(args[0].(string))

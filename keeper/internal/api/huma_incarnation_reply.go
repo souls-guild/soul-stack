@@ -121,6 +121,32 @@ type IncarnationRerunLastReply struct {
 // IncarnationDestroyReply — native 202 body for DELETE /v1/incarnations/{name} (apply_id).
 type IncarnationDestroyReply struct {
 	ApplyID string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
+	// Unreleased — present ONLY when teardown was skipped (allow_destroy=true, or a
+	// service with lifecycle.auto_destroy disabled): the record is gone but nothing
+	// was released. Absent on the regular path, where teardown runs asynchronously.
+	Unreleased *UnreleasedResourcesReply `json:"unreleased,omitempty"`
+}
+
+// UnreleasedResourcesReply — infrastructure that outlived a force-destroyed
+// incarnation (NIM-395). Removing the record and releasing the resource are
+// different operations, and force does only the first: the `destroy` scenario
+// never runs, so the cloud VMs keep running — and keep billing — while the
+// membership relation that named their hosts is deleted with the record.
+//
+// The same set is written to `incarnation_archive.status_details.unreleased` and
+// to the `incarnation.destroy_completed` audit event, which is where to look for
+// it after the fact. The whole object is OMITTED when force ran with nothing to
+// abandon — an empty `{}` would leave the operator deciding whether it meant
+// "checked, clean" or "could not tell".
+//
+// Each field is a dimension of its own, not a restatement of the others: a
+// create that failed before the driver committed its ids leaves registered hosts
+// and no `vm_ids`, and a service that provisions no cloud leaves hosts and no
+// `provider`. Read them together, not as one number.
+type UnreleasedResourcesReply struct {
+	Provider string   `json:"provider,omitempty" doc:"cloud Provider name in the registry that owns the VMs below; empty when the incarnation recorded no provisioned cloud — either it provisions none, or the create failed before the driver committed one"`
+	VMIDs    []string `json:"vm_ids,omitempty" doc:"provider VM ids NOT destroyed — these machines are still running at the provider and must be reclaimed by hand. Empty does NOT mean no machines exist: the ids are read from incarnation.state, which a failed create never committed"`
+	SIDs     []string `json:"sids,omitempty" doc:"member hosts (incarnation_membership) whose souls, seeds and bootstrap tokens were NOT revoked — the membership rows themselves are gone with the record"`
 }
 
 // IncarnationGetReply — native body for GET /v1/incarnations/{name} (and PATCH .../hosts, list element).
@@ -229,7 +255,15 @@ func newIncarnationRerunLastReply(v handlers.IncarnationRerunLastView) Incarnati
 }
 
 func newIncarnationDestroyReply(v handlers.IncarnationDestroyView) IncarnationDestroyReply {
-	return IncarnationDestroyReply{ApplyID: v.ApplyID}
+	out := IncarnationDestroyReply{ApplyID: v.ApplyID}
+	if v.Unreleased != nil {
+		out.Unreleased = &UnreleasedResourcesReply{
+			Provider: v.Unreleased.Provider,
+			VMIDs:    v.Unreleased.VMIDs,
+			SIDs:     v.Unreleased.SIDs,
+		}
+	}
+	return out
 }
 
 // newIncarnationGetReply projects the flat domain handlers.IncarnationGetView into native.

@@ -174,6 +174,23 @@ Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/i
 | Field | Type | Meaning |
 |---|---|---|
 | `_apply_id` | `string` (ULID) | Launch ID. |
+| `unreleased` | `object` | **Force path only**, omitted when the incarnation was holding nothing. What the demolition did NOT release: `provider` (cloud Provider owning the VMs), `vm_ids` (machines still running at the provider), `sids` (member hosts whose soul/seed/token were not revoked). See [`DELETE /v1/incarnations/{name}`](../operator-api/incarnations.md) for the capture rules. |
+
+`allow_destroy=true` deletes the record without releasing anything, so a bare
+`_apply_id` must not be read as "cleaned up" — check `unreleased` and reclaim what
+it names. The same record is written to `incarnation_archive.status_details` and to
+the `incarnation.destroy_completed` audit event.
+
+The three fields are three separate statements. Empty `vm_ids` is not "no
+machines": the ids reach `state` only when a run commits its `state_changes`, so
+a `create` that provisioned machines and then failed — the case this field exists
+for — leaves them running with no ids recorded, and `sids` is what still names
+the hosts. Being read from service-authored state, `provider` and `vm_ids` are
+masked; `sids` are keeper-owned FQDNs and are not.
+
+This tool has its own `outputSchema` rather than sharing the plain apply-id one:
+that schema is closed (`additionalProperties: false`), so a shared declaration
+would make a validating client drop the very field the warning lives in.
 
 #### `keeper.incarnation.traits-set`
 

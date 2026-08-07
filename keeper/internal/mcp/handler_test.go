@@ -62,6 +62,11 @@ type fakePool struct {
 	// amend R1, parity with REST insertArgs).
 	insertIncArgs []any
 
+	// memberSIDs — backing for the `incarnation_membership` roster read that a
+	// force destroy takes before the FK cascade wipes the relation (NIM-395).
+	// nil → an incarnation with no member hosts.
+	memberSIDs []string
+
 	// lastScenarioFn — backing for the rerun-last probe `SELECT scenario, apply_id FROM
 	// state_history … ORDER BY history_id DESC LIMIT 1` (UnlockForRerun last-run).
 	// nil → returns the creating scenario's name from the incFn row (default
@@ -234,6 +239,16 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return errRow{err: pgx.ErrNoRows}
 	}
+	// NIM-395 force-destroy capture: SELECT state … status = 'destroying', read
+	// inside the deleting tx to record what teardown never released. Checked
+	// BEFORE the general `FROM incarnation` match. Carries real provisioned
+	// resources rather than `{}` — an empty object would be produced by an
+	// implementation that captures nothing.
+	if contains(sql, "SELECT state") && contains(sql, "status = 'destroying'") {
+		return staticRow{values: []any{
+			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
+		}}
+	}
 	// SelectByName / existence-probe (full incarnation row).
 	if contains(sql, "FROM incarnation") {
 		if f.incFn == nil {
@@ -274,6 +289,18 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 }
 
 func (f *fakePool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	// Membership roster: SELECT sid FROM incarnation_membership. Must come
+	// BEFORE the incarnation branch — "FROM incarnation" is a prefix of
+	// "FROM incarnation_membership", so the list branch would answer this
+	// plausibly (scanning a name into the sid) instead of admitting it does not
+	// understand the query.
+	if contains(sql, "FROM incarnation_membership") {
+		rows := make([]staticRow, 0, len(f.memberSIDs))
+		for _, sid := range f.memberSIDs {
+			rows = append(rows, staticRow{values: []any{sid}})
+		}
+		return &sidRows{rows: rows}, nil
+	}
 	// list items: SELECT name, service, … FROM incarnation … OFFSET/LIMIT.
 	if contains(sql, "FROM incarnation") {
 		items, _ := f.listItems(incarnation.ListFilter{})
@@ -529,6 +556,29 @@ func (r *historyRows) FieldDescriptions() []pgconn.FieldDescription { return nil
 func (r *historyRows) Values() ([]any, error)                       { return nil, nil }
 func (r *historyRows) RawValues() [][]byte                          { return nil }
 func (r *historyRows) Conn() *pgx.Conn                              { return nil }
+
+// sidRows — a single-column pgx.Rows of SIDs (the membership roster read).
+type sidRows struct {
+	rows []staticRow
+	idx  int
+}
+
+func (r *sidRows) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+
+func (r *sidRows) Scan(dest ...any) error                       { return r.rows[r.idx-1].Scan(dest...) }
+func (r *sidRows) Err() error                                   { return nil }
+func (r *sidRows) Close()                                       {}
+func (r *sidRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *sidRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *sidRows) Values() ([]any, error)                       { return nil, nil }
+func (r *sidRows) RawValues() [][]byte                          { return nil }
+func (r *sidRows) Conn() *pgx.Conn                              { return nil }
 
 type staticRow struct {
 	values []any
@@ -843,6 +893,72 @@ func callTool(t *testing.T, h *Handler, aid, tool, argsJSON string) jsonRPCRespo
 		t.Fatal("tools/call must not be a notification")
 	}
 	return resp
+}
+
+// assertStructuredMatchesOutputSchema checks that every key a tool actually put
+// into `structuredContent` is declared by that tool's own `outputSchema`.
+//
+// Why this is not covered by "outputSchema != nil": a client that validates the
+// result against the declared schema drops — or rejects outright — any key the
+// schema does not name, because our object schemas set
+// `additionalProperties: false`. So a tool can emit a field, pass every one of
+// our own tests, and still have that field never reach the agent. NIM-395 hit
+// exactly this: `unreleased` was emitted against a schema that forbade it, i.e.
+// the warning the ticket exists to deliver was the field being stripped.
+//
+// Deliberately a one-way check with no dependency: it walks the *response* and
+// asks the schema about each key. It does not validate types, `required`, or
+// anything the response does not contain — a full JSON Schema validator is not
+// in the keeper module and is not worth pulling in for this.
+//
+// rawResult is the marshaled `tools/call` result object.
+func assertStructuredMatchesOutputSchema(t *testing.T, tool string, rawResult []byte) {
+	t.Helper()
+	e, ok := toolByName(tool)
+	if !ok {
+		t.Fatalf("tool %q missing from catalogManifest", tool)
+	}
+	if e.decl.OutputSchema == nil {
+		t.Fatalf("tool %q declares no outputSchema", tool)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(e.decl.OutputSchema, &schema); err != nil {
+		t.Fatalf("tool %q outputSchema is not valid JSON: %v", tool, err)
+	}
+	var res struct {
+		Structured map[string]any `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(rawResult, &res); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if res.Structured == nil {
+		t.Fatalf("tool %q returned no structuredContent to check", tool)
+	}
+	assertObjectDeclared(t, tool, "structuredContent", res.Structured, schema)
+}
+
+// assertObjectDeclared reports keys present in value but absent from the
+// schema's `properties`, then recurses into declared object properties.
+// A schema that does not set `additionalProperties: false` is permissive by
+// definition, so undeclared keys there are not a finding — but declared
+// sub-objects are still walked.
+func assertObjectDeclared(t *testing.T, tool, path string, value, schema map[string]any) {
+	t.Helper()
+	props, _ := schema["properties"].(map[string]any)
+	closed := schema["additionalProperties"] == false
+	for k, v := range value {
+		sub, declared := props[k].(map[string]any)
+		if !declared {
+			if closed {
+				t.Errorf("tool %q emits %s.%s, which its own outputSchema does not declare "+
+					"(additionalProperties:false) — a schema-validating client drops it", tool, path, k)
+			}
+			continue
+		}
+		if obj, isObj := v.(map[string]any); isObj {
+			assertObjectDeclared(t, tool, path+"."+k, obj, sub)
+		}
+	}
 }
 
 func claims(aid string) *keeperjwt.Claims {

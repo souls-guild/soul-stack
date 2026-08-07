@@ -2091,6 +2091,37 @@ order to act in.
   sized for a real VM boot, and its diagnostics name the attempt, the budget and
   the elapsed time instead of a bare timeout.
 
+- **A forced destroy no longer reports success as though the resources had been
+  released.** `force` skips the teardown scenario by design — it exists for an
+  incarnation whose hosts are already unreachable — but it then archived the row
+  under the transient status `destroying` and deleted it, and the record of which
+  provider and which VM ids that incarnation had been holding went with it. The
+  operator was told the incarnation was destroyed; the VMs were still running and
+  still billed, and there was no longer anywhere to look up what they were.
+
+  Three things change, none of which needs a migration. The archive now carries a
+  terminal status of its own — `destroyed` for a completed teardown,
+  `force_destroyed` for a skipped one — so an archived row states which of the two
+  it was instead of freezing whatever status the row happened to hold mid-flight.
+  A force collects what it is abandoning **before** the delete and in the same
+  transaction, and writes it into `incarnation_archive.status_details`: the cloud
+  provider, the provisioned VM ids, and the member SIDs — the last of which is
+  otherwise lost the instant `incarnation_membership` cascades. The same record
+  reaches the caller as `unreleased` on
+  `DELETE /v1/incarnations/{name}?allow_destroy=true` and on the MCP tool
+  `keeper.incarnation.destroy`, alongside a WARN in Keeper's log and an
+  `unreleased` key on the `incarnation.destroy_completed` audit event. A force that
+  abandoned nothing omits the key in all of those places rather than writing an
+  empty object — `force_destroyed` already records that teardown was skipped, and
+  `{}` would only raise the question of whether it means "checked, clean" or
+  "could not tell".
+
+  What this deliberately does not do is release anything. `force` still means "I
+  know these hosts are gone, delete the record"; what changes is that it now says
+  so in the operator's words and hands over the identifiers needed to clean up by
+  hand. An explicit resource-level confirmation gate ahead of a destructive force
+  is a separate decision, filed as NIM-519.
+
 - **The embedded web UI bundle matched the companion build again.** Keeper serves
   `/ui` from a committed copy of the companion's build, and the companion had
   moved on without a paired re-sync, so a built Keeper served a bundle in which
