@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1150,7 +1150,7 @@ sign:
 GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
-	check-vuln@build lint@build trial@build check-e2e-cloud check-gate
+	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 check:
@@ -1255,6 +1255,21 @@ check-e2e-set:
 # output. Docker-free, about a second.
 check-gate:
 	@scripts/gate-test.sh
+
+# check-ci-status — the guard on check-ci's report (NIM-393). Same reason
+# check-gate exists, one tool over: ci-status.sh is what answers "has CI verified
+# THIS sha", so a regression there is invisible by construction — it misreports
+# the very thing you would use to notice. It took best-outcome-per-workflow,
+# which is right for an evicted attempt and wrong for a failed one: a red attempt
+# followed by a green rerun printed VERIFIED with no trace of the red.
+#
+# The guard runs ci-status.sh against a `gh` stub serving pinned fixtures from
+# the real API, applying the script's own jq filters — so trimming a filter goes
+# red here rather than silently un-reporting. Docker-free and network-free (it
+# has to be: a test whose subject is "the report omits nothing" cannot depend on
+# which runs GitHub still retains), about a second.
+check-ci-status:
+	@scripts/ci-status-test.sh
 
 check-all:
 	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
