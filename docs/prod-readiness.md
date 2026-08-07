@@ -53,7 +53,7 @@ Rule `reclaim_apply_runs` (Reaper picks up runs stuck after a Keeper instance cr
 ### 6. External pentest + identity spaces
 
 - Independent **external pentest** was not performed ([known-limitations.md → pentest](known-limitations.md#external-pentest---not-carried-out-internal-gate-is-sufficient-for-beta)); for GA - required.
-- **No immediate JWT revocation** before `exp`: after `revoke` Archon its tokens live until expiration, emergency revocation - only by signing-key rotation ([known-limitations.md → Identity](known-limitations.md#operator-identity-jwt-only)).
+- **Immediate operator revocation - closed** (2026-08-07, NIM-421): after `revoke` the Archon's live tokens are refused with `401 operator-revoked-token` on every authenticated route, without a JWT blocklist ([ADR-014 amendment](adr/0014-operator-identity.md)). Signing-key rotation is still the answer for a *leaked* key or a stolen token, which revocation does not address.
 - **mTLS-cert identity operator** - post-MVP ([ADR-014](adr/0014-operator-identity.md)); for GA close either immediate revoke or machine-identity.
 
 ### 7. Remove `continue-on-error: true` from three check classes in CI

@@ -73,6 +73,68 @@ type ActionHolder interface {
 	HoldsAction(aid, resource, action string) bool
 }
 
+// RevocationChecker — the narrow surface [RejectRevoked] needs: is this AID in
+// the snapshot's revoked projection (ADR-014 Amendment 2026-05-27). Implemented
+// by both [rbac.Enforcer] and [rbac.Holder], like [PermissionChecker] and
+// [ActionHolder].
+type RevocationChecker interface {
+	IsRevoked(aid string) bool
+}
+
+// RejectRevoked — a middleware factory that turns a revoked Archon away with 401
+// before any per-route authorization runs. Must be used immediately after
+// [RequireJWT], once per authenticated chain — NOT per route.
+//
+// Why a chain-level link rather than a branch inside the per-route gates
+// (NIM-421 / NIM-356): "revoked" and "lacks the permission" are different
+// states and a client must be able to tell them apart, but a per-route gate can
+// only answer for the routes that carry it. Three groups of routes existed
+// before this middleware, and only the first was right:
+//
+//   - [RequirePermission] routes → 401, correct: [PermissionChecker.Check]
+//     returns [rbac.ErrOperatorRevoked] and the gate maps it.
+//   - [RequireAction] routes → 403 "operator lacks required permission …", wrong:
+//     [ActionHolder.HoldsAction] returns a bare bool, so the reason cannot
+//     travel — a revoked Archon is indistinguishable from an under-privileged one.
+//   - routes with NO RBAC gate at all (the read-your-own catalogs:
+//     `/v1/me/permissions`, `/v1/permissions`, `/v1/event-types`,
+//     `/v1/herald-types`) → 200, served indefinitely.
+//
+// Sitting on the chain covers all three by construction, including any route
+// added later: an authenticated request is either from a live Archon or it is
+// refused here. The per-route revoked branches stay in place as defence in
+// depth (a chain assembled without this link still denies, just with the old
+// code); they are no longer the only line.
+//
+// Scope is this router. MCP is a separate listener verifying the same JWTs on
+// its own mux, so this link does not run there (NIM-551).
+//
+// Missing claims → 500, parity with [RequirePermission]: the JWT middleware did
+// not run, which is a chain configuration error and not the client's. A nil
+// checker is the same class of wiring error and fails closed for the same
+// reason — a security gate that cannot answer must not wave the request on.
+func RejectRevoked(rc RevocationChecker) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := ClaimsFromContext(r.Context())
+			if !ok {
+				WriteInternal(w, r)
+				return
+			}
+			if rc == nil {
+				WriteInternal(w, r)
+				return
+			}
+			if rc.IsRevoked(claims.Subject) {
+				problem.Write(w, problem.New(problem.TypeOperatorRevokedToken, r.URL.Path,
+					"archon "+claims.Subject+" has been revoked"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // RequirePermission — a middleware factory. Must be used after
 // [RequireJWT] (otherwise ClaimsFromContext returns ok=false → 500 logic, not
 // 401: a missing JWT is a server configuration error, not the user's).

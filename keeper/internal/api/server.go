@@ -500,9 +500,14 @@ type Deps struct {
 // ActionHolder (ADR-047 §g G1) — the existence gate of read endpoints
 // ([apimiddleware.RequireAction]): read-souls routes are gated on "does the operator
 // hold soul.list AT ALL", with scope narrowing done by the handler after fetching the rows.
+//
+// RevocationChecker (ADR-014 Amendment 2026-05-27, NIM-421) — the chain-level
+// revoked gate ([apimiddleware.RejectRevoked]), which runs once per authenticated
+// request rather than per route, so a route without an RBAC gate is covered too.
 type RBACProvider interface {
 	apimiddleware.PermissionChecker
 	apimiddleware.ActionHolder
+	apimiddleware.RevocationChecker
 	handlers.RBACSource
 	handlers.PurviewResolver
 	handlers.PermissionsLister

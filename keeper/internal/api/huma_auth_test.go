@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -174,8 +175,14 @@ func TestLDAPLogin_NoRoleMappingIs403(t *testing.T) {
 	}
 }
 
-// TestLDAPLogin_RevokedIs403 — ErrOperatorRevoked → 403, JWT NOT issued.
-func TestLDAPLogin_RevokedIs403(t *testing.T) {
+// TestLDAPLogin_RevokedIs401 — ErrOperatorRevoked → 401, JWT NOT issued.
+//
+// 401, not 403 (NIM-421): federated login used to answer 403 here while the
+// Bearer surface answered 401 for the same state, so a client could not tell
+// "your account is gone" from "you lack this permission" — and on the login form
+// the difference is the whole message. The neighbouring
+// TestLDAPLogin_NoRoleMappingIs403 pins the state that legitimately keeps 403.
+func TestLDAPLogin_RevokedIs401(t *testing.T) {
 	issuer := &loginStubIssuer{token: "x"}
 	d := &LDAPAuthDeps{
 		Authenticator: stubAuthenticator{ext: auth.ExternalIdentity{AID: "carol"}},
@@ -185,8 +192,12 @@ func TestLDAPLogin_RevokedIs403(t *testing.T) {
 		Audit:         &authTestAudit{},
 	}
 	rec := doLogin(mountLogin(d))
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (revoked)", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (revoked)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), problem.TypeOperatorRevokedToken) {
+		t.Errorf("body must carry the %s problem type, got %s",
+			problem.TypeOperatorRevokedToken, rec.Body.String())
 	}
 	if issuer.gotAID != "" {
 		t.Errorf("revoked operator must not get a JWT (issuer called with %q)", issuer.gotAID)

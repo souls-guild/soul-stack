@@ -16,6 +16,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
@@ -305,7 +306,16 @@ func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 // --- 5. Revoked ---
 
 // TestAuthTokenExchange_Revoked_401 — a cookie of a revoked AID → 401, the
-// issuer is NOT called (no token issued).
+// issuer is NOT called (no token issued), and the problem type says *revoked*
+// rather than the generic unauthenticated (NIM-421).
+//
+// The type matters as much as the status here. This is the browser's path, and
+// the point of NIM-421 is that a client can tell "your identity is gone, a fresh
+// token will not help" from "your token expired, get another" — answering the
+// generic code on the cookie exchange would reintroduce exactly the conflation
+// the gate removes elsewhere. The subtest below is the negative control: without
+// it, asserting one string proves nothing, since a handler that returned the
+// revoked type for *every* refusal would pass just as happily.
 func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	session, _ := issuer.Issue("archon-fired", []string{"cluster-admin"}, time.Hour, false)
@@ -325,6 +335,21 @@ func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 	if spy.gotAID != "" {
 		t.Errorf("revoked → issuer called with %q (no token should be issued)", spy.gotAID)
 	}
+	if !strings.Contains(rec.Body.String(), problem.TypeOperatorRevokedToken) {
+		t.Errorf("revoked AID: want problem type %q, got body=%s",
+			problem.TypeOperatorRevokedToken, rec.Body.String())
+	}
+
+	t.Run("live AID with an unverifiable cookie stays generic", func(t *testing.T) {
+		rec := postExchange(h, "not-a-jwt", nil)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("bad cookie: status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), problem.TypeOperatorRevokedToken) {
+			t.Errorf("a cookie that simply failed to verify must NOT be reported as revoked; body=%s",
+				rec.Body.String())
+		}
+	})
 }
 
 // --- 6. Sec-Fetch allowlist (block ONLY cross-site) ---

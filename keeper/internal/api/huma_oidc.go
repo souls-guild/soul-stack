@@ -190,8 +190,10 @@ func oidcLoginProblem(err error) huma.StatusError {
 		return humaProblemError{Details: problemWithStatus(problem.TypeUnauthenticated, http.StatusUnauthorized, "authentication failed")}
 	case errors.Is(err, auth.ErrNoRoleMapping):
 		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "no mapped group")}
+	// ErrOperatorRevoked → 401, parity with ldapLoginProblem (NIM-421); see the
+	// rationale there.
 	case errors.Is(err, auth.ErrOperatorRevoked):
-		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "operator revoked")}
+		return humaProblemError{Details: problemWithStatus(problem.TypeOperatorRevokedToken, http.StatusUnauthorized, "operator revoked")}
 	case errors.Is(err, auth.ErrProvisioningDisabled):
 		return humaProblemError{Details: problemWithStatus(problem.TypeProvisioningMethodDisabled, http.StatusForbidden, "operator provisioning is disabled for this method by policy")}
 	default:

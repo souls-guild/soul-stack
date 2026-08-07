@@ -197,9 +197,11 @@ func recordFailureFor(ctx context.Context, guard LoginGuard, cfg AuthLoginLimitC
 const defaultLockedRetry = 60 * time.Second
 
 // isAuthFailure — the response codes treated as a failed authentication for the
-// failure counter: 401 (bad credentials, ErrAuthFailed) and 403 (revoked / no role
-// mapping / provisioning disabled). 2xx/302 (success) and 5xx (our own error) are NOT
-// a user failure, the counter is left untouched.
+// failure counter: 401 (bad credentials ErrAuthFailed, and since NIM-421 a revoked
+// operator too) and 403 (no role mapping / provisioning disabled). Both are counted,
+// so moving the revoked case from 403 to 401 did not change what the lockout sees.
+// 2xx/302 (success) and 5xx (our own error) are NOT a user failure, the counter is
+// left untouched.
 func isAuthFailure(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }

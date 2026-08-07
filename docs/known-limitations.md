@@ -54,7 +54,7 @@ Independent external pentest was **not running** at the time of beta. The limit 
 
 The Archon credential form in beta is **JWT** (HS256, signing-key from Vault). mTLS-cert form and transit signature JWT - post-MVP, extension via `auth_method` enum without breaking changes ([ADR-014](adr/0014-operator-identity.md), [operations/bootstrap-rbac.md → Machine-identity](operations/bootstrap-rbac.md#machine-identity-ci--scripts)).
 
-**Immediate recall of all living JWTs** is missing in beta: after `revoke` Archon, his active tokens work until `exp`. Emergency revocation - only through signing-key rotation ([operations/bootstrap-rbac.md → Emergency revocation](operations/bootstrap-rbac.md)). Protection - short `ttl_default`.
+**Revoking an Archon takes effect immediately** (2026-08-07, NIM-421): its live tokens are refused with `401 operator-revoked-token` on every authenticated route from the next request. What is still missing is revocation of an **individual token** - there is no blocklist, so a token that leaked without the Archon being revoked stays valid until `exp`, and the answer to that case remains signing-key rotation ([operations/bootstrap-rbac.md → Emergency revocation](operations/bootstrap-rbac.md)) plus a short `ttl_default`. On the **MCP** surface a revoked operator is likewise refused every tool, but the refusal is still rendered as `forbidden` rather than a distinct revoked code, and two paths are not closed at all: `initialize` / `tools/list` (handshake and catalog enumeration, no data) and the SSE event stream for an apply the operator started herself, which stays readable until the stream drops (NIM-551).
 
 ### Push (agentless via SSH) - narrow profile
 

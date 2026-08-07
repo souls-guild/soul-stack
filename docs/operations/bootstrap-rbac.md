@@ -184,7 +184,7 @@ All RBAC operations are written to `audit_log` ([ADR-022](../adr/0022-audit-pipe
 1. The current Archon (or another `cluster-admin`) creates a new one: `POST /v1/operators` + `role.grant-operator`.
 2. Issues JWT to new: `POST /v1/operators/archon-new/issue-token`.
 3. **Across the TTL** intersection the old Archon roars: `POST /v1/operators/archon-old/revoke`.
-4. Live old JWTs work until `exp` (`ttl_default: 24h`) - the operator uses the old token until it expires, then stops. If you need to revoke **immediately**, rotate the signing-key (see above).
+4. The old Archon's live JWTs stop working **at once** (2026-08-07, NIM-421): every authenticated route answers `401 operator-revoked-token` from the next request, so the handover window is the one you plan in step 3, not `ttl_default`. Signing-key rotation (see above) is for a different case - a leaked *key* or a stolen *token* whose Archon you are not revoking.
 
 ### Machine-identity (CI / scripts)
 

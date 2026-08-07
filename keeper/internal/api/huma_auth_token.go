@@ -149,8 +149,21 @@ func registerHumaAuthTokenExchange(humaAPI huma.API, d *AuthTokenDeps) {
 		}
 		// 4. Revoked check against the in-memory RBAC snapshot (map-lookup): a
 		// revoked Archon cannot exchange an otherwise-live cookie for a new Bearer.
+		// Typed operator-revoked-token, not the generic 401 (NIM-421): this is the
+		// browser's path, and the whole point of the ticket is that the client can
+		// tell "your identity is gone, a fresh token will not help" from "your token
+		// expired, get another". Answering the generic code here would reintroduce
+		// on the cookie exchange exactly the conflation the gate removes elsewhere.
+		//
+		// "Can tell" is a statement about the contract, not about today's UI: the
+		// vendored web bundle does not mention operator-revoked-token anywhere and
+		// renders one generic string for any 401 (NIM-557). The distinction has to
+		// exist on the wire before a client can act on it; this is that half.
+		// Anti-oracle holds: reachable only after the cookie verified, so it
+		// discloses nothing an authenticated caller does not already know.
 		if d.Revoked != nil && d.Revoked.IsRevoked(claims.Subject) {
-			return nil, authTokenUnauthenticated("")
+			return nil, humaProblemError{Details: problemWithStatus(
+				problem.TypeOperatorRevokedToken, http.StatusUnauthorized, "operator revoked")}
 		}
 		// 5. TTL cap on cookie.exp: the issued Bearer cannot outlive the source session.
 		ttl := d.TTL

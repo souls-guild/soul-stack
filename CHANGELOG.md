@@ -1147,6 +1147,65 @@ order to act in.
   [deb-onboarding.md §9](docs/operations/deb-onboarding.md) for what each refusal
   means, since the message deliberately does not quote the value to go fix.
 
+- **Revoking an Archon neither took effect where the operator was standing, nor
+  said what had happened.** ADR-014's 2026-05-27 amendment promised two things —
+  a revoked token answers `401` on verify, and the window is single-digit
+  milliseconds. A sweep of a live two-node stand held up neither.
+
+  Of 45 parameterless routes, a revoked token got `401` on 24, `403 operator
+  lacks required permission …` on 8, and `200` on 4. The split follows the gate,
+  not the intent: `RequirePermission` asks `Check`, which can answer
+  `ErrOperatorRevoked`; the existence-gate `RequireAction` asks
+  `HoldsAction() bool`, and a bare bool has nowhere to put a reason. So the same
+  state came back as a permission problem — telling a client to go ask for a
+  grant that cannot exist, since the identity is what was withdrawn. The four
+  `200`s (`/v1/me/permissions`, `/v1/permissions`, `/v1/event-types`,
+  `/v1/herald-types`) carry no RBAC gate at all and simply kept serving, for as
+  long as the token's `exp` allowed. `/auth/ldap/login` and
+  `/auth/oidc/callback` answered `403` for the same state, so a login form could
+  not tell a removed account from a missing group either.
+
+  The timing failed on the node that matters most. `rbac:invalidate` messages
+  are self-filtered by origin KID, and the publishing node had no local refresh —
+  so the one node guaranteed not to learn about a revoke was the node that
+  performed it, and it fell back to the 10s TTL poll. Measured: a subscriber
+  flipped in 0.04–0.06s, the origin took 9.82, 9.82 and 10.19s. The operator who
+  presses revoke is normally talking to that node.
+
+  Revocation is no longer a per-route concern. `RejectRevoked` is one middleware
+  link installed immediately after `RequireJWT`, so every authenticated route
+  answers `401 operator-revoked-token` — the ones that were already right, the
+  ones that said `403`, the ones with no gate at all, the two spec routes outside
+  `/v1`, and any route added later, which is the point of putting it in the chain
+  rather than on the routes. Federated login answers `401` for a revoked operator
+  too. The invalidator now also refreshes its own snapshot, wired unconditionally
+  so that a Redis-less single-node stand gets it as well. It publishes to the
+  cluster first and refreshes locally second: both halves read the same committed
+  rows, so the order cannot change what any node converges on — only how fast the
+  other nodes hear, and the local refresh is the slower of the two. If that
+  refresh fails it is logged and the TTL poll takes over, because the revoke has
+  already committed and must not be reported as failed. Also on the cookie
+  exchange `POST /auth/token`: a revoked session now gets the same typed `401`
+  instead of the generic one, so the browser's own refresh path can tell the two
+  apart. The shipped web UI does not yet act on the distinction (NIM-557).
+
+  **Clients must treat `401 operator-revoked-token` as a logout, not a retry.**
+  `403` still means what it meant — this identity may not do this — and
+  `ErrNoRoleMapping` / `ErrProvisioningDisabled` stay `403` on the login path.
+  Nothing that was permitted becomes refused: the only requests whose answer
+  changes belong to Archons that were already revoked. No OpenAPI change; both
+  federated endpoints already declared `401`.
+
+  This covers the HTTP surface. MCP is a separate listener that verifies the JWT
+  itself, so `RejectRevoked` does not run there: a revoked operator is refused
+  every one of the 94 tools by the same `Check`, but the refusal still reads
+  `forbidden` / "operator lacks required permission X" — the same conflation,
+  left standing on the other door. Two MCP paths are not gated at all:
+  `initialize` / `tools/list` (handshake and catalog, no data), and the SSE
+  stream of an apply the operator started herself, which `authorizeSSE`
+  short-circuits before it reaches `Check`. All of it is tracked as NIM-551. The
+  timing fix is surface-independent and applies to MCP as well.
+
 - **Federated role reconciliation could empty the cluster's admin set, and no
   operator had to be involved** ([ADR-058(d)](docs/adr/0058-operator-auth-ldap-oidc.md)
   amendment 2026-07-29). LDAP/OIDC login revokes the mapped roles a user's groups no

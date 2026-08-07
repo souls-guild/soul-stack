@@ -37,6 +37,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	keeperpg "github.com/souls-guild/soul-stack/keeper/internal/pg"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
@@ -934,27 +935,78 @@ func (p summonsPublisher) PublishSummons(ctx context.Context) error {
 	return err
 }
 
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
+// rbacInvalidatePublishTimeout bounds the cluster fan-out publish.
 const rbacInvalidatePublishTimeout = time.Second
 
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
-// Keeper command runtime helper note.
+// rbacInvalidateRefreshTimeout bounds the LOCAL snapshot reload. Larger than the
+// publish budget — this one is a DB round-trip over the whole RBAC projection,
+// not a single Redis command. On timeout the TTL-poll remains the backstop.
+const rbacInvalidateRefreshTimeout = 2 * time.Second
+
+// rbacInvalidator is the post-commit RBAC invalidation hook shared by
+// rbac.Service and operator.Service. It does BOTH halves of the propagation:
+//
+//   - refreshes the LOCAL snapshot, so the node that performed the mutation
+//     enforces it on its very next request;
+//   - publishes on `rbac:invalidate`, so the other nodes refresh theirs.
+//
+// The local half is NIM-421. Until then only the publish existed, and the
+// pub/sub self-filter (keeperredis.SubscribeRBACInvalidate drops its own
+// origin_kid) meant the mutating node was the ONE node that did not learn about
+// its own revoke — it waited out its TTL poll. Measured on a two-node stand: the
+// subscriber flipped in ~0.05s, the origin took up to 10.19s, i.e. the operator
+// who pressed "revoke" kept serving that token the longest. That contradicts the
+// "JWT immediate revoke" the projection is named after (ADR-014 Amendment
+// 2026-05-27, rbac/repository.go).
+//
+// redis nil → single-node (or Redis not configured): the local half still runs,
+// and there is no one to fan out to. Both halves are best-effort — a revoke that
+// committed must not be reported as failed because propagation was slow; the TTL
+// poll still converges.
 type rbacInvalidator struct {
+	holder *rbac.Holder
 	redis  *keeperredis.Client
 	kid    string
 	logger *slog.Logger
 }
 
+// newRBACInvalidator — the only way the daemon builds one. holder is positional
+// and required on purpose (NIM-421): the local-refresh half of immediate
+// revocation is invisible to the unit tests, which construct the struct by hand,
+// so an omitted `holder:` in a composite literal would silently restore the
+// 10-second TTL-poll window with every test still green. As an argument, dropping
+// it is a compile error instead.
+func newRBACInvalidator(holder *rbac.Holder, redis *keeperredis.Client, kid string, logger *slog.Logger) rbacInvalidator {
+	return rbacInvalidator{holder: holder, redis: redis, kid: kid, logger: logger}
+}
+
 func (i rbacInvalidator) Invalidate(_ context.Context) {
-	// Keeper command runtime helper note.
-	// Keeper command runtime helper note.
-	ctx, cancel := context.WithTimeout(context.Background(), rbacInvalidatePublishTimeout)
+	// Detached from the request context on purpose: the caller has already
+	// committed, and a client that hangs up must not leave this node enforcing a
+	// snapshot it knows to be stale.
+	//
+	// Publish BEFORE the local refresh. Both halves read the same committed rows,
+	// so the order cannot change what anyone converges on — only how fast. The
+	// publish is one Redis command; the refresh is a DB round-trip under a
+	// multi-second timeout. Refreshing first would hold every *other* node on the
+	// stale snapshot for that whole round-trip, taxing the fan-out that already
+	// worked to pay for the origin-node fix. The origin still refreshes
+	// synchronously before this returns, so its own read-your-writes is unchanged.
+	if i.redis != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), rbacInvalidatePublishTimeout)
+		if _, err := keeperredis.PublishRBACInvalidate(ctx, i.redis, i.kid); err != nil {
+			i.logger.Warn("rbac: cluster-invalidate publish failed", slog.Any("error", err))
+		}
+		cancel()
+	}
+	if i.holder == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), rbacInvalidateRefreshTimeout)
 	defer cancel()
-	if _, err := keeperredis.PublishRBACInvalidate(ctx, i.redis, i.kid); err != nil {
-		i.logger.Warn("rbac: cluster-invalidate publish failed", slog.Any("error", err))
+	if err := i.holder.Refresh(ctx); err != nil {
+		i.logger.Warn("rbac: local snapshot refresh after mutation failed, falling back to TTL-poll",
+			slog.Any("error", err))
 	}
 }
 

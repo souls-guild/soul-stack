@@ -2982,8 +2982,12 @@ func (d *daemon) setupRBACInvalidation(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
+	// The invalidator is wired UNCONDITIONALLY (NIM-421): its local half — the
+	// refresh of this node's own snapshot — needs no Redis, and without it a
+	// single-node stand would keep honouring a revoked token until the TTL poll.
+	// Redis only adds the cluster fan-out: publish out, subscribe in.
+	d.rbacSvc.SetInvalidator(newRBACInvalidator(d.rbacHolder, d.redisClient, d.cfg.KID, d.logger))
 	if d.redisClient != nil {
-		d.rbacSvc.SetInvalidator(rbacInvalidator{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
 		go d.rbacHolder.WatchInvalidations(ctx, rbacInvalidationSource{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
 	}
 	// --- /rbac-wiring ---
@@ -3002,14 +3006,17 @@ func (d *daemon) setupRBACInvalidation(ctx context.Context) error {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (d *daemon) setupOperatorInvalidation(_ context.Context) error {
-	if d.redisClient == nil || d.apiServer == nil {
+	// No redisClient guard (NIM-421): revoke is the mutation this hook exists
+	// for, and its local half must run on a Redis-less stand too. See
+	// rbacInvalidator.
+	if d.apiServer == nil {
 		return nil
 	}
 	opSvc := d.apiServer.OperatorService()
 	if opSvc == nil {
 		return nil
 	}
-	opSvc.SetInvalidator(rbacInvalidator{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
+	opSvc.SetInvalidator(newRBACInvalidator(d.rbacHolder, d.redisClient, d.cfg.KID, d.logger))
 	return nil
 }
 

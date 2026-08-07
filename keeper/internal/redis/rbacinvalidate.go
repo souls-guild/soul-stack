@@ -13,9 +13,19 @@ package redis
 // [SubscribeApplyEvent]): after a successful commit, the mutating node
 // PUBLISHes to the `rbac:invalidate` channel, and the other nodes'
 // SUBSCRIBE re-reads the snapshot from the DB (near-instant). Self-filter
-// by `origin_kid` drops the echo of its own publish — the mutating node
-// relies on its own TTL-poll (no need to refresh the snapshot right at
-// publish time; the applybus pattern likewise drops self-origin).
+// by `origin_kid` drops the echo of its own publish (the applybus pattern
+// likewise drops self-origin).
+//
+// The self-filter used to be the WHOLE story for the mutating node: it was
+// documented here as relying on its own TTL-poll, "no need to refresh the
+// snapshot right at publish time". That was wrong for revocation, and NIM-421
+// measured how wrong — the subscriber picked a revoke up in ~0.05s while the
+// node that performed it kept honouring the token for up to 10.19s, the exact
+// inverse of what an operator expects from the button they just pressed. The
+// self-filter is still correct HERE (a node must not answer its own broadcast
+// over the wire); the local refresh now happens at the source, synchronously,
+// in `rbacInvalidator.Invalidate` (keeper/cmd/keeper/main.go) — before the
+// publish and independent of Redis. This channel carries the OTHER nodes.
 //
 // B2 = B1 + pub/sub: TTL-poll is NOT removed. Redis pub/sub has no
 // persistence — if a message is lost (node reconnects, broker blips), the

@@ -2738,6 +2738,27 @@ func getReadStatus(t *testing.T, base, tok, path string) int {
 	return resp.StatusCode
 }
 
+// getReadRefusal — like [getReadStatus], but also returns the problem type of the
+// refusal. The revoked guards need it: after NIM-421 a revoked Archon is refused
+// with 401 on every authenticated route, and a bare status number can no longer
+// tell "revoked" apart from "expired"/"no token" — all three are 401. The type is
+// the part the client acts on, so the type is what the guard pins.
+func getReadRefusal(t *testing.T, base, tok, path string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, base+path, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("getReadRefusal(%s): Do: %v", path, err)
+	}
+	defer resp.Body.Close()
+	var p problem.Details
+	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
+		t.Fatalf("getReadRefusal(%s): decode problem: %v", path, err)
+	}
+	return resp.StatusCode, p.Type
+}
+
 // newExpiredTokenFor issues an ALREADY EXPIRED JWT — for the guard "the revoked-fix did
 // not break the auth layer": an expired token must give 401 on read-souls (the auth layer BEFORE
 // the RBAC gate), rather than slipping into revoked semantics. Issue does not allow a negative
@@ -2758,16 +2779,19 @@ func newExpiredTokenFor(t *testing.T, aid string, roles []string) string {
 	return tok
 }
 
-// TestIntegration_Soul_Read_Revoked_403 — guard (ADR-047 G1 Fix 2): a revoked
-// Archon WITH AN ACTIVE soul.list role does NOT see the souls. ResolvePurview → Deny cuts
-// it off at a single point — the route-gate [RequireAction] (HoldsAction→Deny→false→403),
-// which sits BEFORE the handler and catches ALL four read routes uniformly:
-// list / {sid} / soulprint / history → 403. The handler resolvers (readScope→Empty→
-// InScope false → 404) remain an unreachable backstop when revoked — the gate fires
-// earlier; the coven/regex-scope tests below cover the 404 branch from scope.
-// 403 vs 404 here is not a leak: both = "no access", 403 is even stricter (does not distinguish
-// existence). Control: the same role WITHOUT revoked sees the host (NOT 403).
-func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
+// TestIntegration_Soul_Read_Revoked_401 — guard (ADR-047 G1 Fix 2, amended by
+// NIM-421): a revoked Archon WITH AN ACTIVE soul.list role does NOT see the souls,
+// and is told WHY. Until NIM-421 these four routes answered 403 — the existence-gate
+// [RequireAction] asks HoldsAction, a bare bool that cannot carry a reason, so a
+// fired operator was indistinguishable from one who simply lacks the right. Now
+// [apimiddleware.RejectRevoked] sits right after RequireJWT and refuses the whole
+// authenticated surface with 401 operator-revoked-token, so this test pins the type,
+// not just the number: 401 alone would also be satisfied by an expired token.
+// The handler resolvers (readScope→Empty→InScope false → 404) and the RequireAction
+// gate both remain unreachable backstops when revoked — the chain link fires first;
+// the coven/regex-scope tests below cover the 404 branch from scope.
+// Control: the same role WITHOUT revoked sees the host.
+func TestIntegration_Soul_Read_Revoked_401(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
 	seedSoulFull(t, "prod-01.example.com", "agent", soul.StatusConnected, []string{"prod"}, "archon-fired")
@@ -2805,8 +2829,10 @@ func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
 		"/v1/souls/prod-01.example.com/soulprint",
 		"/v1/souls/prod-01.example.com/history",
 	} {
-		if code := getReadStatus(t, base, tok, path); code != http.StatusForbidden {
-			t.Errorf("revoked GET %s = %d, want 403 (gate HoldsAction->Deny->false, not data/facts/timeline)", path, code)
+		code, typ := getReadRefusal(t, base, tok, path)
+		if code != http.StatusUnauthorized || typ != problem.TypeOperatorRevokedToken {
+			t.Errorf("revoked GET %s = %d %q, want 401 %q (RejectRevoked, not data/facts/timeline)",
+				path, code, typ, problem.TypeOperatorRevokedToken)
 		}
 	}
 }
@@ -2868,10 +2894,14 @@ func postCovenAssign(t *testing.T, base, tok, body string) int {
 // revoked-shortcut in Check/ResolvePurview does not silently open an escalation. Control:
 // the same role WITHOUT revoked passes the gate and handler → 200 (dry_run).
 //
-// 401 here (not 403 as on read-souls): the mutate route goes through the scope-aware
-// Check (revoked → ErrOperatorRevoked → 401, parity with an expired JWT), whereas
-// the read routes — through the existence-gate RequireAction (revoked → HoldsAction
-// false → 403). Different status — different gate mechanisms, both fail-closed.
+// This route reached 401 on its own, through the scope-aware Check (revoked →
+// ErrOperatorRevoked). It was the exception: read routes went through the
+// existence-gate RequireAction and answered 403, and four routes had no gate at
+// all and answered 200. NIM-421 made 401 the answer everywhere by putting
+// [apimiddleware.RejectRevoked] in the chain — which now fires before this route's
+// own Check. The Check branch stays as a fail-closed backstop, so this test keeps
+// passing either way; what it still guards is that the mutate path never returns
+// 200 or 403 to a revoked caller.
 func TestIntegration_Soul_CovenAssign_Revoked_401(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
@@ -3054,11 +3084,14 @@ func TestIntegration_Incarnation_Get_CovenScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Incarnation_Read_Revoked — Fix 3 (revoked coverage): a revoked
-// Archon WITH AN ACTIVE incarnation-read role does NOT see the souls. The single revoked-aware
-// point ResolvePurview→Deny cuts off on all paths: the route-gate (HoldsAction→Deny→
-// false→403 for list/get/history) BEFORE the handler. 403 on list, 403/404 on
-// get/history — all = "no access". Control: the same role WITHOUT revoked sees.
+// TestIntegration_Incarnation_Read_Revoked — Fix 3 (revoked coverage), amended by
+// NIM-421: a revoked Archon WITH AN ACTIVE incarnation-read role does NOT see the
+// incarnations, and the refusal names the reason. These three routes used to answer
+// 403 from the existence-gate (HoldsAction→Deny→false), which said "you lack the
+// right" about an operator whose rights were fine and whose employment was not;
+// [apimiddleware.RejectRevoked] now cuts the whole authenticated surface off with
+// 401 operator-revoked-token before any route gate. Pinned by type, not by number.
+// Control: the same role WITHOUT revoked sees.
 func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-fired", "")
@@ -3098,16 +3131,18 @@ func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	defer stop()
 	tok := newValidTokenFor(t, "archon-fired", []string{"inc-viewer"})
 
-	// list/get/history — all cut off by the route-gate (HoldsAction→Deny→403). 403
-	// vs 404 is not a leak: both = "no access", 403 is stricter (does not distinguish existence).
-	if code := getReadStatus(t, base, tok, "/v1/incarnations"); code != http.StatusForbidden {
-		t.Errorf("revoked GET /v1/incarnations = %d, want 403 (gate HoldsAction→Deny)", code)
-	}
-	if code := getIncStatus(t, base, tok, "redis-prod"); code != http.StatusForbidden {
-		t.Errorf("revoked GET /{name} = %d, want 403 (gate HoldsAction->Deny, not data)", code)
-	}
-	if code := historyIncStatus(t, base, tok, "redis-prod"); code != http.StatusForbidden {
-		t.Errorf("revoked history = %d, want 403 (gate HoldsAction->Deny, not timeline)", code)
+	// list/get/history — all cut off by RejectRevoked before the route gate, with the
+	// same reason on each. Not a leak: nothing about existence is disclosed either way.
+	for _, path := range []string{
+		"/v1/incarnations",
+		"/v1/incarnations/redis-prod",
+		"/v1/incarnations/redis-prod/history",
+	} {
+		code, typ := getReadRefusal(t, base, tok, path)
+		if code != http.StatusUnauthorized || typ != problem.TypeOperatorRevokedToken {
+			t.Errorf("revoked GET %s = %d %q, want 401 %q (RejectRevoked, not data/timeline)",
+				path, code, typ, problem.TypeOperatorRevokedToken)
+		}
 	}
 }
 

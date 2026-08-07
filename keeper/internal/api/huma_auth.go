@@ -123,7 +123,8 @@ func ldapLoginOperation() huma.Operation {
 // registerHumaLDAPLogin mounts POST /auth/ldap/login via huma. d nil →
 // no-op (opt-in domain). Handler: Authenticate → Map → Issue → Set-Cookie →
 // audit operator.login. Errors are sanitized (anti-oracle): ErrAuthFailed→401
-// without a reason, ErrNoRoleMapping→403, ErrOperatorRevoked→403.
+// without a reason, ErrNoRoleMapping→403, ErrOperatorRevoked→401 (NIM-421 —
+// revoked is an identity verdict, not a permission one).
 func registerHumaLDAPLogin(humaAPI huma.API, d *LDAPAuthDeps) {
 	if d == nil {
 		return
@@ -179,8 +180,17 @@ func ldapLoginProblem(err error) huma.StatusError {
 		return humaProblemError{Details: problemWithStatus(problem.TypeUnauthenticated, http.StatusUnauthorized, "authentication failed")}
 	case errors.Is(err, auth.ErrNoRoleMapping):
 		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "no mapped group")}
+	// ErrOperatorRevoked — 401, NOT 403 (NIM-421): "revoked" is a statement about
+	// the identity, the same class as an expired token, and it is what
+	// [apimiddleware.RejectRevoked] answers on the HTTP surface (MCP is a
+	// separate listener that gate does not reach — NIM-551). 403 said
+	// "you are someone, but not allowed here", which sent the UI down the
+	// insufficient-permissions path instead of logging the operator out. Anti-oracle
+	// is untouched: the branch is reachable only AFTER credentials verified, and the
+	// old 403 already spelled out "operator revoked" — the code changes, not what is
+	// disclosed.
 	case errors.Is(err, auth.ErrOperatorRevoked):
-		return humaProblemError{Details: problemWithStatus(problem.TypeForbidden, http.StatusForbidden, "operator revoked")}
+		return humaProblemError{Details: problemWithStatus(problem.TypeOperatorRevokedToken, http.StatusUnauthorized, "operator revoked")}
 	// ErrProvisioningDisabled — the provisioning_allowed_methods policy forbade
 	// auto-provision via this method (ADR-058 Part B). 403 with a meaningful detail
 	// (NOT a sanitized 401): this is a policy denial, not bad-credentials — anti-oracle

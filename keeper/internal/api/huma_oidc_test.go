@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
 	oidcauth "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 )
@@ -148,6 +149,33 @@ func TestOIDCCallback_NoRoleMappingIs403(t *testing.T) {
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+// TestOIDCCallback_RevokedIs401 — Mapper ErrOperatorRevoked → 401, JWT NOT issued.
+//
+// 401, not 403 (NIM-421): parity with TestLDAPLogin_RevokedIs401 and with what
+// apimiddleware.RejectRevoked answers on every Bearer route. The two 403 cases
+// around this one (NoRoleMapping, ProvisioningDisabled) are the states that
+// legitimately stay 403 — this is the border, so it is pinned from both sides.
+func TestOIDCCallback_RevokedIs401(t *testing.T) {
+	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "carol"}}
+	issuer := &loginStubIssuer{token: "x"}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrOperatorRevoked}, Issuer: issuer, TTL: time.Hour, Audit: &authTestAudit{}}
+
+	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 (revoked)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), problem.TypeOperatorRevokedToken) {
+		t.Errorf("body must carry the %s problem type, got %s",
+			problem.TypeOperatorRevokedToken, rec.Body.String())
+	}
+	if issuer.gotAID != "" {
+		t.Errorf("revoked operator must not get a JWT (issuer called with %q)", issuer.gotAID)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Errorf("revoked operator must not get a session cookie")
 	}
 }
 

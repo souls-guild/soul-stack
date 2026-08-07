@@ -192,8 +192,13 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 	// huma artifact for the UI vendor (make gen-openapi); it is NOT served and NOT embedded.
 	r.Get("/healthz", healthH.Healthz)
 	r.Get("/readyz", healthH.Readyz)
-	r.With(apimiddleware.RequireJWT(verifier)).Get("/openapi.yaml", servedOpenAPIHandler)
-	r.With(apimiddleware.RequireJWT(verifier)).Get("/openapi.json", servedOpenAPIJSONHandler)
+	// The spec routes carry the revoked gate too (NIM-421): they are outside /v1
+	// and therefore outside its chain, but they are authenticated, and the whole
+	// API surface is exactly what a revoked Archon must stop being able to read.
+	r.With(apimiddleware.RequireJWT(verifier), apimiddleware.RejectRevoked(enforcer)).
+		Get("/openapi.yaml", servedOpenAPIHandler)
+	r.With(apimiddleware.RequireJWT(verifier), apimiddleware.RejectRevoked(enforcer)).
+		Get("/openapi.json", servedOpenAPIJSONHandler)
 	mountDocsViewer(r)
 
 	// /ui — the embedded UI (ADR-055), a public mount OUTSIDE /v1 (parity with /docs):
@@ -281,6 +286,15 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			r.Use(metricsHTTP.MiddlewareForPath(routePatternFromChi))
 		}
 		r.Use(apimiddleware.RequireJWT(verifier))
+		// Revoked gate (NIM-421 / NIM-356), one link for the whole chain,
+		// immediately after RequireJWT: a revoked Archon is refused with 401
+		// `operator-revoked-token` on EVERY /v1 route, including the ones that
+		// carry no RBAC gate at all (`/v1/me/permissions`, `/v1/permissions`,
+		// `/v1/event-types`, `/v1/herald-types`) and any route added later. Per
+		// route this could not be made uniform: RequireAction's bool cannot
+		// carry the reason, so those routes answered 403 "lacks permission" —
+		// the wrong state, and the one a client cannot act on. See RejectRevoked.
+		r.Use(apimiddleware.RejectRevoked(enforcer))
 
 		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2a of the entire operator domain over 5
 		// references): create/revoke/issue-token — WRITE+AUDIT variant B (huma-audit-

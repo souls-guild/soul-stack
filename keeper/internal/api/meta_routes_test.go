@@ -91,7 +91,7 @@ func metaRouter(t *testing.T, verifier *keeperjwt.Verifier) http.Handler {
 		handlers.NewEventTypeCatalogHandler(nil),
 		handlers.NewHeraldTypeCatalogHandler(nil),
 		handlers.NewMyPermissionsHandler(nil, nil),
-		nil,                                  // enforcer
+		emptyRBAC(t),                         // enforcer — nobody revoked; the spec routes carry RejectRevoked
 		nil,                                  // auditWriter
 		nil,                                  // metricsHTTP
 		nil,                                  // tollDegraded

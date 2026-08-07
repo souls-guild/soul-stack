@@ -36,7 +36,7 @@
 
   **(d) Archon lifecycle.**
   - **Creation:** via `keeper init` (the first Archon only) or via OpenAPI/MCP with the RBAC permission `operator.create` (for the rest). The API returns a JWT token; a repeated JWT request for an existing Archon is a separate endpoint `operator.issue-token` with auth from another Archon holding the `operator.issue-token` right.
-  - **Revocation:** via OpenAPI/MCP with the `operator.revoke` permission — sets `revoked_at`. Active JWT tokens of a revoked Archon keep working until their `exp` (a short TTL is natural protection; forced revocation of "all live JWTs" is a separate post-MVP task, requiring a JWT blocklist or session store).
+  - **Revocation:** via OpenAPI/MCP with the `operator.revoke` permission — sets `revoked_at`. ~~Active JWT tokens of a revoked Archon keep working until their `exp` (a short TTL is natural protection; forced revocation of "all live JWTs" is a separate post-MVP task, requiring a JWT blocklist or session store).~~ **Superseded by the amendment 2026-08-07 below (NIM-421):** a revoked Archon is refused on the next request. The token is not invalidated cryptographically — no blocklist was needed — but every authenticated HTTP route consults the operator record through `RejectRevoked` and answers `401 operator-revoked-token`.
   - **Deleting a record** — not provided for. Archons are only revoked (for auditing, `created_by_aid` must remain a valid FK).
 
   **(e) Audit trail.**
@@ -52,7 +52,7 @@
   - Vault must contain `secret/keeper/jwt-signing-key` before the Keeper starts (or the Keeper generates and puts it during `keeper init` — an implementation fork, not a blocker).
   - The shape of the Operator API (management of Archons + the rest of the endpoints under permissions) is defined by **the Go types of the handlers** (huma v2 full-typed, code-first, [ADR-054](0054-openapi-code-first.md#adr-054-operator-api---reversal-to-code-first-go-types---openapi-via-huma-v2) replaced [ADR-051](0051-operator-api-codegen.md#adr-051-operator-api-codegen-openapi--go-types-oapi-codegen-types-only--strict)); the OpenAPI spec ([`docs/keeper/openapi.yaml`](../keeper/openapi.yaml)) is a derived snapshot, oapi-codegen is gone. Transport — REST/HTTP, without a gRPC service. The former `proto/operator/v1/*.proto` is abolished (amendment [ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules)). The markdown normalization of the HTTP facade and the endpoint ↔ MCP-tool ↔ permission mapping — [`docs/keeper/operator-api.md`](../keeper/operator-api.md).
 - **Trade-offs.**
-  - JWT without a revocation blocklist means a revoked Archon can work until the end of its token's TTL. For MVP we accept this — the TTL is short (24h by default for non-bootstrap tokens), the blast radius is limited.
+  - ~~JWT without a revocation blocklist means a revoked Archon can work until the end of its token's TTL. For MVP we accept this — the TTL is short (24h by default for non-bootstrap tokens), the blast radius is limited.~~ **Superseded 2026-08-07 (NIM-421):** the accepted trade-off turned out to be unnecessary. Revocation is enforced without a blocklist, because the RBAC snapshot already carries `revoked_at` and every authenticated request already consults it — what was missing was a gate that asked. The short TTL stays valuable for the *stolen*-token case, which revocation does not address.
   - Hot-add of operators via the API requires at least one Archon with the `operator.create` right to exist — a natural consequence, not a contradiction.
   - `created_by_aid IS NULL` only for the first Archon — this is a data invariant, it must be maintained by a partial unique index in Postgres (`CREATE UNIQUE INDEX ON operators ((created_by_aid IS NULL)) WHERE created_by_aid IS NULL`).
   - A JWT token in a `mode 0400` file after `keeper init` — the operator must reliably save it before restarting the Keeper; a "lost bootstrap token" can be recovered only via a manual SQL operation (or `keeper init --reissue-token --force` — a separate task).
@@ -83,6 +83,72 @@ up to 10 seconds on loss of a pub/sub message.
 
 **JWT TTL remains defense-in-depth.** Recommendation — lower the default
 `auth.jwt.ttl_default` to 1h in production.
+
+**Amendment 2026-08-07 (NIM-421 / NIM-356): the 2026-05-27 promise held on
+neither axis — the refusal nor the window.**
+
+The amendment above states two things that a live sweep of a two-node stand
+disproved. Both are now true by construction rather than by which middleware a
+route happens to use.
+
+- **"Middleware mapping: a revoked AID on verify → 401" was route-dependent.**
+  It held only for routes gated by `RequirePermission` → `PermissionChecker.Check`,
+  which can return `ErrOperatorRevoked`. Routes gated by the existence-gate
+  `RequireAction` ([ADR-047](0047-purview.md)) ask `HoldsAction() bool` — a
+  bare bool cannot carry a reason, so a revoked Archon got **403 "operator lacks
+  required permission X"**: the wrong verdict *and* an unactionable one, since no
+  grant can fix a revoked identity. Worse, four read routes
+  (`/v1/me/permissions`, `/v1/permissions`, `/v1/event-types`,
+  `/v1/herald-types`) carry no RBAC gate at all and kept answering **200**
+  indefinitely. Measured: of 45 parameterless routes, 24 answered 401, 8
+  answered 403 and 4 answered 200.
+  **Decision:** revocation stops being a per-route concern. `RejectRevoked` is
+  one middleware link installed immediately after `RequireJWT`, once per
+  authenticated chain, so every route under it — including ones added later, and
+  the two spec routes outside `/v1` — answers `401 operator-revoked-token`. The
+  per-route gates keep their own verdicts for what they actually decide;
+  "revoked" is no longer among them.
+
+  **Scope of that claim: the HTTP surface.** MCP is a separate listener that
+  verifies the JWT itself, so `RejectRevoked` does not run there. Every one of
+  the 94 implemented tools *is* refused — each gates on the same
+  revocation-aware `Check` — but the refusal is rendered `forbidden` /
+  "operator lacks required permission X", because 87 call sites across 37 files
+  discard `Check`'s error and hard-code that code. So on the tool surface the
+  door is shut and mislabelled: the exact conflation this amendment removes from
+  HTTP, left standing on the other front door (NIM-551).
+  
+  Two MCP paths are not merely mislabelled. `initialize` and `tools/list` carry
+  no gate at all, so a revoked operator can still handshake and enumerate the
+  catalog — no data, the MCP counterpart of the four ungated HTTP catalog
+  routes. And `authorizeSSE` (`internal/mcp/sse.go`) returns `true` for an apply
+  the caller started *before* it reaches `Check`, so a revoked operator keeps
+  streaming events for her own runs until the stream drops: a read that survives
+  revocation, not a refusal with the wrong label. Both are NIM-551.
+  
+  The timing half above is surface-independent: it is a property of the
+  snapshot, so MCP gets it too.
+- **"single-digit milliseconds with a healthy Redis" excluded the one node that
+  mattered.** `rbac:invalidate` messages are self-filtered by `OriginKID`, and
+  the publishing node had no local refresh — so the node that performed the
+  revoke was the only node that did not learn about it, and fell back to the 10s
+  TTL poll. Measured: a subscriber flipped in 0.04–0.06s, the origin took
+  9.82 / 9.82 / 10.19s. Since the operator who pressed revoke is usually talking
+  to that very node, the observed behaviour was the opposite of the promise.
+  **Decision:** the invalidator refreshes the local snapshot before publishing.
+  The wire-level self-filter stays correct (a node must not re-handle its own
+  message); the fix is that the local half now happens at the source. It is wired
+  unconditionally, so a Redis-less single-node stand gets it too. A failed
+  refresh is logged and falls back to the TTL poll — the write has already
+  committed and must not be reported as failed.
+
+**Federated login answers 401 for a revoked operator too.** `/auth/ldap/login`
+and `/auth/oidc/callback` mapped `ErrOperatorRevoked` to 403, so the same state
+had two codes depending on which door it was met at. Both now answer
+`401 operator-revoked-token`. `ErrNoRoleMapping` and `ErrProvisioningDisabled`
+stay 403 — those are statements about permission, and this is the border: 401
+means "this identity is not valid", 403 means "this identity may not do this".
+No OpenAPI change — both endpoints already declared 401.
 
 **Amendment 2026-06-23: the `operators.created_via` field + moving the bootstrap invariant + extending the `auth_method` enum.**
 
