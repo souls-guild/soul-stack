@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -317,6 +318,43 @@ func TestDeleteAfterTeardown_TeardownStampsDestroyedArchiveStatus(t *testing.T) 
 	}
 	if strings.Contains(string(patch), "unreleased") {
 		t.Errorf("status_details patch = %s, want no `unreleased` key on the teardown path", patch)
+	}
+}
+
+// TestArchiveStatusValues_PinnedToTheirDocumentedStrings — GUARD on the two
+// archive statuses as VALUES, not as identifiers. Every other assertion in the
+// repo compares through the constants, so a rename moves both sides at once and
+// the whole suite stays green: setting ArchiveStatusForceDestroyed to
+// "destroyed" makes a force's archived row byte-identical to a completed
+// teardown's — the exact ambiguity NIM-395 removed — with nothing left to tell
+// them apart, since a force that abandoned nothing writes no `unreleased` and an
+// empty `status_details` patch. The values persist in `incarnation_archive.status`
+// (migration 039 declares it bare TEXT, no CHECK to catch a drifting writer) and
+// operators read them, so pin them three ways: to each other, to their literals,
+// and to the operator doc that promises them — a rename then has to be deliberate
+// in all three places instead of silent in one.
+func TestArchiveStatusValues_PinnedToTheirDocumentedStrings(t *testing.T) {
+	if ArchiveStatusDestroyed == ArchiveStatusForceDestroyed {
+		t.Fatalf("both archive statuses are %q — a force's archived row is then indistinguishable from a completed teardown", ArchiveStatusDestroyed)
+	}
+	for _, tc := range []struct{ name, got, want string }{
+		{"ArchiveStatusDestroyed", ArchiveStatusDestroyed, "destroyed"},
+		{"ArchiveStatusForceDestroyed", ArchiveStatusForceDestroyed, "force_destroyed"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q — the value is persisted in incarnation_archive.status and read by operators, renaming it rewrites history no one can query back", tc.name, tc.got, tc.want)
+		}
+	}
+
+	const doc = "../../../docs/keeper/operator-api/incarnations.md"
+	b, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatalf("read %s: %v", doc, err)
+	}
+	for _, want := range []string{ArchiveStatusDestroyed, ArchiveStatusForceDestroyed} {
+		if !strings.Contains(string(b), "`"+want+"`") {
+			t.Errorf("%s never names `%s` — the doc promises operators an archive status the code no longer writes", doc, want)
+		}
 	}
 }
 
