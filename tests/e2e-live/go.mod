@@ -6,6 +6,7 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/moby/moby/api v1.54.1
+	github.com/souls-guild/soul-stack/sdk v0.0.0-00010101000000-000000000000
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.42.0
@@ -66,14 +67,23 @@ require (
 	go.opentelemetry.io/otel/trace v1.43.0 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 )
 
 // Proto generation lives in the proto/ module; the harness pulls types from it -
 // FromSoul/FromKeeper/KeeperClient for the real-soul-container (L3b-2+).
-// This is the only project module the harness imports directly.
 replace github.com/souls-guild/soul-stack/proto => ../../proto
+
+// sdk/ is the public Apache-2.0 SDK a plugin author builds against. The harness
+// uses exactly the part such an author uses at build time: `sdk/schema` to stamp
+// the schema document into the artifact it publishes into the fixture repo
+// (NIM-377, NIM-515). Reimplementing the trailer format here would let the
+// harness and the product drift apart silently, which is the defect, not a
+// dependency to avoid.
+//
+// These two are the only project modules the harness imports directly.
+replace github.com/souls-guild/soul-stack/sdk => ../../sdk
 
 // NB: NO replace for keeper/internal/* - Go internal-rules forbid it.
 // The L3b harness talks to the keeper side via direct PG SQL and direct Vault

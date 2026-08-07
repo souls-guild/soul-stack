@@ -1658,6 +1658,30 @@ order to act in.
   hard-coded 60 s. Each of the four was proven by reverting the code to the
   defect it describes and watching exactly that check go red.
 
+  A third moving part surfaced the moment the gate was next run against a real
+  stand, and it went straight through the guard just described. That guard knows
+  a **list** of this repo's entry points; the call that mislabelled nine tests
+  named none of them. `NIM-377` deleted the plugin's `manifest.yaml`, the harness
+  read it from the repo tree with a bare `os.ReadFile` inside a declared region,
+  and a **deleted file in this repository** printed STAND-SETUP under the words
+  "nothing above is a finding about the code" on every gate test — the one
+  direction this mechanism must never be wrong in. The region is now also checked
+  by a *property* rather than a name: a declared region that reaches `repoRoot`,
+  directly or through a helper, fails the guard, because whatever it reads is a
+  claim about this repository and the label says machine. Both arms were proven
+  by putting the defect back. The fixture repo the harness publishes was
+  rebuilt for the post-`NIM-377` artifact besides — no `manifest.yaml` anywhere,
+  the schema document stamped into the artifact as a trailer through the public
+  `sdk/schema` the plugin author uses, and published beside it as `schema.json` —
+  and the document is read *outside* the declaration, next to `go build`, for the
+  same reason the build already was.
+
+  The gate is **still not passing**, and not for a reason this work can reach: the
+  same breaking change left `service.yml::modules[]` declaring a two-level name
+  that `core.module.installed` refuses to accept, which is `NIM-524`, waiting on
+  the addressing decision in `NIM-376`. What this entry claims is narrower than a
+  green gate — a red one that names the right layer.
+
 - **The same gate's list of tests held prefixes, not names.** Three of the nine
   entries in `E2E_GATE_TESTS` were the leading part of a test's name rather than
   the name — `TestL3bPluginChannel` for `TestL3bPluginChannel_CatalogAndAllow`.

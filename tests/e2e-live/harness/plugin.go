@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/sdk/schema"
 )
 
 // SoulModule plugin channel (NIM-32 S1, ADR-065(b)/(f)/(g)): helpers to deliver
@@ -29,8 +31,12 @@ const communityRedisPluginDir = "examples/module/soul-mod-community-redis"
 // in the per-test git repo; ref for the catalog entry and Sigil-allow.
 const CommunityRedisPluginRef = "v1.0.0"
 
-// communityRedisBinaryName - kind=soul_module convention for manifest.name=redis
-// (shared/plugin::Manifest.BinaryName).
+// communityRedisBinaryName - the filename `dist/` gives the artifact in the
+// published repo. Since NIM-377 it means NOTHING to any reader: `Manifest.BinaryName()`
+// is gone, the resolver takes the one executable in `dist/` whatever it is called
+// (plugingit TestResolveEntry_ArtifactNameIsIrrelevant) and renames it to the
+// registration alias in the slot. Kept only so the fixture repo looks like a real
+// one an author would publish.
 const communityRedisBinaryName = "soul-mod-redis"
 
 // Build cache - once per process (go build of the plugin isn't fast; Go's
@@ -44,8 +50,11 @@ var (
 // BuildCommunityRedisPlugin builds soul-mod-community-redis (linux/amd64,
 // per-process cache) and materializes a per-test git repo in the layout the
 // plugingit resolver expects (ADR-026(g) F-fetch, parity with fixtureRepo in
-// keeper/internal/plugingit/resolver_test.go): manifest.yaml at the root +
-// dist/soul-mod-redis, one commit on main, tag [CommunityRedisPluginRef].
+// keeper/internal/plugingit/resolver_test.go): dist/ holding the stamped
+// artifact and the published schema.json, one commit on main, tag
+// [CommunityRedisPluginRef]. There is no manifest.yaml anywhere — NIM-377
+// replaced it with the generated document, and ADR-065(g) says the slot holds
+// the artifact and nothing else.
 //
 // Returns the file:// URL of the repo for Config.SoulModules[].Source - the
 // file:// scheme works for plugingit under SOUL_STACK_ALLOW_FILE_REPOS=1, which
@@ -53,12 +62,16 @@ var (
 func BuildCommunityRedisPlugin(t *testing.T) string {
 	t.Helper()
 
-	// The build stays OUTSIDE the declared region on purpose. It is `go build`
-	// over this repo's own community-redis plugin, so a failure here is a
-	// finding — an SDK change that stopped compiling against it, most likely —
-	// and calling that "the stand didn't come up" is the one direction this
-	// mechanism must never be wrong in (NIM-406).
+	// Both of these stay OUTSIDE the declared region on purpose, and for the same
+	// reason: they are statements about THIS REPOSITORY, not about the machine.
+	// `go build` over our own community-redis plugin fails when an SDK change
+	// stopped compiling against it; the document read fails when the plugin's
+	// published schema moved or went away — which is exactly how NIM-377 broke
+	// this gate, and it was reported as "the stand didn't come up" on all nine
+	// tests (NIM-515). That is the one direction this mechanism must never be
+	// wrong in (NIM-406).
 	bin := buildCommunityRedisBinary(t)
+	document := readCommunityRedisDocument(t)
 
 	// From here on it is fixture plumbing — tempdirs, file copies, a throwaway
 	// git repo — whose failures are facts about the machine. Tests call this
@@ -73,19 +86,26 @@ func BuildCommunityRedisPlugin(t *testing.T) string {
 		t.Fatalf("BuildCommunityRedisPlugin: mkdir %s: %v", distDir, err)
 	}
 
-	manifest, err := os.ReadFile(filepath.Join(repoRoot(t), communityRedisPluginDir, "manifest.yaml"))
-	if err != nil {
-		t.Fatalf("BuildCommunityRedisPlugin: read manifest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(repoDir, "manifest.yaml"), manifest, 0o644); err != nil {
-		t.Fatalf("BuildCommunityRedisPlugin: write manifest: %v", err)
-	}
 	binary, err := os.ReadFile(bin)
 	if err != nil {
 		t.Fatalf("BuildCommunityRedisPlugin: read built binary: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(distDir, communityRedisBinaryName), binary, 0o755); err != nil {
-		t.Fatalf("BuildCommunityRedisPlugin: write dist binary: %v", err)
+	// Stamp the trailer the way `soul-mod stamp` does (sdk/cmd/soul-mod), by
+	// appending the same bytes that go to schema.json. Keeper reads the document
+	// by seeking from the end WITHOUT executing the artifact — at plugin.allow it
+	// is not yet approved — so an unstamped binary has no readable disclosure and
+	// every reader fails closed (shared/plugin).
+	if err := os.WriteFile(filepath.Join(distDir, communityRedisBinaryName),
+		schema.AppendTrailer(binary, document), 0o755); err != nil {
+		t.Fatalf("BuildCommunityRedisPlugin: write dist artifact: %v", err)
+	}
+	// The published copy sits beside the artifact in a real build, for soul-lint,
+	// which should not have to download a binary to check a destiny. It is not
+	// executable, so it does not make dist/ ambiguous (plugingit
+	// TestResolveEntry_DistWithSchemaFileIsNotAmbiguous) — having it here is what
+	// proves that in live.
+	if err := os.WriteFile(filepath.Join(distDir, schema.SchemaFileName), document, 0o644); err != nil {
+		t.Fatalf("BuildCommunityRedisPlugin: write dist %s: %v", schema.SchemaFileName, err)
 	}
 
 	runGit(t, "", "init", "-q", "-b", "main", repoDir)
@@ -99,6 +119,35 @@ func BuildCommunityRedisPlugin(t *testing.T) string {
 
 	infraUp = true
 	return "file://" + repoDir
+}
+
+// readCommunityRedisDocument returns the schema document the plugin publishes —
+// the generated canonical JSON that replaced manifest.yaml in NIM-377. These are
+// the bytes `soul-mod stamp` would derive by running the artifact's own `schema`
+// subcommand, and the ones its `verify` requires the trailer and schema.json to
+// agree on, so stamping the fresh build with them keeps the artifact
+// self-consistent by construction.
+//
+// It is read from the plugin's source directory rather than regenerated, because
+// the repository's copy is what `make lint` validates and what the plugin's own
+// manifest_test.go checks against the implementation — the harness must deliver
+// the document this repo publishes, not a second one it made up.
+func readCommunityRedisDocument(t *testing.T) []byte {
+	t.Helper()
+	path := filepath.Join(repoRoot(t), communityRedisPluginDir, schema.SchemaFileName)
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readCommunityRedisDocument: %v", err)
+	}
+	// Canonicality is the property the signature depends on (ADR-026): the bytes
+	// are hashed, and a reformatted copy is a different artifact. Checking it here
+	// means a hand edit to the published document is a finding in this gate too,
+	// not a confusing verify failure inside keeper three steps later.
+	canonical, err := schema.IsCanonical(document)
+	if err != nil || !canonical {
+		t.Fatalf("readCommunityRedisDocument: %s is not canonical (%v) — regenerate it, do not hand-edit", path, err)
+	}
+	return document
 }
 
 // buildCommunityRedisBinary - `GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64

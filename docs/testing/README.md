@@ -286,8 +286,8 @@ Target itself collects native `keeper` (`make build` - harness launches Keeper o
 host) and linux-`soul` (`make build-linux` - mount to container); plugin
 `community.redis` collects the test itself. `E2E_KEEPER_HOST` (IP on which
 soul-container calls Keeper-on-host) **auto-detected by target** via
-`hostname -I`. On **WSL2** this is critical: `localhost` is not visible from the container, it is needed
-LAN-IP. Override manually - `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.
+`hostname -I`. On **WSL2** this matters: the container cannot reach `localhost`,
+so a LAN IP is required. Override manually - `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.
 
 **Run in isolation**, without parallel docker/build load: L3b tests
 raise docker containers (keeper + PG + Redis + Vault + soul) also on WSL2
@@ -321,8 +321,8 @@ costs someone a look at code that turns out to be fine.
 
 The opposite mistake — an infra label on a real regression — is the one that
 makes a regression disappear, and dropping the signature lists does **not** put it
-out of reach. It stays reachable through the mechanism's own two moving parts,
-and both were wrong at some point in NIM-406:
+out of reach. It stays reachable through the mechanism's own moving parts, and
+each of the three below was wrong at some point:
 
 - **Where the declared region ends.** The defer covers a *range* of the entry
   point, and everything in that range is claimed to be infrastructure. The first
@@ -340,10 +340,21 @@ and both were wrong at some point in NIM-406:
   STAND-SETUP, both wrong, in one step. It now switches on `=== CONT` and
   `=== NAME` as well and attributes each result by the name on its own line;
   `--self-test` pins the interleaving.
+- **What the region is allowed to touch.** A region may end in the right place
+  and still make the wrong kind of claim. NIM-377 deleted the plugin's
+  `manifest.yaml`; the harness read it from the repo tree *inside* the region, so
+  a deleted file in this repository printed STAND-SETUP on all nine gate tests
+  and the gate stayed unpassable while reading as a machine problem (NIM-515).
+  The same guard now also fails when a declared region reaches `repoRoot`,
+  directly or through a helper.
 
-So the guarantee is not "unreachable", it is "reachable only by breaking one of
-those two, and each is held by a check that runs in `make check`". Treat an
-edit to either as an edit to the gate's meaning.
+Note what that third one cost to find: the guard already existed, and it looked
+for a **list** of names — the offending call named none of them. So the honest
+statement is not that the mislabelling is now unreachable, or reachable only
+these three ways. It is that each way found so far is held by a check that runs
+in `make check`, the newest of them by a property rather than a list, and that
+the list of ways is open until something closes it. Treat an edit to any of the
+three as an edit to the gate's meaning.
 
 The labelling downgrades nothing — the gate still exits non-zero, and a
 STAND-SETUP that survives a solitary rerun is a finding whatever it was labelled.

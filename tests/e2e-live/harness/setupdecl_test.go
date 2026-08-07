@@ -56,8 +56,11 @@ func TestShouldDeclareTruthTable(t *testing.T) {
 // nine gate tests, would read as nothing but a bad day for docker.
 //
 // This is a list, and a new product call added inside a region is the gap it
-// leaves. That is worth knowing rather than papering over: the rule the list
-// encodes is stated in setupdecl.go, and the failure text below repeats it.
+// leaves. NIM-515 walked straight through it: a bare `os.ReadFile` of a path
+// built from repoRoot, naming no entry point at all, put a finding about a
+// DELETED FILE IN THIS REPOSITORY under the STAND-SETUP label on all nine gate
+// tests. repoReadingFuncs below closes that half by a property rather than a
+// name; the rule both encode is stated in setupdecl.go.
 var productEntryPoints = map[string]string{
 	"runKeeperInit":             "`keeper init` — ADR-013 bootstrap, migrations, the JWT signing key",
 	"startKeeperRun":            "`keeper run`",
@@ -86,6 +89,7 @@ func TestDeclaredRegionsEndBeforeTheProductRuns(t *testing.T) {
 
 	declaring := 0
 	for _, pkg := range pkgs {
+		readsRepo := repoReadingFuncs(pkg)
 		for path, file := range pkg.Files {
 			base := filepath.Base(path)
 			if base == "setupdecl.go" {
@@ -101,7 +105,7 @@ func TestDeclaredRegionsEndBeforeTheProductRuns(t *testing.T) {
 					continue
 				}
 				declaring++
-				checkRegion(t, fset, base, fn, start)
+				checkRegion(t, fset, base, fn, start, readsRepo)
 			}
 		}
 	}
@@ -136,9 +140,82 @@ func deferPos(fn *ast.FuncDecl) token.Pos {
 	return pos
 }
 
-// checkRegion: find where the region closes, then insist no product call falls
-// between the defer and that point.
-func checkRegion(t *testing.T, fset *token.FileSet, file string, fn *ast.FuncDecl, start token.Pos) {
+// repoReadingFuncs — the package's functions that reach [repoRoot], directly or
+// through each other.
+//
+// Reading this repository's own tree is the property, and it is derived rather
+// than listed on purpose. A list can only name what someone thought to add: the
+// call that shipped NIM-515 was `os.ReadFile` on a path under repoRoot, which no
+// plausible entry-point list contains, and it labelled a deleted file in this
+// repo as a fact about the machine on every gate test.
+//
+// The closure is one the fix itself needs: BuildCommunityRedisPlugin no longer
+// reads the document inline, it calls readCommunityRedisDocument, and moving the
+// read one frame down must not move it out of sight.
+func repoReadingFuncs(pkg *ast.Package) map[string]bool {
+	bodies := map[string]*ast.FuncDecl{}
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			// Methods share the map with plain functions under their bare name.
+			// A collision would only ever widen the set, and this package has no
+			// method that reads the repo.
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Body != nil {
+				bodies[fn.Name.Name] = fn
+			}
+		}
+	}
+
+	reads := map[string]bool{"repoRoot": true}
+	for grew := true; grew; {
+		grew = false
+		for name, fn := range bodies {
+			if reads[name] {
+				continue
+			}
+			if callsAny(fn.Body, reads) {
+				reads[name], grew = true, true
+			}
+		}
+	}
+	delete(reads, "repoRoot") // the definition is not a use of itself
+	return reads
+}
+
+// callsAny — does this body CALL one of these names? Calls, not identifiers:
+// locateKeeperBinary holds a local `repoRoot` string of its own, and matching
+// bare identifiers made the guard accuse it of reading the tree. A local never
+// appears in call position, and this is the difference between a property and a
+// coincidence of spelling.
+func callsAny(body *ast.BlockStmt, names map[string]bool) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok && names[calleeName(call)] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// calleeName — the bare name being called, or "" for anything else (a call
+// through a value, a conversion, an index expression).
+func calleeName(call *ast.CallExpr) string {
+	switch f := call.Fun.(type) {
+	case *ast.Ident:
+		return f.Name
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	}
+	return ""
+}
+
+// checkRegion: find where the region closes, then insist no product call and no
+// read of this repository falls between the defer and that point.
+func checkRegion(t *testing.T, fset *token.FileSet, file string, fn *ast.FuncDecl, start token.Pos, readsRepo map[string]bool) {
 	t.Helper()
 
 	end := token.NoPos
@@ -186,6 +263,33 @@ func checkRegion(t *testing.T, fset *token.FileSet, file string, fn *ast.FuncDec
 			"finding about the code\", so a real regression would read as a bad day for docker. Move "+
 			"`infraUp = true` above this call, or the call above the defer.",
 			file, fset.Position(call.Pos()).Line, fn.Name.Name, name, what,
+			fset.Position(start).Line, fset.Position(end).Line)
+		return true
+	})
+
+	// The same rule by property: a region that reads this repository's tree is
+	// making a claim about the repository, and the label says "machine".
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Pos() < start || call.Pos() > end {
+			return true
+		}
+		name := calleeName(call)
+		via := ""
+		switch {
+		case name == "repoRoot":
+			via = "reads the repo tree directly"
+		case readsRepo[name] && name != fn.Name.Name:
+			via = "reaches repoRoot"
+		default:
+			return true
+		}
+		t.Errorf("%s:%d: %s calls %s (%s) INSIDE the declared bring-up region — the region runs from "+
+			"%d to %d. Whatever it reads is a fact about THIS REPOSITORY: a file that moved or went "+
+			"away is a finding, and here it would print STAND-SETUP. That is how NIM-377's deleted "+
+			"manifest.yaml read as \"the stand didn't come up\" on all nine gate tests (NIM-515). "+
+			"Move the read above the defer, beside `go build`.",
+			file, fset.Position(call.Pos()).Line, fn.Name.Name, name, via,
 			fset.Position(start).Line, fset.Position(end).Line)
 		return true
 	})
