@@ -31,7 +31,7 @@ For firewalld, mutations go through `--permanent` + explicit `firewall-cmd --rel
 **doesn't** restart the service and **doesn't** change the default policy).
 
 - **Privileges.** Manifest
-[`firewall.yaml`](../../../../shared/coremanifest/firewall.yaml) announces
+[`firewall` module](../../../../shared/coremanifest/mod_firewall.go) announces
 `required_capabilities: [run_as_root, exec_subprocess]` - editing rules
 firewall requires UID 0 and goes through subprocesses `ufw` / `firewall-cmd`
 (status/list + add/delete + `--reload`). This is a **declaration** for static

@@ -64,7 +64,7 @@ func allRegisteredModules() []string {
 // accepts almost anything for string, so a string is opposed with a list literal
 // and vice versa. Returning "" means "no meaningful check can be built for this
 // type" (type-check skipped, but the fact is logged).
-func mismatchLiteralFor(declaredType string) (literal string, ok bool) {
+func mismatchLiteralFor(declaredType plugin.ParamType) (literal string, ok bool) {
 	switch declaredType {
 	case "string":
 		return "[a, b]", true // list instead of string
@@ -85,9 +85,9 @@ func mismatchLiteralFor(declaredType string) (literal string, ok bool) {
 
 // firstStateWithRequiredOrAny returns the name of any module state in deterministic
 // order. Used to build the core.<mod>.<state> address in the synthetic task.
-func firstStateWithRequiredOrAny(m *plugin.Manifest) (state string, def plugin.StateDef, ok bool) {
-	names := make([]string, 0, len(m.Spec.States))
-	for s := range m.Spec.States {
+func firstStateWithRequiredOrAny(m plugin.ModuleDef) (state string, def plugin.StateDef, ok bool) {
+	names := make([]string, 0, len(m.States))
+	for s := range m.States {
 		names = append(names, s)
 	}
 	// Lexicographic order for reproducibility.
@@ -99,7 +99,7 @@ func firstStateWithRequiredOrAny(m *plugin.Manifest) (state string, def plugin.S
 	if len(names) == 0 {
 		return "", plugin.StateDef{}, false
 	}
-	return names[0], m.Spec.States[names[0]], true
+	return names[0], m.States[names[0]], true
 }
 
 // TestP5_AllModulesResolvableByValidator — every registered core module and each of
@@ -114,11 +114,11 @@ func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 			t.Errorf("%s: present in Names(), but Lookup returned ok=false", mod)
 			continue
 		}
-		if len(m.Spec.States) == 0 {
+		if len(m.States) == 0 {
 			t.Errorf("%s: manifest has no states", mod)
 			continue
 		}
-		for state := range m.Spec.States {
+		for state := range m.States {
 			def, ok := reg.State(mod, state)
 			if !ok {
 				t.Errorf("%s.%s: State() did not find the declared state", mod, state)
@@ -126,7 +126,7 @@ func TestP5_AllModulesResolvableByValidator(t *testing.T) {
 			}
 			// The def the validator reads (config.module_params) is exactly the
 			// same object from Spec.States; check the contract is non-empty.
-			if def.Input == nil && len(m.Spec.States[state].Input) != 0 {
+			if def.Input == nil && len(m.States[state].Input) != 0 {
 				t.Errorf("%s.%s: State().Input diverges from Spec.States", mod, state)
 			}
 		}
@@ -155,7 +155,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 
 	for _, mod := range allRegisteredModules() {
 		m, _ := reg.Lookup(mod)
-		for state, def := range m.Spec.States {
+		for state, def := range m.States {
 			for pname, p := range def.Input {
 				if p.Type == "" {
 					continue // type not declared — nothing to check.
@@ -167,7 +167,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 					// validator. Record as a finding, not a pass.
 					unenforced = append(unenforced, miss{
 						addr: fmt.Sprintf("core.%s.%s.%s", strings.TrimPrefix(mod, "core."), state, pname),
-						typ:  p.Type,
+						typ:  string(p.Type),
 						why:  "test cannot build a mismatch literal for this type (a new type?)",
 					})
 					continue
@@ -179,7 +179,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 				if !hasTypeMismatchFor(diags, pname) {
 					unenforced = append(unenforced, miss{
 						addr: fmt.Sprintf("core.%s.%s.%s", strings.TrimPrefix(mod, "core."), state, pname),
-						typ:  p.Type,
+						typ:  string(p.Type),
 						why:  fmt.Sprintf("validator did not raise param_type_mismatch on literal %q; diags=%v", mismatch, codes(diags)),
 					})
 				}
@@ -208,7 +208,7 @@ func TestP5_RequiredEnforcedByValidator(t *testing.T) {
 	reg := coremanifest.Default()
 	for _, mod := range allRegisteredModules() {
 		m, _ := reg.Lookup(mod)
-		for state, def := range m.Spec.States {
+		for state, def := range m.States {
 			req := requiredNames(def)
 			if len(req) == 0 {
 				continue
@@ -245,7 +245,7 @@ func buildTaskProbing(mod, state string, def plugin.StateDef, probeParam, probeL
 
 // validLiteralFor — a valid YAML literal for a type (to fill sibling required
 // fields in the probing task).
-func validLiteralFor(t string) string {
+func validLiteralFor(t plugin.ParamType) string {
 	switch t {
 	case "int", "integer", "number":
 		return "1"

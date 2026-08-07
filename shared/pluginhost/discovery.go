@@ -5,52 +5,120 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/souls-guild/soul-stack/shared/diag"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// Discovered is one plugin found in the host cache. The binary and manifest
-// live in the same directory (ADR-020(a): "manifest.yaml … next to the binary
-// in the host cache").
+// Discovered is one ADDRESSABLE MODULE in the host cache — not one artifact.
+//
+// An artifact serves several modules (`acl`, `config`, `info`) and the host picks one
+// per spawn, so the unit that can be looked up, capability-checked, disclosed and
+// spawned is the module, not the file. Discovery therefore yields one entry per module
+// of every slot it reads: the artifact fields (Doc, BinaryPath, Dir, Digest) repeat
+// across the entries of one artifact, and [Discovered.Module] is what differs — and
+// what the host passes as argv.
+//
+// Address level 1 is [Discovered.Alias], the slot directory's name, chosen by the
+// operator at registration. The artifact does not know it and carries no self-name, so
+// the same bytes registered as `redis` and as `redis-community` yield two address
+// spaces that cannot collide.
 type Discovered struct {
-	// Manifest is the parsed and validated manifest.yaml.
-	Manifest *sharedplugin.Manifest
-	// BinaryPath is the absolute path to the plugin executable.
+	// Alias is address level 1 — the registration alias, taken from the slot, never
+	// from the artifact.
+	Alias string
+	// Module is address level 2 — the module this entry addresses, and the argv the
+	// host passes the artifact at spawn. Empty for the kinds that serve a single
+	// endpoint (cloud_driver / ssh_provider / soul_beacon), which declare no modules.
+	Module string
+	// Doc is the schema document read from the artifact's trailer — the whole
+	// artifact's, shared by every entry that came out of the same slot. Read THIS
+	// entry's module through [Discovered.ModuleDef], never the document's other
+	// modules.
+	Doc *sharedplugin.Document
+	// BinaryPath is the absolute path to the artifact.
 	BinaryPath string
-	// Dir is the directory holding manifest.yaml and the binary (for logs).
+	// Dir is the slot directory holding the artifact (for logs and the digest
+	// sidecar).
 	Dir string
-	// Digest is the binary's SHA-256 (hex), computed during Discover. Used for
-	// logs/OTel attributes; the authoritative integrity check is done in
-	// [Host.Spawn] against the sidecar (security fix H2). An empty string means
-	// the binary could not be read for the digest (goes into warnings, the
-	// plugin is skipped).
+	// Digest is the artifact's SHA-256 (hex), computed during Discover. Used for
+	// logs/OTel attributes; the authoritative integrity check happens in
+	// [Host.Spawn] against the approved digest in the Sigil grant.
 	Digest string
 }
 
-// Discover looks for plugins in the root directory cacheRoot.
+// Address is `<alias>.<module>` — the key a registry stores this entry under, and what
+// a rendered task carries before its state suffix. A single-endpoint kind has no
+// module, so its address is the bare alias.
+func (d Discovered) Address() string {
+	if d.Module == "" {
+		return d.Alias
+	}
+	return d.Alias + "." + d.Module
+}
+
+// Kind is the contract the artifact implements. Every module in one artifact shares
+// it — a bundle serves one contract, never a mix.
+func (d Discovered) Kind() sharedplugin.Kind {
+	if d.Doc == nil {
+		return ""
+	}
+	return d.Doc.Kind
+}
+
+// ModuleDef is THIS entry's module declaration. ok is false for a single-endpoint kind
+// and for a module the document does not declare.
+func (d Discovered) ModuleDef() (sharedplugin.ModuleDef, bool) {
+	if d.Doc == nil || d.Module == "" {
+		return sharedplugin.ModuleDef{}, false
+	}
+	return d.Doc.Module(d.Module)
+}
+
+// Capabilities is what THIS module declares — never the union across the artifact.
+// Spawning `acl` must not carry, or get approved for, what `config` touches.
+//
+// This is disclosure to the operator before approval, not a control: nothing confines
+// the process afterwards (ADR-020(g), ADR-026(c) as corrected by NIM-377).
+func (d Discovered) Capabilities() []sharedplugin.Capability {
+	m, ok := d.ModuleDef()
+	if !ok {
+		return nil
+	}
+	return m.Capabilities
+}
+
+// SideEffects is what THIS module touches, under the same rule as
+// [Discovered.Capabilities]: one module's footprint, never the artifact's.
+func (d Discovered) SideEffects() []sharedplugin.SideEffect {
+	m, ok := d.ModuleDef()
+	if !ok {
+		return nil
+	}
+	return m.SideEffects
+}
+
+// Discover reads every slot under cacheRoot.
 //
 // Host cache layout (docs/soul/modules.md, docs/keeper/plugins.md):
 //
 //	<cacheRoot>/
-//	  <namespace>-<name>/
-//	    manifest.yaml
-//	    soul-mod-<name>         # for kind=soul_module
-//	    soul-cloud-<name>       # for kind=cloud_driver
-//	    soul-ssh-<name>         # for kind=ssh_provider
+//	  <alias>/
+//	    <artifact>        # exactly one executable, schema in its trailer
+//	    .sha256           # digest sidecar, written on first spawn
 //
-// Discover **does not filter by kind** — that is the caller's job (soul-host
-// accepts only soul_module, keeper-host only cloud_driver and ssh_provider).
+// The slot directory's name is the registration alias. There is no filename convention
+// for the artifact: it carries no self-name, so the host takes the slot's single
+// executable and reads what it offers from the trailer.
+//
+// Discover **does not filter by kind** — that is the caller's job (the Soul host
+// accepts soul_module and soul_beacon, the Keeper host cloud_driver and ssh_provider).
 // See [FilterByKinds].
 //
-// The binary name follows the [sharedplugin.Manifest.BinaryName] convention;
-// directories where the binary is missing or lacks +x go into warnings but do
-// not stop the walk.
-//
-// Read errors on individual directories do not stop the walk — they are
-// collected into warnings, and Discover returns whatever it found. The only
-// fatal error is failing to read cacheRoot itself (e.g. ENOENT).
+// A slot that cannot be read — no executable, several executables, no trailer, a
+// malformed trailer, an invalid document — goes into warnings and is skipped, without
+// stopping the walk. The only fatal error is failing to read cacheRoot itself.
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -64,71 +132,122 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		found, warns := DiscoverSlot(filepath.Join(cacheRoot, e.Name()))
+		found, warns := DiscoverSlot(e.Name(), filepath.Join(cacheRoot, e.Name()))
 		out = append(out, found...)
 		warnings = append(warnings, warns...)
 	}
 	return out, warnings, nil
 }
 
-// DiscoverSlot reads a plugin from a SINGLE slot directory `dir` (manifest.yaml
-// plus the binary by BinaryName convention next to it). Returns (0..1
-// Discovered, warnings): an invalid manifest / a missing or non-executable
-// binary → empty result + warning.
+// DiscoverSlot reads ONE slot directory and returns an entry per module the artifact
+// serves (exactly one for a single-endpoint kind), plus warnings.
 //
-// Split out of [Discover] for the Keeper-host nested layout (A1-S1): keeper
-// discovers via a current-symlink (`<ns>-<name>/current`) pointing at the
-// active slot directory rather than the cache root.
-func DiscoverSlot(dir string) ([]Discovered, []string) {
-	manifestPath := filepath.Join(dir, sharedplugin.FileName)
-	m, diags, ioErr := sharedplugin.Load(manifestPath)
-	if ioErr != nil {
-		return nil, []string{fmt.Sprintf("skip %s: %v", dir, ioErr)}
+// alias is passed rather than derived from dir because the two need not match: the
+// Keeper host reaches an active slot through a `current` symlink whose basename says
+// nothing about the registration (A1-S1), and address level 1 must come from the
+// registration either way.
+//
+// # Fail closed
+//
+// A missing or malformed trailer is a skip with a warning, never a fallback to a
+// sibling `schema.json` and never an empty document. The schema is the disclosure an
+// operator approved; an artifact whose disclosure cannot be read has not been
+// approved, and a host that guessed would be running code nobody agreed to.
+func DiscoverSlot(alias, dir string) ([]Discovered, []string) {
+	skip := func(format string, args ...any) []string {
+		return []string{fmt.Sprintf("skip %s: %s", dir, fmt.Sprintf(format, args...))}
 	}
-	if err := firstDiagError(diags); err != nil {
-		return nil, []string{fmt.Sprintf("skip %s: %v", dir, err)}
-	}
-	binName := m.BinaryName()
-	if binName == "" {
-		return nil, []string{fmt.Sprintf("skip %s: no binary convention for kind=%q", dir, m.Kind)}
-	}
-	binPath := filepath.Join(dir, binName)
-	st, err := os.Stat(binPath)
+
+	binPath, err := artifactIn(dir)
 	if err != nil {
-		return nil, []string{fmt.Sprintf("skip %s: binary %s not found: %v", dir, binName, err)}
-	}
-	if st.IsDir() {
-		return nil, []string{fmt.Sprintf("skip %s: %s is a directory", dir, binName)}
-	}
-	if st.Mode().Perm()&0o111 == 0 {
-		return nil, []string{fmt.Sprintf("skip %s: %s is not executable (mode %o)", dir, binName, st.Mode().Perm())}
+		return nil, skip("%v", err)
 	}
 	digest, err := computeFileDigest(binPath)
 	if err != nil {
-		return nil, []string{fmt.Sprintf("skip %s: digest %s: %v", dir, binName, err)}
+		return nil, skip("digest %s: %v", filepath.Base(binPath), err)
 	}
-	return []Discovered{{
-		Manifest:   m,
-		BinaryPath: binPath,
-		Dir:        dir,
-		Digest:     digest,
-	}}, nil
+	doc, diags, err := sharedplugin.ReadArtifact(binPath)
+	if err != nil {
+		return nil, skip("%v", err)
+	}
+	if derr := sharedplugin.FirstError(diags); derr != nil {
+		return nil, skip("%v", derr)
+	}
+	if doc == nil {
+		// ReadArtifact reports this through diags as well; checking both channels is
+		// what makes a caller that forgets one still fail closed.
+		return nil, skip("artifact carries no readable schema document")
+	}
+
+	base := Discovered{Alias: alias, Doc: doc, BinaryPath: binPath, Dir: dir, Digest: digest}
+	if doc.Kind != sharedplugin.KindSoulModule {
+		return []Discovered{base}, nil
+	}
+	if len(doc.Modules) == 0 {
+		// The validator already rejects this; the second check costs nothing and
+		// keeps a soul_module slot from registering as an unaddressable entry.
+		return nil, skip("kind=soul_module artifact declares no modules")
+	}
+	out := make([]Discovered, 0, len(doc.Modules))
+	for _, m := range doc.Modules {
+		entry := base
+		entry.Module = m.Name
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
-// FilterByKinds keeps in discovered only plugins whose manifest.kind is in
-// allowedKinds. Rejected entries go into warnings with a human-readable
-// message. Returns (filtered list, warnings).
+// artifactIn returns the slot's single executable.
+//
+// There is no name to look up — the artifact declares none — so the rule is
+// arithmetic: exactly one executable in the slot. None is an empty slot; more than one
+// is ambiguous, and picking one would let directory listing order decide which code
+// runs. Dot-files are ignored: that is the digest sidecar and the temp files its
+// atomic write leaves behind.
+func artifactIn(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		// os.Stat, not the DirEntry: a slot may reach its artifact through a
+		// symlink, and lstat would report the link rather than what it points at.
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || st.IsDir() || st.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		found = append(found, name)
+	}
+	switch len(found) {
+	case 1:
+		return filepath.Join(dir, found[0]), nil
+	case 0:
+		return "", errors.New("no executable artifact in the slot")
+	default:
+		sort.Strings(found)
+		return "", fmt.Errorf("slot holds %d executables (%s), a slot holds exactly one artifact",
+			len(found), strings.Join(found, ", "))
+	}
+}
+
+// FilterByKinds keeps only entries whose kind is in allowedKinds. Rejected entries go
+// into warnings with a human-readable message. Returns (filtered list, warnings).
 //
 // Convenient right after [Discover]:
 //
 //	found, w1, err := pluginhost.Discover(root)
-//	found, w2 := pluginhost.FilterByKinds(found, []string{sharedplugin.KindSoulModule})
+//	found, w2 := pluginhost.FilterByKinds(found, []sharedplugin.Kind{sharedplugin.KindSoulModule})
 //	warnings := append(w1, w2...)
-func FilterByKinds(discovered []Discovered, allowedKinds []string) ([]Discovered, []string) {
+func FilterByKinds(discovered []Discovered, allowedKinds []sharedplugin.Kind) ([]Discovered, []string) {
 	if len(allowedKinds) == 0 {
 		return discovered, nil
 	}
-	allowed := make(map[string]struct{}, len(allowedKinds))
+	allowed := make(map[sharedplugin.Kind]struct{}, len(allowedKinds))
 	for _, k := range allowedKinds {
 		allowed[k] = struct{}{}
 	}
@@ -137,31 +256,12 @@ func FilterByKinds(discovered []Discovered, allowedKinds []string) ([]Discovered
 		warnings []string
 	)
 	for _, d := range discovered {
-		if _, ok := allowed[d.Manifest.Kind]; ok {
+		if _, ok := allowed[d.Kind()]; ok {
 			out = append(out, d)
 			continue
 		}
 		warnings = append(warnings, fmt.Sprintf("skip %s: kind=%q not allowed on this host (want %v)",
-			d.Dir, d.Manifest.Kind, allowedKinds))
+			d.Dir, d.Kind(), allowedKinds))
 	}
 	return out, warnings
-}
-
-// firstDiagError joins all error-level diag records into one error with the
-// separator `; `. Returns nil if the diagnostics are empty or contain only
-// warning/hint. Duplicates [sharedplugin.Manifest.ValidateSimple] logic exactly
-// because [sharedplugin.Load] returns errors structurally via diag, while the
-// discovery callsite needs an `error` for its warning message.
-func firstDiagError(ds []diag.Diagnostic) error {
-	var msgs []string
-	for _, d := range ds {
-		if d.Level != diag.LevelError {
-			continue
-		}
-		msgs = append(msgs, d.Code+": "+d.Message)
-	}
-	if len(msgs) == 0 {
-		return nil
-	}
-	return errors.New(strings.Join(msgs, "; "))
 }

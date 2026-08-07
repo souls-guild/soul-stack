@@ -43,19 +43,20 @@ type PluginRegistry struct {
 }
 
 // NewPluginRegistry builds the registry. discovered is the list of
-// kind=soul_beacon plugins (caller already filtered by `d.Manifest.Kind`).
-// The key name is `<namespace>.<name>` (manifest.Address()), matching
-// VigilDef.check for plugin-beacon addresses.
+// kind=soul_beacon plugins (caller already filtered by `d.Kind()`).
+// The key is the registration alias (Discovered.Address()), matching
+// VigilDef.check for plugin-beacon addresses: a beacon artifact serves a single
+// endpoint rather than a set of named modules, so its address has no second level.
 func NewPluginRegistry(spawner PluginBeaconSpawner, discovered []sharedhost.Discovered, logger *slog.Logger) *PluginRegistry {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	beacons := make(map[string]sharedhost.Discovered, len(discovered))
 	for _, d := range discovered {
-		if d.Manifest == nil || d.Manifest.Kind != sharedplugin.KindSoulBeacon {
+		if d.Kind() != sharedplugin.KindSoulBeacon {
 			continue
 		}
-		beacons[d.Manifest.Address()] = d
+		beacons[d.Address()] = d
 	}
 	return &PluginRegistry{spawner: spawner, beacons: beacons, logger: logger}
 }
@@ -106,7 +107,7 @@ func (p *pluginBeacon) Check(ctx context.Context, params *structpb.Struct) (Stat
 	defer func() {
 		if cerr := sess.Close(); cerr != nil {
 			p.logger.Warn("beacon: plugin close error",
-				slog.String("beacon", p.discovered.Manifest.Address()),
+				slog.String("beacon", p.discovered.Address()),
 				slog.Any("error", cerr),
 			)
 		}

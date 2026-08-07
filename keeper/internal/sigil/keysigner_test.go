@@ -122,18 +122,18 @@ func TestLoadSigner_SignUsesPrimary(t *testing.T) {
 		t.Fatalf("LoadSigner: %v", err)
 	}
 
-	ns, name, ref := "cloud", "hetzner", "v1.0.0"
+	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	manifest := []byte("kind: cloud_driver\n")
+	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
 
-	sig, err := signer.Sign(ns, name, ref, binHex, manifest)
+	sig, err := signer.Sign(testSource, ref, binHex, doc)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	manDigest := sha256.Sum256(pluginhost.NormalizeManifestBytes(manifest))
-	block := pluginhost.BuildSigilBlock(ns, name, ref, binDigest[:], manDigest[:])
+	schemaDigest := pluginhost.SchemaDigest(doc)
+	block := pluginhost.BuildSigilBlock(testSource, ref, binDigest[:], schemaDigest[:])
 
 	if !ed25519.Verify(pubP, block, sig) {
 		t.Error("primary pubkey failed to verify signature")

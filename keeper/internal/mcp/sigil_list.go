@@ -10,12 +10,12 @@ import (
 )
 
 // sigilView — output projection of an active allow-list entry for
-// keeper.plugin.list (schemaPluginListOutput). 1:1 with REST sigilItem /
-// [sigil.SigilView]: catalog fields WITHOUT signature/manifest (crypto
-// material / large JSONB isn't part of the allow-list feed).
+// keeper.plugin.list (schemaPluginListOutput). 1:1 with the REST PluginSigilView /
+// [sigil.SigilView]: catalog fields WITHOUT the signature or the schema (crypto
+// material / a large document; neither is part of the allow-list feed).
 type sigilView struct {
-	Namespace    string     `json:"namespace"`
-	Name         string     `json:"name"`
+	Alias        string     `json:"alias"`
+	Source       string     `json:"source"`
 	Ref          string     `json:"ref"`
 	SHA256       string     `json:"sha256"`
 	AllowedByAID string     `json:"allowed_by_aid"`
@@ -67,8 +67,8 @@ func (h *Handler) callPluginList(ctx context.Context, claims *jwt.Claims, req js
 	out := pluginListOutput{Sigils: make([]sigilView, 0, len(views))}
 	for _, v := range views {
 		out.Sigils = append(out.Sigils, sigilView{
-			Namespace:    v.Namespace,
-			Name:         v.Name,
+			Alias:        v.Alias,
+			Source:       v.Source,
 			Ref:          v.Ref,
 			SHA256:       v.SHA256,
 			AllowedByAID: v.AllowedByAID,

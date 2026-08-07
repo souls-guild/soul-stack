@@ -1063,10 +1063,10 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			logger.Warn("keeper run: plugin catalog mismatch", slog.String("detail", w))
 		}
 		for _, dd := range filtered {
-			if dd.Manifest == nil {
+			if dd.Doc == nil {
 				continue
 			}
-			switch dd.Manifest.Kind {
+			switch dd.Kind() {
 			case pluginhost.KindCloudDriver:
 				discoveredCloud = append(discoveredCloud, dd)
 			case pluginhost.KindSSHProvider:
@@ -1272,12 +1272,12 @@ func (l sigilRecordLister) ListActive(ctx context.Context) ([]*sharedhost.SigilR
 	out := make([]*sharedhost.SigilRecord, 0, len(recs))
 	for _, s := range recs {
 		out = append(out, &sharedhost.SigilRecord{
-			Namespace:       s.Namespace,
-			Name:            s.Name,
+			Alias:           s.Alias,
+			Source:          s.Source,
 			Ref:             s.Ref,
 			BinarySHA256hex: s.SHA256,
 			Signature:       s.Signature,
-			Manifest:        s.ManifestRaw,
+			Schema:          s.Schema,
 		})
 	}
 	return out, nil
@@ -1304,15 +1304,17 @@ func moduleCatalogPluginsOrNil(d *daemon) handlers.ModuleCatalogPlugins {
 }
 
 // ModuleManifests implements [artifact.PluginManifestSource]: a point-in-time
-// map of the plugin manifests this cluster has allow-listed, so a definition's
-// `params:` are checked against them while it is parsed (NIM-228).
+// map of the plugin module schemas this cluster has allow-listed, so a
+// definition's `params:` are checked against them while it is parsed (NIM-228).
 //
 // The Sigil grant is the right source and not merely a convenient one: it holds
-// the byte-exact manifest.yaml the signature was verified over, which is the very
-// manifest that gates the task on the host under ADR-0076(t). Checking against
-// anything else would risk refusing a run the Soul would have accepted.
+// the byte-exact schema document the signature was verified over, which is the
+// very disclosure that gates the task on the host under ADR-0076(t). It is also
+// the only place the ALIAS and the module set exist together — the artifact
+// carries no alias, and the catalog carries no modules. Checking against anything
+// else would risk refusing a run the Soul would have accepted.
 //
-// A manifest that no longer parses is skipped rather than fatal — it then reports
+// A schema that no longer parses is skipped rather than fatal — it then reports
 // as `plugin_params_unchecked`, which is what actually happened.
 func (l moduleCatalogPlugins) ModuleManifests(ctx context.Context) (config.ModuleManifestResolver, error) {
 	recs, err := l.store.ListActive(ctx)
@@ -1321,11 +1323,16 @@ func (l moduleCatalogPlugins) ModuleManifests(ctx context.Context) (config.Modul
 	}
 	out := make(artifact.ModuleManifestMap, len(recs))
 	for _, s := range recs {
-		m, diags := plugin.LoadFromBytes(plugin.FileName, s.ManifestRaw)
-		if m == nil || diag.HasErrors(diags) || m.Kind != plugin.KindSoulModule {
+		doc, diags := plugin.ParseDocument(plugin.SchemaFileName, s.Schema)
+		if doc == nil || diag.HasErrors(diags) || doc.Kind != plugin.KindSoulModule {
 			continue
 		}
-		out[m.Namespace+"."+m.Name] = m
+		// One entry per MODULE, keyed `<alias>.<module>`: level 1 is the operator's
+		// registration, which only the grant knows, and level 2 the module, which only
+		// the schema knows. Neither half can build the key alone.
+		for _, m := range doc.Modules {
+			out[s.Alias+"."+m.Name] = m
+		}
 	}
 	return out, nil
 }
@@ -1338,10 +1345,10 @@ func (l moduleCatalogPlugins) ActivePlugins(ctx context.Context) ([]handlers.Plu
 	out := make([]handlers.PluginCatalogEntry, 0, len(recs))
 	for _, s := range recs {
 		out = append(out, handlers.PluginCatalogEntry{
-			Namespace:   s.Namespace,
-			Name:        s.Name,
-			Ref:         s.Ref,
-			ManifestRaw: s.ManifestRaw,
+			Alias:  s.Alias,
+			Source: s.Source,
+			Ref:    s.Ref,
+			Schema: s.Schema,
 		})
 	}
 	return out, nil
@@ -1848,11 +1855,14 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	providers := make(map[string]push.ProviderEntry, len(d.pushDiscoveredSsh))
 	spawnedPluginNames := make([]string, 0, len(d.pushDiscoveredSsh))
 	for _, dd := range d.pushDiscoveredSsh {
-		if dd.Manifest == nil {
-			fmt.Fprintln(os.Stderr, "keeper run: push dispatcher: discovered SshProvider without manifest (discovery programming error)")
+		if dd.Doc == nil {
+			fmt.Fprintln(os.Stderr, "keeper run: push dispatcher: discovered SshProvider without a schema document (discovery programming error)")
 			return errSetupFailed
 		}
-		pluginName := dd.Manifest.Name
+		// The provider name IS the registration alias: an ssh_provider artifact
+		// declares no name of its own (NIM-377), so `push_providers` entries and
+		// `keeper.yml::plugins.ssh_providers` both key on what the operator called it.
+		pluginName := dd.Alias
 
 		resolvedParams, resolveErr := providerResolver.ResolveParams(ctx, pluginName)
 		if resolveErr != nil && !errors.Is(resolveErr, push.ErrPushProviderNotConfigured) {
@@ -1867,13 +1877,13 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 
 		plugin, err := d.pushPluginHost.Spawn(ctx, dd, spawnOpts...)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "keeper run: push dispatcher spawn %s: %v\n", dd.Manifest.Address(), err)
+			fmt.Fprintf(os.Stderr, "keeper run: push dispatcher spawn %s: %v\n", dd.Address(), err)
 			return errSetupFailed
 		}
 		sshPlugin, err := pluginhost.NewSshProviderPlugin(plugin)
 		if err != nil {
 			_ = plugin.Close()
-			fmt.Fprintf(os.Stderr, "keeper run: push dispatcher wrap %s: %v\n", dd.Manifest.Address(), err)
+			fmt.Fprintf(os.Stderr, "keeper run: push dispatcher wrap %s: %v\n", dd.Address(), err)
 			return errSetupFailed
 		}
 		providers[pluginName] = push.ProviderEntry{Provider: sshPlugin, Closer: sshPlugin}

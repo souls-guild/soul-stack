@@ -10,8 +10,10 @@
 // Soul. An empty snapshot means no plugin is granted. Verify against the
 // cache is S6b (shared/pluginhost).
 //
-// Key is the pair (namespace, name), NOT ref: exactly one active Sigil is
-// granted per pair (single-slot), its ref is stored inside the value.
+// Key is the registration alias, NOT ref: exactly one active Sigil is granted per
+// alias (single-slot), its ref is stored inside the value. The alias is the only
+// identity a host can key on — the artifact carries no self-name, and what the grant
+// signs is the source it came from, which the host never sees on disk.
 //
 // The cache lives at Soul's runtime level (created at daemon startup, outside
 // the reconnect loop) and is NOT recreated on stream reconnect — grants
@@ -26,24 +28,17 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// key — the cache's composite key. namespace+name uniquely address one
-// active Sigil (single-slot per pair, see package doc).
-type key struct {
-	namespace string
-	name      string
-}
-
 // Cache — a thread-safe cache of Sigils. Writes come from the recv-loop
 // (single writer), reads come from verify (S6b, not yet wired up); RWMutex
 // covers both. The zero value is not ready for use — construct via New.
 type Cache struct {
 	mu    sync.RWMutex
-	items map[key]*keeperv1.PluginSigil
+	items map[string]*keeperv1.PluginSigil
 }
 
 // New creates an empty cache.
 func New() *Cache {
-	return &Cache{items: make(map[key]*keeperv1.PluginSigil)}
+	return &Cache{items: make(map[string]*keeperv1.PluginSigil)}
 }
 
 // ReplaceAll atomically replaces the ENTIRE grant set with the given
@@ -56,25 +51,24 @@ func New() *Cache {
 // break the swap). Done under a single Lock: verify-phase readers (S6b) see
 // either the entire old set or the entire new one, never an in-between state.
 func (c *Cache) ReplaceAll(snapshot []*keeperv1.PluginSigil) {
-	next := make(map[key]*keeperv1.PluginSigil, len(snapshot))
+	next := make(map[string]*keeperv1.PluginSigil, len(snapshot))
 	for _, sig := range snapshot {
 		if sig == nil {
 			continue
 		}
-		next[key{namespace: sig.GetNamespace(), name: sig.GetName()}] = sig
+		next[sig.GetAlias()] = sig
 	}
 	c.mu.Lock()
 	c.items = next
 	c.mu.Unlock()
 }
 
-// Get returns the active Sigil for the (namespace, name) pair, or nil if
-// there's no grant. Returns the stored pointer — callers must not mutate the
-// PluginSigil (proto message is read-only after receipt).
-func (c *Cache) Get(namespace, name string) *keeperv1.PluginSigil {
-	k := key{namespace: namespace, name: name}
+// Get returns the active Sigil for a registration alias, or nil if there's no grant.
+// Returns the stored pointer — callers must not mutate the PluginSigil (proto message
+// is read-only after receipt).
+func (c *Cache) Get(alias string) *keeperv1.PluginSigil {
 	c.mu.RLock()
-	sig := c.items[k]
+	sig := c.items[alias]
 	c.mu.RUnlock()
 	return sig
 }

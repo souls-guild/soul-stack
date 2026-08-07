@@ -40,20 +40,24 @@ func NewSigilLookupAdapter(lister SigilRecordLister, logger *slog.Logger) *Sigil
 	return &SigilLookupAdapter{lister: lister, logger: logger}
 }
 
-// Get resolves active permission for (namespace, name) from plugin_sigils registry.
-// nil (permission absent / read error) → nil (verify interprets as no_sigil,
+// Get resolves the active grant for a registration ALIAS from the plugin_sigils
+// registry. nil (no grant / read error) → nil (verify reads it as no_sigil,
 // fail-closed).
 //
-// Single-slot per pair (ADR-026(g), Variant C): (namespace, name) has exactly
-// one allowed binary, ref is operator-asserted label within record, not used
-// in lookup. Partial unique index allows multiple active records with
-// different refs per pair; on collision newest chosen (ListActive
-// sorts allowed_at DESC, id DESC — first match = last allow).
+// The alias is the lookup key and is deliberately NOT in the signed block: it is the
+// operator's local naming choice, so re-registering the same bytes under a second alias
+// must not need a second signature, and forging an alias must not be able to reach a
+// signature at all. What was SIGNED is (source, ref) plus the two digests; the alias
+// only says which grant to check that signature against.
 //
-// Manifest is byte-exact RAW manifest.yaml bytes (call-site projects from
-// sigil.Sigil.ManifestRaw, NOT JSONB projection); verify passes them through
-// NormalizeManifestBytes (S3↔S6 invariant).
-func (a *SigilLookupAdapter) Get(namespace, name string) *sharedhost.SigilRecord {
+// At most one active grant may carry an alias (plugin_sigils_active_alias_idx,
+// migration 113), so the first match is the only match — the answer does not depend on
+// row order.
+//
+// Schema is the byte-exact canonical schema document the signature covers (the
+// call-site projects it from sigil.Sigil.Schema); verify hashes exactly those bytes via
+// SchemaDigest (S3↔S6 invariant).
+func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 	if a.lister == nil {
 		return nil
 	}
@@ -61,15 +65,14 @@ func (a *SigilLookupAdapter) Get(namespace, name string) *sharedhost.SigilRecord
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Warn("pluginhost: sigil lookup failed — verify fail-closed",
-				slog.String("namespace", namespace),
-				slog.String("name", name),
+				slog.String("alias", alias),
 				slog.Any("error", err),
 			)
 		}
 		return nil
 	}
 	for _, rec := range recs {
-		if rec.Namespace == namespace && rec.Name == name {
+		if rec.Alias == alias {
 			return rec
 		}
 	}

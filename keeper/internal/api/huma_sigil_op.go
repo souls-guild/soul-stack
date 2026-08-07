@@ -15,21 +15,29 @@ import (
 // === POST /v1/plugins/sigils (allow) — WRITE+AUDIT plugin.allowed ===
 
 // sigilAllowInput — huma input for POST /v1/plugins/sigils (FULL-TYPED). Body —
-// a typed body (the triple namespace/name/ref).
+// a typed body (alias + source + ref).
 type sigilAllowInput struct {
 	Body PluginSigilAllowRequest
 }
 
-// PluginSigilAllowRequest — the Go form of the POST /v1/plugins/sigils body (code-first source
-// of BOTH schema AND validation). Mirrors the domain PluginSigilAllowRequest: the triple of a
-// supply-chain allowance (namespace/name/ref). Segment format (reSigilSegment) is domain
-// validation in AllowTyped (422), not the huma schema. required:"true" —
-// missing→422; additionalProperties:false → unknown→400. The struct name = the contract
-// schema name (huma DefaultSchemaNamer; hand-written spec PluginSigilAllowRequest, N4).
+// PluginSigilAllowRequest — the Go form of the POST /v1/plugins/sigils body (code-first
+// source of BOTH schema AND validation).
+//
+// The body carries the two identities NIM-377 separated. `alias` is the registration
+// the operator is creating — address level 1 and the slot to read; it is NOT signed.
+// `source` + `ref` are what the operator asserts about the artifact in that slot, and
+// are the only identity the signature covers, because the artifact carries no self-name
+// to sign instead.
+//
+// The reserved-name check and the alias shape are domain validation in AllowTyped (422)
+// rather than schema constraints: they are one list, held in shared/plugin, and a second
+// copy in a struct tag is how the two ends drift. required:"true" — missing→422;
+// additionalProperties:false → unknown→400. The struct name = the contract schema name
+// (huma DefaultSchemaNamer).
 type PluginSigilAllowRequest struct {
-	Namespace string `json:"namespace" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"plugin namespace (type — cloud/ssh/mod)"`
-	Name      string `json:"name" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"plugin name (as in manifest.name)"`
-	Ref       string `json:"ref" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref of the release (stable tag, no slashes)"`
+	Alias  string `json:"alias" required:"true" doc:"registration alias — address level 1 (lowercase kebab-case); must not be a reserved name"`
+	Source string `json:"source" required:"true" maxLength:"2048" doc:"artifact source: the git remote the module repository was fetched from (signed)"`
+	Ref    string `json:"ref" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref of the release (stable tag, no slashes; signed)"`
 }
 
 // sigilAllowOutput — huma output for POST /v1/plugins/sigils (FULL-TYPED). Status=201;
@@ -50,7 +58,7 @@ func sigilAllowOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Allow a plugin (Sigil)",
-		Description:   "Registers (namespace,name,ref) in the plugin integrity allow-list with SHA-256 signature (ADR-026 S4a). Permission plugin.allow. 404 — plugin not in the host cache. 409 — release already active.",
+		Description:   "Approves the artifact registered under {alias} on the identity (source, ref), signing its SHA-256 and schema document (ADR-026 S4a, re-keyed by NIM-377). Permission plugin.allow. 404 — no artifact under that alias in the host cache. 409 — the alias is taken, or (source, ref) is already approved. 422 — malformed or reserved alias.",
 		Tags:          []string{"plugin"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -86,15 +94,15 @@ func sigilListOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/plugins/sigils/{namespace}/{name}/{ref} (revoke) — WRITE+AUDIT plugin.revoked ===
+// === DELETE /v1/plugins/sigils/{alias} (revoke) — WRITE+AUDIT plugin.revoked ===
 
-// sigilRevokeInput — huma input for DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}.
-// Three path segments (huma extracts them by `path:"…"`). Segment format
-// (reSigilSegment, a slash in ref → 422) is domain validation in RevokeTyped. No Body.
+// sigilRevokeInput — huma input for DELETE /v1/plugins/sigils/{alias}. ONE path
+// segment: the alias identifies exactly one active grant
+// (plugin_sigils_active_alias_idx), and it is the operator's gesture — "un-register
+// this". The signed identity cannot serve here: a source is a git URL, not a path
+// segment. Alias shape is domain validation in RevokeTyped. No Body.
 type sigilRevokeInput struct {
-	Namespace string `path:"namespace" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"plugin namespace"`
-	Name      string `path:"name" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"plugin name"`
-	Ref       string `path:"ref" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref of the release"`
+	Alias string `path:"alias" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"registration alias of the grant to revoke"`
 }
 
 // sigilNoContentOutput — huma output of the 204 write route revoke. No Body (the legacy
@@ -103,16 +111,16 @@ type sigilNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// sigilRevokeOperation — metadata for DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}.
+// sigilRevokeOperation — metadata for DELETE /v1/plugins/sigils/{alias}.
 // DefaultStatus=204. Permission plugin.revoke + audit plugin.revoked. Errors: 403
 // RBAC, 404 sigil-not-found, 422 invalid path segment, 500.
 func sigilRevokeOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "revokePluginSigil",
 		Method:        http.MethodDelete,
-		Path:          "/{namespace}/{name}/{ref}",
+		Path:          "/{alias}",
 		Summary:       "Revoke Sigil",
-		Description:   "Removes the active release (namespace,name,ref) from allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — active record absent.",
+		Description:   "Removes the active grant registered under {alias} from the allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — no active grant for that alias.",
 		Tags:          []string{"plugin"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

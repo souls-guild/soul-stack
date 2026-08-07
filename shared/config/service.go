@@ -554,17 +554,12 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 			Message: fmt.Sprintf("%s[%d].name is required", listKey, idx),
 			Hint:    "dependency entry must declare {name, ref} — both non-empty",
 		}))
-	} else if listKey == "modules" && strings.HasPrefix(dep.Name, "core.") {
-		// ADR-009 / ADR-015: core modules are available automatically and are NOT
-		// listed in `modules:`. A separate code so the operator doesn't confuse it
-		// with plain `name_invalid_format` (the name is regex-valid, but the
-		// semantics are forbidden).
-		out = append(out, atPath(root, base+".name", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "core_module_in_modules_list",
-			Message: fmt.Sprintf("%s[%d].name %q is a core module — core modules are always available and must not be listed", listKey, idx, dep.Name),
-			Hint:    "Core modules are available automatically - not listed in `modules:` (ADR-009)",
-		}))
+	} else if listKey == "modules" && reservedModuleAddr(dep.Name) {
+		// ADR-009 / ADR-015 for `core.*` (always available, never listed), NIM-377
+		// for the rest of the reserved list (no plugin can be registered under one).
+		// Separate codes from plain `name_invalid_format`: these names are all
+		// regex-valid, and it is the semantics that are forbidden.
+		out = append(out, reservedModuleDiag(root, base+".name", fmt.Sprintf("%s[%d].name", listKey, idx), dep.Name))
 	} else if !nameRegex.MatchString(dep.Name) {
 		out = append(out, atPath(root, base+".name", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,

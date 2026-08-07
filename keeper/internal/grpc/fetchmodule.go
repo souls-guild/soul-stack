@@ -98,8 +98,7 @@ func (h *eventStreamHandler) FetchModule(req *keeperv1.PluginFetchRequest, strea
 		if errors.Is(err, sigil.ErrModuleNotAllowed) {
 			h.logger.Warn("fetchmodule: module is not allowed",
 				slog.String("sid", sid),
-				slog.String("namespace", req.GetNamespace()),
-				slog.String("name", req.GetName()),
+				slog.String("alias", req.GetAlias()),
 				slog.String("binary_sha256", sha))
 			return status.Error(codes.NotFound, "module is not allowed")
 		}
@@ -163,8 +162,7 @@ func (h *eventStreamHandler) FetchModule(req *keeperv1.PluginFetchRequest, strea
 
 	h.logger.Info("fetchmodule: module streamed",
 		slog.String("sid", sid),
-		slog.String("namespace", req.GetNamespace()),
-		slog.String("name", req.GetName()),
+		slog.String("alias", req.GetAlias()),
 		slog.String("binary_sha256", sha),
 		slog.Int64("size_bytes", st.Size()))
 	return nil

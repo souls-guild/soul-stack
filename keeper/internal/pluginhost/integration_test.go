@@ -16,25 +16,29 @@ import (
 	"time"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// sigilFor signs valid SigilRecord under binary+manifest from Discovered
-// with same helper as keeper-Signer does on Sign (BuildSigilBlock +
-// NormalizeManifestBytes — sign↔verify symmetry). Returns trust-anchor and
-// lookup with single permission ready to mount on Host. After S6b
-// verify-gate Spawn fails-closed without valid permission — without this
-// no happy-path test passes.
+// sigilFor signs a valid SigilRecord over the artifact behind Discovered, through the
+// SAME helpers keeper-Signer uses at Sign (BuildSigilBlock + SchemaDigest — sign↔verify
+// symmetry). Returns a trust-anchor and a lookup holding the single grant, ready to
+// mount on a Host. After the S6b verify-gate, Spawn fails closed without a valid grant,
+// so no happy-path test passes without this.
+//
+// The block is keyed on (source, ref): the artifact carries no self-name, so where it
+// came from is the only identity a signature can be over. The ALIAS is not in the block
+// — it is only the key the lookup is stored under.
 func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLookup) {
 	t.Helper()
-	manifest, err := os.ReadFile(filepath.Join(d.Dir, "manifest.yaml"))
+	schemaBytes, err := schema.ReadTrailerFile(d.BinaryPath)
 	if err != nil {
-		t.Fatalf("read manifest for sigil: %v", err)
+		t.Fatalf("read schema trailer for sigil: %v", err)
 	}
 	binBytes, err := os.ReadFile(d.BinaryPath)
 	if err != nil {
-		t.Fatalf("read binary for sigil: %v", err)
+		t.Fatalf("read artifact for sigil: %v", err)
 	}
 	binSum := sha256.Sum256(binBytes)
 	binHex := hex.EncodeToString(binSum[:])
@@ -44,24 +48,42 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	if err != nil {
 		t.Fatalf("genkey: %v", err)
 	}
-	manDigest := sha256.Sum256(sharedhost.NormalizeManifestBytes(manifest))
-	const ref = "v1.0.0"
-	block := sharedhost.BuildSigilBlock(d.Manifest.Namespace, d.Manifest.Name, ref, binRaw, manDigest[:])
+	schemaDigest := sharedhost.SchemaDigest(schemaBytes)
+	const (
+		source = "https://example.com/soul-fake.git"
+		ref    = "v1.0.0"
+	)
+	block := sharedhost.BuildSigilBlock(source, ref, binRaw, schemaDigest[:])
 	rec := &sharedhost.SigilRecord{
-		Namespace:       d.Manifest.Namespace,
-		Name:            d.Manifest.Name,
+		Alias:           d.Alias,
+		Source:          source,
 		Ref:             ref,
 		BinarySHA256hex: binHex,
 		Signature:       ed25519.Sign(priv, block),
-		Manifest:        manifest,
+		Schema:          schemaBytes,
 	}
-	return pub, testLookup{d.Manifest.Namespace + "." + d.Manifest.Name: rec}
+	return pub, testLookup{d.Alias: rec}
 }
 
-// testLookup is minimal sharedhost.SigilLookup over map.
+// testLookup is minimal sharedhost.SigilLookup over map, keyed by alias.
 type testLookup map[string]*sharedhost.SigilRecord
 
-func (l testLookup) Get(ns, name string) *sharedhost.SigilRecord { return l[ns+"."+name] }
+func (l testLookup) Get(alias string) *sharedhost.SigilRecord { return l[alias] }
+
+// stampBuilt appends a schema trailer to an already-built test artifact — what
+// `soul-mod stamp` does in a real build. Without it the slot has no readable
+// disclosure and Discover skips it, which is the fail-closed behaviour under test
+// elsewhere in this package.
+func stampBuilt(t *testing.T, path string, doc schema.Document) {
+	t.Helper()
+	payload, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	if err := schema.WriteTrailerFile(path, payload); err != nil {
+		t.Fatalf("stamp artifact: %v", err)
+	}
+}
 
 // buildTestPlugin builds plugin from testdata/<dir> and places it in outDir with
 // name outName. testdata module has separate go.mod (replace to our
@@ -87,9 +109,9 @@ func buildTestPlugin(t *testing.T, testdataSubdir, outDir, outName string) strin
 	return binPath
 }
 
-// makeNestedSlot creates R-nested slot (A1-S1): <cacheRoot>/<key>/<commit>/ +
-// current → <commit>. Returns commit-slot directory where test places
-// manifest+binary. commit is synthetic fixed 40-hex.
+// makeNestedSlot creates the R-nested slot (A1-S1) <cacheRoot>/<alias>/<commit>/ +
+// current → <commit>, and returns the commit-slot directory the test builds its
+// artifact into. commit is a synthetic fixed 40-hex.
 func makeNestedSlot(t *testing.T, cacheRoot, key string) string {
 	t.Helper()
 	const commit = "0123456789abcdef0123456789abcdef01234567"
@@ -121,33 +143,27 @@ func setupCloudDriverPlugin(t *testing.T) (*Host, Discovered) {
 	}
 	cacheRoot := shortHostDir(t, "ss-kpr-mods-")
 	socketDir := shortHostDir(t, "ss-kpr-sock-")
-	moduleDir := makeNestedSlot(t, cacheRoot, "soulstack-fake")
-	buildTestPlugin(t, "cloud-plugin", moduleDir, "soul-cloud-fake")
-	if err := os.WriteFile(filepath.Join(moduleDir, "manifest.yaml"), []byte(`kind: cloud_driver
-protocol_version: 1
-namespace: soulstack
-name: fake
-required_capabilities: []
-side_effects: []
-spec:
-  provider_kind: fake
-  profile_schema:
-    type: object
-    properties:
-      region: { type: string }
-`), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	moduleDir := makeNestedSlot(t, cacheRoot, "fake")
+	binPath := buildTestPlugin(t, "cloud-plugin", moduleDir, "fake")
+	stampBuilt(t, binPath, schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"region": map[string]any{"type": "string"}},
+		},
+	})
 
 	found, warns, err := Discover(cacheRoot)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(warns) != 0 {
-		t.Logf("discovery warnings: %v", warns)
-	}
+	// Discovery skips a slot it cannot read (unstamped artifact, invalid schema
+	// document, several executables) and says why in warns. When the count is
+	// wrong those warnings ARE the diagnosis, so they belong in the failure rather
+	// than in a Logf the reader has to go looking for.
 	if len(found) != 1 {
-		t.Fatalf("expected 1 discovered plugin, got %d", len(found))
+		t.Fatalf("expected 1 discovered plugin, got %d; discovery warnings: %v", len(found), warns)
 	}
 
 	pub, lookup := sigilFor(t, found[0])
@@ -168,29 +184,24 @@ func setupSshProviderPlugin(t *testing.T) (*Host, Discovered) {
 	}
 	cacheRoot := shortHostDir(t, "ss-kpr-mods-")
 	socketDir := shortHostDir(t, "ss-kpr-sock-")
-	moduleDir := makeNestedSlot(t, cacheRoot, "soulstack-fake")
-	buildTestPlugin(t, "ssh-plugin", moduleDir, "soul-ssh-fake")
-	if err := os.WriteFile(filepath.Join(moduleDir, "manifest.yaml"), []byte(`kind: ssh_provider
-protocol_version: 1
-namespace: soulstack
-name: fake
-required_capabilities: []
-side_effects: []
-spec:
-  provider_kind: static_key
-`), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	moduleDir := makeNestedSlot(t, cacheRoot, "fake")
+	binPath := buildTestPlugin(t, "ssh-plugin", moduleDir, "fake")
+	stampBuilt(t, binPath, schema.Document{
+		Kind:            schema.KindSSHProvider,
+		ProtocolVersion: 1,
+		ProviderKind:    "static_key",
+	})
 
 	found, warns, err := Discover(cacheRoot)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(warns) != 0 {
-		t.Logf("discovery warnings: %v", warns)
-	}
+	// Discovery skips a slot it cannot read (unstamped artifact, invalid schema
+	// document, several executables) and says why in warns. When the count is
+	// wrong those warnings ARE the diagnosis, so they belong in the failure rather
+	// than in a Logf the reader has to go looking for.
 	if len(found) != 1 {
-		t.Fatalf("expected 1 discovered plugin, got %d", len(found))
+		t.Fatalf("expected 1 discovered plugin, got %d; discovery warnings: %v", len(found), warns)
 	}
 
 	pub, lookup := sigilFor(t, found[0])
@@ -223,8 +234,10 @@ func TestSpawnCloudDriverHappyPath(t *testing.T) {
 		}
 	}()
 
-	if cd.Manifest().Address() != "soulstack.fake" {
-		t.Errorf("Manifest.Address = %q", cd.Manifest().Address())
+	// A cloud_driver serves a single endpoint and declares no modules, so its address
+	// is the bare registration alias.
+	if cd.Discovered().Address() != "fake" {
+		t.Errorf("Address = %q, want the registration alias", cd.Discovered().Address())
 	}
 
 	// Schema.
@@ -369,8 +382,8 @@ func TestSpawnSshProviderHappyPath(t *testing.T) {
 		}
 	}()
 
-	if sp.Manifest().Kind != KindSSHProvider {
-		t.Errorf("Manifest.Kind = %q", sp.Manifest().Kind)
+	if sp.Discovered().Kind() != KindSSHProvider {
+		t.Errorf("Kind = %q", sp.Discovered().Kind())
 	}
 
 	signReply, err := sp.Sign(ctx, &pluginv1.SignRequest{Host: "soul-1.example.com", User: "soul"})
@@ -423,7 +436,19 @@ func TestSpawnCloseIdempotent(t *testing.T) {
 
 func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 	h, d := setupCloudDriverPlugin(t)
-	d.Manifest.RequiredCapabilities = []string{"vault_access"}
+	// Capabilities are declared PER MODULE now, so the check needs a module entry to
+	// read them from — a single-endpoint kind declares none.
+	doc := schema.Document{
+		Kind:            schema.KindSoulModule,
+		ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name:         "fake",
+			Capabilities: []schema.Capability{schema.VaultAccess},
+			States:       map[string]schema.State{"present": {Description: "exists"}},
+		}},
+	}
+	d.Doc = &doc
+	d.Module = "fake"
 	h.AllowedCapabilities = map[pluginv1.Capability]struct{}{
 		pluginv1.Capability_CAPABILITY_NETWORK_OUTBOUND: {},
 	}
@@ -435,8 +460,8 @@ func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 	}
 }
 
-// TestSpawnFailsClosedNoSigil verifies keeper-host without permission for (ns, name) →
-// Spawn fail-closed (VerifyReasonNoSigil), binary not started.
+// TestSpawnFailsClosedNoSigil verifies a keeper-host with no grant for the alias →
+// Spawn fails closed (VerifyReasonNoSigil), the artifact is not started.
 func TestSpawnFailsClosedNoSigil(t *testing.T) {
 	h, d := setupCloudDriverPlugin(t)
 	// Replace lookup with empty one (trust-anchor stays valid): no permission.
@@ -481,9 +506,10 @@ func TestSpawnFailsClosedNoTrustAnchor(t *testing.T) {
 }
 
 func TestNewCloudDriverPluginRejectsWrongKind(t *testing.T) {
-	// Feed "fake" Plugin with manifest kind=ssh_provider into Cloud wrapper.
+	// Feed a Plugin whose artifact is an ssh_provider into the Cloud wrapper.
+	doc := schema.Document{Kind: schema.KindSSHProvider, ProtocolVersion: 1, ProviderKind: "static_key"}
 	p := &Plugin{BasePlugin: sharedhost.NewBasePluginForTest(
-		&Manifest{Kind: KindSSHProvider, Namespace: "x", Name: "y"},
+		Discovered{Alias: "x", Doc: &doc},
 	)}
 	if _, err := NewCloudDriverPlugin(p); err == nil {
 		t.Fatal("expected error when wrapping ssh_provider Plugin as CloudDriverPlugin")
@@ -491,8 +517,9 @@ func TestNewCloudDriverPluginRejectsWrongKind(t *testing.T) {
 }
 
 func TestNewSshProviderPluginRejectsWrongKind(t *testing.T) {
+	doc := schema.Document{Kind: schema.KindCloudDriver, ProtocolVersion: 1, ProfileSchema: map[string]any{"type": "object"}}
 	p := &Plugin{BasePlugin: sharedhost.NewBasePluginForTest(
-		&Manifest{Kind: KindCloudDriver, Namespace: "x", Name: "y"},
+		Discovered{Alias: "x", Doc: &doc},
 	)}
 	if _, err := NewSshProviderPlugin(p); err == nil {
 		t.Fatal("expected error when wrapping cloud_driver Plugin as SshProviderPlugin")

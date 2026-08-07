@@ -3,81 +3,79 @@ package pluginhost
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 )
 
 // lookupStub — a minimal SigilLookup for tests. A nil result on a missing key models
 // "the sigil didn't arrive".
 type lookupStub map[string]*SigilRecord
 
-func (l lookupStub) Get(ns, name string) *SigilRecord { return l[ns+"."+name] }
+func (l lookupStub) Get(alias string) *SigilRecord { return l[alias] }
 
 // signFixture, symmetric with keeper/internal/sigil.Signer.Sign, builds the signature
-// over the same block with the same helpers (BuildSigilBlock + NormalizeManifestBytes).
-// If verify and this function diverge, the compiler/test catches it: the helpers are
+// over the same block with the same helpers (BuildSigilBlock + SchemaDigest). If
+// verify and this function diverge, the compiler/test catches it: the helpers are
 // shared, there's no second hashing implementation (S3↔S6 symmetry).
-func signFixture(t *testing.T, priv ed25519.PrivateKey, ns, name, ref string, binDigestHex string, manifest []byte) []byte {
+func signFixture(t *testing.T, priv ed25519.PrivateKey, source, ref, binDigestHex string, schemaDoc []byte) []byte {
 	t.Helper()
 	binRaw, err := hex.DecodeString(binDigestHex)
 	if err != nil {
 		t.Fatalf("decode bin digest: %v", err)
 	}
-	manifestDigest := sha256.Sum256(NormalizeManifestBytes(manifest))
-	block := BuildSigilBlock(ns, name, ref, binRaw, manifestDigest[:])
-	return ed25519.Sign(priv, block)
+	schemaDigest := SchemaDigest(schemaDoc)
+	return ed25519.Sign(priv, BuildSigilBlock(source, ref, binRaw, schemaDigest[:]))
 }
 
-// sigilTestEnv — a built plugin on disk + a matching valid SigilRecord.
+// sigilTestEnv — a stamped artifact on disk + a matching valid SigilRecord.
 type sigilTestEnv struct {
-	dir      string
-	binPath  string
-	manifest *sharedplugin.Manifest
-	rec      *SigilRecord
-	pub      ed25519.PublicKey
+	dir        string
+	binPath    string
+	discovered Discovered
+	rec        *SigilRecord
+	pub        ed25519.PublicKey
 }
+
+const (
+	testAlias  = "redis"
+	testSource = "https://github.com/souls-guild/soul-mod-redis"
+	testRef    = "v1.0.0"
+)
 
 func setupSigilEnv(t *testing.T) sigilTestEnv {
 	t.Helper()
-	const (
-		ns       = "acme"
-		name     = "x"
-		ref      = "v1.0.0"
-		manifest = "kind: soul_module\nnamespace: acme\nname: x\nprotocol_version: 1\n"
-	)
 	dir := t.TempDir()
-	binPath := filepath.Join(dir, "soul-mod-x")
-	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write bin: %v", err)
+	doc := soulModuleDoc(modDef("acl", nil, nil))
+	binPath := writeArtifact(t, dir, testAlias, doc, exitScript)
+
+	found, warns := DiscoverSlot(testAlias, dir)
+	if len(warns) != 0 || len(found) != 1 {
+		t.Fatalf("discover fixture: found=%d warns=%v", len(found), warns)
 	}
-	binDigest, err := computeFileDigest(binPath)
+	schemaDoc, err := schema.Marshal(doc)
 	if err != nil {
-		t.Fatalf("digest: %v", err)
+		t.Fatalf("marshal schema: %v", err)
 	}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("genkey: %v", err)
 	}
-	sig := signFixture(t, priv, ns, name, ref, binDigest, []byte(manifest))
 	return sigilTestEnv{
-		dir:     dir,
-		binPath: binPath,
-		manifest: &sharedplugin.Manifest{
-			Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: ns, Name: name,
-		},
+		dir:        dir,
+		binPath:    binPath,
+		discovered: found[0],
 		rec: &SigilRecord{
-			Namespace:       ns,
-			Name:            name,
-			Ref:             ref,
-			BinarySHA256hex: binDigest,
-			Signature:       sig,
-			Manifest:        []byte(manifest),
+			Alias:           testAlias,
+			Source:          testSource,
+			Ref:             testRef,
+			BinarySHA256hex: found[0].Digest,
+			Signature:       signFixture(t, priv, testSource, testRef, found[0].Digest, schemaDoc),
+			Schema:          schemaDoc,
 		},
 		pub: pub,
 	}
@@ -92,14 +90,10 @@ func (e sigilTestEnv) host(t *testing.T, withRec bool) *Host {
 	h.SigilAnchors = NewAnchorSet([]ed25519.PublicKey{e.pub})
 	look := lookupStub{}
 	if withRec {
-		look[e.rec.Namespace+"."+e.rec.Name] = e.rec
+		look[e.rec.Alias] = e.rec
 	}
 	h.Sigils = look
 	return h
-}
-
-func (e sigilTestEnv) discovered() Discovered {
-	return Discovered{Manifest: e.manifest, BinaryPath: e.binPath, Dir: e.dir}
 }
 
 // asVerifyError extracts *VerifyError from a wrapped Spawn error.
@@ -118,16 +112,14 @@ func asVerifyError(t *testing.T, err error) *VerifyError {
 	return ve
 }
 
-// TestSigilVerifySuccess — a valid sigil + binary + manifest from transport: verify
-// passes, the sidecar is sealed. Spawn then fails at handshake (the binary is a stub
-// without handshake), but the integrity gate ran BEFORE exec.
+// TestSigilVerifySuccess — a valid sigil + artifact + schema from transport: verify
+// passes, the sidecar is sealed. Spawn then fails at handshake (the fixture exits
+// without one), but the integrity gate ran BEFORE exec.
 func TestSigilVerifySuccess(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
 
-	// Spawn will fail after verify (no handshake), but the verify stage must not
-	// produce a VerifyError — we check specifically for the absence of ErrSigilVerify.
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("verify must pass for valid sigil, got %v", err)
 	}
@@ -136,11 +128,25 @@ func TestSigilVerifySuccess(t *testing.T) {
 	}
 }
 
+// The grant is looked up by the REGISTRATION ALIAS: it is the only identity a host
+// holds, since the artifact carries none and the source it was signed under is not on
+// disk. A grant filed under another alias is no grant at all.
+func TestSigilVerifyLookupIsByAlias(t *testing.T) {
+	e := setupSigilEnv(t)
+	h := e.host(t, false)
+	h.Sigils = lookupStub{"some-other-alias": e.rec}
+
+	_, err := h.Spawn(context.Background(), e.discovered)
+	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoSigil {
+		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoSigil)
+	}
+}
+
 func TestSigilVerifyNoSigil(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, false) // sigil didn't arrive
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoSigil {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoSigil)
 	}
@@ -154,7 +160,7 @@ func TestSigilVerifyNoTrustAnchor(t *testing.T) {
 	h := e.host(t, true)
 	h.SigilAnchors = NewAnchorSet(nil) // empty anchor set: Sigil is off on the Keeper
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoTrustAnchor {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoTrustAnchor)
 	}
@@ -162,13 +168,13 @@ func TestSigilVerifyNoTrustAnchor(t *testing.T) {
 
 // TestSigilVerifyNilAnchorHolder — a nil SigilAnchors holder (not set at all) is
 // equivalent to an empty set: verify fails closed with no_trust_anchor (nil-safe
-// snapshot). Covers backward compatibility of the old "nil pubkey".
+// snapshot).
 func TestSigilVerifyNilAnchorHolder(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
 	h.SigilAnchors = nil
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoTrustAnchor {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoTrustAnchor)
 	}
@@ -183,11 +189,9 @@ func TestSigilVerifyMultiAnchorOR(t *testing.T) {
 
 	otherPub1, _, _ := ed25519.GenerateKey(nil)
 	otherPub2, _, _ := ed25519.GenerateKey(nil)
-	// Set: foreign, the signing key (e.pub), another foreign. Neither the order nor
-	// the presence of foreign anchors should interfere — OR finds the signer.
 	h.SigilAnchors = NewAnchorSet([]ed25519.PublicKey{otherPub1, e.pub, otherPub2})
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("verify must pass when signer is one of the anchors, got %v", err)
 	}
@@ -204,34 +208,35 @@ func TestSigilVerifyMultiAnchorAllForeign(t *testing.T) {
 	f2, _, _ := ed25519.GenerateKey(nil)
 	h.SigilAnchors = NewAnchorSet([]ed25519.PublicKey{f1, f2})
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonBadSignature)
 	}
 }
 
+// GUARD: the one real control. The operator approved a sha256; an artifact whose bytes
+// differ does not exec, whatever else is in order.
 func TestSigilVerifyDigestMismatch(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	// Tamper with the binary after the sigil was issued for the old hash.
-	if err := os.WriteFile(e.binPath, []byte("#!/bin/sh\necho pwned\n"), 0o755); err != nil {
-		t.Fatalf("tamper bin: %v", err)
-	}
+	// Swap the artifact after the sigil was issued for the old hash, keeping a valid
+	// trailer so nothing else about the slot looks wrong.
+	writeArtifact(t, e.dir, testAlias, soulModuleDoc(modDef("acl", nil, nil)), "#!/bin/sh\necho pwned\nexit 0\n")
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonDigestMismatch {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonDigestMismatch)
 	}
 }
 
-func TestSigilVerifyBadSignatureManifestTampered(t *testing.T) {
+// The schema is what the operator approved, so tampering with it after signing breaks
+// the seal even though the artifact bytes still match.
+func TestSigilVerifyBadSignatureSchemaTampered(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	// The manifest in the record is tampered after signing — the manifest hash diverges
-	// from the one in the signed block; the binary digest still matches.
-	e.rec.Manifest = []byte("kind: soul_module\nnamespace: acme\nname: x\nprotocol_version: 1\nside_effects: true\n")
+	e.rec.Schema = append(e.rec.Schema, ' ')
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonBadSignature)
 	}
@@ -242,7 +247,7 @@ func TestSigilVerifyBadSignatureCorrupted(t *testing.T) {
 	h := e.host(t, true)
 	e.rec.Signature = make([]byte, ed25519.SignatureSize) // zero signature
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonBadSignature)
 	}
@@ -254,31 +259,68 @@ func TestSigilVerifyRefTampered(t *testing.T) {
 	// ref is part of the signed block — tampering with it breaks the signature.
 	e.rec.Ref = "v9.9.9"
 
-	_, err := h.Spawn(context.Background(), e.discovered())
+	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
 		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonBadSignature)
 	}
 }
 
+// The source is the signed identity: claiming the artifact came from somewhere else
+// breaks the seal.
+func TestSigilVerifySourceTampered(t *testing.T) {
+	e := setupSigilEnv(t)
+	h := e.host(t, true)
+	e.rec.Source = "https://evil.example.com/soul-mod-redis"
+
+	_, err := h.Spawn(context.Background(), e.discovered)
+	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
+		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonBadSignature)
+	}
+}
+
+// The alias is NOT signed, so re-filing the same grant under a second alias verifies
+// unchanged — the same bytes registered twice, one signature.
+func TestSigilVerifySecondAliasNeedsNoNewSignature(t *testing.T) {
+	e := setupSigilEnv(t)
+
+	second := t.TempDir()
+	writeArtifact(t, second, "artifact", soulModuleDoc(modDef("acl", nil, nil)), exitScript)
+	found, warns := DiscoverSlot("redis-community", second)
+	if len(warns) != 0 || len(found) != 1 {
+		t.Fatalf("discover second slot: found=%d warns=%v", len(found), warns)
+	}
+
+	renamed := *e.rec
+	renamed.Alias = "redis-community"
+	h := e.host(t, false)
+	h.Sigils = lookupStub{"redis-community": &renamed}
+
+	_, err := h.Spawn(context.Background(), found[0])
+	if errors.Is(err, ErrSigilVerify) {
+		t.Fatalf("the same artifact under a second alias must verify, got %v", err)
+	}
+}
+
 // TestSigilSymmetryBlockMatchesSign — the block that verify builds matches byte-for-byte
-// the block that the Keeper Sign flow signs: both call BuildSigilBlock +
-// NormalizeManifestBytes (shared code, not a second implementation).
+// the block the Keeper Sign flow signs: both call BuildSigilBlock + SchemaDigest
+// (shared code, not a second implementation).
 func TestSigilSymmetryBlockMatchesSign(t *testing.T) {
-	const (
-		ns, name, ref = "core", "git", "v2.0.0"
-		manifest      = "kind: soul_module\r\nnamespace: core\r\nname: git\r\n" // CRLF → normalized
-	)
-	binRaw := sha256.Sum256([]byte("binary-bytes"))
+	const source, ref = "https://example.com/soul-mod-git", "v2.0.0"
+	schemaDoc, err := schema.Marshal(soulModuleDoc(modDef("clone", nil, nil)))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	binRaw := SchemaDigest([]byte("artifact-bytes"))
 	binHex := hex.EncodeToString(binRaw[:])
 
 	// Verify side.
-	manDigest := sha256.Sum256(NormalizeManifestBytes([]byte(manifest)))
-	verifyBlock := BuildSigilBlock(ns, name, ref, binRaw[:], manDigest[:])
+	verifyDigest := SchemaDigest(schemaDoc)
+	verifyBlock := BuildSigilBlock(source, ref, binRaw[:], verifyDigest[:])
 
 	// Sign side reproduces exactly the same steps (like keeper Sign).
 	signBinRaw, _ := hex.DecodeString(binHex)
-	signManDigest := sha256.Sum256(NormalizeManifestBytes([]byte(manifest)))
-	signBlock := BuildSigilBlock(ns, name, ref, signBinRaw, signManDigest[:])
+	signDigest := SchemaDigest(schemaDoc)
+	signBlock := BuildSigilBlock(source, ref, signBinRaw, signDigest[:])
 
 	if string(verifyBlock) != string(signBlock) {
 		t.Fatalf("verify block != sign block:\n verify=%x\n sign  =%x", verifyBlock, signBlock)
@@ -293,7 +335,7 @@ func TestSigilReExecBySidecar(t *testing.T) {
 	h := e.host(t, true)
 
 	// First Spawn: verify-pass → seal.
-	_, _ = h.Spawn(context.Background(), e.discovered())
+	_, _ = h.Spawn(context.Background(), e.discovered)
 	sidecar := filepath.Join(e.dir, DigestSidecarName)
 	st1, err := os.Stat(sidecar)
 	if err != nil {
@@ -301,7 +343,7 @@ func TestSigilReExecBySidecar(t *testing.T) {
 	}
 
 	// Second Spawn: the sidecar already exists, verify checks it, doesn't fail at verify.
-	_, err = h.Spawn(context.Background(), e.discovered())
+	_, err = h.Spawn(context.Background(), e.discovered)
 	if errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("re-exec must pass integrity, got %v", err)
 	}
@@ -311,5 +353,29 @@ func TestSigilReExecBySidecar(t *testing.T) {
 	}
 	if !st2.ModTime().Equal(st1.ModTime()) {
 		t.Errorf("sidecar rewritten on re-exec: mtime %v -> %v", st1.ModTime(), st2.ModTime())
+	}
+}
+
+// GUARD: a lookup that answers with another registration's grant is refused, even
+// though that grant is otherwise perfectly valid — right signature, right digest, and
+// the artifact on disk is exactly the bytes it approves. Only the alias disagrees, and
+// that is enough: an approval belongs to the registration it was issued for.
+func TestSigilVerifyRefusesGrantFiledUnderAnotherAlias(t *testing.T) {
+	e := setupSigilEnv(t)
+
+	// Same artifact, same source, same signature — only Alias differs from the key
+	// the host will ask for. A mis-wired adapter looks exactly like this.
+	misfiled := *e.rec
+	misfiled.Alias = "redis-community"
+
+	h := e.host(t, false)
+	h.Sigils = lookupStub{testAlias: &misfiled}
+
+	_, err := h.Spawn(context.Background(), e.discovered)
+	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonNoSigil {
+		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonNoSigil)
+	}
+	if _, serr := os.Stat(filepath.Join(e.dir, DigestSidecarName)); !os.IsNotExist(serr) {
+		t.Fatalf("sidecar sealed for a misfiled grant, stat err = %v", serr)
 	}
 }

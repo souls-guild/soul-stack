@@ -39,7 +39,6 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -51,15 +50,18 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded next
-// to the binary. Symmetrical with soul-cloud-aws.
+// schemaDocJSON is the artifact's schema document (NIM-377), embedded next to the
+// binary. It is the SAME file `soul-mod stamp` publishes as dist/schema.json and the
+// same bytes the trailer carries, so the profile_schema this driver answers with and
+// the one an operator approves cannot drift apart — there is only one copy.
 //
 //go:embed schema.json
-var profileSchemaJSON []byte
+var schemaDocJSON []byte
 
 // runTagKey is the idempotency tag: value = run/incarnation identifier. The tag
 // name in Azure follows snake_case notation; colons in tag keys are allowed, but
@@ -91,11 +93,11 @@ type AzureDriver struct {
 
 // Schema publishes the embedded profile_schema (symmetrical with soul-cloud-aws).
 func (a *AzureDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
+	doc, err := schema.Unmarshal(schemaDocJSON)
+	if err != nil {
 		return nil, fmt.Errorf("parse embedded schema.json: %w", err)
 	}
-	s, err := structpb.NewStruct(raw)
+	s, err := structpb.NewStruct(doc.ProfileSchema)
 	if err != nil {
 		return nil, fmt.Errorf("encode profile_schema: %w", err)
 	}

@@ -7,142 +7,257 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/sdk/schema"
 )
 
-// validCloudManifest is minimally-valid manifest for cloud_driver plugin
-// in slot fixture.
-const validCloudManifest = `kind: cloud_driver
-protocol_version: 1
-namespace: cloud
-name: hetzner
-spec:
-  profile_schema:
-    type: object
-`
+// commitFixtureSHA is the synthetic 40-hex commit [writeSlot] names the immutable slot
+// with and points `current` at (these tests exercise reading a slot, not git-resolve).
+const commitFixtureSHA = "0123456789abcdef0123456789abcdef01234567"
 
-// writeSlot creates R-nested slot (A1-S1): <root>/<ns>-<name>/<commit>/ with
-// manifest.yaml and binary by BinaryName convention + current → <commit>.
-// commit is synthetic 40-hex for fixture (read test, not git-resolve).
-func writeSlot(t *testing.T, root, ns, name, binaryName string, manifest, binary []byte) {
+// cloudDriverDoc is a minimally valid kind=cloud_driver document. It declares NO name
+// and no namespace — there is nowhere in the format left to put one (NIM-377).
+func cloudDriverDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema:   map[string]any{"type": "object"},
+	}
+}
+
+// stampedArtifact writes an executable at path holding body, with doc stamped into its
+// trailer. Every fixture goes through the real serializer and the real trailer writer:
+// a hand-assembled trailer would be testing a format nothing else produces.
+func stampedArtifact(t *testing.T, path string, doc schema.Document, body string) {
 	t.Helper()
-	const commit = "0123456789abcdef0123456789abcdef01234567"
-	pluginDir := filepath.Join(root, ns+"-"+name)
-	dir := filepath.Join(pluginDir, commit)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	payload, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	if err := schema.WriteTrailerFile(path, payload); err != nil {
+		t.Fatalf("stamp artifact: %v", err)
+	}
+}
+
+// writeSlot creates the R-nested slot (A1-S1) `<root>/<alias>/<commit>/` holding the
+// named artifacts, plus `current → <commit>`. Each entry of artifacts is a file name;
+// a nil doc means "write it unstamped".
+func writeSlot(t *testing.T, root, alias string, doc *schema.Document, artifacts ...string) string {
+	t.Helper()
+	pluginDir := filepath.Join(root, alias)
+	dir := filepath.Join(pluginDir, commitFixtureSHA)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir slot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), manifest, 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
-	if binaryName != "" {
-		if err := os.WriteFile(filepath.Join(dir, binaryName), binary, 0o755); err != nil {
-			t.Fatalf("write binary: %v", err)
+	for _, name := range artifacts {
+		path := filepath.Join(dir, name)
+		if doc == nil {
+			if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatalf("write artifact: %v", err)
+			}
+			continue
 		}
+		stampedArtifact(t, path, *doc, "#!/bin/sh\nexit 0\n# "+name+"\n")
 	}
-	if err := os.Symlink(commit, filepath.Join(pluginDir, CurrentLink)); err != nil {
+	if err := os.Symlink(commitFixtureSHA, filepath.Join(pluginDir, CurrentLink)); err != nil {
 		t.Fatalf("symlink current: %v", err)
 	}
+	return dir
 }
 
 func TestReadSlot_Success(t *testing.T) {
 	root := t.TempDir()
-	binary := []byte("fake-cloud-binary-bytes")
-	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner", []byte(validCloudManifest), binary)
+	doc := cloudDriverDoc()
+	dir := writeSlot(t, root, "hetzner", &doc, "hetzner")
 
-	got, err := ReadSlot(root, "cloud", "hetzner")
+	got, err := ReadSlot(root, "hetzner")
 	if err != nil {
 		t.Fatalf("ReadSlot: %v", err)
 	}
 
-	wantDigest := sha256.Sum256(binary)
+	raw, err := os.ReadFile(filepath.Join(dir, "hetzner"))
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	wantDigest := sha256.Sum256(raw)
 	if got.BinarySHA256 != hex.EncodeToString(wantDigest[:]) {
 		t.Errorf("BinarySHA256 = %q, want %q", got.BinarySHA256, hex.EncodeToString(wantDigest[:]))
 	}
-	if string(got.ManifestBytes) != validCloudManifest {
-		t.Errorf("ManifestBytes differs from written raw manifest.yaml bytes")
+
+	// The schema bytes must be the trailer's payload byte for byte: they are what the
+	// Sigil signature is placed over, so anything re-serialized here would be a
+	// different document than the one approved.
+	wantSchema, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
-	if filepath.Base(got.BinaryPath) != "soul-cloud-hetzner" {
-		t.Errorf("BinaryPath = %q, want suffix soul-cloud-hetzner", got.BinaryPath)
+	if string(got.SchemaBytes) != string(wantSchema) {
+		t.Errorf("SchemaBytes are not the canonical trailer payload")
+	}
+	if got.Doc == nil || got.Doc.Kind != schema.KindCloudDriver {
+		t.Errorf("Doc = %+v, want a parsed cloud_driver document", got.Doc)
+	}
+	if filepath.Base(got.BinaryPath) != "hetzner" {
+		t.Errorf("BinaryPath = %q, want the slot's single artifact", got.BinaryPath)
+	}
+}
+
+// TestReadSlot_ArtifactNameIsIrrelevant pins the removal of the filename convention:
+// the artifact carries no self-name, so the slot's single executable is taken whatever
+// it is called.
+func TestReadSlot_ArtifactNameIsIrrelevant(t *testing.T) {
+	root := t.TempDir()
+	doc := cloudDriverDoc()
+	writeSlot(t, root, "hetzner", &doc, "some-completely-unrelated-filename")
+
+	got, err := ReadSlot(root, "hetzner")
+	if err != nil {
+		t.Fatalf("ReadSlot: %v", err)
+	}
+	if filepath.Base(got.BinaryPath) != "some-completely-unrelated-filename" {
+		t.Errorf("BinaryPath = %q, want the slot's single artifact regardless of its name", got.BinaryPath)
 	}
 }
 
 func TestReadSlot_NoSlot(t *testing.T) {
 	root := t.TempDir()
-	_, err := ReadSlot(root, "cloud", "absent")
+	_, err := ReadSlot(root, "absent")
 	if !errors.Is(err, ErrSlotNotFound) {
 		t.Fatalf("ReadSlot absent slot: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-func TestReadSlot_NoManifest(t *testing.T) {
+// TestReadSlot_EmptySlot — zero executables fails closed. An empty slot is not "nothing
+// to do", it is a registration that resolves to no code.
+func TestReadSlot_EmptySlot(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(root, "cloud-hetzner")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	_, err := ReadSlot(root, "cloud", "hetzner")
+	writeSlot(t, root, "hetzner", nil)
+	_, err := ReadSlot(root, "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("ReadSlot without manifest: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("ReadSlot on an empty slot: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-func TestReadSlot_BinaryMissing(t *testing.T) {
+// TestReadSlot_TwoExecutables — the guard that matters most in this file. With no
+// filename convention left, "take the first" would let directory listing order decide
+// which bytes get signed and later executed. Two executables must stop the read.
+func TestReadSlot_TwoExecutables(t *testing.T) {
 	root := t.TempDir()
-	// manifest present, binary missing.
-	writeSlot(t, root, "cloud", "hetzner", "", []byte(validCloudManifest), nil)
-	_, err := ReadSlot(root, "cloud", "hetzner")
+	doc := cloudDriverDoc()
+	writeSlot(t, root, "hetzner", &doc, "artifact-a", "artifact-b")
+
+	_, err := ReadSlot(root, "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("ReadSlot without binary: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("ReadSlot with two executables: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-func TestReadSlot_InvalidManifest(t *testing.T) {
+// TestReadSlot_NoTrailer — an unstamped artifact has no disclosure to approve. Fail
+// closed with an error, NOT a fallback to a sibling schema.json and NOT an empty
+// document: a host that guessed would be running code nobody agreed to.
+func TestReadSlot_NoTrailer(t *testing.T) {
 	root := t.TempDir()
-	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner",
-		[]byte("kind: cloud_driver\nprotocol_version: 1\n"), // missing namespace/name/spec
-		[]byte("bin"))
-	_, err := ReadSlot(root, "cloud", "hetzner")
+	writeSlot(t, root, "hetzner", nil, "hetzner")
+
+	_, err := ReadSlot(root, "hetzner")
 	if err == nil {
-		t.Fatal("ReadSlot with invalid manifest should return error")
+		t.Fatal("ReadSlot on an unstamped artifact must fail")
+	}
+	if !errors.Is(err, schema.ErrNoTrailer) {
+		t.Errorf("err = %v, want it to wrap schema.ErrNoTrailer", err)
+	}
+}
+
+// TestReadSlot_NoTrailerIgnoresSiblingSchemaFile — the fallback that must not exist. A
+// published `schema.json` next to an unstamped artifact is exactly the file an attacker
+// could drop, and reading it would approve a disclosure the bytes never carried.
+func TestReadSlot_NoTrailerIgnoresSiblingSchemaFile(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSlot(t, root, "hetzner", nil, "hetzner")
+	payload, err := schema.Marshal(cloudDriverDoc())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, schema.SchemaFileName), payload, 0o644); err != nil {
+		t.Fatalf("write sibling schema.json: %v", err)
+	}
+
+	if _, err := ReadSlot(root, "hetzner"); err == nil {
+		t.Fatal("ReadSlot must not fall back to a sibling schema.json")
+	}
+}
+
+// TestReadSlot_CorruptTrailer — a truncated or tampered trailer fails closed for the
+// same reason a missing one does.
+func TestReadSlot_CorruptTrailer(t *testing.T) {
+	root := t.TempDir()
+	doc := cloudDriverDoc()
+	dir := writeSlot(t, root, "hetzner", &doc, "hetzner")
+
+	path := filepath.Join(dir, "hetzner")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	// Chop the last byte: the magic footer no longer matches its payload.
+	if err := os.WriteFile(path, raw[:len(raw)-1], 0o755); err != nil {
+		t.Fatalf("truncate artifact: %v", err)
+	}
+
+	if _, err := ReadSlot(root, "hetzner"); err == nil {
+		t.Fatal("ReadSlot on a corrupt trailer must fail")
+	}
+}
+
+// TestReadSlot_InvalidDocument — a trailer whose payload parses but does not validate
+// is refused too: an invalid disclosure is not a disclosure.
+func TestReadSlot_InvalidDocument(t *testing.T) {
+	root := t.TempDir()
+	// kind=soul_module with no modules: the validator rejects it.
+	bad := schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1}
+	writeSlot(t, root, "redis", &bad, "redis")
+
+	_, err := ReadSlot(root, "redis")
+	if err == nil {
+		t.Fatal("ReadSlot with an invalid document must fail")
 	}
 	if errors.Is(err, ErrSlotNotFound) {
-		t.Errorf("invalid manifest should not map to ErrSlotNotFound: %v", err)
+		t.Errorf("an invalid document should not read as a missing slot: %v", err)
 	}
 }
 
-// TestReadSlot_RefIgnored is variant C: read by (ns, name) without ref; same
-// slot returns same binary regardless of which ref label it was
-// allowed under (ref not in cache path).
+// TestReadSlot_RefIgnored is variant C: the lookup key is the alias alone, so the same
+// slot yields the same artifact regardless of the ref a grant labels it with.
 func TestReadSlot_RefIgnored(t *testing.T) {
 	root := t.TempDir()
-	binary := []byte("single-slot-binary")
-	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner", []byte(validCloudManifest), binary)
+	doc := cloudDriverDoc()
+	writeSlot(t, root, "hetzner", &doc, "hetzner")
 
-	a, err := ReadSlot(root, "cloud", "hetzner")
+	a, err := ReadSlot(root, "hetzner")
 	if err != nil {
 		t.Fatalf("ReadSlot #1: %v", err)
 	}
-	b, err := ReadSlot(root, "cloud", "hetzner")
+	b, err := ReadSlot(root, "hetzner")
 	if err != nil {
 		t.Fatalf("ReadSlot #2: %v", err)
 	}
 	if a.BinarySHA256 != b.BinarySHA256 {
-		t.Errorf("single-slot must give stable digest: %q != %q", a.BinarySHA256, b.BinarySHA256)
+		t.Errorf("single-slot must give a stable digest: %q != %q", a.BinarySHA256, b.BinarySHA256)
 	}
 }
 
-// commitFixtureSHA is synthetic 40-hex commit that writeSlot uses to name slot
-// and target current (test symlink target reading, not git-resolve).
-const commitFixtureSHA = "0123456789abcdef0123456789abcdef01234567"
-
-// TestSlotCommitSHA_Success verifies current-symlink points to <commit_sha> directory;
-// SlotCommitSHA returns that directory name (A1-S4: source of commit_sha for
-// plugin_sigils on allow).
+// TestSlotCommitSHA_Success — `current` points at the `<commit_sha>` directory and
+// SlotCommitSHA returns that name (A1-S4: the commit_sha written to plugin_sigils on
+// allow).
 func TestSlotCommitSHA_Success(t *testing.T) {
 	root := t.TempDir()
-	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner", []byte(validCloudManifest), []byte("bin"))
+	doc := cloudDriverDoc()
+	writeSlot(t, root, "hetzner", &doc, "hetzner")
 
-	got, err := SlotCommitSHA(root, "cloud", "hetzner")
+	got, err := SlotCommitSHA(root, "hetzner")
 	if err != nil {
 		t.Fatalf("SlotCommitSHA: %v", err)
 	}
@@ -151,39 +266,81 @@ func TestSlotCommitSHA_Success(t *testing.T) {
 	}
 }
 
-// TestSlotCommitSHA_NoSlot verifies missing <ns>-<name>/ directory → ErrSlotNotFound.
 func TestSlotCommitSHA_NoSlot(t *testing.T) {
 	root := t.TempDir()
-	_, err := SlotCommitSHA(root, "cloud", "absent")
+	_, err := SlotCommitSHA(root, "absent")
 	if !errors.Is(err, ErrSlotNotFound) {
 		t.Fatalf("err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-// TestSlotCommitSHA_LegacyNoCurrent verifies legacy slot: <ns>-<name>/ directory exists
-// but current symlink missing (commit_sha cannot be reliably extracted). fail-closed →
-// ErrSlotNotFound (Allow must reject such permission).
-func TestSlotCommitSHA_LegacyNoCurrent(t *testing.T) {
+// TestSlotCommitSHA_NoCurrent — the `<alias>/` directory exists but `current` does not,
+// so the commit_sha cannot be extracted. Fail-closed: Allow must refuse rather than
+// approve with unpinned provenance.
+func TestSlotCommitSHA_NoCurrent(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "cloud-hetzner", "somedir"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "hetzner", "somedir"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	_, err := SlotCommitSHA(root, "cloud", "hetzner")
+	_, err := SlotCommitSHA(root, "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("legacy slot without current: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("slot without current: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-// TestSlotCommitSHA_CurrentNotSymlink verifies current exists but is regular
-// directory not symlink (R-nested invariant broken). fail-closed →
-// ErrSlotNotFound.
+// TestSlotCommitSHA_CurrentNotSymlink — `current` exists but is a plain directory (the
+// R-nested invariant is broken). Fail-closed → ErrSlotNotFound.
 func TestSlotCommitSHA_CurrentNotSymlink(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "cloud-hetzner", CurrentLink), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "hetzner", CurrentLink), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	_, err := SlotCommitSHA(root, "cloud", "hetzner")
+	_, err := SlotCommitSHA(root, "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
 		t.Fatalf("current is not a symlink: err = %v, want ErrSlotNotFound", err)
 	}
+}
+
+// TestSingleArtifactIn_Arithmetic pins the rule directly: exactly one executable, and a
+// non-executable sibling (the published schema.json) does not make a directory
+// ambiguous.
+func TestSingleArtifactIn_Arithmetic(t *testing.T) {
+	t.Run("one executable plus schema.json", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "soul-mod-redis"), []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, schema.SchemaFileName), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := SingleArtifactIn(dir)
+		if err != nil {
+			t.Fatalf("SingleArtifactIn: %v", err)
+		}
+		if filepath.Base(got) != "soul-mod-redis" {
+			t.Errorf("got %q, want the executable", got)
+		}
+	})
+
+	t.Run("zero executables", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, schema.SchemaFileName), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := SingleArtifactIn(dir); err == nil {
+			t.Fatal("zero executables must fail closed")
+		}
+	})
+
+	t.Run("two executables", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, n := range []string{"a", "b"} {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := SingleArtifactIn(dir); err == nil {
+			t.Fatal("two executables must fail closed, not pick one")
+		}
+	})
 }

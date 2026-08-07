@@ -85,6 +85,12 @@ const (
 	// ReasonUnknownCoreModule — namespace is `core` but this engine has no
 	// manifest for it: the definition is newer than the binary scanning it.
 	ReasonUnknownCoreModule = "unknown_core_module"
+	// ReasonReservedNamespace — address level 1 is a reserved name other than
+	// `core` (`keeper.x`, `sigil.x`), which the built-in registry does not serve
+	// and no plugin may be registered under. Recorded rather than passed to the
+	// resolver: letting a catalog answer for a reserved name is the shadowing the
+	// reserved list exists to prevent (NIM-377).
+	ReasonReservedNamespace = "reserved_namespace"
 )
 
 // DeprecatedScan — the result of walking one definition.
@@ -160,18 +166,32 @@ func moduleDeprecatedUses(addr string, params map[string]any, where string, reg 
 		// validator; it is not this walk's business to report it twice.
 		return
 	}
-	if ns != "core" {
-		pluginDeprecatedUses(addr, ns, mod, state, params, where, modules, scan)
-		return
-	}
-	if reg == nil {
-		return
-	}
 	name := ns + "." + mod
-	if _, known := reg.Lookup(name); !known {
-		scan.Unresolved = append(scan.Unresolved, UnresolvedModule{
-			Module: addr, Reason: ReasonUnknownCoreModule, Where: where,
-		})
+
+	// Which arm to take is decided by the REGISTRY, not by the namespace string.
+	// Since NIM-377 address level 1 is an operator's alias, so `ns == "core"` would
+	// route a plugin registered under that word into the built-in arm; and the
+	// reserved check below keeps the opposite mistake from happening too — a
+	// catalog answering for `keeper.x` because it was merely "not core".
+	builtin := false
+	if reg != nil {
+		_, builtin = reg.Lookup(name)
+	}
+	if !builtin {
+		if plugin.IsReserved(ns) {
+			reason := ReasonReservedNamespace
+			if ns == "core" {
+				// `core` keeps its own reason: for an author this is almost always
+				// "your engine is older than this definition", which is a different
+				// thing to do about it than "that name cannot exist".
+				reason = ReasonUnknownCoreModule
+			}
+			scan.Unresolved = append(scan.Unresolved, UnresolvedModule{
+				Module: addr, Reason: reason, Where: where,
+			})
+			return
+		}
+		pluginDeprecatedUses(addr, ns, mod, state, params, where, modules, scan)
 		return
 	}
 	def, ok := reg.State(name, state)
@@ -227,13 +247,13 @@ func pluginDeprecatedUses(addr, ns, mod, state string, params map[string]any, wh
 		return
 	}
 	man, ok := modules.ResolveModule(ns, mod)
-	if !ok || man == nil {
+	if !ok {
 		scan.Unresolved = append(scan.Unresolved, UnresolvedModule{
 			Module: addr, Reason: ReasonPluginNamespace, Where: where,
 		})
 		return
 	}
-	def, known := man.Spec.States[state]
+	def, known := man.States[state]
 	if !known {
 		scan.Unresolved = append(scan.Unresolved, UnresolvedModule{
 			Module: addr, Reason: ReasonUnknownPluginState, Where: where,

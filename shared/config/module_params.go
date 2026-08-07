@@ -12,12 +12,13 @@ import (
 )
 
 // validateModuleParams — the static-check phase of a task's `params:` against the
-// module's manifest schema (docs/soul/modules.md → "Core modules and manifest").
+// module's declared input (docs/soul/modules.md → "Core modules and manifest").
 //
-// Currently only core modules (namespace `core`) are covered: their manifest is
-// embedded in `shared/coremanifest`. Custom modules (any other namespace) are skipped
-// here — their manifest lives on disk next to the binary and is validated by a
-// separate path (`validate-manifest` + resolve on a full service checkout, not pilot).
+// This pass covers only modules the binary carries COMPILED IN: `shared/coremanifest`
+// is available at the moment a task is decoded, which is what lets the check run here.
+// A plugin's contract arrives with the caller instead, so it is checked by the post-pass
+// in module_params_plugin.go against whatever the caller could resolve — keeper's Sigil
+// grants, or the schema documents `soul-lint --modules <alias>=<path>` was handed.
 //
 // What the structural check over plugin.InputParamDef catches:
 //   - unknown param (`command` instead of `cmd` for core.exec) → unknown_param;
@@ -58,7 +59,7 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "module_state_unknown",
 			Message:  fmt.Sprintf("core.%s has no state %q", mod, state),
-			Hint:     "see the module's manifest spec.states for valid states",
+			Hint:     "see the module's schema states for valid states",
 			YAMLPath: pathPrefix + ".module",
 		})}
 	}
@@ -96,7 +97,7 @@ func checkUnknownAndType(def plugin.StateDef, paramsNode *ast.MappingNode, pathP
 				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 				Code:     "unknown_param",
 				Message:  fmt.Sprintf("unknown param %q for this module state", name),
-				Hint:     "see the module's manifest spec.states.<state>.input for accepted params",
+				Hint:     "see the module's schema states.<state>.input for accepted params",
 				YAMLPath: pathPrefix + ".params." + name,
 			}))
 			continue
@@ -132,7 +133,7 @@ func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPre
 	if _, isNull := value.(*ast.NullNode); isNull {
 		return nil // null = "not set", equivalent to a missing key.
 	}
-	if astMatchesType(p.Type, value) {
+	if astMatchesType(string(p.Type), value) {
 		return nil
 	}
 	tok := value.GetToken()
@@ -143,7 +144,7 @@ func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPre
 	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:     "param_type_mismatch",
-		Message:  fmt.Sprintf("param %q must be %s", name, canonicalType(p.Type)),
+		Message:  fmt.Sprintf("param %q must be %s", name, canonicalType(string(p.Type))),
 		YAMLPath: pathPrefix + ".params." + name,
 	})}
 }

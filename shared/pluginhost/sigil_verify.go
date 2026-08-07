@@ -20,31 +20,44 @@ import (
 // needs for verification. A narrow projection of keeperv1.PluginSigil: shared does
 // NOT import keeper-proto, the Soul-side adapter fills this struct.
 //
-// Fields are symmetric to the signed block [BuildSigilBlock]:
-//   - Namespace / Name / Ref — grant identity (Ref is operator-asserted, not checked
-//     against disk, included in the signed block);
-//   - BinarySHA256hex — the allowed binary hash (64 lowercase hex chars), checked
-//     against the actual digest of the binary on disk;
+// The record carries two identities, and the split is the point:
+//
+//   - Alias is the operator's registration, and the runtime LOOKUP key. It is NOT in
+//     the signed block. A host holds a slot named by the alias and nothing else that
+//     could find the grant, and re-registering the same bytes under a second alias
+//     must not need a second signature.
+//   - Source and Ref are what was actually SIGNED. The artifact carries no self-name,
+//     so where it came from is the only identity a signature can be over. Ref is
+//     operator-asserted and not checked against disk.
+//
+// The remaining fields are the seal itself:
+//   - BinarySHA256hex — the approved artifact hash (64 lowercase hex chars), checked
+//     against the actual digest. This is the one real control on the spawn path;
 //   - Signature — raw bytes of the block's ed25519 signature (64 bytes);
-//   - Manifest — RAW manifest.yaml bytes from transport (M1), which verify runs
-//     through [NormalizeManifestBytes] before hashing (S3↔S6 invariant: NOT the file
-//     from disk, otherwise the hash diverges from the Keeper's signature).
+//   - Schema — the canonical schema-document bytes from transport (M1), hashed via
+//     [SchemaDigest]: NOT the trailer read from disk, otherwise the hash could diverge
+//     from what Keeper signed while still looking self-consistent.
 type SigilRecord struct {
-	Namespace       string
-	Name            string
+	Alias           string
+	Source          string
 	Ref             string
 	BinarySHA256hex string
 	Signature       []byte
-	Manifest        []byte
+	Schema          []byte
 }
 
-// SigilLookup is the read surface for the active grant by (namespace, name).
-// Single-slot: exactly one active Sigil is allowed per pair (ADR-026(g)), so the key
+// SigilLookup is the read surface for the active grant by registration alias.
+// Single-slot: exactly one active Sigil is allowed per alias (ADR-026(g)), so the key
 // has no ref. Implemented by the Soul-side adapter over the runtime Sigil cache
 // (soul/internal/sigilcache); a nil result = no grant → verify fail-closed (reason
 // no_sigil).
+//
+// An implementation MUST return either nil or a record whose [SigilRecord.Alias]
+// equals the requested alias. Verify enforces this rather than trusting it: a lookup
+// answering with another registration's grant would hand an approval to the wrong
+// alias, and every later check would pass against bytes nobody approved for THIS one.
 type SigilLookup interface {
-	Get(namespace, name string) *SigilRecord
+	Get(alias string) *SigilRecord
 }
 
 // VerifyReason is a machine-distinguishable reason for a Sigil-verify failure
@@ -53,19 +66,19 @@ type SigilLookup interface {
 type VerifyReason string
 
 const (
-	// VerifyReasonNoSigil — the grant for (namespace, name) did not reach the Soul
+	// VerifyReasonNoSigil — the grant for this alias did not reach the Soul
 	// (rec == nil). NOT "error → allow": an ungranted plugin = "not granted", must
 	// not run.
 	VerifyReasonNoSigil VerifyReason = "no_sigil"
 	// VerifyReasonNoTrustAnchor — the Soul has no Sigil trust anchor (pubkey nil):
 	// Sigil is not configured on the Keeper, nothing to verify the signature with.
 	VerifyReasonNoTrustAnchor VerifyReason = "no_trust_anchor"
-	// VerifyReasonDigestMismatch — the actual digest of the binary on disk did not
-	// match the allowed hash (binary_sha256 in the Sigil).
+	// VerifyReasonDigestMismatch — the actual digest of the artifact on disk did not
+	// match the approved hash (binary_sha256 in the Sigil).
 	VerifyReasonDigestMismatch VerifyReason = "digest_mismatch"
 	// VerifyReasonBadSignature — the Sigil signature failed verification by the trust
-	// anchor (manifest/binary/ref tampered with, or key rotation without recreating
-	// the grant).
+	// anchor (schema/artifact/source/ref tampered with, or key rotation without
+	// recreating the grant).
 	VerifyReasonBadSignature VerifyReason = "bad_signature"
 )
 
@@ -81,37 +94,39 @@ var ErrSigilVerify = errors.New("pluginhost: sigil verification failed")
 type VerifyError struct {
 	// Reason — machine-distinguishable reason (for metrics/logs/tests).
 	Reason VerifyReason
-	// Namespace / Name — address of the plugin that failed verify.
-	Namespace string
-	Name      string
+	// Alias — the registration the host was spawning, always known.
+	Alias string
+	// Source — the artifact source from the grant. Empty on no_sigil: with no grant
+	// there is nothing that says where the artifact should have come from.
+	Source string
 	// Hint — a human-readable actionable hint for the operator.
 	Hint string
 }
 
 func (e *VerifyError) Error() string {
-	return fmt.Sprintf("%s: %s.%s [%s]: %s", ErrSigilVerify.Error(), e.Namespace, e.Name, e.Reason, e.Hint)
+	return fmt.Sprintf("%s: %s [%s]: %s", ErrSigilVerify.Error(), e.Alias, e.Reason, e.Hint)
 }
 
 func (e *VerifyError) Unwrap() error { return ErrSigilVerify }
 
 // verifyErrorFor builds a [VerifyError] with an actionable hint for each reason.
-// ns/name/ref are printed in the hint so the operator can copy the grant command
+// alias/source/ref are printed in the hint so the operator can copy the grant command
 // without guessing.
-func verifyErrorFor(reason VerifyReason, namespace, name, ref string) *VerifyError {
+func verifyErrorFor(reason VerifyReason, alias, source, ref string) *VerifyError {
 	var hint string
 	switch reason {
 	case VerifyReasonNoSigil:
-		hint = fmt.Sprintf("plugin (%s, %s) not allowed; run `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
-			namespace, name, namespace, name)
+		hint = fmt.Sprintf("plugin %q is not allowed; run `keeper.plugin.allow alias=%s source=<source> ref=<ref>`",
+			alias, alias)
 	case VerifyReasonNoTrustAnchor:
 		hint = "Sigil is not configured on Keeper (no trust-anchor to verify plugin signatures)"
 	case VerifyReasonDigestMismatch:
-		hint = "plugin binary does not match the allowed hash (binary substitution or a stale allow)"
+		hint = "artifact does not match the approved hash (binary substitution or a stale allow)"
 	case VerifyReasonBadSignature:
-		hint = fmt.Sprintf("allow signature is invalid (signing key rotated? recreate the allow: `keeper.plugin.allow ns=%s name=%s ref=%s`)",
-			namespace, name, ref)
+		hint = fmt.Sprintf("allow signature is invalid (signing key rotated? recreate the allow: `keeper.plugin.allow alias=%s source=%s ref=%s`)",
+			alias, source, ref)
 	default:
 		hint = "Sigil-verify failed"
 	}
-	return &VerifyError{Reason: reason, Namespace: namespace, Name: name, Hint: hint}
+	return &VerifyError{Reason: reason, Alias: alias, Source: source, Hint: hint}
 }

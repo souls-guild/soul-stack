@@ -13,7 +13,7 @@ import (
 )
 
 // paramsEnv is the env var through which keeper.push passes params (JSON per
-// schema.json) to the static provider when the plugin is forked. It mirrors
+// schema.json -> params_schema) to the static provider when the plugin is forked. It mirrors
 // handshake.SocketEnv: the SshProvider contract (Sign/Authorize) carries no
 // per-request provider params, so config arrives at process startup, just like
 // the socket path. This is the static-provider convention (the env name is
@@ -24,7 +24,7 @@ const paramsEnv = "SOUL_SSH_STATIC_PARAMS"
 // params is the static-provider configuration parsed from paramsEnv.
 type params struct {
 	// KeyPath is the path to the private SSH key on the keeper host (mutually
-	// exclusive with VaultRef; oneOf in schema.json).
+	// exclusive with VaultRef; oneOf in schema.json -> params_schema).
 	KeyPath string `json:"key_path"`
 	// VaultRef is a reference to the Vault KV secret containing the key. Vault
 	// resolution is NOT implemented in the pilot (keeper.push resolves the secret

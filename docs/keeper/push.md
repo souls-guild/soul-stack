@@ -51,7 +51,7 @@ Push mode reuses the same `soul` binary and the same modules as pull ([architect
   bin/
     soul-<sha>          # the current version + 1–2 previous ones for rollback
   modules/
-    soul-mod-<name>-<sha>
+    <alias>/                    # one executable + the schema document (NIM-377)
     ...
 ```
 

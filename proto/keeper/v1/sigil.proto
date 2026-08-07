@@ -11,34 +11,47 @@ option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;ke
 // re-assemble the signed block and check the ed25519 signature with the trust
 // anchor from bootstrap (BootstrapReply.sigil_pubkey_pem):
 //
-//   - namespace + name + ref: identity of the allowed plugin;
-//   - binary_sha256: hash of the binary, which Soul checks against the local binary;
-//   - signature: ed25519 signature of the block (ns, name, ref, binary_sha256, manifest);
-//   - manifest: raw bytes of manifest.yaml (M1), which Soul runs through
-//     shared/pluginhost.NormalizeManifestBytes before hashing (the S3<->S6 invariant).
+//   - alias: the operator's registration, and the key a Soul looks the grant up by.
+//     Deliberately NOT part of the signed block;
+//   - source + ref: what was actually signed. The artifact carries no self-name
+//     (NIM-377), so where it came from is the only identity a signature can be over;
+//   - binary_sha256: hash of the artifact, which Soul checks against the local file.
+//     This is the one real control on the spawn path;
+//   - signature: ed25519 signature of the block (source, ref, binary_sha256,
+//     schema_sha256);
+//   - schema: canonical schema-document bytes (M1), which Soul hashes with
+//     shared/pluginhost.SchemaDigest (the S3<->S6 invariant).
 //
-// S2b introduces ONLY this contract. Keeper distributing PluginSigil messages and
-// the actual verify on Soul are slice S6.
+// Fields 1, 2 and 6 held the pre-NIM-377 shape (namespace / name / manifest) and are
+// reserved rather than reused: ADR-012 forbids reusing a field number, so an old
+// sender talking to a new receiver fails to populate anything instead of landing a
+// namespace where an alias is expected.
 message PluginSigil {
-  // Plugin namespace (e.g. `core`, `community`).
-  string namespace = 1;
-
-  // Plugin name within the namespace.
-  string name = 2;
+  reserved 1, 2, 6;
+  reserved "namespace", "name", "manifest";
 
   // ref: an operator-asserted version label for the grant (ADR-026 Variant C);
-  // NOT part of binary integrity, but is included in the signed block.
+  // NOT part of artifact integrity, but is included in the signed block.
   string ref = 3;
 
-  // SHA-256 of the plugin binary, hex lowercase (64 characters).
+  // SHA-256 of the artifact, hex lowercase (64 characters).
   string binary_sha256 = 4;
 
   // Raw ed25519 signature of the block (64 bytes, no base64/PEM).
   bytes signature = 5;
 
-  // Raw bytes of manifest.yaml (M1). The canonical form for verify is these bytes
-  // through NormalizeManifestBytes, not the parsed form.
-  bytes manifest = 6;
+  // Registration alias — address level 1, chosen by the operator, and the key Soul
+  // resolves a slot by. Not signed: an alias is a local naming choice, so registering
+  // the same bytes twice must not need a second signature.
+  string alias = 7;
+
+  // Artifact source the grant is on (the module repository's remote). Signed.
+  string source = 8;
+
+  // Canonical schema-document bytes (M1). The canonical form for verify is these
+  // bytes as-is — the document is byte-deterministic by construction, so there is
+  // nothing to normalize before hashing.
+  bytes schema = 9;
 }
 
 // SigilSnapshot is the FULL active set of plugin grants (replace semantics,
@@ -53,14 +66,19 @@ message SigilSnapshot {
   repeated PluginSigil sigils = 1;
 }
 
-// PluginFetchRequest requests a SoulModule plugin's bytes (FetchModule, epic
+// PluginFetchRequest requests a SoulModule artifact's bytes (FetchModule, epic
 // core.module.installed S2). The authority for the grant is binary_sha256
 // (content-addressed, same format as PluginSigil.binary_sha256: hex lowercase,
-// 64 characters); namespace/name are context for Keeper's logs/audit.
+// 64 characters); alias is context for Keeper's logs/audit.
+//
+// Fields 1 and 2 held namespace/name before NIM-377 and are reserved, not reused
+// (ADR-012).
 message PluginFetchRequest {
-  string namespace = 1;
-  string name = 2;
+  reserved 1, 2;
+  reserved "namespace", "name";
+
   string binary_sha256 = 3;
+  string alias = 4;
 }
 
 // PluginChunk is one chunk of a binary's bytes in FetchModule's server-streaming

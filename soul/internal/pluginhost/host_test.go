@@ -10,8 +10,8 @@ import (
 	"time"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
@@ -113,20 +113,17 @@ func TestNewHostUnknownCapability(t *testing.T) {
 	}
 }
 
-// TestSpawnRejectsKindMismatch — Spawn rejects a Discovered with manifest.kind
-// != soul_module before exec even happens (guards against Discover-filter
-// drift / a manually constructed Discovered). Covers errKindMismatch.
+// TestSpawnRejectsKindMismatch — Spawn rejects an entry whose kind is not
+// soul_module before exec even happens (guards against Discover-filter drift / a
+// manually constructed Discovered). Covers errKindMismatch.
 func TestSpawnRejectsKindMismatch(t *testing.T) {
 	h, err := NewHost(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
 	d := Discovered{
-		Manifest: &sharedplugin.Manifest{
-			Kind:      KindCloudDriver,
-			Namespace: "acme",
-			Name:      "aws",
-		},
+		Alias:      "aws",
+		Doc:        &Document{Kind: KindCloudDriver, ProtocolVersion: 1},
 		BinaryPath: "/nonexistent/soul-cloud-aws",
 		Dir:        "/nonexistent",
 	}
@@ -134,7 +131,7 @@ func TestSpawnRejectsKindMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected kind-mismatch denial for cloud_driver under soul-host")
 	}
-	if !contains(err.Error(), "soul_module") || !contains(err.Error(), KindCloudDriver) {
+	if !contains(err.Error(), "soul_module") || !contains(err.Error(), string(KindCloudDriver)) {
 		t.Errorf("error %q should mention expected kind soul_module and actual %q", err.Error(), KindCloudDriver)
 	}
 }
@@ -148,66 +145,53 @@ func TestDiscoverMissingRoot(t *testing.T) {
 	}
 }
 
-// TestDiscoverFiltersNonSoulKind — Discover on a directory with one
-// cloud_driver and one soul_module returns only the soul_module; the cloud
-// plugin goes into warnings (Soul-host's FilterByKinds branch).
+// TestDiscoverFiltersNonSoulKind — Discover over a root holding one cloud_driver and
+// one soul_module returns only the soul_module's modules; the cloud plugin goes into
+// warnings (the Soul host's FilterByKinds branch).
 func TestDiscoverFiltersNonSoulKind(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin host requires Unix sockets")
 	}
 	root := shortHostDir(t, "ss-mixedmods-")
 
-	// soul_module plugin (echo) — should pass.
-	soulDir := filepath.Join(root, "acme-echo")
+	// soul_module bundle (echo + reverse) — should pass.
+	soulDir := filepath.Join(root, testAlias)
 	if err := os.Mkdir(soulDir, 0o755); err != nil {
 		t.Fatalf("mkdir soul: %v", err)
 	}
-	buildEchoPlugin(t, soulDir)
-	if err := os.WriteFile(filepath.Join(soulDir, "manifest.yaml"), []byte(`kind: soul_module
-protocol_version: 1
-namespace: acme
-name: echo
-required_capabilities: []
-side_effects: []
-spec:
-  states:
-    applied:
-      description: Echo applied.
-      input:
-        name: { type: string, required: true }
-`), 0o644); err != nil {
-		t.Fatalf("write soul manifest: %v", err)
-	}
+	stampArtifact(t, buildEchoPlugin(t, soulDir))
 
-	// cloud_driver plugin — should be filtered into warnings. The binary is a
-	// copy of echo under a cloud name, so Discover finds an executable file.
+	// cloud_driver — should be filtered into warnings. The artifact is a copy of the
+	// echo binary stamped with a cloud_driver document, so the slot is well-formed
+	// and only the kind disqualifies it.
 	cloudDir := filepath.Join(root, "acme-aws")
 	if err := os.Mkdir(cloudDir, 0o755); err != nil {
 		t.Fatalf("mkdir cloud: %v", err)
 	}
-	echoBin := buildEchoPlugin(t, cloudDir) // soul-mod-echo
-	if err := os.Rename(echoBin, filepath.Join(cloudDir, "soul-cloud-aws")); err != nil {
-		t.Fatalf("rename cloud bin: %v", err)
+	cloudBin := buildEchoPlugin(t, cloudDir)
+	cloudDoc, err := schema.Marshal(schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema:   map[string]any{"type": "object"},
+	})
+	if err != nil {
+		t.Fatalf("marshal cloud schema: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(cloudDir, "manifest.yaml"), []byte(`kind: cloud_driver
-protocol_version: 1
-namespace: acme
-name: aws
-required_capabilities: []
-side_effects: []
-`), 0o644); err != nil {
-		t.Fatalf("write cloud manifest: %v", err)
+	if err := schema.WriteTrailerFile(cloudBin, cloudDoc); err != nil {
+		t.Fatalf("stamp cloud artifact: %v", err)
 	}
 
 	found, warns, err := Discover(root)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(found) != 1 {
-		t.Fatalf("expected 1 soul_module discovered, got %d: %+v", len(found), found)
+	if len(found) != 2 {
+		t.Fatalf("expected the bundle's 2 modules, got %d: %+v", len(found), found)
 	}
-	if found[0].Manifest.Kind != KindSoulModule {
-		t.Errorf("discovered kind = %q, want soul_module", found[0].Manifest.Kind)
+	for _, d := range found {
+		if d.Kind() != KindSoulModule {
+			t.Errorf("discovered kind = %q, want soul_module", d.Kind())
+		}
 	}
 	var sawCloudWarn bool
 	for _, w := range warns {
@@ -234,7 +218,9 @@ func TestSpawnBinaryNotFound(t *testing.T) {
 		ShutdownGrace:  1 * time.Second,
 	}}
 	d := Discovered{
-		Manifest:   &sharedplugin.Manifest{Kind: KindSoulModule, Namespace: "acme", Name: "ghost"},
+		Alias:      "ghost",
+		Module:     "haunt",
+		Doc:        &Document{Kind: KindSoulModule, ProtocolVersion: 1},
 		BinaryPath: filepath.Join(socketDir, "does-not-exist"),
 		Dir:        socketDir,
 	}
@@ -252,8 +238,9 @@ func TestSpawnBinaryNotFound(t *testing.T) {
 //
 // This is the central security invariant: swapping the binary must not lead to exec.
 func TestSpawnDigestMismatchRejected(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

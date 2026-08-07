@@ -2,9 +2,9 @@
 // delivering a SoulModule plugin to a Soul host.
 //
 // States:
-//   - installed: a plugin covered by an active Sigil grant is pulled from
+//   - installed: an artifact covered by an active Sigil grant is pulled from
 //     Keeper (FetchModule), verified, and atomically installed into the
-//     catalog slot `<paths.modules>/<ns>-<name>/`. Idempotency is by binary
+//     catalog slot `<paths.modules>/<alias>/`. Idempotency is by artifact
 //     sha256 against the active grant.
 //
 // The apply-flow order is normative ([ADR-065](f)): allow-check BEFORE fetch
@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
@@ -33,9 +32,14 @@ const Name = "core.module"
 
 const stateInstalled = "installed"
 
-// reFullName — the param name format `<namespace>.<name>` (bounds from
-// naming-rules, "Plugin catalog").
-var reFullName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}\.[a-z][a-z0-9-]{0,62}$`)
+// reAlias — the param name format: a registration alias, address level 1. Same
+// kebab-case grammar as a module name, and a single path element, since the alias also
+// names the slot directory and the artifact inside it.
+//
+// This is a FORM check only. Whether an alias is reserved (`core`, `keeper`, `soul`, …)
+// is decided at registration on the Keeper, where the operator picks it; by the time a
+// grant reaches a Soul the name has already been accepted.
+var reAlias = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // Fetcher — the FetchModule transport ([ADR-012] third RPC, ADR-065(a)).
 // Implemented by soulgrpc.StreamSession; reaches the run via context
@@ -90,9 +94,8 @@ type Module struct {
 
 func New(deps Deps) *Module { return &Module{deps: deps} }
 
-// Validate: known-state + required come from the embedded manifest; beyond
-// that, semantics the manifest DSL can't express — the `<namespace>.<name>`
-// format of name.
+// Validate: known-state + required come from the embedded core declaration; beyond
+// that, semantics the input DSL can't express — the alias format of name.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	errs := util.ValidateAgainstManifest(Name, req)
 
@@ -100,8 +103,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		name, err := util.StringParam(req.GetParams(), "name")
 		if err != nil {
 			errs = append(errs, err.Error())
-		} else if !reFullName.MatchString(name) {
-			errs = append(errs, fmt.Sprintf("param %q: expected \"<namespace>.<name>\" (e.g. community.redis), got %q", "name", name))
+		} else if !reAlias.MatchString(name) {
+			errs = append(errs, fmt.Sprintf("param %q: expected a registration alias (e.g. redis), got %q", "name", name))
 		}
 	}
 	if _, err := util.OptStringParam(req.GetParams(), "ref"); err != nil {
@@ -123,13 +126,4 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q (want %s)", req.GetState(), stateInstalled))
 	}
 	return m.applyInstalled(stream, req)
-}
-
-// splitFullName splits `<namespace>.<name>` on the first dot.
-func splitFullName(full string) (namespace, name string, ok bool) {
-	if !reFullName.MatchString(full) {
-		return "", "", false
-	}
-	namespace, name, ok = strings.Cut(full, ".")
-	return namespace, name, ok
 }

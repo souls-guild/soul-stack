@@ -92,21 +92,21 @@ func reset(t *testing.T) string {
 	return aid
 }
 
-// rawManifestYAML is raw bytes of manifest.yaml (canon). Deliberately differ from
-// JSONB projection below (different syntax, line endings) to prove round-trip:
-// manifest_raw returned byte-exact, not from JSONB column.
-var rawManifestYAML = []byte("kind: cloud_driver\nname: hetzner\n")
+// rawSchemaDoc is the byte-exact canonical schema document the signature covers. It is
+// stored as BYTEA rather than JSONB precisely so this round-trips byte for byte: a
+// JSONB column would re-serialize it, and the bytes a Soul re-hashes at verify would no
+// longer be the bytes Keeper signed.
+var rawSchemaDoc = []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`)
 
 func newRecord(aid string) *Sigil {
 	digest := sha256.Sum256([]byte("binary-bytes"))
 	return &Sigil{
-		Namespace:    "cloud",
-		Name:         "hetzner",
+		Alias:        "hetzner",
+		Source:       testSource,
 		Ref:          "v1.0.0",
 		SHA256:       hex.EncodeToString(digest[:]),
 		Signature:    ed25519.Sign(genIntegrationKey(), []byte("block")),
-		ManifestRaw:  rawManifestYAML,
-		Manifest:     []byte(`{"kind":"cloud_driver","name":"hetzner"}`),
+		Schema:       rawSchemaDoc,
 		AllowedByAID: aid,
 	}
 }
@@ -131,9 +131,12 @@ func TestIntegration_Insert_GetActive(t *testing.T) {
 		t.Error("Insert did not populate AllowedAt")
 	}
 
-	got, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
+	got, err := GetActive(ctx, integrationPool, "hetzner")
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
+	}
+	if got.Alias != "hetzner" || got.Source != testSource || got.Ref != "v1.0.0" {
+		t.Errorf("identity roundtrip = (%q,%q,%q)", got.Alias, got.Source, got.Ref)
 	}
 	if got.SHA256 != rec.SHA256 {
 		t.Errorf("SHA256 = %q, want %q", got.SHA256, rec.SHA256)
@@ -141,41 +144,50 @@ func TestIntegration_Insert_GetActive(t *testing.T) {
 	if !bytes.Equal(got.Signature, rec.Signature) {
 		t.Error("signature roundtrip mismatch")
 	}
-	// manifest_raw round-trip byte-exact to original raw (canon for verify).
-	if !bytes.Equal(got.ManifestRaw, rawManifestYAML) {
-		t.Errorf("manifest_raw roundtrip:\n got=%q\nwant=%q", got.ManifestRaw, rawManifestYAML)
-	}
-	// JSONB projection non-empty and differs from raw (derived layer, not canon).
-	if len(got.Manifest) == 0 {
-		t.Error("manifest JSONB empty")
-	}
-	if bytes.Equal(got.ManifestRaw, got.Manifest) {
-		t.Error("manifest_raw matched JSONB manifest — raw must carry raw YAML")
+	// schema round-trips byte-exact — the canon for verify.
+	if !bytes.Equal(got.Schema, rawSchemaDoc) {
+		t.Errorf("schema roundtrip:\n got=%q\nwant=%q", got.Schema, rawSchemaDoc)
 	}
 	if got.RevokedAt != nil {
 		t.Error("fresh record should be active")
 	}
 }
 
-// TestIntegration_Insert_GuardEmptyManifestRaw verifies Insert on real PG path
-// rejects empty ManifestRaw (guard before query), record not created.
-func TestIntegration_Insert_GuardEmptyManifestRaw(t *testing.T) {
+// TestIntegration_Insert_GuardEmptySchema verifies that on the real PG path Insert
+// rejects an empty Schema (a guard before the query) and creates no row.
+func TestIntegration_Insert_GuardEmptySchema(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
 	rec := newRecord(aid)
-	rec.ManifestRaw = nil
+	rec.Schema = nil
 	if err := Insert(ctx, integrationPool, rec); err == nil {
-		t.Fatal("Insert empty ManifestRaw must return error")
+		t.Fatal("Insert with an empty schema must return an error")
 	}
-	if _, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0"); !errors.Is(err, ErrSigilNotFound) {
-		t.Errorf("after rejected Insert no active record, err = %v", err)
+	if _, err := GetActive(ctx, integrationPool, "hetzner"); !errors.Is(err, ErrSigilNotFound) {
+		t.Errorf("after a rejected Insert there must be no active record, err = %v", err)
 	}
 }
 
-// TestIntegration_ListActive_ManifestRaw verifies ListActive returns manifest_raw
-// byte-exact (read by S6 sender/broadcast).
-func TestIntegration_ListActive_ManifestRaw(t *testing.T) {
+// TestIntegration_Insert_RejectsReservedAliasAtSchemaLevel — the reserved list is
+// enforced in Go, but the ALIAS SHAPE is also a CHECK constraint, so a path-shaped or
+// uppercase alias cannot reach the table even if a caller skipped the service.
+func TestIntegration_Insert_RejectsMalformedAliasAtSchemaLevel(t *testing.T) {
+	aid := reset(t)
+	ctx := context.Background()
+
+	for _, alias := range []string{"Redis", "redis.acl", "a/b", "9lives"} {
+		rec := newRecord(aid)
+		rec.Alias = alias
+		if err := Insert(ctx, integrationPool, rec); err == nil {
+			t.Errorf("alias %q was accepted by the schema", alias)
+		}
+	}
+}
+
+// TestIntegration_ListActive_Schema verifies ListActive returns the schema byte-exact
+// (this is what the S6 broadcast sends to Souls).
+func TestIntegration_ListActive_Schema(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
@@ -189,8 +201,8 @@ func TestIntegration_ListActive_ManifestRaw(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("ListActive returned %d, want 1", len(list))
 	}
-	if !bytes.Equal(list[0].ManifestRaw, rawManifestYAML) {
-		t.Errorf("ListActive manifest_raw:\n got=%q\nwant=%q", list[0].ManifestRaw, rawManifestYAML)
+	if !bytes.Equal(list[0].Schema, rawSchemaDoc) {
+		t.Errorf("ListActive schema:\n got=%q\nwant=%q", list[0].Schema, rawSchemaDoc)
 	}
 }
 
@@ -209,7 +221,7 @@ func TestIntegration_CommitSha_RoundTrip(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	got, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
+	got, err := GetActive(ctx, integrationPool, "hetzner")
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
 	}
@@ -251,7 +263,7 @@ func TestIntegration_CommitSha_LegacyNull(t *testing.T) {
 		t.Error("empty CommitSHA must be written to DB as NULL (NULLIF)")
 	}
 
-	got, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
+	got, err := GetActive(ctx, integrationPool, "hetzner")
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
 	}
@@ -260,16 +272,40 @@ func TestIntegration_CommitSha_LegacyNull(t *testing.T) {
 	}
 }
 
-func TestIntegration_DuplicateActive(t *testing.T) {
+// TestIntegration_DuplicateActiveSourceRef — the TRUST key. Approving the same
+// (source, ref) twice is a conflict even under a different alias: an approval must not
+// be silently duplicated, or revoking one copy would leave the other standing.
+func TestIntegration_DuplicateActiveSourceRef(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
 	if err := Insert(ctx, integrationPool, newRecord(aid)); err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
-	err := Insert(ctx, integrationPool, newRecord(aid))
+	second := newRecord(aid)
+	second.Alias = "hetzner-mirror"
+	err := Insert(ctx, integrationPool, second)
 	if !errors.Is(err, ErrSigilAlreadyActive) {
 		t.Fatalf("second Insert err = %v, want ErrSigilAlreadyActive", err)
+	}
+}
+
+// TestIntegration_DuplicateActiveAlias — the REGISTRATION invariant. One alias is one
+// address space and one host slot, so a second live grant may not claim it. Reported as
+// a DIFFERENT sentinel: the operator's fix is a different alias, not a revoke.
+func TestIntegration_DuplicateActiveAlias(t *testing.T) {
+	aid := reset(t)
+	ctx := context.Background()
+
+	if err := Insert(ctx, integrationPool, newRecord(aid)); err != nil {
+		t.Fatalf("first Insert: %v", err)
+	}
+	second := newRecord(aid)
+	second.Source = "https://example.com/somebody-else.git"
+	second.Ref = "v2.0.0"
+	err := Insert(ctx, integrationPool, second)
+	if !errors.Is(err, ErrAliasAlreadyRegistered) {
+		t.Fatalf("second Insert err = %v, want ErrAliasAlreadyRegistered", err)
 	}
 }
 
@@ -280,15 +316,15 @@ func TestIntegration_Revoke(t *testing.T) {
 	if err := Insert(ctx, integrationPool, newRecord(aid)); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); err != nil {
+	if err := Revoke(ctx, integrationPool, "hetzner", aid); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	// After revoke no active record exists.
-	if _, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0"); !errors.Is(err, ErrSigilNotFound) {
+	if _, err := GetActive(ctx, integrationPool, "hetzner"); !errors.Is(err, ErrSigilNotFound) {
 		t.Errorf("GetActive after revoke err = %v, want ErrSigilNotFound", err)
 	}
 	// Re-revoke → not found.
-	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); !errors.Is(err, ErrSigilNotFound) {
+	if err := Revoke(ctx, integrationPool, "hetzner", aid); !errors.Is(err, ErrSigilNotFound) {
 		t.Errorf("second Revoke err = %v, want ErrSigilNotFound", err)
 	}
 }
@@ -301,10 +337,11 @@ func TestIntegration_ReAllowAfterRevoke(t *testing.T) {
 	if err := Insert(ctx, integrationPool, first); err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
-	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); err != nil {
+	if err := Revoke(ctx, integrationPool, "hetzner", aid); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	// Re-allow after revoke — new INSERT, partial-unique does not interfere.
+	// Re-allow after revoke — a plain INSERT; both partial-unique indexes count only
+	// active rows, so revoked history never gets in the way.
 	second := newRecord(aid)
 	if err := Insert(ctx, integrationPool, second); err != nil {
 		t.Fatalf("re-allow Insert: %v", err)
@@ -312,7 +349,7 @@ func TestIntegration_ReAllowAfterRevoke(t *testing.T) {
 	if second.ID == first.ID {
 		t.Error("re-allow should produce a new row id")
 	}
-	got, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
+	got, err := GetActive(ctx, integrationPool, "hetzner")
 	if err != nil {
 		t.Fatalf("GetActive after re-allow: %v", err)
 	}
@@ -325,19 +362,21 @@ func TestIntegration_ListActive(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
-	r1 := newRecord(aid)
-	r1.Name = "aws"
-	r2 := newRecord(aid)
-	r2.Name = "gcp"
-	r3 := newRecord(aid)
-	r3.Name = "azure"
-	for _, r := range []*Sigil{r1, r2, r3} {
+	mk := func(alias string) *Sigil {
+		r := newRecord(aid)
+		r.Alias = alias
+		// Distinct sources too: the trust key is (source, ref), so three grants under
+		// one source would collide on it rather than on the alias.
+		r.Source = "https://example.com/soul-cloud-" + alias + ".git"
+		return r
+	}
+	for _, r := range []*Sigil{mk("aws"), mk("gcp"), mk("azure")} {
 		if err := Insert(ctx, integrationPool, r); err != nil {
-			t.Fatalf("Insert %s: %v", r.Name, err)
+			t.Fatalf("Insert %s: %v", r.Alias, err)
 		}
 	}
 	// Revoke one — it should not appear in ListActive.
-	if err := Revoke(ctx, integrationPool, "cloud", "gcp", "v1.0.0", aid); err != nil {
+	if err := Revoke(ctx, integrationPool, "gcp", aid); err != nil {
 		t.Fatalf("Revoke gcp: %v", err)
 	}
 
@@ -349,7 +388,7 @@ func TestIntegration_ListActive(t *testing.T) {
 		t.Fatalf("ListActive returned %d, want 2", len(list))
 	}
 	for _, s := range list {
-		if s.Name == "gcp" {
+		if s.Alias == "gcp" {
 			t.Error("revoked record appeared in ListActive")
 		}
 		if s.RevokedAt != nil {
@@ -360,7 +399,87 @@ func TestIntegration_ListActive(t *testing.T) {
 
 func TestIntegration_GetActive_NotFound(t *testing.T) {
 	reset(t)
-	if _, err := GetActive(context.Background(), integrationPool, "cloud", "nope", "v1"); !errors.Is(err, ErrSigilNotFound) {
+	if _, err := GetActive(context.Background(), integrationPool, "nope"); !errors.Is(err, ErrSigilNotFound) {
 		t.Errorf("err = %v, want ErrSigilNotFound", err)
+	}
+}
+
+// TestIntegration_Revoke_DoesNotMatchAcrossIdentities is the guard for the revoke
+// KEY choice. Revoke takes the ALIAS — the name the operator registered, the one
+// every address in their destinies uses, and the one thing they hold when they
+// decide a plugin should stop running. It must therefore be impossible for a
+// revoke to reach a row it was not aimed at.
+//
+// Two ways that could go wrong, both covered here:
+//
+//   - revoking alias A must not touch a live grant held under alias B, even when
+//     B is the same artifact identity (source, ref). "Revoke redis" must mean that
+//     one registration and no other;
+//   - after an alias is re-pointed (revoke, then approve the same alias on a
+//     DIFFERENT artifact), revoking it must hit the CURRENT row. The old row stays
+//     revoked with its own audit trail rather than being reachable a second time.
+//
+// The second case is what makes the alias safe as a revoke key at all: the partial
+// unique index means at most one live row ever holds an alias, so "the active grant
+// for this alias" is never a choice between candidates.
+func TestIntegration_Revoke_DoesNotMatchAcrossIdentities(t *testing.T) {
+	aid := reset(t)
+	ctx := context.Background()
+
+	// Two live grants, distinct aliases AND distinct sources (the trust key forbids
+	// sharing a source+ref between live rows).
+	a := newRecord(aid)
+	a.Alias, a.Source = "redis", "https://example.com/redis.git"
+	b := newRecord(aid)
+	b.Alias, b.Source = "redis-community", "https://example.com/redis-community.git"
+	for _, r := range []*Sigil{a, b} {
+		if err := Insert(ctx, integrationPool, r); err != nil {
+			t.Fatalf("Insert %s: %v", r.Alias, err)
+		}
+	}
+
+	// Revoking one alias leaves the other completely untouched.
+	if err := Revoke(ctx, integrationPool, "redis", aid); err != nil {
+		t.Fatalf("Revoke redis: %v", err)
+	}
+	if _, err := GetActive(ctx, integrationPool, "redis"); !errors.Is(err, ErrSigilNotFound) {
+		t.Errorf("redis still active after revoke: %v", err)
+	}
+	other, err := GetActive(ctx, integrationPool, "redis-community")
+	if err != nil {
+		t.Fatalf("revoking one alias took down another: %v", err)
+	}
+	if other.ID != b.ID || other.Source != b.Source {
+		t.Errorf("surviving grant = %+v, want the untouched redis-community row", other)
+	}
+
+	// Re-point the freed alias onto a DIFFERENT artifact, then revoke it again: the
+	// revoke must hit the new row, and the old one must keep its own revocation.
+	repointed := newRecord(aid)
+	repointed.Alias, repointed.Source = "redis", "https://example.com/redis-fork.git"
+	if err := Insert(ctx, integrationPool, repointed); err != nil {
+		t.Fatalf("re-point redis: %v", err)
+	}
+	live, err := GetActive(ctx, integrationPool, "redis")
+	if err != nil {
+		t.Fatalf("GetActive after re-point: %v", err)
+	}
+	if live.ID != repointed.ID {
+		t.Fatalf("GetActive returned id=%d, want the re-pointed row %d — the alias lookup is ambiguous", live.ID, repointed.ID)
+	}
+	if err := Revoke(ctx, integrationPool, "redis", aid); err != nil {
+		t.Fatalf("Revoke re-pointed redis: %v", err)
+	}
+
+	// The original row's audit trail survived the second revoke untouched: revoking
+	// an alias must not rewrite the history of a grant that already ended.
+	var revokedCount int
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT count(*) FROM plugin_sigils WHERE alias = 'redis' AND revoked_at IS NOT NULL`,
+	).Scan(&revokedCount); err != nil {
+		t.Fatalf("count revoked redis rows: %v", err)
+	}
+	if revokedCount != 2 {
+		t.Errorf("revoked redis rows = %d, want 2 (the original and the re-pointed one, each with its own record)", revokedCount)
 	}
 }

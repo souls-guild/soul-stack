@@ -187,7 +187,7 @@ type Module struct {
 
 	// Providers resolves SSH provider by name from param `ssh_provider`. MVP is
 	// single-provider: module holds map assembled by wire-up from discovered
-	// SshProvider plugins (by manifest.Name). Not used in teleport mode
+	// SshProvider plugins (by registration alias). Not used in teleport mode
 	// (Authorize/Sign not called).
 	Providers map[string]SshProviderHost
 

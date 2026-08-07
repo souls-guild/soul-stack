@@ -212,14 +212,14 @@ func TestOutbound_SendSigilSnapshot_HappyPath(t *testing.T) {
 
 	set := []*keeperv1.PluginSigil{
 		{
-			Namespace:    "core",
-			Name:         "template",
+			Alias:        "template",
+			Source:       "https://example.com/soul-mod-template.git",
 			Ref:          "v1.0.0",
 			BinarySha256: "abc123",
 			Signature:    []byte("sig"),
-			Manifest:     []byte("raw-manifest-bytes"),
+			Schema:       []byte(`{"kind":"soul_module","protocol_version":1}`),
 		},
-		{Namespace: "cloud", Name: "hetzner", Ref: "v2", BinarySha256: "def456"},
+		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2", BinarySha256: "def456"},
 	}
 	if err := ob.SendSigilSnapshot(context.Background(), "sid", set); err != nil {
 		t.Fatalf("SendSigilSnapshot: %v", err)
@@ -232,7 +232,7 @@ func TestOutbound_SendSigilSnapshot_HappyPath(t *testing.T) {
 	if len(snap.GetSigils()) != 2 {
 		t.Fatalf("snapshot sigils = %d, want 2", len(snap.GetSigils()))
 	}
-	if snap.GetSigils()[0].GetName() != "template" || snap.GetSigils()[1].GetName() != "hetzner" {
+	if snap.GetSigils()[0].GetAlias() != "template" || snap.GetSigils()[1].GetAlias() != "hetzner" {
 		t.Errorf("snapshot order/identity = %+v", snap.GetSigils())
 	}
 	// Outbound is a pure "pipe" function: no audit is written for
@@ -268,7 +268,7 @@ func TestOutbound_SendSigilSnapshot_NotConnected(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})
 	err := ob.SendSigilSnapshot(context.Background(), "sid",
-		[]*keeperv1.PluginSigil{{Namespace: "core", Name: "template"}})
+		[]*keeperv1.PluginSigil{{Alias: "template", Source: "https://example.com/soul-mod-template.git"}})
 	if !errors.Is(err, ErrSoulNotConnected) {
 		t.Fatalf("err = %v, want ErrSoulNotConnected", err)
 	}

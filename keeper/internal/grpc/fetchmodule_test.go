@@ -134,8 +134,7 @@ func TestFetchModule_AllowedSHA_StreamsChunks(t *testing.T) {
 	stream := &fakePluginChunkStream{ctx: fetchCtx("host.example.com")}
 
 	err := h.FetchModule(&keeperv1.PluginFetchRequest{
-		Namespace:    "community",
-		Name:         "mongo",
+		Alias:        "mongo",
 		BinarySha256: strings.ToUpper(testModuleSHA),
 	}, stream)
 	if err != nil {

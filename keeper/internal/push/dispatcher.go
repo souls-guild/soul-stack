@@ -92,8 +92,9 @@ type ProviderEntry struct {
 // the caller (pushorch.PushRun resolves it via ProviderRouter) and look it up
 // in the map under RLock.
 type Deps struct {
-	// Providers — a map of registered SshProvider plugins by name
-	// (manifest.Name). An empty map is a programmer error: NewSshDispatcher
+	// Providers — a map of registered SshProvider plugins by name, which is their
+	// registration ALIAS (an artifact declares no name of its own, NIM-377). An
+	// empty map is a programmer error: NewSshDispatcher
 	// fails construction. Swapped at runtime via [SshDispatcher.
 	// RefreshProvider] under d.mu (an atomic swap of one entry with no effect
 	// on the others).

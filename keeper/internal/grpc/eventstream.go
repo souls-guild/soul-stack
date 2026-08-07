@@ -1057,21 +1057,28 @@ func (h *eventStreamHandler) broadcastVigils(
 	)
 }
 
-// sigilRecordToProto projects a plugin_sigils registry record into the
-// transport [keeperv1.PluginSigil]. Manifest = rec.ManifestRaw (the
-// byte-exact signed bytes, M1), NOT rec.Manifest (the JSONB projection): the
-// re-hash on the Soul side runs over exactly these bytes via
-// NormalizeManifestBytes (S3↔S6 invariant). Shared by the connect-time
-// broadcast ([broadcastSigils]) and the cluster re-broadcast
-// ([Outbound.RebroadcastSigils], S6c) — a single mapping point.
+// sigilRecordToProto projects a plugin_sigils registry record into the transport
+// [keeperv1.PluginSigil]. Shared by the connect-time broadcast ([broadcastSigils]) and
+// the cluster re-broadcast ([Outbound.RebroadcastSigils], S6c) — a single mapping
+// point.
+//
+// Both identities ride, and they mean different things on the far side. Alias is the
+// key a Soul looks the grant up by (its slot is named by it) and is NOT signed. Source
+// and Ref are what the signature covers — with no self-name in the artifact, where it
+// came from is its only signed identity.
+//
+// Schema = rec.Schema, the byte-exact bytes the signature was placed over: the Soul
+// re-hashes exactly these via SchemaDigest (S3↔S6 invariant). commit_sha stays behind
+// as Keeper-side audit — it is outside the signed block and would only be an
+// unverifiable claim on the wire.
 func sigilRecordToProto(rec *sigil.Sigil) *keeperv1.PluginSigil {
 	return &keeperv1.PluginSigil{
-		Namespace:    rec.Namespace,
-		Name:         rec.Name,
+		Alias:        rec.Alias,
+		Source:       rec.Source,
 		Ref:          rec.Ref,
 		BinarySha256: rec.SHA256,
 		Signature:    rec.Signature,
-		Manifest:     rec.ManifestRaw,
+		Schema:       rec.Schema,
 	}
 }
 

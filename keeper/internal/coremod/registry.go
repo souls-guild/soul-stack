@@ -130,7 +130,7 @@ type Deps struct {
 	// bootstrap-token delivery over SSH).
 	//
 	// direct mode: all three are wired from same push infrastructure as
-	// SshDispatcher (discovered SshProvider plugins by manifest.Name +
+	// SshDispatcher (discovered SshProvider plugins by registration alias +
 	// host-CA from Vault + push.Dial). Module registered only when
 	// BootstrapProviders non-empty AND BootstrapHostCAs non-empty AND BootstrapDial set.
 	//

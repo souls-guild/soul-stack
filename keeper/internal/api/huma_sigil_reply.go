@@ -25,19 +25,19 @@ import (
 
 // === top-level reply-DTO (form 1:1 with previous legacy generated) ===
 
-// PluginSigilAllowReply — native 201-body POST /v1/plugins/sigils (form 1:1 with previous
-// PluginSigilAllowReply). namespace/name/ref + sha256 (calculated Keeper).
+// PluginSigilAllowReply — native 201-body POST /v1/plugins/sigils: the echoed
+// alias/source/ref + the sha256 the Keeper computed and signed.
 //
 // OUTPUT-PATTERN (documentation, NOT runtime-validation): huma does NOT validate
 // response-body (empirically 200, not 500). sha256 — machine hex(sha256) binary
-// (hex.EncodeToString, lowercase 64 chars, pluginhost/slot.go:173); allowed_by_aid ←
-// operator.AIDPattern. ref NOT tagged: this is git-ref (tag/branch per ADR-007),
-// arbitrary string, NOT hash.
+// (hex.EncodeToString, lowercase 64 chars); allowed_by_aid ← operator.AIDPattern. ref
+// NOT tagged: this is a git-ref (tag/branch per ADR-007), an arbitrary string, NOT a
+// hash.
 type PluginSigilAllowReply struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Ref       string `json:"ref"`
-	SHA256    string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
+	Alias  string `json:"alias"`
+	Ref    string `json:"ref"`
+	SHA256 string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
+	Source string `json:"source"`
 }
 
 // PluginSigilListReply — native 200-body GET /v1/plugins/sigils (form 1:1 with previous
@@ -52,11 +52,11 @@ type PluginSigilListReply struct {
 // revoked_at — `*time.Time` with omitempty (nil for active → key omitted); allowed_at —
 // nanosecond time-wire (value truncates handler-layer to seconds).
 type PluginSigilView struct {
+	Alias        string     `json:"alias"`
 	AllowedAt    time.Time  `json:"allowed_at"`
 	AllowedByAID string     `json:"allowed_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	Name         string     `json:"name"`
-	Namespace    string     `json:"namespace"`
 	Ref          string     `json:"ref"`
+	Source       string     `json:"source"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
 	SHA256       string     `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
 }
@@ -66,10 +66,10 @@ type PluginSigilView struct {
 // newPluginSigilAllowReply projects flat domain handlers.SigilAllowView to native.
 func newPluginSigilAllowReply(v handlers.SigilAllowView) PluginSigilAllowReply {
 	return PluginSigilAllowReply{
-		Name:      v.Name,
-		Namespace: v.Namespace,
-		Ref:       v.Ref,
-		SHA256:    v.SHA256,
+		Alias:  v.Alias,
+		Ref:    v.Ref,
+		SHA256: v.SHA256,
+		Source: v.Source,
 	}
 }
 
@@ -77,13 +77,13 @@ func newPluginSigilAllowReply(v handlers.SigilAllowView) PluginSigilAllowReply {
 // and AllowedAt handler already truncated to seconds (byte-exact with legacy wire).
 func newPluginSigilView(v handlers.SigilView) PluginSigilView {
 	return PluginSigilView{
+		Alias:        v.Alias,
 		AllowedAt:    v.AllowedAt,
 		AllowedByAID: v.AllowedByAID,
-		Name:         v.Name,
-		Namespace:    v.Namespace,
 		Ref:          v.Ref,
 		RevokedAt:    v.RevokedAt,
 		SHA256:       v.SHA256,
+		Source:       v.Source,
 	}
 }
 

@@ -11,9 +11,9 @@ import (
 )
 
 // ValidateAgainstManifest — runtime validation of a ValidateRequest against a
-// core module's embedded manifest (shared/coremanifest). Single source of
+// core module's embedded declaration (shared/coremanifest). Single source of
 // truth for per-field checks: known states and required params are declared
-// in the module's manifest.yaml, not hardcoded separately in each
+// in the module's schema, not hardcoded separately in each
 // Module.Validate (previously duplicated between the linter and runtime code).
 //
 // `coreName` is the canonical core-module name (`core.exec`, `core.file`).
@@ -25,11 +25,11 @@ import (
 func ValidateAgainstManifest(coreName string, req *pluginv1.ValidateRequest) []string {
 	m, ok := coremanifest.Default().Lookup(coreName)
 	if !ok {
-		// A core module's manifest must exist (otherwise it's a build bug); but
+		// A core module's declaration must exist (otherwise it's a build bug); but
 		// we don't panic at runtime — report it as a regular validation error.
 		return []string{fmt.Sprintf("internal: no manifest for %q", coreName)}
 	}
-	def, ok := m.Spec.States[req.State]
+	def, ok := m.States[req.State]
 	if !ok {
 		return []string{fmt.Sprintf("unknown state %q (want one of %v)", req.State, sortedStates(m))}
 	}
@@ -49,9 +49,9 @@ func paramPresent(req *pluginv1.ValidateRequest, name string) bool {
 	return ParamPresent(req.Params, name)
 }
 
-func sortedStates(m *plugin.Manifest) []string {
-	out := make([]string, 0, len(m.Spec.States))
-	for s := range m.Spec.States {
+func sortedStates(m plugin.ModuleDef) []string {
+	out := make([]string, 0, len(m.States))
+	for s := range m.States {
 		out = append(out, s)
 	}
 	sort.Strings(out)

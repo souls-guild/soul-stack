@@ -152,7 +152,7 @@ Moved to [`docs/adr/0025-augur.md`](adr/0025-augur.md). Keeper-side broker for S
 
 ### [ADR-026. Sigil - plugin integrity (Keeper-signed digest index)](adr/0026-sigil.md)
 
-Moved to [`docs/adr/0026-sigil.md`](adr/0026-sigil.md). Keeper-signed allow-list of plugins (registry `plugin_sigils`): Archon explicitly allows `(namespace, name, ref) → sha256`, Keeper signs the block with attached manifest, host verifies digest+signature BEFORE exec (replaces TOFU first-load). Git-verified `ref` (go-git F-fetch), multi-anchor signature key rotation (`sigil_signing_keys`), replace semantics snapshot/anchors.
+Moved to [`docs/adr/0026-sigil.md`](adr/0026-sigil.md). Keeper-signed allow-list of plugins (registry `plugin_sigils`): an Archon explicitly allows an artifact `(source, ref) → sha256` under a registration `alias` (re-keyed off `(namespace, name, ref)` by NIM-377/438 — the artifact declares no name), Keeper signs the block with the schema document attached, and the host verifies digest+signature BEFORE exec (replaces TOFU first-load). ★ The signature makes the declarations **non-forgeable, not enforced** — `capabilities`/`side_effects` are disclosure for the operator's approval, and the one real control is the approved digest. Git-verified `ref` (go-git F-fetch), multi-anchor signature key rotation (`sigil_signing_keys`), replace semantics snapshot/anchors.
 
 ### [ADR-027. Execution model apply - work-queue + claim (Acolyte-pool, Ward-claim)](adr/0027-apply-work-queue.md)
 
@@ -308,14 +308,14 @@ This section applies to both **pull** and **push** transports. This is a single 
 ### Structure
 
 - **Core modules** - statically built into the `soul` binary. Cover the vast majority of Destiny: the exact list is fixed [ADR-015](#adr-015-core-mvp-modules-exact-list) – 18 Soul-side (`pkg`/`file`/`directory`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`; `directory` split from `file` per Amendment 2026-07-17, `service` also gains `disabled`/`masked`) + 3 Keeper-sides (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
-- **Custom modules** - separate executable files `soul-mod-<name>`, located in `/var/lib/soul-stack/modules/`. The `soul` binary runs them as a sub-process with the stdio protocol (see below). By addressing they live in the namespace of their collection (`acme`, `community`, ...).
+- **Custom modules** - executable artifacts under `/var/lib/soul-stack/modules/<alias>/`, one executable per slot. The `soul` binary runs one as a sub-process over the stdio protocol (see below), naming the module it wants as a **subcommand**; one artifact serves several modules. By addressing they live under their registration alias (`redis`, `acme`, `community`, …).
 
 > **Soul-side vs Keeper-side core modules.** The vast majority of core modules (`pkg`, `file`, `service`, `user`, `exec`, `template`, …) are **Soul-side**: executed on the host `soul`-binary. Some of the core modules are **Keeper-side**: they operate on the keeper's registries (Postgres souls+coven, Redis cache, logs) and are executed on the keeper itself. The first Keeper-side core is `core.soul.registered` (SID binding to coven tags of the souls registry; full specification is [`docs/keeper/modules.md`](keeper/modules.md)). Dispatcher - scenario key `on:` ([`docs/scenario/orchestration.md §3`](scenario/orchestration.md)): for Soul-side core `on:` is omitted or contains coven tags; for Keeper-side core `on: keeper`. The addressing (`<namespace>.<module>.<state>`) and the SoulModule contract are the same for both parties.
 
 When applying Destiny step `soul`:
 1. parses the module name according to the scheme `<namespace>.<module>.<state>` (see "Addressing modules");
 2. for a built-in core module calls the implementation of `<module>.<state>` directly, in the process;
-3. otherwise looks for the file `soul-mod-<module>` in the collection modules directory; no file - validation error (`soul-lint` catches this before running);
+3. otherwise takes the single executable in the alias's slot directory; no slot - validation error (`soul-lint` catches this before running);
 4. launches a sub-process, transfers state and parameters via gRPC-stdio, reads events as a stream (see "Modules Protocol").
 
 ### Module addressing
@@ -323,14 +323,18 @@ When applying Destiny step `soul`:
 The module is addressed in three levels, through a dot:
 
 ```
-<namespace>.<module>.<state>
+<alias>.<module>.<state>
 ```
 
 | Level | Meaning | Examples |
 |---|---|---|
-| **namespace** | A collection is a unit of distribution and trust (see [module-collections.md](module-collections.md)). Author/publisher prefix. | `core` (built into `soul`), `acme`, `community` |
+| **alias** | The **registration alias** — the name the *operator* gave the artifact in `keeper.yml::plugins.*[].name`. Also the unit of distribution and caching (see [module-collections.md](module-collections.md)). | `core` (built into `soul`), `redis`, `acme`, `community` |
 | **module** | The control object is "what the module is about." (`pkg`, `service`). | `pkg`, `file`, `service`, `user`, `exec`, `template`, `haproxy` |
 | **state** | The desired state is "how the object should be." Declarative noun (not an imperative verb). | `installed`, `absent`, `latest`, `present`, `running`, `stopped`, `restarted`, `enabled` |
+
+> **Level 1 is the operator's name, not the publisher's** ([ADR-020(p)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). The artifact carries no `namespace:`, no `name:` and no self-identity of any kind: the same bytes registered as `redis` answer `redis.acl.present`, and registered as `redis-community` answer `redis-community.acl.present`, with no rebuild. Two publishers of one subject cannot collide, because the operator names both. `core` is [reserved](naming-rules.md#reserved-namespace-names) and cannot be claimed.
+>
+> **The full addressing model is [NIM-376](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), a separate open ticket** — reserved-name enforcement across both surfaces, the `required_modules:` grammar and the alias↔source relationship are fixed there, not here.
 
 Addressing **declarative**: the third level is a *desired state*, not an *action*. `core.pkg.installed` reads "package installed" - not "install package". This fits better with the philosophy of destiny ("what should be"), gives a natural language to scenario writers.
 
@@ -343,7 +347,7 @@ Addressing **declarative**: the third level is a *desired state*, not an *action
 
 **The third level is required.** The entry `core.pkg` without `state` is a validation error, no defaults. Explicit is better than implicit: the operator does not have to "guess" what the default is.
 
-**`required_modules:` in destiny.yml is a declaration of only custom modules** in a two-level form (`<namespace>.<module>`): "this destiny requires that the family of custom modules `acme.haproxy`, `acme.myapp`, ..." be available on the host. All state forms inside these modules are available automatically. Specific state instances are called by a 3-level form in `tasks/main.yml` (see ["Task Structure in `tasks:`"](#destiny-task-structure) below).
+**`required_modules:` in destiny.yml is a declaration of only custom modules** in a two-level form (`<alias>.<module>`): "this destiny requires that the family of custom modules `acme.haproxy`, `acme.myapp`, ..." be available on the host. All state forms inside these modules are available automatically. Specific state instances are called by a 3-level form in `tasks/main.yml` (see ["Task Structure in `tasks:`"](#destiny-task-structure) below).
 
 **Core modules are not listed in `required_modules:`** - they are statically built into the `soul` binary and are always available. If destiny uses only `core.*`, the `required_modules:` block is omitted entirely.
 
@@ -408,45 +412,23 @@ Model **B (gRPC-stdio)**: same technique as Terraform providers, Vault plugins, 
   }
   ```
 
-  The plugin manifest is static `manifest.yaml`, normatively described in [ADR-020(a)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format); RPC `Manifest()` is not included in MVP.
+  The plugin's schema document is generated and stamped into the artifact, normatively described in [ADR-020(o)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name); there is no `Manifest()` RPC — the host must be able to read the schema without executing an unapproved binary.
 
 - gRPC-stream provides native progress reporting for long operations (`PlanEvent`, `ApplyEvent`).
 - The module ends with a graceful shutdown signal under the same contract.
 
-### Module manifest
+### Module schema document
 
-Each module declares itself in the **static `manifest.yaml`** in the root of the plugin repo and next to the binary in the host cache ([ADR-020(a)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)). The format is the same for three kinds (`soul_module` / `cloud_driver` / `ssh_provider`) with `kind:` discriminator; regulatory source is [ADR-020(e)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format) and [`docs/keeper/plugins.md`](keeper/plugins.md). Example for `SoulModule`:
+A module declares itself as a **`module.Def` value in Go**, and the **schema document** — canonical JSON — is *generated* from it, stamped into the artifact and written to `dist/schema.json` ([ADR-020(n)/(o)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). **There is no hand-written `manifest.yaml`.** The format is one shape for every kind (`soul_module` / `cloud_driver` / `ssh_provider` / `soul_beacon`) with a `kind:` discriminator; the normative source is [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document), which carries the field tables and the authoring example — deliberately not duplicated here.
 
-```yaml
-kind: soul_module                   # discriminator (ADR-020(e))
-protocol_version: 1                 # plugin protocol version (compat flag, not module version - see ADR-007, ADR-020(c))
-namespace: acme                       # collection
-name: haproxy                       # module name inside the collection
+Two properties matter at this level:
 
-required_capabilities: [run_as_root]  # closed enum (ADR-020(f))
-side_effects:                          # strict contract (ADR-020(g))
-  - { service: haproxy }
-  - { file: /etc/haproxy/haproxy.cfg }
+- **The artifact names no subject.** No `namespace:`, no `name:` — level 1 comes from registration (see [Module addressing](#module-addressing) above), and level 2 is the module's own name inside the artifact's `modules[]`.
+- **The document is readable without executing the artifact.** Keeper reads it at `plugin.allow`, when the binary is not yet approved; running it to ask what it is would defeat the gate. It is stamped as a trailer and found by seeking from the end of the file.
 
-spec:                                  # kind-specific block for soul_module
-  # List of supported states (or verb forms for non-stateful modules).
-  # Each state has its own input schema (DSL - see section
-  # "Destiny: Input Contract and Validation").
-  states:
-    running:
-      input:
-        name:    { type: string, required: true }
-        enabled: { type: boolean, default: true }
-      description: HAProxy is running and enabled in systemd.
-    stopped:
-      input:
-        name: { type: string, required: true }
-    restarted:
-      input:
-        name: { type: string, required: true }
-```
+The document is used by `soul-lint` for **local** validation of Destiny: unknown modules, unknown module state, wrong parameters for a specific state — without launching the module itself ([ADR-009](adr/0009-scenario-dsl.md), [ADR-020](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
 
-The manifest is used by `soul-lint` for **local** validation of Destiny: we catch unknown modules, unknown module state, incorrect parameters for a specific state, capabilities-mismatch with host-policy - without launching the module itself ([ADR-009](adr/0009-scenario-dsl.md), [ADR-020](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
+**`required_capabilities` / `side_effects` are disclosure to the operator before approval, not controls** — nothing enforces them; the one real control is that the operator approves a specific sha256 and the host refuses to exec a differing digest ([ADR-020(r)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)).
 
 ### Languages and module assembly
 
@@ -613,7 +595,7 @@ Moved to [`docs/adr/0082-service-vars.md`](adr/0082-service-vars.md). A service 
 
 | Contract | Who is the host | Who is the plugin | Destination |
 |---|---|---|---|
-| **`SoulModule`** | `soul`-binary | `soul-mod-<name>` | Implements Destiny steps: `Validate` / `Plan` / `Apply` (see Module Model). |
+| **`SoulModule`** | `soul`-binary | one executable in the alias-named slot | Implements Destiny steps: `Validate` / `Plan` / `Apply` (see Module Model). |
 | **`CloudDriver`** | `keeper` | `soul-cloud-<provider>` | Creates/deletes/polls VMs in the cloud: `Schema` / `Validate` / `Create` / `Destroy` / `Status` / `List`. |
 | **`SshProvider`** | `keeper` | `soul-ssh-<provider>` | Provides SSH credentials for `keeper.push`: `Sign` / `Authorize` (Vault SSH CA, static-key, Teleport - all fit into this contract). |
 

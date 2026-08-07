@@ -20,7 +20,7 @@ func TestApplyInstalledChangedCallsRescan(t *testing.T) {
 	var calls int
 	f.withRescan(&calls)
 
-	ev := f.apply(t, map[string]any{"name": "community.redis"})
+	ev := f.apply(t, map[string]any{"name": "redis"})
 	if ev.GetFailed() || !ev.GetChanged() {
 		t.Fatalf("expected changed=true, got failed=%v changed=%v message=%q",
 			ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
@@ -41,7 +41,7 @@ func TestApplyInstalledIdempotentSkipsRescan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ev := f.apply(t, map[string]any{"name": "community.redis"})
+	ev := f.apply(t, map[string]any{"name": "redis"})
 	if ev.GetFailed() || ev.GetChanged() {
 		t.Fatalf("expected idempotent changed=false, got failed=%v changed=%v message=%q",
 			ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
@@ -57,7 +57,7 @@ func TestApplyInstalledFailedSkipsRescan(t *testing.T) {
 	f.withRescan(&calls)
 	f.fetcher.stream = &fakeChunkStream{chunks: [][]byte{[]byte("malicious payload")}}
 
-	ev := f.apply(t, map[string]any{"name": "community.redis"})
+	ev := f.apply(t, map[string]any{"name": "redis"})
 	if !ev.GetFailed() {
 		t.Fatalf("expected failed on verify, got changed=%v", ev.GetChanged())
 	}

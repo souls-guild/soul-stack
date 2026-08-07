@@ -61,11 +61,13 @@ type PluginRegistry struct {
 	mods map[string]pluginhost.Discovered
 }
 
-// NewPluginRegistry builds the registry. The key is `<namespace>.<name>`
-// (manifest.Address()) — matches what arrives in RenderedTask.module before
-// the state suffix. Discovered entries with kind != soul_module are skipped
-// (defensive: the Soul-host Discover can also return soul_beacon, ADR-030
-// V5-2 — those get registered by a separate beacon-PluginRegistry).
+// NewPluginRegistry builds the registry. The key is `<alias>.<module>`
+// (Discovered.Address()) — what arrives in RenderedTask.module before the state
+// suffix. Level 1 is the registration alias the slot is named by, so two publishers
+// of the same subject cannot collide: the operator picked both names. Discovered
+// entries with kind != soul_module are skipped (defensive: the Soul-host Discover can
+// also return soul_beacon, ADR-030 V5-2 — those get registered by a separate
+// beacon-PluginRegistry).
 func NewPluginRegistry(spawner PluginSpawner, discovered []pluginhost.Discovered, logger *slog.Logger) *PluginRegistry {
 	if logger == nil {
 		logger = slog.Default()
@@ -73,13 +75,16 @@ func NewPluginRegistry(spawner PluginSpawner, discovered []pluginhost.Discovered
 	return &PluginRegistry{spawner: spawner, mods: indexSoulModules(discovered), logger: logger}
 }
 
+// indexSoulModules keys the discovered set by `<alias>.<module>`. Discovery already
+// yields one entry per module, so one artifact serving `acl`, `config` and `info`
+// registers three addresses that spawn the same bytes with different argv.
 func indexSoulModules(discovered []pluginhost.Discovered) map[string]pluginhost.Discovered {
 	mods := make(map[string]pluginhost.Discovered, len(discovered))
 	for _, d := range discovered {
-		if d.Manifest == nil || d.Manifest.Kind != pluginhost.KindSoulModule {
+		if d.Kind() != pluginhost.KindSoulModule || d.Module == "" {
 			continue
 		}
-		mods[d.Manifest.Address()] = d
+		mods[d.Address()] = d
 	}
 	return mods
 }
@@ -129,21 +134,24 @@ func (r *PluginRegistry) Lookup(name string) (module.SoulModule, bool) {
 	}, true
 }
 
-// StateInput serves the input contract from the manifest discovered beside the
-// plugin binary — the only place a custom module's params are described at all
-// (keeper's static check covers namespace `core` only). Enforced, like core:
-// the manifest IS the contract in both homes, and an opt-in "enforce me" key
-// could not be added anyway — an unknown key makes DiscoverSlot skip the whole
-// slot, so a manifest carrying it would delete the module on an older Soul
-// rather than merely fail to gate it (ADR-0076 amendment (t)).
+// StateInput serves the input contract from the schema document stamped into the
+// artifact — the only place a custom module's params are described at all (keeper's
+// static check covers namespace `core` only). Enforced, like core: the document IS the
+// contract in both homes, and an opt-in "enforce me" key could not be added anyway —
+// an unknown key makes the strict decoder reject the whole document, so a document
+// carrying it would delete the module on an older Soul rather than merely fail to gate
+// it (ADR-0076 amendment (t)).
+//
+// The lookup reads THIS module's states only: `d.Module` names the module the address
+// resolved to, so a sibling in the same artifact cannot describe params for it.
 func (r *PluginRegistry) StateInput(module, state string) (map[string]plugin.InputParamDef, ParamStrictness) {
 	r.mu.RLock()
 	d, ok := r.mods[module]
 	r.mu.RUnlock()
-	if !ok || d.Manifest == nil {
+	if !ok {
 		return nil, ParamsUnchecked
 	}
-	def, ok := d.Manifest.Spec.States[state]
+	def, ok := plugin.StateOf(d.Doc, d.Module, state)
 	if !ok {
 		return nil, ParamsUnchecked
 	}
@@ -170,7 +178,7 @@ func (m *pluginSoulModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerS
 	defer func() {
 		if cerr := sess.Close(); cerr != nil {
 			m.logger.Warn("plugin: close error",
-				slog.String("module", m.discovered.Manifest.Address()),
+				slog.String("module", m.discovered.Address()),
 				slog.Any("error", cerr),
 			)
 		}

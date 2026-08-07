@@ -113,7 +113,7 @@ no - the module trusts the author of the task.
   ```
 
 - **Privileges.** Manifest
-[`cron.yaml`](../../../../shared/coremanifest/cron.yaml) announces
+[`cron` module](../../../../shared/coremanifest/mod_cron.go) announces
 `required_capabilities: [run_as_root, fs_write_root]` - entry to `/etc/cron.d/`
 goes outside `/var/lib/soul-stack` and requires UID 0; `exec_subprocess`
 **not** declared intentionally - the module of external binaries does not launch, the file is written

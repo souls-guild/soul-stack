@@ -15,7 +15,7 @@ import (
 // PluginAdapter implements [PluginHost] on top of keeper/internal/pluginhost.
 // Replaces [StubHost] in prod (see wire-up in keeper/cmd/keeper/main.go).
 //
-// Provider lookup is by `manifest.name` among the discovery cache, which is
+// Provider lookup is by REGISTRATION ALIAS among the discovery cache, which is
 // already filtered by [pluginhost.FilterByCatalog] against
 // `keeper.yml::plugins.cloud_drivers[].name` (PM-decision delegation.md #1).
 // Comparison is CASE-sensitive, same as in the catalog.
@@ -28,29 +28,32 @@ type PluginAdapter struct {
 	providers map[string]pluginhost.Discovered
 }
 
-// NewPluginAdapter indexes the given discovery list by `manifest.name` for
-// O(1) lookup in Create/Destroy. Duplicate names in discovery are not
-// allowed: FilterByCatalog doesn't deduplicate, but the caller (wire-up in
-// main.go) only feeds it cloud_driver plugins. A name collision returns an
-// error — that's a configuration problem (two entries with the same
-// `name`), not a runtime one.
+// NewPluginAdapter indexes the given discovery list by REGISTRATION ALIAS for
+// O(1) lookup in Create/Destroy. The alias is what a scenario's `provider:` names
+// and the only name a cloud_driver has: the artifact carries none of its own
+// (NIM-377), so the operator's registration IS the provider name.
+//
+// Duplicate aliases in discovery are not allowed: FilterByCatalog doesn't
+// deduplicate, but the caller (wire-up in main.go) only feeds it cloud_driver
+// plugins. A collision returns an error — that's a configuration problem (two
+// catalog entries with the same `name`), not a runtime one.
 func NewPluginAdapter(host *pluginhost.Host, discovered []pluginhost.Discovered) (*PluginAdapter, error) {
 	if host == nil {
 		return nil, errors.New("cloud adapter: pluginhost.Host is nil")
 	}
 	providers := make(map[string]pluginhost.Discovered, len(discovered))
 	for _, d := range discovered {
-		if d.Manifest == nil {
+		if d.Doc == nil {
 			continue
 		}
-		if d.Manifest.Kind != pluginhost.KindCloudDriver {
+		if d.Kind() != pluginhost.KindCloudDriver {
 			continue
 		}
-		name := d.Manifest.Name
-		if _, dup := providers[name]; dup {
-			return nil, fmt.Errorf("cloud adapter: duplicate provider name %q in discovery", name)
+		alias := d.Alias
+		if _, dup := providers[alias]; dup {
+			return nil, fmt.Errorf("cloud adapter: duplicate provider name %q in discovery", alias)
 		}
-		providers[name] = d
+		providers[alias] = d
 	}
 	return &PluginAdapter{host: host, providers: providers}, nil
 }
@@ -90,13 +93,13 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 	}
 	plugin, err := a.host.Spawn(ctx, d)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Address(), err)
 	}
 	defer func() { _ = plugin.Close() }()
 
 	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Address(), err)
 	}
 
 	profileStruct, err := encodeStruct(profile, "profile")
@@ -116,13 +119,13 @@ func (a *PluginAdapter) Create(ctx context.Context, driver string, profile, cred
 		Name:        name,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: create rpc %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: create rpc %s: %w", d.Address(), err)
 	}
 
 	vms, err := collectCreateVMs(stream)
 	if err != nil {
 		return nil, fmt.Errorf("cloud adapter: create stream %s: %w (stderr-tail: %s)",
-			d.Manifest.Address(), err, plugin.StderrTail())
+			d.Address(), err, plugin.StderrTail())
 	}
 	return vms, nil
 }
@@ -189,13 +192,13 @@ func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials 
 	}
 	plugin, err := a.host.Spawn(ctx, d)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Address(), err)
 	}
 	defer func() { _ = plugin.Close() }()
 
 	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Address(), err)
 	}
 
 	credsStruct, err := encodeStruct(credentials, "credentials")
@@ -205,13 +208,13 @@ func (a *PluginAdapter) Destroy(ctx context.Context, driver string, credentials 
 
 	stream, err := cd.Destroy(ctx, &pluginv1.DestroyRequest{VmIds: vmIDs, Credentials: credsStruct})
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: destroy rpc %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: destroy rpc %s: %w", d.Address(), err)
 	}
 
 	destroyed, collectErr := collectDestroyed(stream, len(vmIDs))
 	if collectErr != nil {
 		return destroyed, fmt.Errorf("cloud adapter: destroy %s: %w (stderr-tail: %s)",
-			d.Manifest.Address(), collectErr, plugin.StderrTail())
+			d.Address(), collectErr, plugin.StderrTail())
 	}
 	return destroyed, nil
 }
@@ -269,13 +272,13 @@ func (a *PluginAdapter) Status(ctx context.Context, driver string, credentials m
 	}
 	plugin, err := a.host.Spawn(ctx, d)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Address(), err)
 	}
 	defer func() { _ = plugin.Close() }()
 
 	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Address(), err)
 	}
 
 	credsStruct, err := encodeStruct(credentials, "credentials")
@@ -286,7 +289,7 @@ func (a *PluginAdapter) Status(ctx context.Context, driver string, credentials m
 	rep, err := cd.Status(ctx, &pluginv1.StatusRequest{VmId: vmID, Credentials: credsStruct})
 	if err != nil {
 		return nil, fmt.Errorf("cloud adapter: status rpc %s: %w (stderr-tail: %s)",
-			d.Manifest.Address(), err, plugin.StderrTail())
+			d.Address(), err, plugin.StderrTail())
 	}
 	return rep, nil
 }
@@ -300,13 +303,13 @@ func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, fi
 	}
 	plugin, err := a.host.Spawn(ctx, d)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Address(), err)
 	}
 	defer func() { _ = plugin.Close() }()
 
 	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Address(), err)
 	}
 
 	credsStruct, err := encodeStruct(credentials, "credentials")
@@ -320,7 +323,7 @@ func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, fi
 
 	stream, err := cd.List(ctx, &pluginv1.ListRequest{Filter: filterStruct, Credentials: credsStruct})
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: list rpc %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: list rpc %s: %w", d.Address(), err)
 	}
 
 	var vms []*pluginv1.VmInfo
@@ -331,7 +334,7 @@ func (a *PluginAdapter) List(ctx context.Context, driver string, credentials, fi
 		}
 		if recvErr != nil {
 			return nil, fmt.Errorf("cloud adapter: list stream %s: %w (stderr-tail: %s)",
-				d.Manifest.Address(), recvErr, plugin.StderrTail())
+				d.Address(), recvErr, plugin.StderrTail())
 		}
 		vms = append(vms, vm)
 	}
@@ -350,13 +353,13 @@ func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials m
 	}
 	plugin, err := a.host.Spawn(ctx, d)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: spawn %s: %w", d.Address(), err)
 	}
 	defer func() { _ = plugin.Close() }()
 
 	cd, err := pluginhost.NewCloudDriverPlugin(plugin)
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: wrap %s: %w", d.Address(), err)
 	}
 
 	credsStruct, err := encodeStruct(credentials, "credentials")
@@ -371,7 +374,7 @@ func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials m
 		Credentials:   credsStruct,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("cloud adapter: resize rpc %s: %w", d.Manifest.Address(), err)
+		return nil, fmt.Errorf("cloud adapter: resize rpc %s: %w", d.Address(), err)
 	}
 
 	var results []*pluginv1.VmResizeResult
@@ -382,7 +385,7 @@ func (a *PluginAdapter) Resize(ctx context.Context, driver string, credentials m
 		}
 		if recvErr != nil {
 			return nil, fmt.Errorf("cloud adapter: resize stream %s: %w (stderr-tail: %s)",
-				d.Manifest.Address(), recvErr, plugin.StderrTail())
+				d.Address(), recvErr, plugin.StderrTail())
 		}
 		if ev.GetFailed() {
 			// Stream-level failure of the whole operation (including

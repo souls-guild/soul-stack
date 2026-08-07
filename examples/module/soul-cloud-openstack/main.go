@@ -22,7 +22,6 @@ package main
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -31,16 +30,18 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded next
-// to the binary. Same technique as in soul-cloud-aws - a separate file, not
-// hardcoded in Go (easier to keep in sync with manifest.spec.profile_schema).
+// schemaDocJSON is the artifact's schema document (NIM-377), embedded next to the
+// binary. It is the SAME file `soul-mod stamp` publishes as dist/schema.json and the
+// same bytes the trailer carries, so the profile_schema this driver answers with and
+// the one an operator approves cannot drift apart — there is only one copy.
 //
 //go:embed schema.json
-var profileSchemaJSON []byte
+var schemaDocJSON []byte
 
 // runMetaKey is the server.metadata idempotency key: value = run identifier
 // (from profile.labels or CreateRequest.name as fallback). The name has no colon
@@ -76,13 +77,13 @@ type OpenstackDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema publishes the embedded profile_schema.
+// Schema answers with the profile_schema out of the embedded schema document.
 func (o *OpenstackDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
+	doc, err := schema.Unmarshal(schemaDocJSON)
+	if err != nil {
 		return nil, fmt.Errorf("parse embedded schema.json: %w", err)
 	}
-	s, err := structpb.NewStruct(raw)
+	s, err := structpb.NewStruct(doc.ProfileSchema)
 	if err != nil {
 		return nil, fmt.Errorf("encode profile_schema: %w", err)
 	}

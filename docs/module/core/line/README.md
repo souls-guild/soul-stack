@@ -169,7 +169,7 @@ the module does not silently demote the rights of an existing file.
   ```
 
 - **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
-([`line.yaml`](../../../../shared/coremanifest/line.yaml)) only
+([`line` module](../../../../shared/coremanifest/mod_line.go)) only
 [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum) (record for
 limits `/var/lib/soul-stack/`). Editing occurs with process privileges
 `soul`-agent; for paths `/etc/...` in practice requires root. Subprocesses

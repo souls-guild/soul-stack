@@ -29,14 +29,47 @@ func (f *fakeApplyStream) Send(e *pluginv1.ApplyEvent) error {
 	return nil
 }
 
-func TestApply_NoopByDefault(t *testing.T) {
+func TestApply_DeclaredStatesAreServed(t *testing.T) {
+	for _, state := range []string{"present", "absent"} {
+		m := &{{.NamePascal}}Module{}
+		stream := &fakeApplyStream{ctx: context.Background()}
+		if err := m.Apply(&pluginv1.ApplyRequest{State: state}, stream); err != nil {
+			t.Fatalf("Apply(%s): unexpected error: %v", state, err)
+		}
+		// TODO: once Apply is implemented, assert the correct state_change here.
+		_ = stream.events
+	}
+}
+
+// A state the declaration does not carry must be refused, never quietly treated
+// as one of the ones it does: which state runs decides what happens to the host.
+func TestApply_UndeclaredStateIsRefused(t *testing.T) {
 	m := &{{.NamePascal}}Module{}
 	stream := &fakeApplyStream{ctx: context.Background()}
 
-	if err := m.Apply(&pluginv1.ApplyRequest{}, stream); err != nil {
-		t.Fatalf("Apply: unexpected error: %v", err)
+	if err := m.Apply(&pluginv1.ApplyRequest{State: "presnet"}, stream); err != nil {
+		t.Fatalf("Apply: unexpected transport error: %v", err)
 	}
+	if len(stream.events) == 0 || !stream.events[len(stream.events)-1].GetFailed() {
+		t.Errorf("an unknown state was accepted: %v", stream.events)
+	}
+}
 
-	// TODO: once Apply is implemented, replace with an assertion on the correct state_change.
-	_ = stream.events
+// Every state the module declares must be one Apply actually serves. The schema
+// document is generated from Module, so a state declared and not handled is a
+// promise the artifact's own disclosure makes and the code does not keep.
+func TestDeclaredStatesMatchApply(t *testing.T) {
+	for state := range Module.States {
+		m := &{{.NamePascal}}Module{}
+		stream := &fakeApplyStream{ctx: context.Background()}
+		if err := m.Apply(&pluginv1.ApplyRequest{State: state}, stream); err != nil {
+			t.Errorf("declared state %q: Apply returned %v", state, err)
+			continue
+		}
+		for _, e := range stream.events {
+			if e.GetFailed() {
+				t.Errorf("declared state %q is not served by Apply: %v", state, e)
+			}
+		}
+	}
 }

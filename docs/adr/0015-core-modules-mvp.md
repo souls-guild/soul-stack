@@ -78,7 +78,7 @@
   (`applyPresent`/`planPresent`, formerly `applyDirectory`/`planDirectory`),
   reuses `util.ParseMode`/`util.ApplyOwnership`/`util.OwnershipDrift`.
   The author manifest — the `states.directory` block in
-  [`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml) (additive,
+  [`file` module](../../shared/coremanifest/mod_file.go) (additive,
   only-add; `soul-lint` validates it automatically). Additive and backward-compatible:
   existing `core.file` tasks are not affected. Documentation —
   [`docs/module/core/file/README.md`](../module/core/file/README.md).
@@ -106,7 +106,7 @@
   `util.AtomicWrite`) + branches in `applyPresent`/`planPresent`/`Validate`
   ([`soul/internal/coremod/file/file.go`](../../soul/internal/coremod/file/file.go)).
   The author manifest — the param `src` in `states.present.input`
-  ([`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml)); the manifest DSL
+  ([`file` module](../../shared/coremanifest/mod_file.go)); the manifest DSL
   does not express mutual exclusion (there is no `oneof`) — the XOR lives in `Module.Validate`, the
   manifest has only descriptions. **Additive, proto is untouched, no breaking**: `core.file.present`
   tasks without `src` are not affected. Documentation —
@@ -140,7 +140,7 @@
   (`applyApplied`/`planApplied` + `case "applied"` branches in Apply/Plan/Validate),
   reuses `util.AtomicWritePreserving`/`util.DaemonReloadMode`. The author manifest
   — the `states.applied` block in
-  [`shared/coremanifest/sysctl.yaml`](../../shared/coremanifest/sysctl.yaml) (additive,
+  [`sysctl` module](../../shared/coremanifest/mod_sysctl.go) (additive,
   only-add). Additive and backward-compatible: `core.sysctl.present` tasks are not affected.
   Documentation — [`docs/module/core/sysctl/README.md`](../module/core/sysctl/README.md).
 - **Amendment (2026-06-18, centralized daemon-reload in `core.service`).** `core.service` (systemd backend) before mutating actions (`running` / `restarted` / `enabled`) checks the systemd flag `NeedDaemonReload` and, on a desync of the unit file with the loaded definition, runs `systemctl daemon-reload` BEFORE start/restart/enable. Closes a bug: after editing a unit file without a reload, `systemctl restart` silently restarts with the OLD definition (exit 0, only a warning). The behavior is controlled by the optional parameter `daemon_reload` (string enum `auto` | `always` | `never`, **default `auto`**, declared in `shared/coremanifest/service.yaml` on the states `running`/`restarted`/`enabled`; on `stopped` it is NOT declared — a reload is not needed there): `auto` — reload only when `NeedDaemonReload=yes` (gated, idempotent); `always` — reload unconditionally; `never` — an explicit opt-out. The check mechanism — `systemctl show <unit> --property=NeedDaemonReload --value` (`yes`/`no`); on the first install of a new unit the flag = `no` (systemd will pick up the definition on start), a reload is not needed. **The reload does NOT mark the step as `changed`** (changed remains a function only of start/restart/enable) — on an actually performed reload a diagnostic `reloaded: true` is added to `output`. `openrc`/`sysv` — a **no-op** (they have no daemon-reload). Implementation — the helper `util.EnsureDaemonReloaded` next to `util.ServiceActive` (the same mock-able Runner, without D-Bus/go-systemd); the enum is validated in `core.service.Validate` (an unknown value → a validation error, not silently). Additive and backward-compatible: existing tasks without `daemon_reload` get `auto`.

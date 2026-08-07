@@ -1,8 +1,10 @@
 # Module collections (feature backlog)
 
-This document collects ideas and open Q around **collection** - the top level of module addressing (`namespace` in `<namespace>.<module>.<state>`, see ["Module Addressing"](architecture.md#module-addressing)). The addressing scheme itself is fixed. The collection as a full-fledged **entity** of the Soul Stack is a feature backlog: below is a list of what it can provide, and a list of forks before implementation begins.
+This document collects ideas and open Q around **collection** — the top level of module addressing (see ["Module Addressing"](architecture.md#module-addressing)). The addressing scheme itself is fixed. The collection as a full-fledged **entity** of the Soul Stack is a feature backlog: below is a list of what it can provide, and a list of forks before implementation begins.
 
-Entity name at the Soul Stack dictionary level **not selected yet** - in documents we use the neutral "collection / namespace". See open Q below for candidates.
+> **Updated 2026-08-06 (NIM-377).** Level 1 is now the **registration alias** — the name the *operator* gives an artifact in `keeper.yml::plugins.*[].name` — not a `namespace:` field read out of the artifact. The artifact carries **no self-identity at all** ([ADR-020(p)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)), so the same bytes registered twice answer at two addresses. That closes **open Q 1, 2 and 4** below and changes what the remaining ones are asking. The full addressing model is **NIM-376**, a separate open ticket.
+
+Entity name at the Soul Stack dictionary level **still not selected** — in documents we use the neutral "collection / alias". See open Q 1 below.
 
 ## Why is the collection (what does it give us)
 
@@ -24,7 +26,9 @@ collections:
 
 Signing and verification occurs at the collection level, not each module. One publisher → one key. Keeper has a policy of "trust `core` + `acme`, do not trust `community`".
 
-> **Current model - Sigil (Option A).** Integrity of plugins in MVP is closed **Sigil** - Keeper-signed digest index ([ADR-026](adr/0026-sigil.md)): permission of specific hashes `(namespace, name, ref) → sha256`, signature with Keeper's key, explicit permission by Archon. Author-signed collections/publishers (collection level trust boundary by `(namespace, ref)`, one publisher → one key - **Option B**) - **post-MVP** together with this entity, extends Sigil additively without breaking changes.
+> **This benefit does not survive the alias, and that is worth being explicit about.** A policy phrased as "trust `acme`" reads level 1 as a statement about a publisher; since NIM-377 level 1 is a label the local operator chose, so such a policy would say only "trust what I already decided to trust". A real publisher-level trust boundary needs a publisher-level identity, which is exactly what Variant B below would introduce — and it would key on the artifact **source**, not on the alias.
+
+> **Current model - Sigil (Option A).** Integrity of plugins in MVP is closed **Sigil** - Keeper-signed digest index ([ADR-026](adr/0026-sigil.md)): permission of specific hashes, keyed on the artifact source `(source, ref) → sha256` since NIM-377/438, signature with Keeper's key, explicit permission by Archon. Author-signed collections/publishers (collection level trust boundary by `(namespace, ref)`, one publisher → one key - **Option B**) - **post-MVP** together with this entity, extends Sigil additively without breaking changes.
 
 ### 3. RBAC and allow-list
 
@@ -42,29 +46,33 @@ Modules within the same collection move together. Not "`pkg@1.5` is compatible w
 
 The architecture already describes the `/var/lib/soul-stack/modules/` SHA-256 cache for push. With collections, the cache key becomes not a "separate module", but "collection@ref" - there are fewer pieces to cache, it's easier to check consistency, the "update the collection across the entire fleet" pipeline is easier.
 
+> **Largely delivered by NIM-377, without the entity.** One artifact already serves several modules, and the host slot is one directory per alias holding one executable ([soul/modules.md](soul/modules.md)) — so the cache unit is already "artifact@ref" rather than "module". What a collection entity would still add is grouping across *several* artifacts.
+
 ### 7. Visual clue about origin
 
 From the line `core.pkg.installed` you can immediately see: built-in, without network dependencies. From `community.kubernetes.deployed` - third-party collection, installation required. This solves the "it's not clear where core / where custom" is where the conversation started.
+
+> **Weaker since NIM-377, in one direction only.** `core` is still a reliable signal — it is [reserved](naming-rules.md#reserved-namespace-names) and cannot be claimed by a plugin, so "not `core`" still means "delivered, installation required". What a non-`core` level 1 no longer tells you is *whose* it is: `community.` means whatever the local operator meant by it. Origin is answered by the catalog entry's `source`, which is also what the allow-list keys on.
 
 ## What needs to be decided before implementation (open Q)
 
 All points are propose-and-wait and are not fixed silently.
 
-1. **Entity name in the Soul Stack dictionary.** Candidates:
-   - **Grimoire** (grimoire) - modules = spells, grimoire = their book. It fits into the "spiritual" metaphor.
-   - **Codex** (code) - more neutral, same idea of ​​a "book".
-   - **Order** (order) - a social metaphor, a guild of publishers. Weaker than the book version.
-   - **Collection** / **Pack** / **Bundle** - neutral, without metaphor. Understandable, but not original.
-   - **Namespace** is a technical name, not an entity.
+1. ~~**Entity name in the Soul Stack dictionary.**~~ **Closed as "no entity" (NIM-377).** The candidates were Grimoire / Codex / Order / Collection / Pack / Bundle — all of them names for *a thing a publisher ships*. Level 1 is not that thing: it is a **local label an operator chose**, and it identifies nothing about origin. Naming it would invent an entity the system does not have.
 
-2. **Declaration in destiny/service.yml.** Options:
-   - Explicit block `required_collections:` with versions + `required_modules:` references short-name in the spirit of `core.pkg`;
-   - Versions are pulled from the module name automatically (`core` → built-in, `acme` → last installed);
-   - Hybrid: collections are declared globally (Keeper config), destiny refers only to names.
+   The name in the dictionary is therefore **registration alias** ([naming-rules.md](naming-rules.md#plugin-manifest-and-handshake)) — a DevOps term, not a Soul Stack entity, per the "small = DevOps" rule. **Bundle** was taken for something real and different: the set of modules one artifact serves (`module.Bundle`), which is a publisher-side fact.
 
-3. **Versioning model.** The basic rule is enshrined in [ADR-007](adr/0007-versioning-git-ref.md): the version of a collection is the git ref (tag or branch), no semver-range. Open: tag naming convention (mandatory `vMAJOR.MINOR.PATCH` or free form), breaking change policy for `protocol_version` modules inside, whether the collection needs to have its own manifest with `min_keeper_version`-like compat flags.
+   What remains open is whether a *publisher-side* collection entity is ever needed — that is question 2 of the deferred Variant B below, not a naming question.
 
-4. **Where the registry of trusted collections lives.** Postgres (part of Keeper-state) vs static Keeper config vs both. Affects whether collections can be managed via API/MCP at runtime, or whether this is a deployment-time artifact.
+2. ~~**Declaration in destiny/service.yml.**~~ **Closed by the alias (NIM-377):** the third option, "collections are declared globally in the Keeper config, destiny refers only to names". The operator declares `{name, source, ref}` once in `keeper.yml::plugins.*`, and `required_modules:` / `service.yml::modules[]` carry only names. No `required_collections:` block, and no version in a destiny.
+
+   This is not a preference — it is forced. Any option where a destiny declares a *version* would need the artifact to have a name a destiny could bind a version to, and it does not. The version lives with the `ref` in the catalog entry, where the operator put it.
+
+3. **Versioning model.** The basic rule is enshrined in [ADR-007](adr/0007-versioning-git-ref.md): the version of a collection is the git ref (tag or branch), no semver-range. Open: tag naming convention (mandatory `vMAJOR.MINOR.PATCH` or free form) and the breaking-change policy for `protocol_version` of the modules inside. **Partly answered by NIM-377:** the artifact declares its engine window as `compat: {keeper: ">=0.9 <2.0"}` in the [schema document](keeper/plugins.md#schema-document) — declared once per artifact, since a bundle's modules ship together on one version line. So the "own manifest with `min_keeper_version`-like compat flags" half of this question is closed; the tag-convention half is not.
+
+4. ~~**Where the registry of trusted collections lives.**~~ **Closed: both, on two different axes (NIM-377).** The **catalog** (`{alias, source, ref}`) is static Keeper config — `keeper.yml::plugins.*`. The **allow-list** is Postgres — `plugin_sigils`, keyed on the artifact source since [ADR-026(a)](adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations) as amended, mutated at runtime via API/MCP by an Archon's `plugin.allow`.
+
+   The split is deliberate and answers the "can they be managed at runtime" part: *which artifacts exist* is deployment-time, *which digests may run* is runtime and audited. Note the two use **different keys** — the alias names the address, the source keys the trust record — so registering one artifact under two aliases is one allow decision.
 
 5. **Collection source.** Git repo / OCI registry / own artifact store / smesh. Convergence with the approach to delivering the `soul` binary and custom modules (see "Delivery of the soul binary and modules to the host" in architecture.md).
 

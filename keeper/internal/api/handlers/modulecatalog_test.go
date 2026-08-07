@@ -8,8 +8,14 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
+
+// catalogSource is the git remote the fixture grants were issued on. It is the artifact's
+// signed identity; the catalog shows it so an operator can see which repository the
+// modules in their catalog actually came from.
+const catalogSource = "https://example.com/soul-mod-postgres.git"
 
 // fakeCatalogPlugins — mock [ModuleCatalogPlugins] for the transport tests.
 type fakeCatalogPlugins struct {
@@ -24,32 +30,52 @@ func (f fakeCatalogPlugins) ActivePlugins(context.Context) ([]PluginCatalogEntry
 	return f.entries, nil
 }
 
-// soulModuleManifest — a minimal valid soul_module manifest.yaml with two
-// states and an overlapping param (a vault secret in both).
-const soulModuleManifest = `kind: soul_module
-protocol_version: 1
-namespace: official
-name: postgres-user
-spec:
-  states:
-    present:
-      description: ensure user exists
-      input:
-        username:
-          type: string
-          required: true
-          description: role name
-        password:
-          type: string
-          secret: true
-          pattern: "^vault:.*"
-    absent:
-      description: drop user
-      input:
-        username:
-          type: string
-          required: true
-`
+// The catalog fixtures are Go [schema.Document] values marshalled through the real
+// serializer, not hand-written text. Since NIM-377 nobody writes a schema by hand — it
+// is generated from `module.Def` — so a fixture written any other way would be testing
+// a form the system never produces.
+//
+// None of them declares a namespace or a name for the ARTIFACT: there is nowhere in
+// the format to put one. Address level 1 comes from the registration alias the catalog
+// entry carries, level 2 from the module.
+
+// docBytes marshals a document to the canonical bytes a grant would hold.
+func docBytes(t *testing.T, doc schema.Document) []byte {
+	t.Helper()
+	out, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	return out
+}
+
+// twoStateModuleDoc — a soul_module with two states and an overlapping param (a vault
+// secret in both), so the catalog's per-param flattening is exercised.
+func twoStateModuleDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindSoulModule,
+		ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name:        "postgres-user",
+			Description: "a postgres role",
+			States: map[string]schema.State{
+				"present": {
+					Description: "ensure user exists",
+					Input: schema.Input{
+						"username": {Type: schema.String, Required: true, Description: "role name"},
+						"password": {Type: schema.String, Secret: true, Pattern: `^vault:.*`},
+					},
+				},
+				"absent": {
+					Description: "drop user",
+					Input: schema.Input{
+						"username": {Type: schema.String, Required: true},
+					},
+				},
+			},
+		}},
+	}
+}
 
 func findItem(items []moduleCatalogItem, name string) (moduleCatalogItem, bool) {
 	for _, it := range items {
@@ -76,7 +102,7 @@ func catalogProblemType(t *testing.T, err error) string {
 func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{
 		entries: []PluginCatalogEntry{
-			{Namespace: "official", Name: "postgres-user", Ref: "v1.0.0", ManifestRaw: []byte(soulModuleManifest)},
+			{Alias: "official", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, twoStateModuleDoc())},
 		},
 	}, nil)
 
@@ -144,27 +170,27 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 	}
 }
 
-// sourceModuleManifest — a soul_module manifest with both source discriminators
-// (ADR-044/ADR-045): incarnation_hosts (bool) and choir (string). Guard for the
-// snake_case wire serialization of moduleParam.Source.
-const sourceModuleManifest = `kind: soul_module
-protocol_version: 1
-namespace: official
-name: with-source
-spec:
-  states:
-    present:
-      description: source-bearing state
-      input:
-        host:
-          type: string
-          source:
-            incarnation_hosts: true
-        voice:
-          type: string
-          source:
-            choir: alpha
-`
+// sourceModuleDoc — a soul_module with both source discriminators (ADR-044/ADR-045):
+// incarnation_hosts (bool) and choir (string). Guard for the snake_case wire
+// serialization of moduleParam.Source.
+func sourceModuleDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindSoulModule,
+		ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name: "with-source",
+			States: map[string]schema.State{
+				"present": {
+					Description: "source-bearing state",
+					Input: schema.Input{
+						"host":  {Type: schema.String, Source: &schema.InputSource{IncarnationHosts: true}},
+						"voice": {Type: schema.String, Source: &schema.InputSource{Choir: "alpha"}},
+					},
+				},
+			},
+		}},
+	}
+}
 
 // TestModuleCatalog_Source_SnakeCaseWire — guard for the wire contract of the module
 // source-picker form (BUG-FIX): the raw JSON response must carry snake_case keys
@@ -174,7 +200,7 @@ spec:
 func TestModuleCatalog_Source_SnakeCaseWire(t *testing.T) {
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{
 		entries: []PluginCatalogEntry{
-			{Namespace: "official", Name: "with-source", Ref: "v1.0.0", ManifestRaw: []byte(sourceModuleManifest)},
+			{Alias: "official", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, sourceModuleDoc())},
 		},
 	}, nil)
 
@@ -305,26 +331,27 @@ func TestModuleCatalog_GetTyped_NotFound(t *testing.T) {
 	}
 }
 
-// introducedInManifest — a module carrying ADR-0076(i) metadata at both
-// granularities: the module itself and a parameter added later than the state it
-// hangs on.
-const introducedInManifest = `kind: soul_module
-protocol_version: 1
-namespace: official
-name: postgres-user
-introduced_in: "1.4.0"
-spec:
-  states:
-    present:
-      description: ensure user exists
-      input:
-        username:
-          type: string
-          required: true
-        selinux_context:
-          type: string
-          introduced_in: "2.5.0"
-`
+// introducedInDoc — a module carrying ADR-0076(i) metadata at both granularities: the
+// module itself and a parameter added later than the state it hangs on.
+func introducedInDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindSoulModule,
+		ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name:         "postgres-user",
+			IntroducedIn: "1.4.0",
+			States: map[string]schema.State{
+				"present": {
+					Description: "ensure user exists",
+					Input: schema.Input{
+						"username":        {Type: schema.String, Required: true},
+						"selinux_context": {Type: schema.String, IntroducedIn: "2.5.0"},
+					},
+				},
+			},
+		}},
+	}
+}
 
 // The catalog is where an author looks up what a module implies before declaring
 // a compat: window against it (ADR-0076(i)), so introduced_in has to reach the
@@ -332,7 +359,7 @@ spec:
 func TestModuleCatalog_IntroducedInIsPublished(t *testing.T) {
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{
 		entries: []PluginCatalogEntry{
-			{Namespace: "official", Name: "postgres-user", Ref: "v1.0.0", ManifestRaw: []byte(introducedInManifest)},
+			{Alias: "official", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, introducedInDoc())},
 		},
 	}, nil)
 
@@ -359,28 +386,29 @@ func TestModuleCatalog_IntroducedInIsPublished(t *testing.T) {
 	}
 }
 
-// deprecatedManifest — a module whose param is on its way out (ADR-0076
-// deprecation policy) next to one that is not, so the catalog is proven to carry
-// the block exactly where it is declared.
-const deprecatedManifest = `kind: soul_module
-protocol_version: 1
-namespace: official
-name: postgres-user
-spec:
-  states:
-    present:
-      description: ensure user exists
-      input:
-        username:
-          type: string
-          required: true
-        address:
-          type: string
-          deprecated:
-            since: "0.4.0"
-            removed_in: "0.6.0"
-            use: "username"
-`
+// deprecatedDoc — a module whose param is on its way out (ADR-0076 deprecation policy)
+// next to one that is not, so the catalog is proven to carry the block exactly where it
+// is declared.
+func deprecatedDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindSoulModule,
+		ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name: "postgres-user",
+			States: map[string]schema.State{
+				"present": {
+					Description: "ensure user exists",
+					Input: schema.Input{
+						"username": {Type: schema.String, Required: true},
+						"address": {Type: schema.String, Deprecated: &schema.Deprecated{
+							Since: "0.4.0", RemovedIn: "0.6.0", Use: "username",
+						}},
+					},
+				},
+			},
+		}},
+	}
+}
 
 // The catalog is the surface an author reads BEFORE writing a task, so a
 // deprecation has to reach it: learning about the deadline from a lint warning
@@ -390,7 +418,7 @@ spec:
 func TestModuleCatalog_DeprecatedIsPublished(t *testing.T) {
 	h := NewModuleCatalogHandler(fakeCatalogPlugins{
 		entries: []PluginCatalogEntry{
-			{Namespace: "official", Name: "postgres-user", Ref: "v1.0.0", ManifestRaw: []byte(deprecatedManifest)},
+			{Alias: "official", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, deprecatedDoc())},
 		},
 	}, nil)
 
@@ -435,7 +463,7 @@ func TestModuleCatalog_CoreDeprecationMatchesTheManifests(t *testing.T) {
 			continue // a core module with no embedded manifest carries no params.
 		}
 		declared := map[string]bool{}
-		for _, def := range m.Spec.States {
+		for _, def := range m.States {
 			for name, p := range def.Input {
 				if p.Deprecated != nil {
 					declared[name] = true
@@ -464,6 +492,72 @@ func TestModuleCatalog_CoreCarriesNoIntroducedInYet(t *testing.T) {
 	for _, it := range resp.Items {
 		if it.IntroducedIn != "" {
 			t.Errorf("core module %s claims introduced_in=%q; stamp it in RELEASING when that becomes true", it.Name, it.IntroducedIn)
+		}
+	}
+}
+
+// TestModuleCatalog_UnreadableSchemaStaysLabelled — a grant whose schema does not
+// parse must still appear as a NAMED entry, never as a blank one.
+//
+// The catalog now takes every label from the grant's alias, because the artifact
+// self-reports no name at all. That removes a whole class of "unlabelled module in
+// the UI" bug — but only as long as nothing falls back to a name read out of the
+// document. A grant is a fact about the cluster: hiding it would misreport what is
+// approved, and showing it without a name would put a row in the operator's form
+// that they cannot act on.
+func TestModuleCatalog_UnreadableSchemaStaysLabelled(t *testing.T) {
+	h := NewModuleCatalogHandler(fakeCatalogPlugins{
+		entries: []PluginCatalogEntry{
+			{Alias: "redis", Source: catalogSource, Ref: "v1.0.0", Schema: []byte("not a schema document")},
+		},
+	}, nil)
+
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	it, ok := findItem(resp.Items, "redis")
+	if !ok {
+		t.Fatalf("a grant with an unreadable schema vanished from the catalog: %+v", resp.Items)
+	}
+	if it.Namespace != "redis" || it.Kind != "plugin" {
+		t.Errorf("entry = %+v, want it labelled by the registration alias", it)
+	}
+	// Non-nil empties: the wire carries `[]`, not null, so the form renders an
+	// empty module rather than crashing on a missing field.
+	if it.States == nil || it.Params == nil {
+		t.Errorf("states/params must be non-nil empties, got states=%v params=%v", it.States, it.Params)
+	}
+}
+
+// TestModuleCatalog_AliasIsTheOnlyLabelSource — the same artifact registered under
+// two aliases must produce two independently addressed module sets. Level 2 comes
+// from the document, level 1 only ever from the registration.
+func TestModuleCatalog_AliasIsTheOnlyLabelSource(t *testing.T) {
+	h := NewModuleCatalogHandler(fakeCatalogPlugins{
+		entries: []PluginCatalogEntry{
+			{Alias: "redis", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, twoStateModuleDoc())},
+			{Alias: "redis-community", Source: catalogSource, Ref: "v1.0.0", Schema: docBytes(t, twoStateModuleDoc())},
+		},
+	}, nil)
+
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	for _, want := range []string{"redis.postgres-user", "redis-community.postgres-user"} {
+		it, ok := findItem(resp.Items, want)
+		if !ok {
+			t.Fatalf("%q missing — the alias is not reaching address level 1: %+v", want, resp.Items)
+		}
+		// Each carries the real contract, not a stub: this is the surface the UI
+		// builds its form from, so an entry that compiles but lists no states would
+		// break the form silently.
+		if len(it.States) != 2 {
+			t.Errorf("%s states = %v, want the module's two states", want, it.States)
+		}
+		if len(it.Params) != 2 {
+			t.Errorf("%s params = %d, want the module's two params", want, len(it.Params))
 		}
 	}
 }

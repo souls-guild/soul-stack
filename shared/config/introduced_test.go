@@ -11,9 +11,9 @@ import (
 // `introduced_in` (nothing has shipped past the baseline release), so the module
 // axis is exercised against an injected registry instead of a fixture that would
 // have to be re-stamped on every release.
-type fakeCoreRegistry map[string]*plugin.Manifest
+type fakeCoreRegistry map[string]plugin.ModuleDef
 
-func (r fakeCoreRegistry) Lookup(module string) (*plugin.Manifest, bool) {
+func (r fakeCoreRegistry) Lookup(module string) (plugin.ModuleDef, bool) {
 	m, ok := r[module]
 	return m, ok
 }
@@ -23,25 +23,25 @@ func (r fakeCoreRegistry) State(module, state string) (plugin.StateDef, bool) {
 	if !ok {
 		return plugin.StateDef{}, false
 	}
-	def, ok := m.Spec.States[state]
+	def, ok := m.States[state]
 	return def, ok
 }
 
 func stampedRegistry() fakeCoreRegistry {
 	return fakeCoreRegistry{
 		"core.file": {
-			Namespace: "core", Name: "file",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
+			Name: "file",
+			States: map[string]plugin.StateDef{
 				"present": {Input: map[string]plugin.InputParamDef{
 					"path":    {Type: "string"},
 					"selinux": {Type: "string", IntroducedIn: "2.5.0"},
 				}},
 				"pruned": {IntroducedIn: "2.3.0"},
-			}},
+			},
 		},
 		"core.choir": {
-			Namespace: "core", Name: "choir", IntroducedIn: "1.4.0",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{"present": {}}},
+			Name: "choir", IntroducedIn: "1.4.0",
+			States: map[string]plugin.StateDef{"present": {}},
 		},
 	}
 }
@@ -107,9 +107,9 @@ func TestKeeperFeaturesOfTasks_ModuleAndStateAndBlocks(t *testing.T) {
 // same boundary the soul axis draws in NIM-161).
 func TestKeeperFeaturesOfTasks_PluginModuleIsNotOnTheKeeperAxis(t *testing.T) {
 	reg := stampedRegistry()
-	reg["acme.file"] = &plugin.Manifest{
-		Namespace: "acme", Name: "file", IntroducedIn: "9.9.9",
-		Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{"present": {}}},
+	reg["acme.file"] = plugin.ModuleDef{
+		Name: "file", IntroducedIn: "9.9.9",
+		States: map[string]plugin.StateDef{"present": {}},
 	}
 	used := keeperFeaturesOfTasks([]Task{moduleTask("acme.file.present", nil)}, reg)
 	if len(used) != 0 {

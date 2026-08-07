@@ -119,8 +119,8 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/souls/{sid}/exec"}:        {events: []audit.EventType{audit.EventTypeErrandInvoked}},
 
 	// plugins/sigils (middleware-audit).
-	{http.MethodPost, "/v1/plugins/sigils"}:                            {events: []audit.EventType{audit.EventPluginAllowed}},
-	{http.MethodDelete, "/v1/plugins/sigils/{namespace}/{name}/{ref}"}: {events: []audit.EventType{audit.EventPluginRevoked}},
+	{http.MethodPost, "/v1/plugins/sigils"}:           {events: []audit.EventType{audit.EventPluginAllowed}},
+	{http.MethodDelete, "/v1/plugins/sigils/{alias}"}: {events: []audit.EventType{audit.EventPluginRevoked}},
 
 	// sigil/keys (middleware-audit).
 	{http.MethodPost, "/v1/sigil/keys"}:                  {events: []audit.EventType{audit.EventSigilKeyIntroduced}},

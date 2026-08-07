@@ -1,21 +1,48 @@
 // Package module is the Soul Stack SDK for SoulModule plugin authors
-// (kind: soul_module, binaries soul-mod-<name>).
+// (kind: soul_module).
 //
-// Minimal path for a plugin author:
+// An author writes two things: the implementation, and the [Def] that describes it.
 //
-//	type RedisFailover struct { module.BaseModule }
+//	// internal/acl/acl.go
+//	var Module = module.Def{
+//		Name:         "acl",
+//		Description:  "Redis ACL users",
+//		Capabilities: []module.Capability{module.NetworkOutbound},
+//		SideEffects:  []module.SideEffect{{User: "redis_acl_user"}},
+//		Impl:         &ACL{},
 //
-//	func (r *RedisFailover) Apply(req *pluginv1.ApplyRequest, stream pluginv1.SoulModule_ApplyServer) error {
-//	    // ...
+//		States: map[string]module.State{
+//			"present": {
+//				Description: "The ACL user exists with the given password and rules",
+//				Input: module.Input{
+//					"host": {Type: module.String, Required: true},
+//					"port": {Type: module.Int, Default: 6379},
+//				},
+//			},
+//		},
 //	}
 //
+//	type ACL struct{ module.BaseModule }
+//
+//	func (a *ACL) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+//		// ...
+//	}
+//
+//	// cmd/soul-mod-redis/main.go
 //	func main() {
-//	    if err := module.Serve(&RedisFailover{}); err != nil { os.Exit(1) }
+//		module.ServeBundle(module.Bundle{
+//			Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
+//			Modules: []module.Def{acl.Module, config.Module, info.Module},
+//		})
 //	}
 //
-// BaseModule provides no-op implementations of Validate (ok=true) and Plan
-// (empty stream); the author only overrides Apply. Serve opens a Unix
-// socket, performs the gRPC-stdio handshake, and handles SIGTERM (see
+// There is no manifest to write and no manifest to keep in step with the code: the
+// schema document is generated from [Bundle] and published by `soul-mod stamp` — into
+// the artifact as a trailer, and next to it as `dist/schema.json` (see `sdk/schema`).
+//
+// [BaseModule] provides no-op implementations of Validate (ok=true) and Plan (empty
+// stream); the author only overrides Apply. [ServeBundle] dispatches on argv[1], opens
+// a Unix socket, performs the gRPC-stdio handshake and handles SIGTERM (see
 // sdk/handshake).
 package module
 
@@ -23,7 +50,6 @@ import (
 	"context"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
-	"github.com/souls-guild/soul-stack/sdk/handshake"
 	"google.golang.org/grpc"
 )
 
@@ -125,18 +151,6 @@ func (BaseModule) Plan(*pluginv1.PlanRequest, grpc.ServerStreamingServer[pluginv
 
 func (BaseModule) Apply(*pluginv1.ApplyRequest, grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	return nil
-}
-
-// Serve is the typical main() of a SoulModule plugin: it wraps
-// sdk/handshake.Serve and registers the pluginv1.SoulModule grpc-service
-// with the author's impl.
-func Serve(impl SoulModule) error {
-	return handshake.Serve(handshake.Config{
-		ProtocolVersion: protocolVersion,
-		Kind:            pluginv1.Kind_KIND_SOUL_MODULE,
-	}, func(s *grpc.Server) {
-		pluginv1.RegisterSoulModuleServer(s, &serverAdapter{impl: impl})
-	})
 }
 
 // serverAdapter bridges the SDK's SoulModule interface and

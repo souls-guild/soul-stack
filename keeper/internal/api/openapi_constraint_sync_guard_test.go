@@ -96,11 +96,14 @@ const (
 // Runtime sources of INPUT patterns WITHOUT an exported const — we duplicate the literal next
 // to the reference (like ssh_port/batch above); candidates for export.
 //
-//   - sigilSegmentRuntimePattern: closed-charset path segments of Sigil (namespace/name/ref).
-//     The authority — the unexported reSigilSegment (api/handlers/sigil.go:39 + mcp/
-//     sigil_revoke.go:17, validateSigilTriple → 422 BEFORE svc.Allow/Revoke). ref here is
-//     validated by that SAME validator as a tag-ref (NOT an arbitrary git ref): a slash → 422. A candidate for
-//     export as sigil.SegmentPattern.
+//   - sigilRefRuntimePattern: the closed charset of a Sigil `ref` label. The authority —
+//     the unexported reSigilRef (api/handlers/sigil.go + mcp/sigil_revoke.go,
+//     validateAllowInput → 422 BEFORE svc.Allow). ref is validated as a tag-ref (NOT an
+//     arbitrary git ref): a slash → 422. A candidate for export as sigil.RefPattern.
+//   - sigilAliasRuntimePattern: the registration alias. Unlike the ref this one DOES have
+//     an exported authority — shared/plugin.AliasPattern, which sigil.ValidateAlias and
+//     the PG CHECK constraint both use. The literal is duplicated here only so the guard
+//     compares against a written-out value rather than the same const on both sides.
 //   - choirNameRuntimePattern: the Choir name, kebab + `_`. The authority — the unexported
 //     choir.choirNamePattern (choir.go:35, ValidChoirName); CreateTyped 422s BEFORE
 //     INSERT. The handler inlines the same literal into the error text (handlers/choir.go:156).
@@ -110,9 +113,10 @@ const (
 //     Equivalent = `^/` (start anchor): an empty string doesn't match (422), a bare `/` does match
 //     (the runtime ACCEPTS it) — NOT `^/.+`, otherwise a valid `/` would falsely 422.
 const (
-	sigilSegmentRuntimePattern = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" // = reSigilSegment (unexported, ×2 copies)
-	choirNameRuntimePattern    = "^[a-z][a-z0-9_-]*$"                 // = choir.choirNamePattern (unexported)
-	soulPathRuntimePattern     = "^/"                                 // = SoulPath[0]!='/' (start-with-slash, non-empty)
+	sigilRefRuntimePattern   = "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" // = reSigilRef (unexported, ×2 copies)
+	sigilAliasRuntimePattern = "^[a-z][a-z0-9-]{0,62}$"             // = shared/plugin.AliasPattern
+	choirNameRuntimePattern  = "^[a-z][a-z0-9_-]*$"                 // = choir.choirNamePattern (unexported)
+	soulPathRuntimePattern   = "^/"                                 // = SoulPath[0]!='/' (start-with-slash, non-empty)
 )
 
 // constraintTagKind — which huma constraint tag is checked in the case.
@@ -999,55 +1003,28 @@ var constraintSyncCases = []constraintSyncCase{
 	// covered by the tag). Body fields go through the Body wrapper; path params directly.
 	// ====================================================================
 
-	// --- Sigil triple namespace/name/ref (reSigilSegment, 422 in validateSigilTriple) ---
-	// ref is a tag-ref per this SAME validator (NOT an arbitrary git ref): a slash → 422.
-	{
-		name:      "sigil.allow namespace",
-		structPtr: &sigilAllowInput{},
-		fieldPath: []string{"Body", "Namespace"},
-		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, AllowTyped)",
-	},
-	{
-		name:      "sigil.allow name",
-		structPtr: &sigilAllowInput{},
-		fieldPath: []string{"Body", "Name"},
-		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, AllowTyped)",
-	},
+	// --- Sigil identity: alias + source + ref (NIM-377) ---
+	//
+	// The ALIAS carries no schema `pattern` on the allow body on purpose: the reserved
+	// list and the alias shape are one rule held in shared/plugin, enforced by
+	// sigil.ValidateAlias (422), and a struct-tag copy is how the two ends drift. The
+	// revoke PATH does carry it, because a path segment must be constrained before chi
+	// routes on it. ref is a tag-ref per its own validator: a slash → 422.
 	{
 		name:      "sigil.allow ref",
 		structPtr: &sigilAllowInput{},
 		fieldPath: []string{"Body", "Ref"},
 		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, AllowTyped - tag-ref, slash->422)",
+		runtime:   sigilRefRuntimePattern,
+		source:    "reSigilRef (validateAllowInput, AllowTyped - tag-ref, slash->422)",
 	},
 	{
-		name:      "sigil.revoke namespace (path)",
+		name:      "sigil.revoke alias (path)",
 		structPtr: &sigilRevokeInput{},
-		fieldPath: []string{"Namespace"},
+		fieldPath: []string{"Alias"},
 		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, RevokeTyped)",
-	},
-	{
-		name:      "sigil.revoke name (path)",
-		structPtr: &sigilRevokeInput{},
-		fieldPath: []string{"Name"},
-		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, RevokeTyped)",
-	},
-	{
-		name:      "sigil.revoke ref (path)",
-		structPtr: &sigilRevokeInput{},
-		fieldPath: []string{"Ref"},
-		tag:       tagPattern,
-		runtime:   sigilSegmentRuntimePattern,
-		source:    "reSigilSegment (validateSigilTriple, RevokeTyped - tag-ref, slash->422)",
+		runtime:   sigilAliasRuntimePattern,
+		source:    "shared/plugin.AliasPattern (sigil.ValidateAlias, RevokeTyped)",
 	},
 
 	// --- incarnation name/service (incarnation.NamePattern, 422 in CreateTyped) ---

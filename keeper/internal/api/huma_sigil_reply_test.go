@@ -27,19 +27,20 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 34, 56, 789012345, time.UTC)
 	ts2 := time.Date(2026, 6, 13, 1, 2, 3, 456789012, time.UTC)
 	sha := "deadbeef0123456789abcdef"
+	const src = "https://example.com/soul-mod-redis.git"
 
 	// --- PluginSigilAllowReply ---
 	goldenSigilWire(t, "AllowReply",
-		PluginSigilAllowReply{Name: "soul-mod-redis", Namespace: "mod", Ref: "v1.2.0", SHA256: sha},
-		`{"name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","sha256":"deadbeef0123456789abcdef"}`)
+		PluginSigilAllowReply{Alias: "redis", Ref: "v1.2.0", SHA256: sha, Source: src},
+		`{"alias":"redis","ref":"v1.2.0","sha256":"deadbeef0123456789abcdef","source":"https://example.com/soul-mod-redis.git"}`)
 
 	// --- PluginSigilView (nested): revoked_at omitempty — both branches ---
 	goldenSigilWire(t, "PluginSigilView/active",
-		PluginSigilView{AllowedAt: ts, AllowedByAID: "archon-alice", Name: "soul-mod-redis", Namespace: "mod", Ref: "v1.2.0", RevokedAt: nil, SHA256: sha},
-		`{"allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","sha256":"deadbeef0123456789abcdef"}`)
+		PluginSigilView{Alias: "redis", AllowedAt: ts, AllowedByAID: "archon-alice", Ref: "v1.2.0", Source: src, RevokedAt: nil, SHA256: sha},
+		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/soul-mod-redis.git","sha256":"deadbeef0123456789abcdef"}`)
 	goldenSigilWire(t, "PluginSigilView/revoked",
-		PluginSigilView{AllowedAt: ts, AllowedByAID: "archon-alice", Name: "soul-mod-redis", Namespace: "mod", Ref: "v1.2.0", RevokedAt: &ts2, SHA256: sha},
-		`{"allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","name":"soul-mod-redis","namespace":"mod","ref":"v1.2.0","revoked_at":"2026-06-13T01:02:03.456789012Z","sha256":"deadbeef0123456789abcdef"}`)
+		PluginSigilView{Alias: "redis", AllowedAt: ts, AllowedByAID: "archon-alice", Ref: "v1.2.0", Source: src, RevokedAt: &ts2, SHA256: sha},
+		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/soul-mod-redis.git","revoked_at":"2026-06-13T01:02:03.456789012Z","sha256":"deadbeef0123456789abcdef"}`)
 }
 
 // TestGoldenWire_SigilProjection verifies that the projection of domain handlers.Sigil* results
@@ -48,18 +49,19 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 func TestGoldenWire_SigilProjection(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 0, 0, 123456789, time.UTC)
 	sha := "feedface"
+	const src = "https://example.com/n.git"
 
-	allowV := handlers.SigilAllowView{Name: "n", Namespace: "mod", Ref: "v1", SHA256: sha}
+	allowV := handlers.SigilAllowView{Alias: "n", Source: src, Ref: "v1", SHA256: sha}
 	goldenSigilWire(t, "proj/AllowReply", newPluginSigilAllowReply(allowV),
-		`{"name":"n","namespace":"mod","ref":"v1","sha256":"feedface"}`)
+		`{"alias":"n","ref":"v1","sha256":"feedface","source":"https://example.com/n.git"}`)
 
-	viewV := handlers.SigilView{AllowedAt: ts, AllowedByAID: "archon-bob", Name: "n", Namespace: "mod", Ref: "v1", RevokedAt: nil, SHA256: sha}
+	viewV := handlers.SigilView{Alias: "n", AllowedAt: ts, AllowedByAID: "archon-bob", Source: src, Ref: "v1", RevokedAt: nil, SHA256: sha}
 	goldenSigilWire(t, "proj/PluginSigilView", newPluginSigilView(viewV),
-		`{"allowed_at":"2026-06-14T12:00:00.123456789Z","allowed_by_aid":"archon-bob","name":"n","namespace":"mod","ref":"v1","sha256":"feedface"}`)
+		`{"alias":"n","allowed_at":"2026-06-14T12:00:00.123456789Z","allowed_by_aid":"archon-bob","ref":"v1","source":"https://example.com/n.git","sha256":"feedface"}`)
 
 	pageV := handlers.SigilListPage{Items: []handlers.SigilView{viewV}}
 	goldenSigilWire(t, "proj/PluginSigilListReply", newPluginSigilListReply(pageV),
-		`{"items":[{"allowed_at":"2026-06-14T12:00:00.123456789Z","allowed_by_aid":"archon-bob","name":"n","namespace":"mod","ref":"v1","sha256":"feedface"}]}`)
+		`{"items":[{"alias":"n","allowed_at":"2026-06-14T12:00:00.123456789Z","allowed_by_aid":"archon-bob","ref":"v1","source":"https://example.com/n.git","sha256":"feedface"}]}`)
 	// handler returns make([]., 0): items=`[]` (non-nil), NOT null
 	pageEmpty := handlers.SigilListPage{Items: []handlers.SigilView{}}
 	goldenSigilWire(t, "proj/PluginSigilListReply/empty", newPluginSigilListReply(pageEmpty),

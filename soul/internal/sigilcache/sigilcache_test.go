@@ -7,19 +7,19 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-func sig(ns, name, ref string) *keeperv1.PluginSigil {
-	return &keeperv1.PluginSigil{Namespace: ns, Name: name, Ref: ref}
+func sig(alias, ref string) *keeperv1.PluginSigil {
+	return &keeperv1.PluginSigil{Alias: alias, Source: "https://example.com/" + alias, Ref: ref}
 }
 
 func TestReplaceAllGet(t *testing.T) {
 	c := New()
 
-	if got := c.Get("core", "pkg"); got != nil {
+	if got := c.Get("core-pkg"); got != nil {
 		t.Fatalf("Get on an empty cache: expected nil, got %v", got)
 	}
 
-	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "pkg", "v1")})
-	got := c.Get("core", "pkg")
+	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core-pkg", "v1")})
+	got := c.Get("core-pkg")
 	if got == nil {
 		t.Fatal("Get after ReplaceAll: expected Sigil, got nil")
 	}
@@ -28,22 +28,23 @@ func TestReplaceAllGet(t *testing.T) {
 	}
 }
 
-// TestKeyIsNamespaceAndName: the (namespace, name) pair addresses distinct
-// slots — the same name in different namespaces doesn't collide.
-func TestKeyIsNamespaceAndName(t *testing.T) {
+// TestKeyIsTheAlias: two registrations of the same subject are distinct slots. The
+// operator picked both names, so `redis` and `redis-community` never collide even when
+// they resolve to the same upstream.
+func TestKeyIsTheAlias(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{
-		sig("core", "pkg", "v1"),
-		sig("community", "pkg", "v9"),
+		sig("redis", "v1"),
+		sig("redis-community", "v9"),
 	})
 
-	core := c.Get("core", "pkg")
-	if core == nil || core.GetRef() != "v1" {
-		t.Fatalf("expected core/pkg ref=v1, got %v", core)
+	first := c.Get("redis")
+	if first == nil || first.GetRef() != "v1" {
+		t.Fatalf("expected redis ref=v1, got %v", first)
 	}
-	comm := c.Get("community", "pkg")
-	if comm == nil || comm.GetRef() != "v9" {
-		t.Fatalf("the same name in different namespaces must be different slots: %v", comm)
+	second := c.Get("redis-community")
+	if second == nil || second.GetRef() != "v9" {
+		t.Fatalf("a second registration must be its own slot: %v", second)
 	}
 }
 
@@ -55,11 +56,11 @@ func TestSurvivesReconnect(t *testing.T) {
 	c := New() // created once at the Soul runtime level
 
 	// "Session 1" applied a snapshot and closed.
-	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "file", "v1")})
+	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core-file", "v1")})
 
 	// "Session 2" (after reconnect) sees the grant applied in session 1 —
 	// the same *Cache isn't recreated.
-	if got := c.Get("core", "file"); got == nil {
+	if got := c.Get("core-file"); got == nil {
 		t.Fatal("cache lost admission after a conditional reconnect - it must not be re-created per session")
 	}
 }
@@ -71,27 +72,27 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 
 	// First snapshot: two grants.
 	c.ReplaceAll([]*keeperv1.PluginSigil{
-		sig("core", "pkg", "v1"),
-		sig("core", "file", "v1"),
+		sig("core-pkg", "v1"),
+		sig("core-file", "v1"),
 	})
-	if c.Get("core", "pkg") == nil || c.Get("core", "file") == nil {
+	if c.Get("core-pkg") == nil || c.Get("core-file") == nil {
 		t.Fatal("ReplaceAll should have added both admissions")
 	}
 
 	// Second snapshot: core/pkg revoked (missing), core/service added,
 	// core/file updated to v2.
 	c.ReplaceAll([]*keeperv1.PluginSigil{
-		sig("core", "file", "v2"),
-		sig("core", "service", "v1"),
+		sig("core-file", "v2"),
+		sig("core-service", "v1"),
 	})
 
-	if c.Get("core", "pkg") != nil {
+	if c.Get("core-pkg") != nil {
 		t.Fatal("revoke: admission missing from the snapshot must be forgotten")
 	}
-	if got := c.Get("core", "file"); got == nil || got.GetRef() != "v2" {
+	if got := c.Get("core-file"); got == nil || got.GetRef() != "v2" {
 		t.Fatalf("update: core/file expected ref=v2, got %v", got)
 	}
-	if c.Get("core", "service") == nil {
+	if c.Get("core-service") == nil {
 		t.Fatal("allow: a new admission should appear")
 	}
 }
@@ -100,13 +101,13 @@ func TestReplaceAllAddsAndRevokes(t *testing.T) {
 // plugin remains granted).
 func TestReplaceAllEmptyClears(t *testing.T) {
 	c := New()
-	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core", "pkg", "v1")})
-	if c.Get("core", "pkg") == nil {
+	c.ReplaceAll([]*keeperv1.PluginSigil{sig("core-pkg", "v1")})
+	if c.Get("core-pkg") == nil {
 		t.Fatal("precondition: the admission must be in the cache")
 	}
 
 	c.ReplaceAll(nil)
-	if c.Get("core", "pkg") != nil {
+	if c.Get("core-pkg") != nil {
 		t.Fatal("empty/nil snapshot should clear the cache")
 	}
 }
@@ -116,14 +117,14 @@ func TestReplaceAllEmptyClears(t *testing.T) {
 func TestReplaceAllSkipsNilElements(t *testing.T) {
 	c := New()
 	c.ReplaceAll([]*keeperv1.PluginSigil{
-		sig("core", "pkg", "v1"),
+		sig("core-pkg", "v1"),
 		nil,
-		sig("core", "file", "v1"),
+		sig("core-file", "v1"),
 	})
-	if c.Get("core", "pkg") == nil || c.Get("core", "file") == nil {
+	if c.Get("core-pkg") == nil || c.Get("core-file") == nil {
 		t.Fatal("ReplaceAll should skip nil and keep valid admissions")
 	}
-	if c.Get("", "") != nil {
+	if c.Get("") != nil {
 		t.Fatal("a nil element must not create an entry under an empty key")
 	}
 }
@@ -144,8 +145,8 @@ func TestConcurrentReplaceAllGet(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < iters; i++ {
 				c.ReplaceAll([]*keeperv1.PluginSigil{
-					sig("core", "pkg", "v1"),
-					sig("core", "file", "v1"),
+					sig("core-pkg", "v1"),
+					sig("core-file", "v1"),
 				})
 			}
 		}()
@@ -154,8 +155,8 @@ func TestConcurrentReplaceAllGet(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iters; i++ {
-				_ = c.Get("core", "pkg")
-				_ = c.Get("core", "file")
+				_ = c.Get("core-pkg")
+				_ = c.Get("core-file")
 			}
 		}()
 	}

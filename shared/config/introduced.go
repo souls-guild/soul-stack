@@ -264,7 +264,7 @@ func KeeperFeaturesOfTasks(tasks []Task) []KeeperFeature {
 // against a stamped module: no core manifest declares `introduced_in` today
 // (the catalog has not changed since the baseline release).
 type coreModuleLookup interface {
-	Lookup(module string) (*plugin.Manifest, bool)
+	Lookup(module string) (plugin.ModuleDef, bool)
 	State(module, state string) (plugin.StateDef, bool)
 }
 

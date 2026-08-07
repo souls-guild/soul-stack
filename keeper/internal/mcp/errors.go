@@ -86,11 +86,14 @@ const (
 	mcpCodeSoulCapabilityUnsupported = "soul-capability-unsupported"
 
 	// Sigil codes (plugin allow-list, S4b — parity with REST POST/DELETE
-	// /v1/plugins/sigils*). plugin-not-in-cache — plugin (ns, name) not in the
-	// host's single-slot cache (REST TypePluginNotInCache, 404); sigil-already-
-	// active — an active allow entry for (ns, name, ref) already exists (REST
-	// TypeSigilActive, 409); sigil-not-found — no active entry to revoke (REST
-	// TypeSigilNotFound, 404). validation-failed / forbidden are common codes.
+	// /v1/plugins/sigils*). plugin-not-in-cache — nothing registered under the
+	// alias in the host's slot cache (REST TypePluginNotInCache, 404);
+	// sigil-already-active — one of the two live-uniqueness keys was hit, either
+	// the alias or the approved (source, ref) (REST TypeSigilActive, 409; the two
+	// share this code and differ in their detail, because the operator's fix
+	// differs — see [mapSigilErrorToMCP]); sigil-not-found — no active grant under
+	// that alias to revoke (REST TypeSigilNotFound, 404). validation-failed /
+	// forbidden are common codes; a reserved or malformed alias uses the former.
 	mcpCodePluginNotInCache = "plugin-not-in-cache"
 	mcpCodeSigilActive      = "sigil-already-active"
 	mcpCodeSigilNotFound    = "sigil-not-found"
@@ -450,9 +453,17 @@ func mapSoulErrorToMCP(err error) (code, detail string) {
 // the REST SigilHandler (Allow / Revoke): same sentinels, same codes.
 //
 // sentinel ↔ MCP-code (REST problem-type → MCP-code):
-//   - ErrPluginNotInCache    → plugin-not-in-cache (REST TypePluginNotInCache).
-//   - ErrSigilAlreadyActive  → sigil-already-active (REST TypeSigilActive).
-//   - ErrSigilNotFound       → sigil-not-found (REST TypeSigilNotFound).
+//   - ErrPluginNotInCache       → plugin-not-in-cache (REST TypePluginNotInCache).
+//   - ErrAliasReserved          → validation-failed (REST TypeValidationFailed).
+//   - ErrAliasAlreadyRegistered → sigil-already-active (REST TypeSigilActive).
+//   - ErrSigilAlreadyActive     → sigil-already-active (REST TypeSigilActive).
+//   - ErrSigilNotFound          → sigil-not-found (REST TypeSigilNotFound).
+//
+// The two conflict sentinels share a CODE and differ in their DETAIL, because the
+// operator's fix differs: an alias collision is resolved by picking another alias,
+// a (source, ref) collision by revoking the existing approval first. Falling through
+// to internal-error would turn a 409-class answer into a 500 and tell the operator
+// nothing about which of the two they hit.
 //
 // Unknown errors → internal-error + generic detail (raw err.Error() isn't
 // forwarded — oracle-attack protection, as in the neighboring mappers).
@@ -461,11 +472,17 @@ func mapSigilErrorToMCP(err error) (code, detail string) {
 	case err == nil:
 		return "", ""
 	case errors.Is(err, sigil.ErrPluginNotInCache):
-		return mcpCodePluginNotInCache, "plugin not found in host cache"
+		return mcpCodePluginNotInCache, "no plugin artifact is registered under this alias in the host cache"
+	case errors.Is(err, sigil.ErrAliasReserved):
+		return mcpCodeValidationFailed, err.Error()
+	case errors.Is(err, sigil.ErrAliasAlreadyRegistered):
+		return mcpCodeSigilActive,
+			"this alias is already registered by an active sigil; revoke it first (keeper.plugin.revoke) or pick another alias"
 	case errors.Is(err, sigil.ErrSigilAlreadyActive):
-		return mcpCodeSigilActive, "an active sigil already exists for (namespace, name, ref)"
+		return mcpCodeSigilActive,
+			"this (source, ref) is already approved under some alias; revoke that grant first (keeper.plugin.list shows the alias holding it)"
 	case errors.Is(err, sigil.ErrSigilNotFound):
-		return mcpCodeSigilNotFound, "no active sigil for (namespace, name, ref)"
+		return mcpCodeSigilNotFound, "no active sigil for this alias"
 	}
 	return mcpCodeInternalError, "internal error"
 }

@@ -123,7 +123,7 @@ like `repo`.
   ```
 
 - **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
-([`git.yaml`](../../../../shared/coremanifest/git.yaml)) only
+([`git` module](../../../../shared/coremanifest/mod_git.go)) only
 [`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum) (call
 `git`) and [`network_outbound`](../../../naming-rules.md#required_capabilities-enum)
 (clone/pull go to remote). The file entry and `git` itself come with privileges

@@ -2,33 +2,52 @@
 
 {{.Description}}
 
-SoulModule plugin for Soul Stack ({{.Namespace}}.{{.Name}}). Implemented via `sdk/module` on top of the gRPC-stdio handshake ([ADR-020](https://github.com/souls-guild/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
+A SoulModule bundle for Soul Stack, serving the `{{.Name}}` module. Implemented via `sdk/module` on top of the gRPC-stdio handshake ([ADR-020](https://github.com/souls-guild/soul-stack/blob/main/docs/architecture.md#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format)).
+
+## The artifact has no name of its own
+
+There is no `manifest.yaml`. The module declares itself as a `module.Def` value in `internal/{{.NamePackage}}/handler.go`, and the schema document is **generated** from it: `make stamp` puts one copy inside the binary and writes another to `dist/schema.json`.
+
+The artifact carries no namespace and no publisher. Address level 1 is the **registration alias** an operator picks — register this artifact as `{{.Namespace}}` and a task writes `{{.Namespace}}.{{.Name}}.present`; register the same bytes as something else and the same module answers there instead.
 
 ## States
 
 - `present` - the resource exists with the requested parameters.
 - `absent` - the resource is absent.
 
-Parameters - see `manifest.yaml::spec.states.<state>.input`.
+Parameters - see `Module.States.<state>.Input` in `internal/{{.NamePackage}}/handler.go`.
 
-Any `secret: true` parameter must have `pattern: "^vault:.*"` - otherwise `soul-lint validate-manifest` fails with an error (semantic rule `input_secret_without_vault_pattern`).
+Any `Secret: true` parameter must carry `Pattern: "^vault:.*"`; without it the bundle fails validation (`input_secret_without_vault_pattern`) at startup, in `make test`, and at `soul-mod verify`.
 
 ## Usage in destiny
 
 ```yaml
-- module: {{.Namespace}}.{{.Name}}
-  state: present
-  name: example
-  # TODO: remaining params
+- name: create the resource
+  module: {{.Namespace}}.{{.Name}}.present
+  params:
+    name: example
+    # TODO: remaining params
 ```
+
+`{{.Namespace}}` here is the alias the operator registered this artifact under, not something the artifact declares.
 
 ## Build
 
 ```
-make build       # -> bin/{{.BinaryName}}
+make build       # -> dist/{{.BinaryName}}
+make stamp       # generate + stamp the schema document, write dist/schema.json
+make verify      # stamped document == the document the code generates
 make test
-make check       # fmt + vet + test + build
+make check       # fmt + vet + test + stamp + verify
 ```
+
+## Checking a destiny against this module, offline
+
+```
+soul-lint validate-scenario <path> --modules {{.Namespace}}=./dist/schema.json
+```
+
+The alias goes on the flag for the same reason it is absent from the artifact: it is the operator's choice, so the linter has to be told which one the definition assumes.
 
 ## Sigil-trust
 
@@ -37,7 +56,7 @@ digest through Keeper ([ADR-026](https://github.com/souls-guild/soul-stack/blob/
 
 ## Tests
 
-- **L0** - unit tests with a mock `pluginv1.SoulModule_ApplyServer` (see `internal/{{.NamePackage}}/handler_test.go`).
+- **L0** - unit tests with a mock `pluginv1.SoulModule_ApplyServer` (see `internal/{{.NamePackage}}/handler_test.go`), plus the bundle validation in `cmd/{{.BinaryName}}/bundle_test.go`.
 - **L1** - integration via testcontainers against a real backend resource.
 - **L3b** - real-soul-container (privileged Debian-12 + the module installed).
 

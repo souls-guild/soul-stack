@@ -40,8 +40,9 @@ const (
 	KindService
 	// KindScenario is scenario/<name>/main.yml.
 	KindScenario
-	// KindManifest is a plugin manifest.yaml (kind: soul_module /
-	// cloud_driver / ssh_provider). Parsed and validated by `shared/plugin`.
+	// KindManifest is a plugin's schema document — the published
+	// `dist/schema.json`, or the copy stamped into an artifact. Parsed and
+	// validated by `shared/plugin`.
 	KindManifest
 )
 
@@ -51,21 +52,21 @@ type Options struct {
 	JSON bool
 	Kind Kind
 
-	// ModulesDir is the `--modules <dir>` tree of plugin `manifest.yaml`
-	// files (NIM-228). Empty means no resolver: plugin `params:` cannot be
-	// checked, and each such module is reported as `plugin_params_unchecked`
-	// rather than passing in silence.
-	ModulesDir string
+	// Modules holds the `--modules <alias>=<path>` bindings (NIM-228, reshaped by
+	// NIM-377). Empty means no resolver: plugin `params:` cannot be checked, and
+	// each such module is reported as `plugin_params_unchecked` rather than
+	// passing in silence.
+	Modules []string
 }
 
-// moduleManifests builds the resolver for this run, or nil when the caller
-// supplied no `--modules`. An unreadable tree is a fatal error rather than a
-// downgrade to "unchecked": the author asked for these checks.
-func (o Options) moduleManifests(errOut io.Writer) (config.ModuleManifestResolver, bool) {
-	if o.ModulesDir == "" {
+// moduleSchemas builds the resolver for this run, or nil when the caller supplied no
+// `--modules`. Any binding that does not resolve is a fatal error rather than a
+// downgrade to "unchecked": the author asked for these checks by naming the alias.
+func (o Options) moduleSchemas(errOut io.Writer) (config.ModuleManifestResolver, bool) {
+	if len(o.Modules) == 0 {
 		return nil, true
 	}
-	r, err := LoadModuleManifests(o.ModulesDir)
+	r, err := LoadModuleSchemas(o.Modules)
 	if err != nil {
 		fmt.Fprintf(errOut, "soul-lint: %v\n", err)
 		return nil, false
@@ -82,7 +83,7 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		return ExitIOFatal
 	}
 
-	modules, ok := opts.moduleManifests(errOut)
+	modules, ok := opts.moduleSchemas(errOut)
 	if !ok {
 		return ExitIOFatal
 	}
@@ -169,7 +170,7 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// `../../service.yml` (ADR-0076(k)).
 		diags = append(diags, scenarioCompatFloorDiags(opts.Path, scn)...)
 	case KindManifest:
-		_, diags = sharedplugin.LoadFromBytes(opts.Path, src)
+		diags = schemaDocumentDiags(opts.Path, src)
 	default:
 		fmt.Fprintf(errOut, "soul-lint: unknown kind %d\n", opts.Kind)
 		return ExitIOFatal
@@ -180,6 +181,23 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		return ExitHasErrors
 	}
 	return ExitOK
+}
+
+// schemaDocumentDiags validates one plugin schema document — the published
+// `dist/schema.json`, or the copy stamped into an artifact.
+//
+// Which of the two it got is decided by content: a canonical document is a JSON object
+// and so begins with `{`, and anything else is read as an artifact through its trailer,
+// where a missing or malformed trailer is itself the finding. Deciding by filename would
+// read an artifact that happens to be called `schema.json` as text and report a parse
+// error rather than "this was never stamped".
+func schemaDocumentDiags(path string, src []byte) []diag.Diagnostic {
+	if trimmed := bytes.TrimLeft(src, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '{' {
+		_, diags := sharedplugin.ParseDocument(path, src)
+		return diags
+	}
+	_, diags, _ := sharedplugin.ReadArtifact(path)
+	return diags
 }
 
 // scenarioServiceRoot derives the linted service repo root from a

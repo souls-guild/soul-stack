@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,40 +15,63 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// TestMain enables SOUL_STACK_ALLOW_FILE_REPOS for entire package test run:
-// tests resolve local file:// repositories which are forbidden in prod by
-// scheme-allowlist ([validateGitScheme]). Test for allowlist itself
-// (TestResolveEntry_FileSchemeRequiresFlag) saves/restores flag
-// locally via t.Setenv.
+// TestMain enables SOUL_STACK_ALLOW_FILE_REPOS for the whole package run: these tests
+// resolve local file:// repositories, which the scheme-allowlist ([validateGitScheme])
+// forbids in production. The test for the allowlist itself
+// (TestResolveEntry_FileSchemeRequiresFlag) saves/restores the flag locally via
+// t.Setenv.
 func TestMain(m *testing.M) {
 	os.Setenv(allowFileReposEnv, "1")
 	os.Exit(m.Run())
 }
 
-const validCloudManifest = `kind: cloud_driver
-protocol_version: 1
-namespace: cloud
-name: hetzner
-spec:
-  profile_schema:
-    type: object
-`
+// cloudDoc / moduleDoc are the two documents the fixtures stamp. Neither carries a
+// name, a namespace or a publisher — there is nowhere in the format left to put one.
+func cloudDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema:   map[string]any{"type": "object"},
+	}
+}
 
-// fixtureRepo — working wrapper over local git repository plugin source
-// (populated with manifest + dist/<binary>), used by go-git resolver
-// via file:// URL. No system git and no git-egress outward.
+func moduleDoc(names ...string) schema.Document {
+	mods := make([]schema.Module, 0, len(names))
+	for _, n := range names {
+		mods = append(mods, schema.Module{
+			Name:   n,
+			States: map[string]schema.State{"present": {Description: "the resource exists"}},
+		})
+	}
+	return schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1, Modules: mods}
+}
+
+// stamped returns body with doc appended as a schema trailer — the bytes
+// `soul-mod stamp` would leave in `dist/`.
+func stamped(t *testing.T, doc schema.Document, body []byte) []byte {
+	t.Helper()
+	payload, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	return schema.AppendTrailer(body, payload)
+}
+
+// fixtureRepo — a working wrapper over a local git repository acting as a plugin
+// source (populated with `dist/`), reached by the go-git resolver through a file://
+// URL. No system git and no git-egress outward.
 type fixtureRepo struct {
 	t    *testing.T
 	dir  string
 	repo *git.Repository
 }
 
-// newFixtureRepo initializes empty git repository in temp directory.
-// Default branch — `main` (`master` outside Soul Stack dictionary).
+// newFixtureRepo initializes an empty git repository in a temp directory. Default
+// branch — `main` (`master` is outside the Soul Stack dictionary).
 func newFixtureRepo(t *testing.T) *fixtureRepo {
 	t.Helper()
 	dir := t.TempDir()
@@ -62,31 +86,41 @@ func newFixtureRepo(t *testing.T) *fixtureRepo {
 
 func (fr *fixtureRepo) fileURL() string { return "file://" + fr.dir }
 
-// writePlugin puts manifest.yaml and dist/<binName> with given content
-// in working tree. Empty manifest/binName skips respective file (for
-// ErrManifestNotFound / ErrArtifactNotFound).
-func (fr *fixtureRepo) writePlugin(manifest, binName string, binary []byte) {
+// writeArtifact puts an EXECUTABLE `dist/<binName>` carrying body plus doc's trailer.
+// The executable bit matters: `dist/` also holds the published schema.json, and what
+// separates the artifact from it is exactly that bit.
+func (fr *fixtureRepo) writeArtifact(binName string, doc schema.Document, body []byte) {
 	fr.t.Helper()
-	if manifest != "" {
-		fr.writeFile(sharedplugin.FileName, []byte(manifest))
-	}
-	if binName != "" {
-		fr.writeFile(filepath.Join(artifactSubdir, binName), binary)
-	}
+	fr.writeFileMode(filepath.Join(artifactSubdir, binName), stamped(fr.t, doc, body), 0o755)
+}
+
+// writeUnstampedArtifact puts an executable with NO trailer — an artifact whose build
+// forgot `soul-mod stamp`.
+func (fr *fixtureRepo) writeUnstampedArtifact(binName string, body []byte) {
+	fr.t.Helper()
+	fr.writeFileMode(filepath.Join(artifactSubdir, binName), body, 0o755)
 }
 
 func (fr *fixtureRepo) writeFile(rel string, content []byte) {
+	fr.t.Helper()
+	fr.writeFileMode(rel, content, 0o644)
+}
+
+func (fr *fixtureRepo) writeFileMode(rel string, content []byte, mode os.FileMode) {
 	fr.t.Helper()
 	full := filepath.Join(fr.dir, rel)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		fr.t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(full, content, 0o644); err != nil {
+	if err := os.WriteFile(full, content, mode); err != nil {
 		fr.t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(full, mode); err != nil {
+		fr.t.Fatalf("Chmod: %v", err)
 	}
 }
 
-// commit stages all changes and creates commit, returning its sha1.
+// commit stages all changes and creates a commit, returning its sha1.
 func (fr *fixtureRepo) commit(msg string) string {
 	fr.t.Helper()
 	wt, err := fr.repo.Worktree()
@@ -105,7 +139,7 @@ func (fr *fixtureRepo) commit(msg string) string {
 	return h.String()
 }
 
-// tag creates lightweight tag at HEAD.
+// tag creates a lightweight tag at HEAD.
 func (fr *fixtureRepo) tag(name string) {
 	fr.t.Helper()
 	head, err := fr.repo.Head()
@@ -117,10 +151,11 @@ func (fr *fixtureRepo) tag(name string) {
 	}
 }
 
-// taggedPlugin — common setup: commit with valid cloud plugin + tag v1.0.0.
-// Returns sha1 of commit under tag.
-func taggedPlugin(fr *fixtureRepo, binName string, binary []byte) string {
-	fr.writePlugin(validCloudManifest, binName, binary)
+// taggedPlugin — the common setup: a commit holding one stamped cloud_driver artifact
+// in `dist/`, tagged v1.0.0. Returns the sha1 under the tag.
+func taggedPlugin(t *testing.T, fr *fixtureRepo, binName string, body []byte) string {
+	t.Helper()
+	fr.writeArtifact(binName, cloudDoc(), body)
 	sha := fr.commit("plugin")
 	fr.tag("v1.0.0")
 	return sha
@@ -128,12 +163,12 @@ func taggedPlugin(fr *fixtureRepo, binName string, binary []byte) string {
 
 func newTestResolver(t *testing.T) (*Resolver, string) {
 	t.Helper()
-	// 0/0 size limits → defaults (256 MiB / 1024 MiB), happy-path doesn't hit.
+	// 0/0 size limits → defaults (256 MiB / 1024 MiB); the happy path never hits them.
 	return newTestResolverWithLimits(t, 0, 0)
 }
 
-// newTestResolverWithLimits — resolver with explicit byte-limits artifact/clone
-// (for size-limit tests, ADR-026(g)). 0 → default of respective limit.
+// newTestResolverWithLimits — a resolver with explicit artifact/clone byte-limits (for
+// the size-limit tests, ADR-026(g)). 0 → the respective default.
 func newTestResolverWithLimits(t *testing.T, maxArtifact, maxClone int64) (*Resolver, string) {
 	t.Helper()
 	base := t.TempDir()
@@ -142,15 +177,15 @@ func newTestResolverWithLimits(t *testing.T, maxArtifact, maxClone int64) (*Reso
 	return NewResolver(cacheRoot, workRoot, 0, maxArtifact, maxClone, nil), cacheRoot
 }
 
-// entryFor builds catalog entry on file:// source fr with ref.
+// entryFor builds a catalog entry over fr at ref, registered under alias `hetzner`.
 func entryFor(fr *fixtureRepo, ref string) config.PluginCatalogEntry {
 	return config.PluginCatalogEntry{Name: "hetzner", Source: fr.fileURL(), Ref: ref}
 }
 
 func TestResolveEntry_HappyPath(t *testing.T) {
-	binary := []byte("fake-built-cloud-binary")
+	body := []byte("fake-built-cloud-binary")
 	fr := newFixtureRepo(t)
-	wantSHA := taggedPlugin(fr, "soul-cloud-hetzner", binary)
+	wantSHA := taggedPlugin(t, fr, "soul-cloud-hetzner", body)
 	r, cacheRoot := newTestResolver(t)
 
 	got, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -160,46 +195,117 @@ func TestResolveEntry_HappyPath(t *testing.T) {
 	if got.CommitSHA != wantSHA {
 		t.Errorf("CommitSHA = %q, want %q", got.CommitSHA, wantSHA)
 	}
-	if got.Namespace != "cloud" || got.Name != "hetzner" {
-		t.Errorf("ns/name = %q/%q, want cloud/hetzner", got.Namespace, got.Name)
+	// The identity comes from the CATALOG, not from the checkout: alias from `name:`,
+	// source from `source:`. The repository has no say in either.
+	if got.Alias != "hetzner" {
+		t.Errorf("Alias = %q, want hetzner (the catalog's registration)", got.Alias)
+	}
+	if got.Source != fr.fileURL() {
+		t.Errorf("Source = %q, want %q", got.Source, fr.fileURL())
 	}
 	if got.Ref != "v1.0.0" {
 		t.Errorf("Ref = %q, want v1.0.0", got.Ref)
 	}
-	wantDigest := sha256.Sum256(binary)
-	if got.BinarySHA256 != hex.EncodeToString(wantDigest[:]) {
-		t.Errorf("BinarySHA256 mismatch")
+	if got.Doc == nil || got.Doc.Kind != schema.KindCloudDriver {
+		t.Errorf("Doc = %+v, want a parsed cloud_driver document", got.Doc)
+	}
+	// SchemaBytes must be the trailer payload byte for byte: they are what gets hashed
+	// and signed at allow.
+	wantSchema, err := schema.Marshal(cloudDoc())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(got.SchemaBytes) != string(wantSchema) {
+		t.Errorf("SchemaBytes are not the canonical trailer payload")
 	}
 
-	// Slot laid in R-nested layout + current → commit.
-	wantSlot := filepath.Join(cacheRoot, "cloud-hetzner", wantSHA)
+	// The slot is laid out R-nested under the ALIAS + current → commit.
+	wantSlot := filepath.Join(cacheRoot, "hetzner", wantSHA)
 	if got.SlotDir != wantSlot {
 		t.Errorf("SlotDir = %q, want %q", got.SlotDir, wantSlot)
 	}
-	if _, err := os.Stat(filepath.Join(wantSlot, sharedplugin.FileName)); err != nil {
-		t.Errorf("manifest in slot missing: %v", err)
+	// The artifact is named by the alias — it has no name of its own to keep.
+	slotBin := filepath.Join(wantSlot, "hetzner")
+	if got.BinaryPath != slotBin {
+		t.Errorf("BinaryPath = %q, want %q", got.BinaryPath, slotBin)
 	}
-	if _, err := os.Stat(filepath.Join(wantSlot, "soul-cloud-hetzner")); err != nil {
-		t.Errorf("binary in slot missing: %v", err)
+	raw, err := os.ReadFile(slotBin)
+	if err != nil {
+		t.Fatalf("artifact in slot missing: %v", err)
 	}
-	link, err := os.Readlink(filepath.Join(cacheRoot, "cloud-hetzner", currentLink))
+	wantDigest := sha256.Sum256(raw)
+	if got.BinarySHA256 != hex.EncodeToString(wantDigest[:]) {
+		t.Errorf("BinarySHA256 mismatch")
+	}
+	link, err := os.Readlink(filepath.Join(cacheRoot, "hetzner", currentLink))
 	if err != nil {
 		t.Fatalf("readlink current: %v", err)
 	}
 	if link != wantSHA {
 		t.Errorf("current → %q, want %q", link, wantSHA)
 	}
+	if st, _ := os.Stat(slotBin); st.Mode().Perm()&0o111 == 0 {
+		t.Errorf("artifact not executable: %v", st.Mode())
+	}
 
-	// Binary must be executable (0755), manifest — 0644.
-	if st, _ := os.Stat(filepath.Join(wantSlot, "soul-cloud-hetzner")); st.Mode().Perm()&0o111 == 0 {
-		t.Errorf("binary not executable: %v", st.Mode())
+	// The slot holds the artifact and NOTHING else: no manifest, no schema.json. A
+	// second copy of the schema beside the bytes could only ever disagree with the
+	// trailer that gets signed.
+	entries, err := os.ReadDir(wantSlot)
+	if err != nil {
+		t.Fatalf("read slot: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "hetzner" {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("slot holds %v, want only the artifact", names)
 	}
 }
 
-// TestResolveEntry_BranchRef checks resolve of ref-branch (`main`), not just tag.
+// TestResolveEntry_ArtifactNameIsIrrelevant pins the removal of the filename
+// convention: whatever `dist/` calls its single executable, it is the artifact.
+func TestResolveEntry_ArtifactNameIsIrrelevant(t *testing.T) {
+	fr := newFixtureRepo(t)
+	fr.writeArtifact("anything-at-all", cloudDoc(), []byte("bin"))
+	fr.commit("plugin")
+	fr.tag("v1.0.0")
+	r, _ := newTestResolver(t)
+
+	got, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
+	if err != nil {
+		t.Fatalf("ResolveEntry: %v", err)
+	}
+	if filepath.Base(got.BinaryPath) != "hetzner" {
+		t.Errorf("slot artifact = %q, want it renamed to the alias", got.BinaryPath)
+	}
+}
+
+// TestResolveEntry_DistWithSchemaFileIsNotAmbiguous — the published `schema.json` sits
+// beside the artifact in a real build and must not make `dist/` ambiguous: it is not
+// executable.
+func TestResolveEntry_DistWithSchemaFileIsNotAmbiguous(t *testing.T) {
+	fr := newFixtureRepo(t)
+	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
+	payload, err := schema.Marshal(cloudDoc())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	fr.writeFile(filepath.Join(artifactSubdir, schema.SchemaFileName), payload)
+	fr.commit("plugin with published schema")
+	fr.tag("v1.0.0")
+	r, _ := newTestResolver(t)
+
+	if _, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0")); err != nil {
+		t.Fatalf("dist/ with schema.json beside the artifact must resolve: %v", err)
+	}
+}
+
+// TestResolveEntry_BranchRef checks resolving a branch ref (`main`), not just a tag.
 func TestResolveEntry_BranchRef(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writePlugin(validCloudManifest, "soul-cloud-hetzner", []byte("bin"))
+	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
 	wantSHA := fr.commit("plugin on main")
 	r, _ := newTestResolver(t)
 
@@ -214,7 +320,7 @@ func TestResolveEntry_BranchRef(t *testing.T) {
 
 func TestResolveEntry_ErrRefNotResolved(t *testing.T) {
 	fr := newFixtureRepo(t)
-	taggedPlugin(fr, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin"))
 	r, _ := newTestResolver(t)
 
 	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "no-such-ref"))
@@ -223,25 +329,12 @@ func TestResolveEntry_ErrRefNotResolved(t *testing.T) {
 	}
 }
 
-func TestResolveEntry_ErrManifestNotFound(t *testing.T) {
-	// Commit without manifest.yaml.
+// TestResolveEntry_ErrArtifactNotFound_Empty — `dist/` with no executable. Not "nothing
+// to fetch": a catalog entry that resolves to no code is a broken entry.
+func TestResolveEntry_ErrArtifactNotFound_Empty(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeFile("README", []byte("no manifest here"))
-	fr.commit("empty")
-	fr.tag("v1.0.0")
-	r, _ := newTestResolver(t)
-
-	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
-	if !errors.Is(err, ErrManifestNotFound) {
-		t.Fatalf("err = %v, want ErrManifestNotFound", err)
-	}
-}
-
-func TestResolveEntry_ErrArtifactNotFound(t *testing.T) {
-	// manifest exists, dist/<binary> missing.
-	fr := newFixtureRepo(t)
-	fr.writePlugin(validCloudManifest, "", nil)
-	fr.commit("manifest only")
+	fr.writeFile("README", []byte("built nothing"))
+	fr.commit("no dist")
 	fr.tag("v1.0.0")
 	r, _ := newTestResolver(t)
 
@@ -251,8 +344,121 @@ func TestResolveEntry_ErrArtifactNotFound(t *testing.T) {
 	}
 }
 
+// TestResolveEntry_ErrArtifactNotFound_TwoExecutables is the guard that replaces the
+// old `dist/<binary-name>` lookup. With no name to look up, taking the first match
+// would let a repository's directory listing order decide which bytes an operator ends
+// up approving. Two executables must stop the entry.
+func TestResolveEntry_ErrArtifactNotFound_TwoExecutables(t *testing.T) {
+	fr := newFixtureRepo(t)
+	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin-a"))
+	fr.writeArtifact("soul-cloud-hetzner-debug", cloudDoc(), []byte("bin-b"))
+	fr.commit("two artifacts")
+	fr.tag("v1.0.0")
+	r, cacheRoot := newTestResolver(t)
+
+	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
+	if !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("err = %v, want ErrArtifactNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "2 executables") {
+		t.Errorf("error should say what was ambiguous: %v", err)
+	}
+	// Fail-closed: nothing was cached.
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "hetzner")); !os.IsNotExist(statErr) {
+		t.Errorf("slot created despite an ambiguous dist/ (stat err=%v)", statErr)
+	}
+}
+
+// TestResolveEntry_ErrSchemaUnreadable_NoTrailer — an unstamped artifact has no
+// disclosure to approve, so it never reaches the cache.
+func TestResolveEntry_ErrSchemaUnreadable_NoTrailer(t *testing.T) {
+	fr := newFixtureRepo(t)
+	fr.writeUnstampedArtifact("soul-cloud-hetzner", []byte("bin without a trailer"))
+	fr.commit("unstamped")
+	fr.tag("v1.0.0")
+	r, cacheRoot := newTestResolver(t)
+
+	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
+	if !errors.Is(err, ErrSchemaUnreadable) {
+		t.Fatalf("err = %v, want ErrSchemaUnreadable", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "hetzner")); !os.IsNotExist(statErr) {
+		t.Errorf("slot created for an unstamped artifact (stat err=%v)", statErr)
+	}
+}
+
+// TestResolveEntry_ErrSchemaUnreadable_CorruptTrailer — a truncated trailer fails
+// closed for the same reason a missing one does.
+func TestResolveEntry_ErrSchemaUnreadable_CorruptTrailer(t *testing.T) {
+	fr := newFixtureRepo(t)
+	full := stamped(t, cloudDoc(), []byte("bin"))
+	fr.writeUnstampedArtifact("soul-cloud-hetzner", full[:len(full)-1])
+	fr.commit("corrupt trailer")
+	fr.tag("v1.0.0")
+	r, _ := newTestResolver(t)
+
+	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
+	if !errors.Is(err, ErrSchemaUnreadable) {
+		t.Fatalf("err = %v, want ErrSchemaUnreadable", err)
+	}
+}
+
+// TestResolveEntry_ErrSchemaUnreadable_InvalidDocument — a trailer that parses but does
+// not validate is refused too.
+func TestResolveEntry_ErrSchemaUnreadable_InvalidDocument(t *testing.T) {
+	fr := newFixtureRepo(t)
+	// kind=soul_module with no modules: the validator rejects it.
+	bad := schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1}
+	fr.writeArtifact("soul-mod-redis", bad, []byte("bin"))
+	fr.commit("invalid document")
+	fr.tag("v1.0.0")
+	r, _ := newTestResolver(t)
+
+	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
+	if !errors.Is(err, ErrSchemaUnreadable) {
+		t.Fatalf("err = %v, want ErrSchemaUnreadable", err)
+	}
+}
+
+// TestResolveEntry_ReservedAliasRejected — an operator cannot register a plugin as
+// `core`: the address `core.file.present` must keep meaning the engine. Checked BEFORE
+// any git egress, so a reserved entry never reaches the network.
+func TestResolveEntry_ReservedAliasRejected(t *testing.T) {
+	r, cacheRoot := newTestResolver(t)
+	for _, alias := range []string{"core", "keeper", "soul", "destiny", "soul-stack", "Core"} {
+		e := config.PluginCatalogEntry{
+			Name:   alias,
+			Source: "https://example.com/never-reached.git",
+			Ref:    "v1.0.0",
+		}
+		_, err := r.ResolveEntry(context.Background(), e)
+		if !errors.Is(err, ErrAliasInvalid) {
+			t.Errorf("alias %q: err = %v, want ErrAliasInvalid", alias, err)
+		}
+	}
+	if _, statErr := os.Stat(cacheRoot); !os.IsNotExist(statErr) {
+		t.Errorf("a reserved alias must not touch the cache (stat err=%v)", statErr)
+	}
+}
+
+// TestResolveEntry_MalformedAliasRejected — the alias names a directory and an address
+// level, so path-shaped and uppercase names are refused before anything is created.
+func TestResolveEntry_MalformedAliasRejected(t *testing.T) {
+	r, _ := newTestResolver(t)
+	for _, alias := range []string{"", "../escape", "with/slash", "Redis", "redis.acl", "9lives"} {
+		e := config.PluginCatalogEntry{
+			Name:   alias,
+			Source: "https://example.com/never-reached.git",
+			Ref:    "v1.0.0",
+		}
+		if _, err := r.ResolveEntry(context.Background(), e); !errors.Is(err, ErrAliasInvalid) {
+			t.Errorf("alias %q: err = %v, want ErrAliasInvalid", alias, err)
+		}
+	}
+}
+
 func TestResolveEntry_ErrSourceUnavailable(t *testing.T) {
-	// Nonexistent local repository → clone fails.
+	// A nonexistent local repository → clone fails.
 	r, _ := newTestResolver(t)
 	e := config.PluginCatalogEntry{
 		Name:   "hetzner",
@@ -265,11 +471,11 @@ func TestResolveEntry_ErrSourceUnavailable(t *testing.T) {
 	}
 }
 
-// TestResolveEntry_FileSchemeRequiresFlag fixes scheme-allowlist: file://
-// without env flag rejected ErrSourceUnavailable before git operations.
+// TestResolveEntry_FileSchemeRequiresFlag pins the scheme-allowlist: file:// without
+// the env flag is rejected as ErrSourceUnavailable before any git operation.
 func TestResolveEntry_FileSchemeRequiresFlag(t *testing.T) {
 	fr := newFixtureRepo(t)
-	taggedPlugin(fr, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin"))
 	r, _ := newTestResolver(t)
 
 	t.Setenv(allowFileReposEnv, "")
@@ -279,8 +485,8 @@ func TestResolveEntry_FileSchemeRequiresFlag(t *testing.T) {
 	}
 }
 
-// TestResolveEntry_UnsupportedScheme fixes http:// (unencrypted) and
-// other schemes outside allowlist rejected without git-egress.
+// TestResolveEntry_UnsupportedScheme pins that http:// (unencrypted) and other schemes
+// outside the allowlist are rejected without git-egress.
 func TestResolveEntry_UnsupportedScheme(t *testing.T) {
 	r, _ := newTestResolver(t)
 	e := config.PluginCatalogEntry{Name: "hetzner", Source: "http://example.com/repo.git", Ref: "v1.0.0"}
@@ -291,19 +497,18 @@ func TestResolveEntry_UnsupportedScheme(t *testing.T) {
 }
 
 func TestResolveEntry_Idempotent(t *testing.T) {
-	binary := []byte("idempotent-binary")
 	fr := newFixtureRepo(t)
-	sha := taggedPlugin(fr, "soul-cloud-hetzner", binary)
+	sha := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("idempotent-binary"))
 	r, cacheRoot := newTestResolver(t)
 
 	first, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
 	if err != nil {
 		t.Fatalf("ResolveEntry #1: %v", err)
 	}
-	slotPath := filepath.Join(cacheRoot, "cloud-hetzner", sha, "soul-cloud-hetzner")
+	slotPath := filepath.Join(cacheRoot, "hetzner", sha, "hetzner")
 	st1, err := os.Stat(slotPath)
 	if err != nil {
-		t.Fatalf("stat slot binary: %v", err)
+		t.Fatalf("stat slot artifact: %v", err)
 	}
 
 	second, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -312,31 +517,29 @@ func TestResolveEntry_Idempotent(t *testing.T) {
 	}
 	st2, err := os.Stat(slotPath)
 	if err != nil {
-		t.Fatalf("stat slot binary #2: %v", err)
+		t.Fatalf("stat slot artifact #2: %v", err)
 	}
 	if first.BinarySHA256 != second.BinarySHA256 {
 		t.Errorf("digest unstable between runs")
 	}
-	// Immutable slot not recreated — binary mtime unchanged.
+	// Immutable slot not recreated — artifact mtime unchanged.
 	if !st1.ModTime().Equal(st2.ModTime()) {
 		t.Errorf("slot recreated on re-resolve of same commit (mtime %v → %v)", st1.ModTime(), st2.ModTime())
 	}
 }
 
 func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
-	// Resolve tag v1.0.0, then advance main branch with new plugin and
-	// resolve main: current must switch to second commit atomically, both
-	// slots — remain in cache.
+	// Resolve tag v1.0.0, then advance main with a new build and resolve main: current
+	// must switch to the second commit atomically, and both slots must remain.
 	fr := newFixtureRepo(t)
-	shaA := taggedPlugin(fr, "soul-cloud-hetzner", []byte("bin-a"))
+	shaA := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin-a"))
 	r, cacheRoot := newTestResolver(t)
 
 	if _, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0")); err != nil {
 		t.Fatalf("resolve A (tag): %v", err)
 	}
 
-	// Advance main with new plugin commit.
-	fr.writePlugin(validCloudManifest, "soul-cloud-hetzner", []byte("bin-b"))
+	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin-b"))
 	shaB := fr.commit("advance main")
 	if shaB == shaA {
 		t.Fatal("commit B matched A — setup broken")
@@ -346,38 +549,33 @@ func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
 		t.Fatalf("resolve B (branch): %v", err)
 	}
 
-	link, err := os.Readlink(filepath.Join(cacheRoot, "cloud-hetzner", currentLink))
+	link, err := os.Readlink(filepath.Join(cacheRoot, "hetzner", currentLink))
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
 	}
 	if link != shaB {
 		t.Errorf("current → %q, want %q (latest resolve)", link, shaB)
 	}
-	// Both commit slots in place (commit_sha immutable, old not deleted).
+	// Both commit slots in place (commit_sha immutable, the old one is not deleted).
 	for _, c := range []string{shaA, shaB} {
-		if _, err := os.Stat(filepath.Join(cacheRoot, "cloud-hetzner", c, "soul-cloud-hetzner")); err != nil {
+		if _, err := os.Stat(filepath.Join(cacheRoot, "hetzner", c, "hetzner")); err != nil {
 			t.Errorf("slot %s missing: %v", c, err)
 		}
 	}
 }
 
 func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
-	// Good entries: cloud + soul_module; broken (no manifest in checkout).
+	// Good entries: cloud + soul_module; a broken one (no artifact in the checkout).
 	okRepo := newFixtureRepo(t)
-	taggedPlugin(okRepo, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, okRepo, "soul-cloud-hetzner", []byte("bin"))
 
 	modRepo := newFixtureRepo(t)
-	modRepo.writePlugin(`kind: soul_module
-protocol_version: 1
-namespace: community
-name: redis
-spec: { states: { pinged: {} } }
-`, "soul-mod-redis", []byte("modbin"))
+	modRepo.writeArtifact("soul-mod-redis", moduleDoc("acl", "config"), []byte("modbin"))
 	modRepo.commit("soul module plugin")
 	modRepo.tag("v1.0.0")
 
 	brokenRepo := newFixtureRepo(t)
-	brokenRepo.writeFile("README", []byte("no manifest"))
+	brokenRepo.writeFile("README", []byte("no dist"))
 	brokenRepo.commit("empty")
 	brokenRepo.tag("v9.9.9")
 
@@ -399,78 +597,81 @@ spec: { states: { pinged: {} } }
 		t.Fatalf("ResolveCatalog returned fatal: %v", err)
 	}
 	if len(slots) != 2 {
-		t.Fatalf("slots = %d, want 2 (hetzner + community.redis): %v", len(slots), slots)
+		t.Fatalf("slots = %d, want 2 (hetzner + redis): %v", len(slots), slots)
 	}
-	byName := map[string]ResolvedSlot{}
+	byAlias := map[string]ResolvedSlot{}
 	for _, s := range slots {
-		byName[s.Name] = s
+		byAlias[s.Alias] = s
 	}
-	if _, ok := byName["hetzner"]; !ok {
-		t.Errorf("no slot hetzner: %v", byName)
+	if _, ok := byAlias["hetzner"]; !ok {
+		t.Errorf("no slot hetzner: %v", byAlias)
 	}
-	if mod, ok := byName["redis"]; !ok || mod.Namespace != "community" {
-		t.Errorf("no slot community.redis: %v", byName)
+	mod, ok := byAlias["redis"]
+	if !ok {
+		t.Fatalf("no slot redis: %v", byAlias)
+	}
+	// The alias came from the catalog and the modules from the artifact; neither side
+	// could have produced the pair alone.
+	if mod.Doc == nil || len(mod.Doc.Modules) != 2 {
+		t.Errorf("redis slot should carry the artifact's two modules: %+v", mod.Doc)
 	}
 	if len(warns) != 1 {
 		t.Fatalf("warns = %d, want 1 (broken entry): %v", len(warns), warns)
 	}
 }
 
-// TestResolveEntry_ErrArtifactTooLarge: binary larger than max_artifact_size →
+// TestResolveEntry_ErrArtifactTooLarge: an artifact larger than max_artifact_size →
 // ErrArtifactTooLarge, slot NOT created (fail-closed, ADR-026(g)).
 func TestResolveEntry_ErrArtifactTooLarge(t *testing.T) {
 	fr := newFixtureRepo(t)
-	oversized := make([]byte, 4096) // > limit 1024 bytes
-	sha := taggedPlugin(fr, "soul-cloud-hetzner", oversized)
+	oversized := make([]byte, 4096) // > the 1024-byte limit
+	sha := taggedPlugin(t, fr, "soul-cloud-hetzner", oversized)
 	r, cacheRoot := newTestResolverWithLimits(t, 1024, 0)
 
 	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
 	if !errors.Is(err, ErrArtifactTooLarge) {
 		t.Fatalf("err = %v, want ErrArtifactTooLarge", err)
 	}
-	// Fail-closed: slot at commit_sha not materialized, current not created.
-	if _, statErr := os.Stat(filepath.Join(cacheRoot, "cloud-hetzner", sha)); !os.IsNotExist(statErr) {
+	// Fail-closed: the commit_sha slot is not materialized and current is not created.
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "hetzner", sha)); !os.IsNotExist(statErr) {
 		t.Errorf("slot created despite limit exceeded (stat err=%v)", statErr)
 	}
-	if _, statErr := os.Lstat(filepath.Join(cacheRoot, "cloud-hetzner", currentLink)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Lstat(filepath.Join(cacheRoot, "hetzner", currentLink)); !os.IsNotExist(statErr) {
 		t.Errorf("current symlink created despite limit exceeded (stat err=%v)", statErr)
 	}
 }
 
-// TestResolveEntry_ErrCloneTooLarge: total working tree larger than
-// max_clone_size → ErrCloneTooLarge + cleanup workdir (fail-closed, ADR-026(g)).
+// TestResolveEntry_ErrCloneTooLarge: a working tree larger than max_clone_size →
+// ErrCloneTooLarge + workdir cleanup (fail-closed, ADR-026(g)).
 func TestResolveEntry_ErrCloneTooLarge(t *testing.T) {
 	fr := newFixtureRepo(t)
-	// Tree bloated with junk file besides valid plugin.
-	fr.writePlugin(validCloudManifest, "soul-cloud-hetzner", []byte("bin"))
+	// A tree bloated with a junk file beside a valid plugin.
+	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
 	fr.writeFile("bloat.dat", make([]byte, 8192))
 	fr.commit("bloated plugin")
 	fr.tag("v1.0.0")
-	// Clone limit below tree size; artifact limit default (miss).
+	// Clone limit below the tree size; artifact limit default (missed).
 	r, cacheRoot := newTestResolverWithLimits(t, 0, 2048)
 
 	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
 	if !errors.Is(err, ErrCloneTooLarge) {
 		t.Fatalf("err = %v, want ErrCloneTooLarge", err)
 	}
-	// Cleanup: workdir deleted (workdir name = sanitizeSegment(name) under workRoot).
+	// Cleanup: the workdir is deleted (its name is the alias, under workRoot).
 	workdir := filepath.Join(filepath.Dir(cacheRoot), "work", "hetzner")
 	if _, statErr := os.Stat(workdir); !os.IsNotExist(statErr) {
 		t.Errorf("workdir not cleaned after ErrCloneTooLarge (stat err=%v)", statErr)
 	}
-	// Slot not created.
-	if _, statErr := os.Stat(filepath.Join(cacheRoot, "cloud-hetzner")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "hetzner")); !os.IsNotExist(statErr) {
 		t.Errorf("slot created despite ErrCloneTooLarge (stat err=%v)", statErr)
 	}
 }
 
-// TestResolveEntry_WithinSizeLimits: normal size with given (not
-// default) limits resolves without error — happy-path not broken by hardening.
+// TestResolveEntry_WithinSizeLimits: a normal size under explicit (non-default) limits
+// resolves without error — the happy path is not broken by the hardening.
 func TestResolveEntry_WithinSizeLimits(t *testing.T) {
-	binary := []byte("small-binary")
 	fr := newFixtureRepo(t)
-	wantSHA := taggedPlugin(fr, "soul-cloud-hetzner", binary)
-	// Limits with margin above real binary and tree size.
+	wantSHA := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("small-binary"))
 	r, cacheRoot := newTestResolverWithLimits(t, 1<<20, 16<<20)
 
 	got, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -480,7 +681,7 @@ func TestResolveEntry_WithinSizeLimits(t *testing.T) {
 	if got.CommitSHA != wantSHA {
 		t.Errorf("CommitSHA = %q, want %q", got.CommitSHA, wantSHA)
 	}
-	if _, statErr := os.Stat(filepath.Join(cacheRoot, "cloud-hetzner", wantSHA, "soul-cloud-hetzner")); statErr != nil {
+	if _, statErr := os.Stat(filepath.Join(cacheRoot, "hetzner", wantSHA, "hetzner")); statErr != nil {
 		t.Errorf("slot not created with size within limit: %v", statErr)
 	}
 }

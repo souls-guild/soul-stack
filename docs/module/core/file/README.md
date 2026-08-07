@@ -219,7 +219,7 @@ but does not make the content secure: secrets (`${ vault(...) }`, passwords via
 explicit `mode` for configs with secrets. Absence of a variable in the template -
 render error (strict-mode `missingkey=error`), not silent empty
 substitution.
-- **Privileges.** Manifest [`file.yaml`](../../../../shared/coremanifest/file.yaml)
+- **Privileges.** Manifest [`file` module](../../../../shared/coremanifest/mod_file.go)
 announces [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum)
 (entry outside `/var/lib/soul-stack/`). Write to system paths on
 practice requires root - the module is executed with process privileges

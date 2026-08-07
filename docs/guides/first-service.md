@@ -167,14 +167,29 @@ Before registering a service, run the static linter - it catches structural erro
 Both should give exit 0 and `OK: <path>`. What exactly does the linter check (name regex, JSON Schema at the root, compliance with `state_schema_version` ↔ `migrations/`, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md).
 
 **If your service uses plugin modules, add `--modules`.** The `params:` of a `core.*`
-task are checked against the manifest compiled into the linter; a plugin's manifest
-lives beside its binary, so the linter has to be told where to find it
-([ADR-0076(x–z)](../adr/0076-engine-compat-window.md)):
+task are checked against the declaration compiled into the linter; a plugin's schema
+ships with its artifact, so the linter has to be told where to find it — and under
+which **alias**, since the artifact carries no name of its own
+([ADR-0076(x–z)](../adr/0076-engine-compat-window.md),
+[ADR-020(p)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)):
 
 ```sh
 ./soul-lint/bin/soul-lint validate-scenario \
-    examples/service/redis/scenario/add_user/main.yml --modules examples/module
+    examples/service/redis/scenario/add_user/main.yml \
+    --modules redis=./soul-mod-redis/dist/schema.json
 ```
+
+The `redis` you write here is the `redis` the task writes in `redis.acl.present` — the
+registration alias your operator chose, not something read off the path. The artifact
+carries no name of its own, so nothing on disk could tell the linter what to call it.
+
+`schema.json` is the sidecar `soul-mod stamp` writes next to the artifact, so this
+costs no download. `<path>` may equally be the stamped artifact itself or the `dist/`
+directory holding it. The flag is repeatable — one binding per plugin.
+
+**A binding that does not resolve is fatal (exit 2)**, because you asked for that check.
+A module you simply did not bind is a hint (`plugin_params_unchecked`), not a failure —
+see [docs/soul-lint.md](../soul-lint.md#a-broken-binding-and-an-absent-one-are-different-answers).
 
 Without the flag those tasks are **not** checked, and the linter says so per module
 rather than passing in silence:

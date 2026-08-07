@@ -99,7 +99,7 @@ and not external input. The same guard commands `unless` / `onlyif` also go thro
 `sh -c` - they are subject to exactly the same prohibition on untrusted
 interpolation.
 - **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
-([`cmd.yaml`](../../../../shared/coremanifest/cmd.yaml)) only
+([`cmd` module](../../../../shared/coremanifest/mod_cmd.go)) only
   [`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum).
 The command is executed with the privileges of the `soul`-agent process, without elevation
 inside the module; for system operations the agent in practice runs as root, and

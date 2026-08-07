@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"time"
 
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	"google.golang.org/grpc"
 )
 
@@ -21,7 +20,7 @@ import (
 // Kind-specific wrappers (SoulModulePlugin / CloudDriverPlugin / SshProviderPlugin)
 // embed *BasePlugin and add a kind-specific gRPC client over [BasePlugin.Conn].
 type BasePlugin struct {
-	manifest   *sharedplugin.Manifest
+	discovered Discovered
 	cmd        *exec.Cmd
 	conn       *grpc.ClientConn
 	sockPath   string
@@ -30,19 +29,20 @@ type BasePlugin struct {
 	closed     bool
 }
 
-// Manifest — read-only access to the plugin manifest. Used by callsites that need
-// namespace/name for logs or OTel attributes.
-func (p *BasePlugin) Manifest() *sharedplugin.Manifest { return p.manifest }
+// Discovered — read-only access to the module this session was spawned for. Used by
+// callsites that need the address or the kind for logs, OTel attributes and
+// kind cross-checks.
+func (p *BasePlugin) Discovered() Discovered { return p.discovered }
 
-// NewBasePluginForTest — a "manifest-only" BasePlugin constructor for use cases
+// NewBasePluginForTest — a "declaration-only" BasePlugin constructor for use cases
 // that need a kind cross-check without a real fork: e.g. tests of kind-specific
 // wrappers ([keeper/internal/pluginhost.NewCloudDriverPlugin] rejecting a foreign
 // kind).
 //
 // Use outside tests is a bug: the returned BasePlugin has neither Conn nor Cmd, any
 // RPC over it will nil-pointer.
-func NewBasePluginForTest(m *sharedplugin.Manifest) *BasePlugin {
-	return &BasePlugin{manifest: m, closed: true}
+func NewBasePluginForTest(d Discovered) *BasePlugin {
+	return &BasePlugin{discovered: d, closed: true}
 }
 
 // Conn — the gRPC conn to the plugin. Used by kind-specific wrappers to create a

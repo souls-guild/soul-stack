@@ -2469,39 +2469,38 @@ components:
     PluginSigilAllowReply:
       additionalProperties: false
       properties:
-        name:
-          type: string
-        namespace:
+        alias:
           type: string
         ref:
           type: string
         sha256:
           pattern: ^[0-9a-f]{64}$
           type: string
+        source:
+          type: string
       required:
-        - name
-        - namespace
+        - alias
         - ref
         - sha256
+        - source
       type: object
     PluginSigilAllowRequest:
       additionalProperties: false
       properties:
-        name:
-          description: plugin name (as in manifest.name)
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
-          type: string
-        namespace:
-          description: plugin namespace (type — cloud/ssh/mod)
-          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
+        alias:
+          description: registration alias — address level 1 (lowercase kebab-case); must not be a reserved name
           type: string
         ref:
-          description: git-tag-ref of the release (stable tag, no slashes)
+          description: git-tag-ref of the release (stable tag, no slashes; signed)
           pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
           type: string
+        source:
+          description: "artifact source: the git remote the module repository was fetched from (signed)"
+          maxLength: 2048
+          type: string
       required:
-        - namespace
-        - name
+        - alias
+        - source
         - ref
       type: object
     PluginSigilListReply:
@@ -2519,15 +2518,13 @@ components:
     PluginSigilView:
       additionalProperties: false
       properties:
+        alias:
+          type: string
         allowed_at:
           format: date-time
           type: string
         allowed_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
-          type: string
-        name:
-          type: string
-        namespace:
           type: string
         ref:
           type: string
@@ -2537,12 +2534,14 @@ components:
         sha256:
           pattern: ^[0-9a-f]{64}$
           type: string
+        source:
+          type: string
       required:
+        - alias
         - allowed_at
         - allowed_by_aid
-        - name
-        - namespace
         - ref
+        - source
         - sha256
       type: object
     Profile:
@@ -9851,7 +9850,7 @@ paths:
       tags:
         - plugin
     post:
-      description: Registers (namespace,name,ref) in the plugin integrity allow-list with SHA-256 signature (ADR-026 S4a). Permission plugin.allow. 404 — plugin not in the host cache. 409 — release already active.
+      description: Approves the artifact registered under {alias} on the identity (source, ref), signing its SHA-256 and schema document (ADR-026 S4a, re-keyed by NIM-377). Permission plugin.allow. 404 — no artifact under that alias in the host cache. 409 — the alias is taken, or (source, ref) is already approved. 422 — malformed or reserved alias.
       operationId: allowPluginSigil
       requestBody:
         content:
@@ -9905,34 +9904,18 @@ paths:
       summary: Allow a plugin (Sigil)
       tags:
         - plugin
-  /v1/plugins/sigils/{namespace}/{name}/{ref}:
+  /v1/plugins/sigils/{alias}:
     delete:
-      description: Removes the active release (namespace,name,ref) from allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — active record absent.
+      description: Removes the active grant registered under {alias} from the allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — no active grant for that alias.
       operationId: revokePluginSigil
       parameters:
-        - description: plugin namespace
+        - description: registration alias of the grant to revoke
           in: path
-          name: namespace
+          name: alias
           required: true
           schema:
-            description: plugin namespace
-            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
-            type: string
-        - description: plugin name
-          in: path
-          name: name
-          required: true
-          schema:
-            description: plugin name
-            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
-            type: string
-        - description: git-tag-ref of the release
-          in: path
-          name: ref
-          required: true
-          schema:
-            description: git-tag-ref of the release
-            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
+            description: registration alias of the grant to revoke
+            pattern: ^[a-z][a-z0-9-]{0,62}$
             type: string
       responses:
         "204":

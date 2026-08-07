@@ -1,0 +1,1 @@
+{"kind":"soul_module","protocol_version":1,"modules":[{"name":"acl","capabilities":["network_sideways"],"states":{"present":{"description":"d","input":{}}}}]}

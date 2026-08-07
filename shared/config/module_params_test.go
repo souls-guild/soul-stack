@@ -172,8 +172,8 @@ func TestModuleParams_UserNewParamsValid(t *testing.T) {
 }
 
 // TestModuleParams_KeeperSoulRegistered — keeper-side core.soul.registered: the
-// 3-segment address ns=core/mod=soul/state=registered resolves to the manifest
-// shared/coremanifest/soul.yaml. The valid form (sid+coven) passes, an unknown
+// 3-segment address ns=core/mod=soul/state=registered resolves to the declaration in
+// shared/coremanifest/mod_soul.go. The valid form (sid+coven) passes, an unknown
 // param is caught.
 func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 	valid := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    mode: append\n"

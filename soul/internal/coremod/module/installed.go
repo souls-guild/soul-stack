@@ -34,11 +34,15 @@ const (
 
 // applyInstalled implements state `installed` (ADR-065(c,f,g)).
 //
-// Normative order: allow-check BEFORE fetch → sha256 idempotency → fetch by
-// content address → full Sigil verify BEFORE materialization → atomic
-// install into the catalog slot `<paths.modules>/<ns>-<name>/`.
+// Normative order, unchanged by NIM-377 and load-bearing: allow-check BEFORE fetch →
+// sha256 idempotency → fetch by content address → full Sigil verify BEFORE
+// materialization → atomic install into the catalog slot `<paths.modules>/<alias>/`.
+//
+// The task names the ALIAS the operator registered, not a namespace and name: the
+// artifact carries no self-name, and the alias is what the grant, the slot and every
+// address derived from it agree on.
 func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], req *pluginv1.ApplyRequest) error {
-	fullName, err := util.StringParam(req.GetParams(), "name")
+	alias, err := util.StringParam(req.GetParams(), "name")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -46,9 +50,8 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	namespace, name, ok := splitFullName(fullName)
-	if !ok {
-		return util.SendFailed(stream, fmt.Sprintf("param %q: expected \"<namespace>.<name>\", got %q", "name", fullName))
+	if !reAlias.MatchString(alias) {
+		return util.SendFailed(stream, fmt.Sprintf("param %q: expected a registration alias, got %q", "name", alias))
 	}
 	if m.deps.ModulesRoot == "" {
 		return util.SendFailed(stream, "paths.modules is not set in soul.yml - module cache has nowhere to materialize")
@@ -57,31 +60,36 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	// (1) allow-check BEFORE a single network byte.
 	var rec *sharedhost.SigilRecord
 	if m.deps.Sigils != nil {
-		rec = m.deps.Sigils.Get(namespace, name)
+		rec = m.deps.Sigils.Get(alias)
 	}
 	if rec == nil {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: no active Sigil grant for %s (kind: soul_module); run `keeper.plugin.allow ns=%s name=%s ref=<ref>`",
-			reasonNotAllowed, fullName, namespace, name))
+			"%s: no active Sigil grant for %q (kind: soul_module); run `keeper.plugin.allow alias=%s source=<source> ref=<ref>`",
+			reasonNotAllowed, alias, alias))
 	}
 	if pin != "" && rec.Ref != pin {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: active grant %s is on ref %q, task expects ref %q (pin check, ADR-065)",
-			reasonNotAllowed, fullName, rec.Ref, pin))
+			"%s: active grant %q is on ref %q, task expects ref %q (pin check, ADR-065)",
+			reasonNotAllowed, alias, rec.Ref, pin))
 	}
-	manifest, diags := sharedplugin.LoadFromBytes(sharedplugin.FileName, rec.Manifest)
-	if diag.HasErrors(diags) || manifest.Kind != sharedplugin.KindSoulModule {
+	// The kind comes from the grant's schema bytes — the same bytes the signature
+	// covers. Reading it from the artifact instead would mean trusting a file we have
+	// not verified yet, and at this point we have not even fetched it.
+	doc, diags := sharedplugin.ParseDocument(sharedplugin.SchemaFileName, rec.Schema)
+	if doc == nil || diag.HasErrors(diags) || doc.Kind != sharedplugin.KindSoulModule {
 		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: grant %s does not confirm kind: soul_module (grant manifest is corrupt or a different kind)",
-			reasonNotAllowed, fullName))
+			"%s: grant %q does not confirm kind: soul_module (grant schema is corrupt or a different kind)",
+			reasonNotAllowed, alias))
 	}
 
-	slotDir := filepath.Join(m.deps.ModulesRoot, namespace+"-"+name)
-	binPath := filepath.Join(slotDir, manifest.BinaryName())
+	// The slot is named by the alias and holds exactly one executable; the artifact
+	// has no name of its own, so the alias names the file too.
+	slotDir := filepath.Join(m.deps.ModulesRoot, alias)
+	binPath := filepath.Join(slotDir, alias)
 
-	// (2) idempotency: the installed binary already matches the active grant.
+	// (2) idempotency: the installed artifact already matches the active grant.
 	if diskSHA, exists := sha256OfFile(binPath); exists && strings.EqualFold(diskSHA, rec.BinarySHA256hex) {
-		return sendInstalled(stream, false, fullName, rec, binPath)
+		return sendInstalled(stream, false, alias, rec, binPath)
 	}
 
 	// (3) fetch by content address via FetchModule of the current EventStream session.
@@ -90,21 +98,22 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		return util.SendFailed(stream, fmt.Sprintf(
 			"%s: FetchModule is unavailable in this run (no EventStream session; push mode is not supported)", reasonFetchFailed))
 	}
-	data, err := fetchAll(stream.Context(), fetcher, namespace, name, rec.BinarySHA256hex)
+	data, err := fetchAll(stream.Context(), fetcher, alias, rec.BinarySHA256hex)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonFetchFailed, fullName, err))
+		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonFetchFailed, alias, err))
 	}
 
 	// (4) full Sigil verify BEFORE materialization: sha256 of the bytes ==
-	// grant + signature + manifest hash (shared/pluginhost, ADR-065(f)).
+	// grant + signature over the source-keyed block + schema hash
+	// (shared/pluginhost, ADR-065(f)).
 	if err := sharedhost.VerifyArtifactBytes(data, rec, m.deps.Anchors); err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonVerifyFailed, fullName, err))
+		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonVerifyFailed, alias, err))
 	}
 
-	// (5) atomic install: manifest from the grant's manifest_raw (NOT from
-	// fetch) → clear the previous binary's digest sidecar → atomic rename.
-	if err := installSlot(slotDir, binPath, rec.Manifest, data); err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("install %s: %v", fullName, err))
+	// (5) atomic install into the slot: clear the previous artifact and its digest
+	// sidecar → atomic rename.
+	if err := installSlot(slotDir, binPath, data); err != nil {
+		return util.SendFailed(stream, fmt.Sprintf("install %s: %v", alias, err))
 	}
 
 	// (6) hot-register (ADR-065(d)) — only on an actual install.
@@ -112,14 +121,13 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		m.deps.Rescan()
 	}
 
-	return sendInstalled(stream, true, fullName, rec, binPath)
+	return sendInstalled(stream, true, alias, rec, binPath)
 }
 
-// fetchAll assembles the binary bytes from the server-streaming PluginChunk response.
-func fetchAll(ctx context.Context, fetcher Fetcher, namespace, name, sha string) ([]byte, error) {
+// fetchAll assembles the artifact bytes from the server-streaming PluginChunk response.
+func fetchAll(ctx context.Context, fetcher Fetcher, alias, sha string) ([]byte, error) {
 	stream, err := fetcher.FetchModule(ctx, &keeperv1.PluginFetchRequest{
-		Namespace:    namespace,
-		Name:         name,
+		Alias:        alias,
 		BinarySha256: sha,
 	})
 	if err != nil {
@@ -138,22 +146,52 @@ func fetchAll(ctx context.Context, fetcher Fetcher, namespace, name, sha string)
 	}
 }
 
-// installSlot materializes the slot: manifest.yaml + binary, both via atomic
-// rename (util.AtomicWrite). The previous binary's digest sidecar is removed
-// BEFORE the new one is renamed in — otherwise Spawn would fail-closed the
-// freshly installed binary against a stale sidecar (see shared/pluginhost
-// verifySigilAndSeal).
-func installSlot(slotDir, binPath string, manifestRaw, binData []byte) error {
+// installSlot materializes the slot: one executable, written via atomic rename
+// (util.AtomicWrite). No schema file is written — the schema travels inside the
+// artifact's trailer, which is what discovery and `plugin.allow` both read.
+//
+// Two things are cleared first. The previous artifact's digest sidecar, because Spawn
+// would otherwise fail-closed the freshly installed bytes against a stale digest (see
+// shared/pluginhost verifySigilAndSeal). And any other executable left in the slot,
+// because a slot holds exactly ONE — a second one from an earlier install under a
+// different filename would make the slot ambiguous and discovery would refuse it
+// rather than guess which is current.
+func installSlot(slotDir, binPath string, binData []byte) error {
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
-		return err
-	}
-	if err := util.AtomicWrite(filepath.Join(slotDir, sharedplugin.FileName), manifestRaw, 0o644); err != nil {
 		return err
 	}
 	if err := os.Remove(filepath.Join(slotDir, sharedhost.DigestSidecarName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	if err := removeForeignArtifacts(slotDir, filepath.Base(binPath)); err != nil {
+		return err
+	}
 	return util.AtomicWrite(binPath, binData, 0o755)
+}
+
+// removeForeignArtifacts deletes every executable in the slot except keep. Dot-files
+// are left alone: those are the sidecar and the temp files of atomic writes, neither
+// of which discovery considers an artifact.
+func removeForeignArtifacts(slotDir, keep string) error {
+	entries, err := os.ReadDir(slotDir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if name == keep || strings.HasPrefix(name, ".") {
+			continue
+		}
+		path := filepath.Join(slotDir, name)
+		st, serr := os.Stat(path)
+		if serr != nil || st.IsDir() || st.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		if rerr := os.Remove(path); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			return rerr
+		}
+	}
+	return nil
 }
 
 // sha256OfFile returns the file's hex digest; exists=false on absence or any
@@ -171,9 +209,10 @@ func sha256OfFile(path string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
-func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, fullName string, rec *sharedhost.SigilRecord, binPath string) error {
+func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, alias string, rec *sharedhost.SigilRecord, binPath string) error {
 	return util.SendFinal(stream, changed, map[string]any{
-		"name":      fullName,
+		"name":      alias,
+		"source":    rec.Source,
 		"ref":       rec.Ref,
 		"sha256":    rec.BinarySHA256hex,
 		"path":      binPath,

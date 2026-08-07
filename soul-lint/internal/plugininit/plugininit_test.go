@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/souls-guild/soul-stack/soul-lint/internal/validate"
 )
 
 func TestParseSpec_OK(t *testing.T) {
@@ -66,9 +64,6 @@ func TestBuildVars_HappyPath(t *testing.T) {
 	check("GoModulePath", v.GoModulePath, "github.com/souls-guild/soul-mod-official-postgres-user")
 	check("AuthorName", v.AuthorName, "souls-guild")
 	check("Description", v.Description, "Manages PostgreSQL roles")
-	if v.ProtocolVersion != currentProtocolVersion {
-		t.Errorf("ProtocolVersion: got %d, want %d", v.ProtocolVersion, currentProtocolVersion)
-	}
 }
 
 func TestBuildVars_DefaultsAndInvalidAuthor(t *testing.T) {
@@ -136,12 +131,12 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 
 	// Expected files must exist and be rendered.
 	want := []string{
-		"manifest.yaml",
 		"go.mod",
 		"Makefile",
 		"README.md",
 		".gitignore",
 		"cmd/soul-mod-official-postgres-user/main.go",
+		"cmd/soul-mod-official-postgres-user/bundle_test.go",
 		"internal/postgres_user/handler.go",
 		"internal/postgres_user/handler_test.go",
 		"tests/L0_test.go",
@@ -163,12 +158,14 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 		t.Errorf("placeholders: %v", err)
 	}
 
+	// The manifest form is gone: a scaffold that still shipped one would be
+	// shipping a file nothing reads, and the first thing an author would do is
+	// edit it and wonder why nothing changed.
+	if _, err := os.Stat(filepath.Join(outDir, "manifest.yaml")); err == nil {
+		t.Error("the scaffold still writes manifest.yaml; the schema is generated from Go now")
+	}
+
 	// Substitutions in representative files.
-	mustContain(t, filepath.Join(outDir, "manifest.yaml"),
-		"namespace: official",
-		"name: postgres-user",
-		"protocol_version: 1",
-	)
 	mustContain(t, filepath.Join(outDir, "go.mod"),
 		"module github.com/souls-guild/soul-mod-official-postgres-user",
 	)
@@ -185,16 +182,34 @@ func TestRun_ScaffoldsExpectedTree(t *testing.T) {
 	)
 	mustContain(t, filepath.Join(outDir, "cmd", "soul-mod-official-postgres-user", "main.go"),
 		"\"github.com/souls-guild/soul-mod-official-postgres-user/internal/postgres_user\"",
-		"&postgres_user.PostgresUserModule{}",
+		"module.ServeBundle(bundle)",
+		"postgres_user.Module,",
+	)
+	// The declaration itself: a module.Def next to the code, carrying the
+	// module's own name (address level 2) and NOT a namespace — level 1 is the
+	// operator's registration alias and cannot live in the artifact.
+	mustContain(t, filepath.Join(outDir, "internal", "postgres_user", "handler.go"),
+		"var Module = module.Def{",
+		"Name:        \"postgres-user\",",
+		"Impl: &PostgresUserModule{},",
+	)
+	// stamp + verify are the build: an unstamped artifact carries no disclosure,
+	// and verify is what keeps the stamped document equal to the code.
+	mustContain(t, filepath.Join(outDir, "Makefile"),
+		"$(SOUL_MOD) stamp $(BINARY)",
+		"$(SOUL_MOD) verify $(BINARY)",
 	)
 }
 
-// TestRun_GeneratedManifestPassesValidate — sanity check: the manifest the
-// scaffold ships out of the box must pass `validate-manifest` with no
-// errors. Covers regressions like a secret without a pattern (the
-// input_secret_without_vault_pattern semantic rule), drift between the
-// template and the shared/plugin schema, and similar cases.
-func TestRun_GeneratedManifestPassesValidate(t *testing.T) {
+// TestRun_GeneratedScaffoldCarriesItsOwnSchemaGate — the scaffold's declaration is
+// Go now, so nothing in THIS repo can validate it without compiling the generated
+// project. What the scaffold must therefore ship is the gate itself: a test in the
+// generated tree that runs the SDK validator over the bundle, plus `soul-mod verify`
+// in its build. Both are what the old `validate-manifest` check on the shipped
+// manifest.yaml used to buy — a secret with no `^vault:.*` pattern, a bad state
+// name, drift between the template and the schema rules — moved to where the
+// declaration now lives.
+func TestRun_GeneratedScaffoldCarriesItsOwnSchemaGate(t *testing.T) {
 	tmp := t.TempDir()
 	outDir := filepath.Join(tmp, "soul-mod-official-postgres-user")
 
@@ -209,16 +224,10 @@ func TestRun_GeneratedManifestPassesValidate(t *testing.T) {
 		t.Fatalf("Run: code=%d", code)
 	}
 
-	manifest := filepath.Join(outDir, "manifest.yaml")
-	var out, errOut bytes.Buffer
-	vcode := validate.Run(validate.Options{
-		Path: manifest,
-		Kind: validate.KindManifest,
-	}, &out, &errOut)
-	if vcode != 0 {
-		t.Fatalf("validate-manifest failed (code=%d):\nstdout:\n%s\nstderr:\n%s",
-			vcode, out.String(), errOut.String())
-	}
+	mustContain(t, filepath.Join(outDir, "cmd", "soul-mod-official-postgres-user", "bundle_test.go"),
+		"bundle.Validate()",
+	)
+	mustContain(t, filepath.Join(outDir, "Makefile"), "verify:")
 }
 
 func TestRun_OutDirNotEmptyWithoutForce(t *testing.T) {
@@ -260,7 +269,7 @@ func TestRun_DefaultOutPath(t *testing.T) {
 		t.Fatalf("Run: code=%d", code)
 	}
 
-	if _, err := os.Stat(filepath.Join(tmp, "soul-mod-official-nginx-vhost", "manifest.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, "soul-mod-official-nginx-vhost", "go.mod")); err != nil {
 		t.Fatalf("default out path: %v", err)
 	}
 }

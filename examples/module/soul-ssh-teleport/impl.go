@@ -12,7 +12,7 @@ import (
 )
 
 // paramsEnv is the env var through which keeper.push passes params (JSON per
-// schema.json) to the teleport provider when the plugin is forked. Symmetrical
+// schema.json -> params_schema) to the teleport provider when the plugin is forked. Symmetrical
 // with soul-ssh-vault / soul-ssh-static: the SshProvider contract
 // (Sign/Authorize) carries no per-request provider params, so config arrives at
 // process startup, just like the socket path.

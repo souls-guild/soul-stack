@@ -86,7 +86,7 @@ repository keys on the host. Installing from an unverified/unsigned repo
 does not insure in any way - the correct configuration of trusted repositories lies outside
 module. Flags of the form `--allow-unauthenticated` / `--nogpgcheck` module **not**
 exhibits (verified: `install` goes without them).
-- **Privileges.** Manifest [`pkg.yaml`](../../../../shared/coremanifest/pkg.yaml)
+- **Privileges.** Manifest [`pkg` module](../../../../shared/coremanifest/mod_pkg.go)
 announces `required_capabilities: [run_as_root, exec_subprocess]` —
 install/remove via package manager always requires root and launch
 subprocesses. This is a **declaration** for static reconciliation of `soul-lint` with

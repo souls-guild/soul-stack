@@ -1,6 +1,6 @@
 # Modules and the cache on the Soul host
 
-This section is about the **host side** of modules: where they physically live, how they reach the host, how they are cached, and how they are cleaned up. For the module model itself (core vs custom, the `<namespace>.<module>.<state>` addressing, the gRPC-stdio protocol, the manifest) — see [architecture.md → Module model](../architecture.md); it is deliberately not duplicated here.
+This section is about the **host side** of modules: where they physically live, how they reach the host, how they are cached, and how they are cleaned up. For the module model itself (core vs custom, the `<alias>.<module>.<state>` addressing, the gRPC-stdio protocol, the schema document) — see [architecture.md → Module model](../architecture.md); it is deliberately not duplicated here.
 
 ## Layout on the host
 
@@ -9,16 +9,18 @@ This section is about the **host side** of modules: where they physically live, 
   bin/
     soul-<sha>                 # current version + 1–2 previous for rollback
   modules/
-    community-redis/           # catalog slot of a custom module: <ns>-<name>/
-      manifest.yaml            #   materialized from PluginSigil.manifest_raw
-      soul-mod-redis           #   binary (single-active, atomic rename)
-    acme-haproxy/
-      manifest.yaml
+    redis/                     # slot of a custom module, named by the REGISTRATION ALIAS
+      <schema document>        #   canonical JSON, from the artifact's trailer
+      soul-mod-redis           #   the single executable (single-active, atomic rename)
+    acme/
+      <schema document>
       soul-mod-haproxy
 ```
 
 - **`bin/soul-<sha>`** — the agent executable itself. The name contains the SHA-256 of the binary, which allows keeping several versions side by side and rolling back without re-downloading. Used by the push mode (Keeper rolls out the binary over SSH); in the pull mode updating the daemon is the operator's task (a systemd unit, a package manager).
-- **`modules/<ns>-<name>/{manifest.yaml, soul-mod-<name>}`** — the catalog slot of a custom module ([ADR-065](../adr/0065-core-module-installed.md); the names — [naming-rules.md → Destiny modules](../naming-rules.md)). **Single-active** per `(namespace, name)` pair: one active version, writing via an atomic rename; several versions are not kept side by side — the authority = the active Sigil grant, a "rollback" = revoke+allow of another grant on Keeper + a repeated install step. `manifest.yaml` is materialized from `PluginSigil.manifest_raw` (it arrives in a `SigilSnapshot`, not via a fetch). The binary is launched by the `soul` binary as a sub-process over gRPC-stdio.
+- **`modules/<alias>/`** — the slot of a custom module ([ADR-065](../adr/0065-core-module-installed.md#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact); the names — [naming-rules.md → Destiny modules](../naming-rules.md)). **The slot is named by the registration alias** — the name the operator chose on Keeper, not one read out of the artifact, because the artifact carries none (NIM-377). **Single-active** per alias: one active version, written by atomic rename; versions are not kept side by side — the authority is the active Sigil grant, and a "rollback" is revoke+allow of another grant on Keeper plus a repeated install step.
+- **The executable's filename means nothing.** The slot holds exactly one and the host takes it; `soul-mod-<name>` survives only as a habit of the repositories that build them. The `soul` binary launches it as a sub-process over gRPC-stdio, naming the module it wants as a **subcommand** (`soul-mod-redis acl`) — one artifact serves several modules.
+- **The schema document replaces `manifest.yaml`** in the slot: canonical JSON, generated from Go, stamped into the artifact as a trailer. It is also carried by `PluginSigil.manifest_raw` in a `SigilSnapshot`, which is what the allow-check reads **before** any fetch. Since the schema now travels inside the bytes as well, Keeper's signed copy and the artifact's own copy are the same bytes by construction.
 - **Core modules do not lie on disk.** They are statically built into the `soul-<sha>` binary.
 
 The path `/var/lib/soul-stack/modules/` is configured via `paths.modules` in [`soul.yml`](config.md#paths). The path to `bin/` is currently fixed by convention (the push binary is rolled out into it).
@@ -31,7 +33,7 @@ The path `/var/lib/soul-stack/modules/` is configured via `paths.modules` in [`s
 
 ## Behavior in push (keeper.push)
 
-- Keeper delivers to the host **all modules registered in Keeper** (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — the copy is skipped. This works thanks to the hot cache on the host (the same catalog slots `<ns>-<name>/` as in pull).
+- Keeper delivers to the host **all modules registered in Keeper** (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — the copy is skipped. This works thanks to the hot cache on the host (the same alias-named slots as in pull).
 - The `soul` binary itself is rolled out by the same mechanism: Keeper compares the SHA-256 of the target version with what lies in `bin/`, and copies only on a mismatch.
 - The first run on a new host is slow (the binary and all modules are copied). Subsequent ones are instant.
 - For `bin/`, the file names with a SHA suffix allow keeping several agent versions side by side and rolling back without re-downloading; module slots are single-active ([ADR-065](../adr/0065-core-module-installed.md)).
@@ -61,75 +63,81 @@ Cleanup happens within `keeper.push` itself: when connecting to a host, Keeper m
 
 The operator may initiate `keeper.push.cleanup` — a separate push operation that wipes `/var/lib/soul-stack/` entirely on the specified host. Applied on revoking (`revoke`) a Soul or removing the host from the registry.
 
-## The SoulModule manifest
+## The SoulModule schema document
 
-Each custom module declares itself in a **static `manifest.yaml`** at the root of the plugin repo and next to the binary in the host cache ([ADR-020(a)](../adr/0020-plugin-infrastructure.md)). `soul-lint` parses the file **without running the binary** for static destiny validation.
+A custom module declares itself as a **`module.Def` value in Go**, and the schema document is **generated** from it ([ADR-020(n)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). There is no `manifest.yaml` — not in the repo, not in the slot. `soul-lint` reads `dist/schema.json` and the host reads the copy stamped into the artifact, both **without running the binary**.
 
-The manifest format is **unified for all three plugin kinds** (`soul_module` / `cloud_driver` / `ssh_provider`) with a `kind:` discriminator. The normative source on the manifest fields, handshake, lifecycle, capabilities, side_effects is **[`../keeper/plugins.md`](../keeper/plugins.md)**. Here — only the specifics of `kind: soul_module`.
+The document format is **unified for all plugin kinds** with a `kind:` discriminator. The normative source on its fields, the handshake, lifecycle, capabilities and side_effects is **[`../keeper/plugins.md`](../keeper/plugins.md#schema-document)**. Here — only the specifics of `kind: soul_module`.
 
-### spec: for kind: soul_module
+### `modules[]` for `kind: soul_module`
 
-The kind-specific `SoulModule` block is `spec.states`: a map of supported states with an input schema for each.
+One artifact serves several modules; each declares its own states.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `spec.states` | `map<state-name, {input, description?}>` | — | A map of supported module states. The key is the state name (`installed` / `running` / `run` / …, see [naming-rules.md → Destiny modules](../naming-rules.md)). |
-| `spec.states.<name>.input` | input-schema ([`docs/input.md`](../input.md)) | `{}` | The parameter contract for this state. `soul-lint` validates the `params:` of each destiny task against this schema. |
-| `spec.states.<name>.description` | `string` (optional) | — | A human-readable description for documentation / UI. |
+| `modules[].name` | `string` | — | Address level 2 (`acl` in `redis.acl.present`) and the **subcommand** the host uses to select it. |
+| `modules[].capabilities` | `list<enum>` | `[]` | Disclosure to the operator, **not a control** — see [plugins.md](../keeper/plugins.md#capabilities-and-side_effects-are-disclosure). |
+| `modules[].side_effects` | `list<{type: value}>` | `[]` | Disclosure to the operator, **not a contract**. |
+| `modules[].states` | `map<state-name, state>` | — | The supported states. The key is the state name (`installed` / `running` / `run` / …, see [naming-rules.md → Destiny modules](../naming-rules.md)). |
+| `…states.<name>.input` | input-schema ([`docs/input.md`](../input.md)) | `{}` | The parameter contract for this state. `soul-lint` validates each destiny task's `params:` against it. |
+| `…states.<name>.description` | `string` (optional) | — | A human-readable description for documentation / UI. |
 
-The full table of common manifest fields (`kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`), the normative handshake JSON schema, the lifecycle diagram, and the enum tables are in **[`../keeper/plugins.md`](../keeper/plugins.md)**, deliberately not duplicated here.
+**Address level 1 is not in the document.** It is the registration alias the operator chose on Keeper — which is why the same artifact serves `redis.acl.present` on one cluster and `redis-community.acl.present` on another, with no rebuild.
 
-### Example: soul-mod-haproxy
+The root fields (`kind`, `protocol_version`, `compat`), the normative handshake JSON schema, the lifecycle diagram and the enum tables are in **[`../keeper/plugins.md`](../keeper/plugins.md#schema-document)**, deliberately not duplicated here.
 
-```yaml
-# soul-mod-haproxy/manifest.yaml
-kind: soul_module
-protocol_version: 1
-namespace: acme
-name: haproxy
+### Example: what an author writes
 
-required_capabilities:
-  - run_as_root
-  - exec_subprocess
+```go
+// internal/haproxy/haproxy.go
+var Module = module.Def{
+	Name:         "haproxy",
+	Description:  "HAProxy service and configuration",
+	Capabilities: []module.Capability{module.RunAsRoot, module.ExecSubprocess},
+	SideEffects: []module.SideEffect{
+		{Service: "haproxy"},
+		{File: "/etc/haproxy/haproxy.cfg"},
+		{Package: "haproxy"},
+	},
+	Impl: &HAProxy{},
 
-side_effects:
-  - { service: haproxy }
-  - { file: /etc/haproxy/haproxy.cfg }
-  - { package: haproxy }
-
-spec:
-  states:
-    running:
-      description: HAProxy is running and enabled in systemd.
-      input:
-        name:        { type: string, required: true }
-        enabled:     { type: boolean, default: true }
-        config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
-    stopped:
-      description: HAProxy is stopped.
-      input:
-        name: { type: string, required: true }
-    restarted:
-      description: HAProxy restarted (force-restart).
-      input:
-        name:        { type: string, required: true }
-        config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
-    reloaded:
-      description: HAProxy reload (SIGHUP) without downtime.
-      input:
-        name: { type: string, required: true }
+	States: map[string]module.State{
+		"running": {
+			Description: "HAProxy is running and enabled in systemd",
+			Input: module.Input{
+				"name":        {Type: module.String, Required: true},
+				"enabled":     {Type: module.Bool, Default: true},
+				"config_path": {Type: module.String, Default: "/etc/haproxy/haproxy.cfg"},
+			},
+		},
+		"stopped":  {Description: "HAProxy is stopped", Input: module.Input{"name": {Type: module.String, Required: true}}},
+		"reloaded": {Description: "HAProxy reloaded (SIGHUP), without downtime", Input: module.Input{"name": {Type: module.String, Required: true}}},
+	},
+}
 ```
 
-The destiny step addressing is `<namespace>.<name>.<state>`, in the example above — `acme.haproxy.running` / `acme.haproxy.stopped` / `acme.haproxy.restarted` / `acme.haproxy.reloaded`.
+```go
+// cmd/soul-mod-haproxy/main.go
+func main() {
+	module.ServeBundle(module.Bundle{
+		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
+		Modules: []module.Def{haproxy.Module},
+	})
+}
+```
 
-### Core modules and the manifest
+The build stamps the generated schema into the artifact (`soul-mod stamp`) and CI checks that the stamp still matches the code (`soul-mod verify`) — see [plugins.md → Stamping and verification](../keeper/plugins.md#stamping-and-verification) for the generated document this produces.
 
-**Core modules** (statically built into the `soul` binary, see [naming-rules.md → Destiny modules](../naming-rules.md)) do without a separate `manifest.yaml` file next to the binary: their declaration is embedded into the registry at compile time (`go:embed`), and the table of states and input schemas is available to `soul-lint` through the same `shared/plugin` parser as for custom modules, but without reading from disk. The declaration format is the same `kind: soul_module` format from [`../keeper/plugins.md`](../keeper/plugins.md).
+Destiny step addressing is `<alias>.<module>.<state>`. Registered as `acme`, the artifact above answers `acme.haproxy.running` / `acme.haproxy.stopped` / `acme.haproxy.reloaded`. **The `acme` is not in the artifact** — an operator who registered the same bytes as `haproxy-community` would write `haproxy-community.haproxy.running` instead.
+
+### Core modules and their declaration
+
+**Core modules** (statically built into the `soul` binary, see [naming-rules.md → Destiny modules](../naming-rules.md)) have no file beside a binary at all: their declaration is compiled in, and the table of states and input schemas reaches `soul-lint` through the same model as for custom modules, without reading from disk. Core modules are declared the same way plugin modules are — as Go values, the shape described in [`../keeper/plugins.md`](../keeper/plugins.md#schema-document) — so the two never diverge into separate dialects. What does not apply to them is the stamping path: they are linked into `soul`, not shipped as artifacts, so there is no trailer to read and nothing to allow-list.
 
 Implementation:
 
-- The manifests lie as `*.yaml` next to the registry in the **`shared/coremanifest`** package (one file per core module: `exec.yaml`, `file.yaml`, …). Placement in `shared/` was chosen for isolation: both `soul` and `soul-lint` import `shared/`, but they do not import each other and do not pull `keeper` — the compiler guarantees that the linter does not pull in the runtime module implementations.
-- When validating a destiny/scenario, `soul-lint` finds for each task `module: core.<m>.<state>` the manifest in the registry, takes `spec.states.<state>.input`, and checks `params:`: an unknown parameter (`command` instead of `cmd`), a missing required (`cmd`/`path`), a literal type mismatch. A structural check by `plugin.InputParamDef` (type/required/secret/pattern); enum, numeric bounds, and nested object/array schemas are not expressible in this DSL — deferred until the unification of `config.InputSchema`↔`plugin`.
+- The declarations live in the **`shared/coremanifest`** package, one Go file per core module (`mod_exec.go`, `mod_file.go`, …). Placement in `shared/` was chosen for isolation: both `soul` and `soul-lint` import `shared/`, but they do not import each other and do not pull `keeper` — the compiler guarantees that the linter does not pull in the runtime module implementations.
+- When validating a destiny/scenario, `soul-lint` finds for each task `module: core.<m>.<state>` the manifest in the registry, takes that state's `input`, and checks `params:`: an unknown parameter (`command` instead of `cmd`), a missing required (`cmd`/`path`), a literal type mismatch. A structural check by `plugin.InputParamDef` (type/required/secret/pattern); enum, numeric bounds, and nested object/array schemas are not expressible in this DSL — deferred until the unification of `config.InputSchema`↔`plugin`.
 - The manifest describes the **author-facing** contract — what the operator writes in `params:`. For `core.file.rendered` this is `template:` (the path to the `.tmpl`) + `vars:`, and **not** the runtime form `template_content`+`render_context` that Keeper substitutes after the CEL/text-template phases ([ADR-010](../adr/0010-templating.md), [ADR-012](../adr/0012-keeper-soul-grpc.md)). Therefore the runtime `Module.Validate` of modules with a handoff transformation of params (rendered) validates its runtime form separately; for modules without a handoff (`core.exec`) the runtime `Validate` delegates to the same manifest registry — a single source of per-field checks.
 - Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, [ADR-017](../adr/0017-keeper-side-core.md)) is added to the registry by the same mechanism (a new `<module>.yaml`).
 
@@ -143,7 +151,7 @@ The failure mode it closes: a Soul reads params by key, so a key it does not kno
 - **The check runs on `dry_run` too.** A `Plan` that skipped it would answer "no drift" for a param it never reads — the false-clean [ADR-031](../adr/0031-scry-drift.md) forbids.
 - **Transport keys are exempt on the state that owns them.** `core.file.rendered` receives `template_content`/`render_context` instead of the author's `template:`/`vars:`; those two keys are accepted on that state and nowhere else.
 - **A module with no embedded manifest is unchecked** (`core.augur`) — absence of a declaration is not a declaration of absence.
-- **Custom modules are advisory, not enforced.** Their manifests live beside the binary, were never enforced before, and under-declare in practice; an undeclared param is logged rather than rejected. See [ADR-0076](../adr/0076-engine-compat-window.md) (q) for the measured reason and what flipping it requires.
+- **Custom modules are advisory, not enforced.** Their schema ships in the artifact, was never enforced before, and under-declares in practice; an undeclared param is logged rather than rejected. See [ADR-0076](../adr/0076-engine-compat-window.md) (q) for the measured reason and what flipping it requires.
 - **Only the unknown direction is checked here.** A missing required param stays with Keeper's static check, which sees the author's text with a line and column before a run exists.
 
 Adding a param to a core module is therefore a Soul-side compat event: an agent that predates the param now fails loudly instead of mis-applying silently, so upgrade **souls first, then keeper** — the same order the capability gate already imposes. Shrinking a contract goes the other way, through [param deprecation](../keeper/plugins.md#deprecating-a-param).

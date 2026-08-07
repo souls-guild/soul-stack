@@ -178,12 +178,13 @@ func depDef(removedIn string) plugin.DeprecatedDef {
 	return plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: removedIn}
 }
 
-// pluginCatalog — the resolver shape NIM-228 supplies (keeper snapshots it from
-// Sigil grants).
-type pluginCatalog map[string]*plugin.Manifest
+// pluginCatalog — the resolver shape NIM-228 supplies (keeper snapshots it from Sigil
+// grants). Keyed `<alias>.<module>`: level 1 is the operator's registration, level 2
+// the module the artifact declares.
+type pluginCatalog map[string]plugin.ModuleDef
 
-func (c pluginCatalog) ResolveModule(namespace, name string) (*plugin.Manifest, bool) {
-	m, ok := c[namespace+"."+name]
+func (c pluginCatalog) ResolveModule(alias, module string) (plugin.ModuleDef, bool) {
+	m, ok := c[alias+"."+module]
 	return m, ok
 }
 
@@ -204,15 +205,15 @@ tasks:
 	})
 	catalog := pluginCatalog{
 		"community.redis": {
-			Namespace: "community", Name: "redis",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
-				"present": {Input: map[string]plugin.InputParamDef{
+			Name: "redis",
+			States: map[string]plugin.StateDef{
+				"present": {Input: plugin.Input{
 					"addr": {Type: "string"},
 					"address": {Type: "string", Deprecated: &plugin.DeprecatedDef{
 						Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
 					}},
 				}},
-			}},
+			},
 		},
 	}
 	s := testScanner(t)

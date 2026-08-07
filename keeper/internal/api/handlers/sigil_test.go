@@ -29,7 +29,7 @@ func (s *fakeSigilStore) Insert(_ context.Context, rec *sigil.Sigil) error {
 	return nil
 }
 
-func (s *fakeSigilStore) Revoke(context.Context, string, string, string, string) error {
+func (s *fakeSigilStore) Revoke(context.Context, string, string) error {
 	return s.revokeErr
 }
 
@@ -45,11 +45,11 @@ type fakeSigilSlots struct {
 	commitErr error
 }
 
-func (f fakeSigilSlots) ReadSlot(string, string) (*pluginhost.SlotContents, error) {
+func (f fakeSigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return f.slot, f.err
 }
 
-func (f fakeSigilSlots) SlotCommitSHA(string, string) (string, error) {
+func (f fakeSigilSlots) SlotCommitSHA(string) (string, error) {
 	if f.commitErr != nil {
 		return "", f.commitErr
 	}
@@ -61,12 +61,16 @@ func (f fakeSigilSlots) SlotCommitSHA(string, string) (string, error) {
 	return f.commit, nil
 }
 
+// sigilTestSource is the git remote the fixture grants are issued on — with no
+// self-name in the artifact, this and the ref are the whole signed identity.
+const sigilTestSource = "https://example.com/soul-cloud-hetzner.git"
+
 func sigilSlotFixture() *pluginhost.SlotContents {
 	digest := sha256.Sum256([]byte("cloud-binary"))
 	return &pluginhost.SlotContents{
-		BinaryPath:    "/cache/cloud-hetzner/soul-cloud-hetzner",
-		ManifestBytes: []byte("kind: cloud_driver\nprotocol_version: 1\nnamespace: cloud\nname: hetzner\nspec:\n  profile_schema:\n    type: object\n"),
-		BinarySHA256:  hex.EncodeToString(digest[:]),
+		BinaryPath:   "/cache/hetzner/current/hetzner",
+		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
+		BinarySHA256: hex.EncodeToString(digest[:]),
 	}
 }
 
@@ -95,14 +99,14 @@ func TestSigilHandler_Allow_201(t *testing.T) {
 	h := newSigilHandler(t, store, fakeSigilSlots{slot: slot})
 
 	reply, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
-		SigilAllowInput{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0"})
+		SigilAllowInput{Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0"})
 	if err != nil {
 		t.Fatalf("AllowTyped: %v", err)
 	}
 	if reply.View.SHA256 != slot.BinarySHA256 {
 		t.Errorf("reply.sha256 = %q, want %q", reply.View.SHA256, slot.BinarySHA256)
 	}
-	if reply.View.Namespace != "cloud" || reply.View.Name != "hetzner" || reply.View.Ref != "v1.0.0" {
+	if reply.View.Alias != "hetzner" || reply.View.Source != sigilTestSource || reply.View.Ref != "v1.0.0" {
 		t.Errorf("reply view = %+v", reply.View)
 	}
 	if store.inserted == nil || store.inserted.AllowedByAID != "archon-alice" {
@@ -110,24 +114,47 @@ func TestSigilHandler_Allow_201(t *testing.T) {
 	}
 }
 
-func TestSigilHandler_Allow_EmptyName_422(t *testing.T) {
+func TestSigilHandler_Allow_EmptyAlias_422(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{slot: sigilSlotFixture()})
 	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
-		SigilAllowInput{Namespace: "cloud", Name: "", Ref: "v1.0.0"})
+		SigilAllowInput{Alias: "", Source: sigilTestSource, Ref: "v1.0.0"})
 	wantProblem(t, err, problem.TypeValidationFailed)
+}
+
+func TestSigilHandler_Allow_EmptySource_422(t *testing.T) {
+	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{slot: sigilSlotFixture()})
+	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
+		SigilAllowInput{Alias: "hetzner", Source: "", Ref: "v1.0.0"})
+	wantProblem(t, err, problem.TypeValidationFailed)
+}
+
+// TestSigilHandler_Allow_ReservedAlias_422 — the reserved list reaches the transport, so
+// an operator naming a plugin `core` is told in the 422 rather than discovering it when
+// `core.file.present` starts meaning somebody else's code.
+func TestSigilHandler_Allow_ReservedAlias_422(t *testing.T) {
+	for _, alias := range []string{"core", "keeper", "soul", "soul-stack"} {
+		store := &fakeSigilStore{}
+		h := newSigilHandler(t, store, fakeSigilSlots{slot: sigilSlotFixture()})
+		_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
+			SigilAllowInput{Alias: alias, Source: sigilTestSource, Ref: "v1.0.0"})
+		wantProblem(t, err, problem.TypeValidationFailed)
+		if store.inserted != nil {
+			t.Errorf("alias %q reached the registry", alias)
+		}
+	}
 }
 
 func TestSigilHandler_Allow_SlashInRef_422(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{slot: sigilSlotFixture()})
 	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
-		SigilAllowInput{Namespace: "cloud", Name: "hetzner", Ref: "feature/x"})
+		SigilAllowInput{Alias: "hetzner", Source: sigilTestSource, Ref: "feature/x"})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
 func TestSigilHandler_Allow_NotInCache_404(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{err: pluginhost.ErrSlotNotFound})
 	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
-		SigilAllowInput{Namespace: "cloud", Name: "absent", Ref: "v1.0.0"})
+		SigilAllowInput{Alias: "absent", Source: sigilTestSource, Ref: "v1.0.0"})
 	wantProblem(t, err, problem.TypePluginNotInCache)
 }
 
@@ -135,19 +162,29 @@ func TestSigilHandler_Allow_AlreadyActive_409(t *testing.T) {
 	store := &fakeSigilStore{insertErr: sigil.ErrSigilAlreadyActive}
 	h := newSigilHandler(t, store, fakeSigilSlots{slot: sigilSlotFixture()})
 	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
-		SigilAllowInput{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0"})
+		SigilAllowInput{Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0"})
+	wantProblem(t, err, problem.TypeSigilActive)
+}
+
+// TestSigilHandler_Allow_AliasTaken_409 — the other live-collision sentinel. Same HTTP
+// status, different sentence: the operator's fix is a different alias, not a revoke.
+func TestSigilHandler_Allow_AliasTaken_409(t *testing.T) {
+	store := &fakeSigilStore{insertErr: sigil.ErrAliasAlreadyRegistered}
+	h := newSigilHandler(t, store, fakeSigilSlots{slot: sigilSlotFixture()})
+	_, err := h.AllowTyped(context.Background(), claimsFor("archon-alice"),
+		SigilAllowInput{Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0"})
 	wantProblem(t, err, problem.TypeSigilActive)
 }
 
 // --- ListTyped ---
 
-func TestSigilHandler_List_200_NoSignatureNoManifest(t *testing.T) {
+func TestSigilHandler_List_200_NoSignatureNoSchema(t *testing.T) {
 	store := &fakeSigilStore{listResult: []*sigil.Sigil{
 		{
-			Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0",
+			Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0",
 			SHA256:       "deadbeef",
 			Signature:    []byte("secret-bytes"),
-			Manifest:     []byte(`{"kind":"cloud_driver"}`),
+			Schema:       []byte(`{"kind":"cloud_driver","protocol_version":1}`),
 			AllowedByAID: "archon-alice",
 			AllowedAt:    time.Now(),
 		},
@@ -161,10 +198,11 @@ func TestSigilHandler_List_200_NoSignatureNoManifest(t *testing.T) {
 	if len(page.Items) != 1 || page.Items[0].SHA256 != "deadbeef" {
 		t.Fatalf("items = %+v", page.Items)
 	}
-	// The domain projection (SigilView) does NOT carry signature/manifest fields —
-	// crypto material / large JSONB do not leave the service boundary (regression guard).
+	// The domain projection (SigilView) carries neither the signature nor the schema —
+	// crypto material and a large document do not leave the service boundary
+	// (regression guard).
 	it := page.Items[0]
-	if it.Namespace != "cloud" || it.Name != "hetzner" || it.Ref != "v1.0.0" {
+	if it.Alias != "hetzner" || it.Source != sigilTestSource || it.Ref != "v1.0.0" {
 		t.Errorf("item key = %+v", it)
 	}
 	// Active record: RevokedAt nil → the native type omits revoked_at (omitempty).
@@ -192,19 +230,21 @@ func TestSigilHandler_List_200_EmptyNonNil(t *testing.T) {
 
 func TestSigilHandler_Revoke_204(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{})
-	if _, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), "cloud", "hetzner", "v1.0.0"); err != nil {
+	if _, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), "hetzner"); err != nil {
 		t.Fatalf("RevokeTyped: %v", err)
 	}
 }
 
 func TestSigilHandler_Revoke_NotFound_404(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{revokeErr: sigil.ErrSigilNotFound}, fakeSigilSlots{})
-	_, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), "cloud", "hetzner", "v9.9.9")
+	_, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), "hetzner")
 	wantProblem(t, err, problem.TypeSigilNotFound)
 }
 
 func TestSigilHandler_Revoke_BadSegment_422(t *testing.T) {
 	h := newSigilHandler(t, &fakeSigilStore{}, fakeSigilSlots{})
-	_, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), "cloud", "hetzner", "..")
-	wantProblem(t, err, problem.TypeValidationFailed)
+	for _, alias := range []string{"", "..", "a/b", "Hetzner", "core"} {
+		_, err := h.RevokeTyped(context.Background(), claimsFor("archon-alice"), alias)
+		wantProblem(t, err, problem.TypeValidationFailed)
+	}
 }

@@ -10,7 +10,7 @@ import (
 
 // CloudDriverPlugin is thin wrapper over [Plugin], tying base handle
 // to CloudDriver gRPC client. Created via [NewCloudDriverPlugin] after
-// successful [Host.Spawn]: caller verifies manifest.kind == cloud_driver,
+// successful [Host.Spawn]: caller verifies the artifact's kind == cloud_driver,
 // and wraps Plugin in CloudDriverPlugin.
 //
 // Apply-cycle keeper.cloud / scenario step `core.cloud.provisioned`
@@ -24,15 +24,15 @@ type CloudDriverPlugin struct {
 }
 
 // NewCloudDriverPlugin wraps [Plugin] (from [Host.Spawn]) in kind-specific
-// handle. Returns error if manifest.kind != cloud_driver: protection from
-// accidental call on soul_module / ssh_provider binary.
+// handle. Returns error if the artifact's kind != cloud_driver: protection from
+// accidental call on a soul_module / ssh_provider artifact.
 func NewCloudDriverPlugin(p *Plugin) (*CloudDriverPlugin, error) {
 	if p == nil {
 		return nil, fmt.Errorf("pluginhost: nil Plugin")
 	}
-	if p.Manifest().Kind != KindCloudDriver {
-		return nil, fmt.Errorf("pluginhost: expected kind=cloud_driver, manifest %s has kind=%q",
-			p.Manifest().Address(), p.Manifest().Kind)
+	if d := p.Discovered(); d.Kind() != KindCloudDriver {
+		return nil, fmt.Errorf("pluginhost: expected kind=cloud_driver, artifact %s has kind=%q",
+			d.Address(), d.Kind())
 	}
 	return &CloudDriverPlugin{
 		Plugin: p,

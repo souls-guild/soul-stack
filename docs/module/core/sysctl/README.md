@@ -106,7 +106,7 @@ Destiny/scenario) rather than external input.
   [`sysctl.go`](../../../../soul/internal/coremod/sysctl/sysctl.go) `Apply`
 only reads `name`/`value`/`filename` as strings and passes `value` to
 `sysctl -w` literally; `Validate` delegated to manifest
-([`sysctl.yaml`](../../../../shared/coremanifest/sysctl.yaml)) and checks
+([`sysctl` module](../../../../shared/coremanifest/mod_sysctl.go)) and checks
 only known-state + required (`name`/`value`), but **not** range, type or
 the validity of the parameter itself. Unknown/non-numeric `value` catches itself
 `sysctl -w` (non-zero exit → step falls), and not the module - the module does not "underlie"
@@ -114,7 +114,7 @@ straws" in advance. The file name `filename` is normalized (`.`→`-`, suffix
 `.conf`), but the path is always inside `/etc/sysctl.d/` (`filepath.Join(m.Dir, …)`) -
 You cannot write a persist file outside the directory via `filename`.
 - **Privileges.** Manifest
-[`sysctl.yaml`](../../../../shared/coremanifest/sysctl.yaml) announces
+[`sysctl` module](../../../../shared/coremanifest/mod_sysctl.go) announces
   `required_capabilities: [run_as_root, exec_subprocess, fs_write_root]` —
 changing the kernel parameter and writing to `/etc/sysctl.d/` requires UID 0,
 the application goes through the subprocess `sysctl` (`-n`/`-w`), and the persist file is written

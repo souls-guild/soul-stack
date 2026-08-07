@@ -9,18 +9,22 @@
 //	validate-service  <path> [--json]  validate service.yml (the service
 //	                                    root manifest).
 //	validate-scenario <path> [--json]  validate scenario/<name>/main.yml.
-//	validate-manifest <path> [--json]  validate a plugin's manifest.yaml
-//	                                    (kind: soul_module / cloud_driver /
-//	                                    ssh_provider).
+//	validate-manifest <path> [--json]  validate a plugin's schema document
+//	                                    (dist/schema.json, or a stamped
+//	                                    artifact).
 //	plugin-init       <namespace>/<name> [flags]  scaffold a new SoulModule
 //	                                    plugin (ADR-016 amendment 2026-05-27).
 //
 // The validate-destiny / validate-service / validate-scenario subcommands also
-// take `--modules DIR`, a tree of plugin `manifest.yaml` files (NIM-228). With
-// it, the `params:` of a plugin module are checked exactly as `core.*` already
-// is; without it they cannot be, and each such module is reported as
+// take `--modules <alias>=<path>`, repeatable (NIM-228, reshaped by NIM-377).
+// With it, the `params:` of a plugin module are checked exactly as `core.*`
+// already is; without it they cannot be, and each such module is reported as
 // `plugin_params_unchecked` rather than passing in silence. Core needs no flag —
 // its manifests are compiled in.
+//
+// The alias is on the flag because the artifact has no self-name: address level 1
+// is the registration alias an operator picks, so `redis=./dist/schema.json`
+// states the same word the task writes and the operator will register.
 //
 // Exit codes: 0 = ok, 1 = has errors, 2 = I/O fatal / usage.
 package main
@@ -44,11 +48,11 @@ func main() {
 	case "validate-config":
 		os.Exit(runSubcommand(sub, "validate-config <path> [--json]", validate.KindConfig, os.Args[2:]))
 	case "validate-destiny":
-		os.Exit(runSubcommand(sub, "validate-destiny <path> [--json] [--modules DIR]", validate.KindDestiny, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-destiny <path> [--json] [--modules ALIAS=PATH]...", validate.KindDestiny, os.Args[2:]))
 	case "validate-service":
-		os.Exit(runSubcommand(sub, "validate-service <path> [--json] [--modules DIR]", validate.KindService, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-service <path> [--json] [--modules ALIAS=PATH]...", validate.KindService, os.Args[2:]))
 	case "validate-scenario":
-		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--modules DIR]", validate.KindScenario, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--modules ALIAS=PATH]...", validate.KindScenario, os.Args[2:]))
 	case "validate-manifest":
 		os.Exit(runSubcommand(sub, "validate-manifest <path> [--json]", validate.KindManifest, os.Args[2:]))
 	case "plugin-init":
@@ -70,12 +74,12 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 	var (
 		jsonOut    bool
 		path       string
-		modulesDir string
+		modules    []string
 		wantModule bool // the previous arg was `--modules`, so this one is its value
 	)
 	for _, a := range args {
 		if wantModule {
-			modulesDir = a
+			modules = append(modules, a)
 			wantModule = false
 			continue
 		}
@@ -87,8 +91,14 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 			return 0
 		case a == "--modules" || a == "-modules":
 			wantModule = true
-		case strings.HasPrefix(a, "--modules="):
-			modulesDir = strings.TrimPrefix(a, "--modules=")
+		case strings.HasPrefix(a, "--modules=") || strings.HasPrefix(a, "-modules="):
+			// Repeatable: one binding per occurrence, appended in order. An empty
+			// value is kept rather than dropped so LoadModuleSchemas rejects it by
+			// the same rule as every other malformed binding — silently ignoring
+			// `--modules=` would mean "check nothing", which is the failure mode
+			// this flag exists to remove.
+			_, value, _ := strings.Cut(a, "=")
+			modules = append(modules, value)
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "soul-lint %s: unknown flag %q\n", sub, a)
 			return 2
@@ -100,8 +110,8 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 			path = a
 		}
 	}
-	if wantModule || (modulesDir == "" && hasBareModulesFlag(args)) {
-		fmt.Fprintf(os.Stderr, "soul-lint %s: --modules needs a directory\n", sub)
+	if wantModule {
+		fmt.Fprintf(os.Stderr, "soul-lint %s: --modules needs an <alias>=<path> binding\n", sub)
 		return 2
 	}
 	if path == "" {
@@ -109,24 +119,11 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 		return 2
 	}
 	return validate.Run(validate.Options{
-		Path:       path,
-		JSON:       jsonOut,
-		Kind:       kind,
-		ModulesDir: modulesDir,
+		Path:    path,
+		JSON:    jsonOut,
+		Kind:    kind,
+		Modules: modules,
 	}, os.Stdout, os.Stderr)
-}
-
-// hasBareModulesFlag reports whether `--modules=` was passed with an empty
-// value. Distinguishing it from "not passed at all" matters: an empty tree
-// silently means "check nothing", which is the failure mode this flag exists to
-// remove.
-func hasBareModulesFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--modules=" || a == "-modules=" {
-			return true
-		}
-	}
-	return false
 }
 
 // runPluginInit parses flags for `plugin-init <namespace>/<name> [flags]`.
@@ -216,13 +213,16 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  validate-config   <path> [--json]              validate keeper.yml or soul.yml")
-	fmt.Fprintln(w, "  validate-destiny  <path> [--json] [--modules DIR]  validate destiny.yml manifest")
-	fmt.Fprintln(w, "  validate-service  <path> [--json] [--modules DIR]  validate service.yml manifest")
-	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--modules DIR]  validate scenario/<name>/main.yml")
-	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate plugin manifest.yaml")
+	fmt.Fprintln(w, "  validate-destiny  <path> [--json] [--modules A=P]...  validate destiny.yml manifest")
+	fmt.Fprintln(w, "  validate-service  <path> [--json] [--modules A=P]...  validate service.yml manifest")
+	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--modules A=P]...  validate scenario/<name>/main.yml")
+	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate a plugin schema document")
 	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]      scaffold a new SoulModule plugin")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  --modules DIR  tree of plugin manifest.yaml files. Without it the params of a")
-	fmt.Fprintln(w, "                 plugin module cannot be checked, and each such module is reported")
-	fmt.Fprintln(w, "                 as plugin_params_unchecked rather than passing silently.")
+	fmt.Fprintln(w, "  --modules <alias>=<path>  bind a plugin's schema document to the alias a task")
+	fmt.Fprintln(w, "                 addresses it by (redis=./dist/schema.json). Repeatable. <path> is a")
+	fmt.Fprintln(w, "                 schema.json, a stamped artifact, or the dist/ dir holding one. The")
+	fmt.Fprintln(w, "                 alias is stated here because the artifact carries no name of its own.")
+	fmt.Fprintln(w, "                 Without a binding, that module's params cannot be checked and it is")
+	fmt.Fprintln(w, "                 reported as plugin_params_unchecked rather than passing silently.")
 }

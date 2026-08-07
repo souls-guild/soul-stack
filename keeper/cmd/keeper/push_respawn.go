@@ -59,7 +59,8 @@ func newPushProviderRespawner(
 // RespawnProvider -- implementation of [push.ProviderRespawner].
 //
 // Steps:
-//  1. Find Discovered by name (manifest.Name);
+//  1. Find Discovered by its registration ALIAS (an ssh_provider artifact declares
+//     no name of its own, NIM-377);
 //  2. Close oldCloser if passed (the plugin holds a unix socket + child
 //     process -- both must be cleaned up BEFORE spawning the new one, to avoid
 //     leaking orphan sockets on a Spawn error);
@@ -102,21 +103,24 @@ func (r *pushProviderRespawner) RespawnProvider(ctx context.Context, providerNam
 
 	plugin, err := r.host.Spawn(ctx, *d, spawnOpts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("respawn: spawn %s: %w", d.Manifest.Address(), err)
+		return nil, nil, fmt.Errorf("respawn: spawn %s: %w", d.Address(), err)
 	}
 	wrapped, err := pluginhost.NewSshProviderPlugin(plugin)
 	if err != nil {
 		_ = plugin.Close()
-		return nil, nil, fmt.Errorf("respawn: wrap %s: %w", d.Manifest.Address(), err)
+		return nil, nil, fmt.Errorf("respawn: wrap %s: %w", d.Address(), err)
 	}
 	return wrapped, wrapped, nil
 }
 
-// findDiscoveredByName -- linear search over discovered (single-provider pilot
-// usually holds 1 element; multi-provider is a handful, no point building a map).
+// findDiscoveredByName -- linear search over discovered by REGISTRATION ALIAS, which is
+// the provider name: an ssh_provider artifact declares no name of its own, so what the
+// operator registered it as is the only name a `push_providers` entry can reference.
+// (Single-provider pilot usually holds 1 element; multi-provider is a handful, no point
+// building a map.)
 func (r *pushProviderRespawner) findDiscoveredByName(name string) *pluginhost.Discovered {
 	for i := range r.discovered {
-		if r.discovered[i].Manifest != nil && r.discovered[i].Manifest.Name == name {
+		if r.discovered[i].Doc != nil && r.discovered[i].Alias == name {
 			return &r.discovered[i]
 		}
 	}

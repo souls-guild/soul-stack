@@ -59,12 +59,12 @@ The Sigil registry — the Keeper-signed allow-list of admitted plugin binaries 
 ```sql
 CREATE TABLE plugin_sigils (
   id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  namespace       TEXT        NOT NULL,                          -- plugin type: cloud / ssh / mod
-  name            TEXT        NOT NULL,                          -- binary name: soul-cloud-hetzner etc.
-  ref             TEXT        NOT NULL,                          -- git-ref of the version (ADR-007)
+  alias           TEXT        NOT NULL,                          -- registration alias: address level 1, operator-chosen. NOT signed (migration 113)
+  source          TEXT        NOT NULL,                          -- artifact source: the git remote the module repo was fetched from. SIGNED
+  ref             TEXT        NOT NULL,                          -- git-ref of the version (ADR-007). SIGNED
   sha256          TEXT        NOT NULL,                          -- digest of the admitted binary (hex, lowercase, 64)
-  signature       BYTEA       NOT NULL,                          -- Keeper's signature (ed25519/ECDSA) over the signed block; raw bytes, no base64
-  manifest        JSONB       NOT NULL,                          -- stitched into the signed block (ADR-026(c)) → side_effects/capabilities are not forgeable
+  signature       BYTEA       NOT NULL,                          -- Keeper's signature (ed25519) over the signed block; raw bytes, no base64
+  schema          BYTEA       NOT NULL,                          -- the canonical-JSON schema document, byte-exact as signed (migration 113)
   allowed_by_aid  TEXT        NOT NULL REFERENCES operators(aid),               -- who admitted it; default NO ACTION (effectively RESTRICT) — the author of an active allowance cannot be deleted
   allowed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at      TIMESTAMPTZ,                                   -- NULL = active; NOT NULL = allowance revoked (soft, for audit)
@@ -74,14 +74,23 @@ CREATE TABLE plugin_sigils (
 );
 
 CREATE INDEX plugin_sigils_allowed_by_aid_idx ON plugin_sigils (allowed_by_aid);
--- Invariant: at most one ACTIVE record per (namespace, name, ref); this same
--- index covers the lookup during verify. Precedent — bootstrap_tokens (migration 008).
-CREATE UNIQUE INDEX plugin_sigils_active_idx ON plugin_sigils (namespace, name, ref) WHERE revoked_at IS NULL;
+
+-- TRUST key: at most one ACTIVE approval per artifact identity. Re-approving the same
+-- artifact is a conflict the operator resolves by revoking first — never a silent
+-- second grant that revoking the first would leave standing.
+CREATE UNIQUE INDEX plugin_sigils_active_idx       ON plugin_sigils (source, ref) WHERE revoked_at IS NULL;
+
+-- REGISTRATION invariant, NOT a trust key: one alias is one address space and one host
+-- slot, so `<alias>.<module>.<state>` names one set of bytes and the runtime lookup has
+-- exactly one answer rather than "whichever row sorted first".
+CREATE UNIQUE INDEX plugin_sigils_active_alias_idx ON plugin_sigils (alias)         WHERE revoked_at IS NULL;
 ```
+
+> **Re-keyed by migration 113 (NIM-377 / NIM-438).** It was `(namespace, name, ref)` with a `manifest JSONB` column. The artifact now declares **no name at all**, so the old key is unusable rather than merely absent — and an alias is operator-chosen text, so keying an approval on it would mean renaming an alias walks around an approved hash instead of requiring a fresh approval. The only identity an operator *asserts about the bytes* is where they came from. The `manifest` jsonb projection was dropped and `manifest_raw` renamed to `schema` (`NOT NULL`): one signed value, stored once, with no second copy free to drift. **The migration empties the table** — every prior grant was signed under DST `soul-stack/sigil/v1` over a block keyed on `(namespace, name)`, so none of them verifies against the v2 block; approvals are re-issued with `keeper.plugin.allow`. See [ADR-026](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations).
 
 **The `signature BYTEA` choice.** An ed25519/ECDSA signature is raw binary bytes of fixed (ed25519 — 64 bytes) length. `BYTEA` stores them directly, without the overhead of base64 encoding (`text`) and without the risk of an encoding mismatch between the write path (S2a/S3) and the verify path (S6). The exact format of the signed block — slice S3.
 
-**Lifecycle.** `allowed` (an Archon admitted it — audit-event `plugin.allowed`, [naming-rules.md → the `plugin.*` area](../naming-rules.md)) → optionally `revoked` (`revoked_at`/`revoked_by_aid` — audit-event `plugin.revoked`). Revocation is soft: the row remains for audit, activity is determined by `revoked_at IS NULL`. Uniqueness — partial-unique over active records (`plugin_sigils_active_idx`): there is always exactly one active record per triple `(namespace, name, ref)`, and **re-allow after revoke creates a NEW record** (a clean INSERT) — the revocation history is preserved, the previous `sha256`/`signature`/`allowed_by_aid` are not overwritten. A Sigil verification failure before seal/exec on a host — audit-event `plugin.verify_failed`. The registry CRUD, signing and verify — slices S2a/S3/S6, not part of this migration.
+**Lifecycle.** `allowed` (an Archon admitted it — audit-event `plugin.allowed`, [naming-rules.md → the `plugin.*` area](../naming-rules.md)) → optionally `revoked` (`revoked_at`/`revoked_by_aid` — audit-event `plugin.revoked`). Revocation is soft: the row remains for audit, activity is determined by `revoked_at IS NULL`. Uniqueness — partial-unique over active records (`plugin_sigils_active_idx`): there is always at most one active record per `(source, ref)`, and **re-allow after revoke creates a NEW record** (a clean INSERT) — the revocation history is preserved, the previous `sha256`/`signature`/`allowed_by_aid` are not overwritten. A Sigil verification failure before seal/exec on a host — audit-event `plugin.verify_failed`. The registry CRUD, signing and verify — slices S2a/S3/S6, not part of this migration.
 
 ## Redis — hot layer and coordination
 

@@ -49,7 +49,7 @@ Addressing: namespace `core`, module `module`, state `installed`; the step is So
 
 | Parameter | Type | Req. | Semantics |
 |---|---|---|---|
-| `name` | string | **yes** | Full plugin name `<namespace>.<name>` (e.g. `community.redis`). |
+| `name` | string | **yes** | The **registration alias** of the module family (e.g. `redis`), amended 2026-08-06 — previously the two-level `<namespace>.<name>` read out of the artifact. See the [amendment](#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact). |
 | `ref` | string | — | **Pin check, NOT version selection**: the active Sigil allowance must be on this ref, otherwise the step is `failed` (`module_not_allowed`). Authority = sha256 of the active allowance; `ref` is the operator's safeguard "I expect exactly this ref". |
 
 **Idempotency:** sha256 of the already installed binary == `binary_sha256` of the active Sigil → `changed=false`, no fetch is performed. **The "all allowed in bulk" scope — NOT in MVP** (a separate option later, on a real request).
@@ -88,9 +88,11 @@ The operator writes the install step **explicitly** before the first use of the 
 1. **allow-check BEFORE fetch:** no active allowance `(namespace, name)` with `kind: soul_module` in the Soul's local Sigil set → the step is `failed` `module_not_allowed` — **before a single network byte**.
 2. fetch by content-address (`FetchModule`).
 3. **full verify before atomic rename:** sha256(downloaded bytes) == `binary_sha256` of the allowance + the Sigil signature is valid against the trust-anchor set + `manifest_sha256` matches. Reuse of [`shared/pluginhost`](../../shared/pluginhost). Failure → `module_verify_failed`, the binary is not materialized.
-4. **The manifest is materialized from `PluginSigil.manifest_raw`** (already carried by `SigilSnapshot`) — the manifest does NOT travel through `FetchModule`.
+4. **The schema document is materialized from `PluginSigil.schema`** (field 9, already carried by `SigilSnapshot`; the field was `manifest_raw` before NIM-438, and field 6 `manifest` is **reserved, never reused**). ⚠ **Amended 2026-08-06** — the second half of this line, "does NOT travel through `FetchModule`", is no longer true: the schema is stamped into the artifact as a trailer, so it necessarily arrives with the bytes as well. See the [amendment](#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact).
 
 ### (g) Soul cache layout — directory-based
+
+⚠ **Amended 2026-08-06 (NIM-377)** — the slot is `<paths.modules>/<alias>/`, holding one executable and no `manifest.yaml`; see the [amendment](#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact). Original text follows.
 
 `<paths.modules>/<ns>-<name>/{manifest.yaml, soul-mod-<name>}` — a single-active slot per `(namespace, name)` pair, written via atomic rename. Replaces the early flat schema `soul-mod-<name>-<sha>` (doc-fix [soul/modules.md](../soul/modules.md)). There is deliberately no `commit_sha` axis (as in the keeper-side R-nested) on the Soul: multiple versions side by side are not needed — authority = the active Sigil, "rollback" = revoke+allow of another allowance on the Keeper + a repeated install step.
 
@@ -106,7 +108,7 @@ The operator writes the install step **explicitly** before the first use of the 
 
 - **proto** — only-add: RPC `FetchModule` + messages `PluginFetchRequest`/`PluginChunk` ([ADR-012(c)](0012-keeper-soul-grpc.md) forward-compat; fields and file — S1). `proto/plugin/v1/` untouched.
 - **config** — additive: `plugins.soul_modules[]` (+ a fetch rate-limit config field, S1); the existing `plugins.*`/`plugin_runtime` fields do not change.
-- **PG schema — NOT touched**: `plugin_sigils` as-is; `kind: soul_module` is read from the allowance manifest (persisted `manifest_raw`, migration 030).
+- ~~**PG schema — NOT touched**~~ ⚠ **superseded (NIM-377 / NIM-438, migration 113 — see the [amendment](#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact)):** `plugin_sigils` is re-keyed onto `(source, ref)`, gains `alias`, drops `namespace`/`name`/`manifest`, and `manifest_raw` becomes `schema` (`NOT NULL`). Original claim: `plugin_sigils` as-is; `kind: soul_module` is read from the allowance manifest (persisted `manifest_raw`, migration 030).
 - **UI / soulctl / MCP / plugin-SDK — not affected**: the Sigil allow/revoke/list surface already exists ([ADR-026](0026-sigil.md)); plugin authors need do nothing.
 - **TaskError reasons** (open catalog, [naming-rules.md → Error codes](../naming-rules.md#error-codes)): `module_not_allowed` / `module_fetch_failed` / `module_verify_failed`.
 
@@ -134,3 +136,40 @@ The operator writes the install step **explicitly** before the first use of the 
 - **[ADR-020](0020-plugin-infrastructure.md)** — the `keeper.yml::plugins` catalog extended with `soul_modules[]`; delivery of SoulModule plugins to Soul hosts is formalized (previously catalog resolution — only keeper-side kinds).
 - **[ADR-015](0015-core-modules-mvp.md)** — "the `core.module.installed` specification is a separate task" is closed by this ADR.
 - **[ADR-026](0026-sigil.md)** — NO changes (cross-ref: `FetchModule` reuses `plugin_sigils` allowances, signature and `shared/pluginhost` verify as-is).
+
+## Amendment (2026-08-06, NIM-377): the slot is named by the alias, and the schema rides in the artifact
+
+Amends (c), (f) and (g). Decisions settled with the user 2026-08-06; the counterparts are [ADR-020](0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name) (the schema is generated, the artifact carries no name) and [ADR-026](0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations) (the registry keys on the source).
+
+**Nothing about the delivery mechanism changes.** `FetchModule` keeps its contract, its content-addressed serving, its mTLS auth and its guard-rails; the allow-check still runs before a single network byte; verify still fails closed before the atomic rename; hot-register is still mandatory. What changes is how the slot is named and where the schema comes from.
+
+### (g) Soul-side cache layout — keyed by the alias
+
+```
+<paths.modules>/
+  redis/                     # the REGISTRATION ALIAS, not <ns>-<name>
+    <schema document>        #   canonical JSON, from the artifact's trailer
+    soul-mod-redis           #   the single executable delivered by FetchModule
+```
+
+- **The slot name is the registration alias.** Previously `<ns>-<name>/`, composed from fields inside the artifact. Those fields are gone ([ADR-020(p)](0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)) and the alias is what the operator chose at registration, so it is both the only name available and the right one: the same artifact registered twice under two aliases occupies two slots and answers at two addresses, with no rebuild.
+- **Single-active per alias**, written by atomic rename — unchanged, and the reason is unchanged: authority is the active Sigil grant, "rollback" is revoke+allow of another grant on Keeper plus a repeated install step. There is deliberately still no `commit_sha` axis on the Soul.
+- **The executable's filename no longer means anything.** `Manifest.BinaryName()` is gone; discovery takes the one executable in the slot rather than computing a name to look for. A slot with zero or several executables fails closed.
+- **`manifest.yaml` is gone from the slot**, replaced by the canonical-JSON schema document.
+
+### (f)/(c) How the schema reaches the host
+
+The schema is stamped into the artifact as a **trailer** ([ADR-020(o)](0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)), which changes one factual claim in (f) step 4: the schema now **does** travel through `FetchModule`, because it is part of the bytes. That is a consequence of the stamping decision, not a new transport.
+
+`PluginSigil.schema` (field 9, renamed from `manifest_raw` in NIM-438) still carries the schema document, and still matters for the same two reasons it always did:
+
+1. **The allow-check happens before the fetch.** The Soul must know what it is permitted to install before downloading anything; the local Sigil set is where that comes from.
+2. **`manifest_sha256` is in the signed block.** Verify compares the schema Keeper signed against the schema the artifact carries. With the trailer these are the same bytes by construction rather than by careful agreement between two delivery paths — the S3↔S6 invariant gets easier to hold, not harder.
+
+**Not settled here:** whether the slot keeps the schema as a separate file or the loader re-reads the trailer on each load. Both satisfy everything above. Decided in the wave-2 slot slice.
+
+### `service.yml::modules[]` and the synthesized step
+
+`modules[].name` becomes the registration alias, matching (c)'s `params.name`. The synthesis rules of the 2026-07-03 amendment are otherwise untouched: position before the first consumer, `ref` pin inherited from the manifest entry, dedup against an explicit step with the same literal `params.name`, no plan-level idempotency.
+
+The two-level regex on `modules[].name` (`^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`, [service/manifest.md](../service/manifest.md)) and its `destiny.yml::required_modules[]` twin follow the addressing decision, which is **NIM-376** — not fixed here. What this amendment does fix is that the reserved-name list ([ADR-020(s)](0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)) is checked on both surfaces: at registration and in `required_modules:`.

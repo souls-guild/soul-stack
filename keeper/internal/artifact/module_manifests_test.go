@@ -36,29 +36,32 @@ func TestSnapshotModuleManifests_FailedReadDegradesToUnchecked(t *testing.T) {
 }
 
 func TestSnapshotModuleManifests_PassesThroughResolver(t *testing.T) {
-	want := ModuleManifestMap{"community.redis": {Namespace: "community", Name: "redis"}}
+	want := ModuleManifestMap{"redis.acl": {Name: "acl"}}
 	got := SnapshotModuleManifests(t.Context(), stubSource{r: want})
 	if got == nil {
 		t.Fatal("a working source produced no resolver")
 	}
-	if _, ok := got.ResolveModule("community", "redis"); !ok {
+	if _, ok := got.ResolveModule("redis", "acl"); !ok {
 		t.Error("the snapshot lost the module the source carried")
 	}
 }
 
 func TestModuleManifestMap_ResolveModule(t *testing.T) {
-	m := ModuleManifestMap{"community.redis": &plugin.Manifest{Namespace: "community", Name: "redis"}}
-	if _, ok := m.ResolveModule("community", "redis"); !ok {
+	// The key is `<alias>.<module>`: level 1 is the operator's registration, level 2
+	// the module the artifact declares. Only the grant holds both.
+	m := ModuleManifestMap{"redis.acl": plugin.ModuleDef{Name: "acl"}}
+	if _, ok := m.ResolveModule("redis", "acl"); !ok {
 		t.Error("a present module did not resolve")
 	}
 	// A miss is an ordinary answer, not an error: the caller reports it as
 	// plugin_params_unchecked.
-	if _, ok := m.ResolveModule("community", "mongo"); ok {
+	if _, ok := m.ResolveModule("redis", "config"); ok {
 		t.Error("an absent module resolved")
 	}
-	// The key is the whole address. A namespace collision must not let
-	// `other.redis` resolve against `community.redis`'s contract.
-	if _, ok := m.ResolveModule("other", "redis"); ok {
-		t.Error("a module resolved across namespaces")
+	// The key is the whole address. The same artifact registered under a second alias
+	// is a second address space, and `redis-community.acl` must NOT resolve against
+	// `redis.acl` just because the module name matches.
+	if _, ok := m.ResolveModule("redis-community", "acl"); ok {
+		t.Error("a module resolved across aliases")
 	}
 }

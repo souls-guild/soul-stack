@@ -74,7 +74,7 @@ func TestSchemaNames_SigilRequestShapes(t *testing.T) {
 	if allow == nil {
 		t.Fatal("PluginSigilAllowRequest missing")
 	}
-	assertRequiredExactly(t, allow, "PluginSigilAllowRequest", "namespace", "name", "ref")
+	assertRequiredExactly(t, allow, "PluginSigilAllowRequest", "alias", "source", "ref")
 
 	intro, _ := schemas["SigilKeyIntroduceRequest"].(map[string]any)
 	if intro == nil {

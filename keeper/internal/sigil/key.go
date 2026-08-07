@@ -3,15 +3,17 @@
 //
 // Package contents:
 //   - key.go    — load ed25519 signing private key from Vault KV;
-//   - sign.go   — hash assembly manifest+binary and ed25519 signature of Sigil block;
+//   - sign.go   — the digests of the schema document + artifact, and the ed25519
+//     signature of the Sigil block;
 //   - store.go  — CRUD plugin_sigils registry (allow / revoke / list / lookup).
 //
 // S3↔S6 invariant (normative, maintained jointly with
-// shared/pluginhost.NormalizeManifestBytes): manifest.yaml bytes that
-// Keeper hashes in [Signer.Sign] MUST be identical to what Soul re-hashes
-// in verify (S6). Guarantee — (1) manifest+binary delivered in single
-// artifact stream, (2) both sides run raw bytes through
-// NormalizeManifestBytes before SHA-256. Signed block assembled by clean
+// shared/pluginhost.SchemaDigest): the schema-document bytes Keeper hashes in
+// [Signer.Sign] MUST be identical to what Soul re-hashes at verify (S6). Since
+// NIM-377 the guarantee is structural rather than negotiated — the document is
+// canonical JSON from ONE serializer and travels inside the artifact, so there is
+// nothing left to normalize and no normalization step for the two sides to
+// implement differently. Signed block assembled by clean
 // deterministic shared/pluginhost.BuildSigilBlock — common code for Sign (S3)
 // and Verify (S6), no proto-marshal.
 //

@@ -113,7 +113,7 @@ source file (`hashFile`) - this is "is the archive the same as last time", and n
 the module does not do checksum/signatures; if you need it, check the hash separately
 step (for example `register` + `failed_when:`) before unpacking.
 - **Privileges.** Manifest
-([`archive.yaml`](../../../../shared/coremanifest/archive.yaml)) announces
+([`archive` module](../../../../shared/coremanifest/mod_archive.go)) announces
 only [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum)
 (write beyond `/var/lib/soul-stack/`), but **not** `run_as_root` and more
 **not** `exec_subprocess` (subprocesses are not spawned). The module runs with

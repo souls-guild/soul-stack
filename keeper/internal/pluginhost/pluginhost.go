@@ -45,9 +45,14 @@ const (
 
 // Re-export types from shared. Aliases intentional: they provide call-sites familiar
 // short names and stable contract surface for Keeper-host.
+//
+// [Document] replaced the manifest in NIM-377: an artifact carries a generated schema
+// document in its trailer and no self-name at all. A Discovered entry is therefore one
+// addressable MODULE, keyed by the registration alias, not one file.
 type (
 	Discovered = sharedhost.Discovered
-	Manifest   = sharedplugin.Manifest
+	Document   = sharedplugin.Document
+	Kind       = sharedplugin.Kind
 )
 
 // Kind-constants for Keeper-host.
@@ -104,16 +109,16 @@ func WithEnv(env []string) SpawnOption { return sharedhost.WithEnv(env) }
 // distinguishes two kinds, so intermediate generic Plugin makes choice
 // explicit rather than implicit.
 //
-// Protection from kind-mismatch: if manifest.kind not in {cloud_driver, ssh_provider},
-// Spawn returns error before fork.
+// Protection from kind-mismatch: if the artifact's kind is not in {cloud_driver,
+// ssh_provider}, Spawn returns an error before the fork.
 //
 // opts are optional SpawnOptions ([WithEnv] etc.); passed through to
 // [sharedhost.Host.Spawn] unchanged.
 func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*Plugin, error) {
-	if d.Manifest != nil &&
-		d.Manifest.Kind != KindCloudDriver &&
-		d.Manifest.Kind != KindSSHProvider {
-		return nil, fmt.Errorf("pluginhost: expected kind=cloud_driver|ssh_provider, got %q", d.Manifest.Kind)
+	if d.Doc != nil &&
+		d.Kind() != KindCloudDriver &&
+		d.Kind() != KindSSHProvider {
+		return nil, fmt.Errorf("pluginhost: expected kind=cloud_driver|ssh_provider, got %q", d.Kind())
 	}
 	base, err := h.Host.Spawn(ctx, d, opts...)
 	if err != nil {
@@ -139,21 +144,26 @@ type Plugin struct {
 // Cache layout (R-nested layout, A1-S1 — git-resolver populates slots):
 //
 //	<cacheRoot>/
-//	  <namespace>-<name>/
-//	    current -> <commit_sha>       # symlink to active slot
+//	  <alias>/                        # the registration alias, address level 1
+//	    current -> <commit_sha>       # symlink to the active slot
 //	    <commit_sha>/
-//	      manifest.yaml
-//	      soul-cloud-<name>           # for kind=cloud_driver
-//	      soul-ssh-<name>             # for kind=ssh_provider
-//	      soul-mod-<name>             # for kind=soul_module
+//	      <artifact>                  # exactly one executable, schema in its trailer
 //
-// Discovery goes through `current` (one-level symlink resolution): for each
-// directory `<ns>-<name>` discovers `<ns>-<name>/current/`. Directories without
-// valid `current` (resolver hasn't populated slot yet) go to warnings.
+// The slot directory's name is the REGISTRATION ALIAS the operator chose, and the
+// artifact inside has no name convention at all: it carries no self-name since
+// NIM-377, so the host takes the slot's single executable and reads what it offers
+// from the trailer. Two publishers of the same subject cannot collide — the operator
+// picks both aliases.
 //
-// Cache population by git-resolver (`plugins.{cloud_drivers,ssh_providers,
-// soul_modules}` → commit_sha-slot) done by [plugingit.Resolver] before Discover
-// on Keeper startup; [FilterByCatalog] filters found plugins by registry.
+// Discovery goes through `current` (one-level symlink resolution): for each directory
+// `<alias>` it reads `<alias>/current/`, passing the alias down so address level 1
+// comes from the registration and never from the symlink's basename (which is a commit
+// sha and says nothing about the registration). Directories without a valid `current`
+// (the resolver has not populated the slot yet) go to warnings.
+//
+// Cache population by the git-resolver (`plugins.{cloud_drivers,ssh_providers,
+// soul_modules}` → commit_sha-slot) happens in [plugingit.Resolver] before Discover on
+// Keeper startup; [FilterByCatalog] then filters the result against the catalog.
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -167,52 +177,56 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		// Active plugin slot — via current-symlink. sharedhost.Discover
-		// reads manifest+binary from passed directory; current points to
-		// commit_sha-slot with this layout.
-		current := filepath.Join(cacheRoot, e.Name(), CurrentLink)
+		alias := e.Name()
+		current := filepath.Join(cacheRoot, alias, CurrentLink)
 		if _, statErr := os.Stat(current); statErr != nil {
 			warnings = append(warnings, fmt.Sprintf("skip %s: no active slot (current): %v",
-				filepath.Join(cacheRoot, e.Name()), statErr))
+				filepath.Join(cacheRoot, alias), statErr))
 			continue
 		}
-		found, warns := sharedhost.DiscoverSlot(current)
+		found, warns := sharedhost.DiscoverSlot(alias, current)
 		all = append(all, found...)
 		warnings = append(warnings, warns...)
 	}
-	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []string{KindCloudDriver, KindSSHProvider, KindSoulModule})
+	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []Kind{KindCloudDriver, KindSSHProvider, KindSoulModule})
 	return keeperOnly, append(warnings, filterWarns...), nil
 }
 
-// FilterByCatalog keeps in `found` only plugins whose `manifest.name`
-// is mentioned in catalog `keeper.yml::plugins.{cloud_drivers,ssh_providers,
-// soul_modules}`. Comparison by field `name` (PluginCatalogEntry.Name) —
-// same kebab-case as `manifest.name`.
+// FilterByCatalog keeps in `found` only entries whose registration ALIAS is declared in
+// `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`. The comparison is
+// against `PluginCatalogEntry.Name`, which IS the alias (the field kept its name until
+// the real registry lands in NIM-437).
 //
-// Returns filtered list and warnings list:
+// The alias is now the only thing to compare: the artifact declares no name of its own,
+// so there is nothing else that could be matched against a catalog entry, and matching
+// on the artifact's contents would mean the catalog no longer says which registration
+// it authorized.
 //
-//   - catalog entry without discovered plugin → warning;
-//   - discovered plugin without catalog entry → warning.
+// Returns the filtered list and a warning list:
 //
-// Catalog `source`/`ref` themselves not used by this filter — git-resolve
-// is separate task (see [Discover]).
+//   - catalog entry with no discovered slot → warning;
+//   - discovered slot with no catalog entry → warning.
+//
+// Because one artifact yields one entry PER MODULE, several entries may share an alias;
+// they are accepted or rejected together, and a catalog entry counts as satisfied by
+// the first of them.
 func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Discovered, []string) {
 	if plugins == nil {
 		return nil, nil
 	}
-	// Index declared names by kind to validate both lists in one pass over found.
-	// Sets empty if nil-block.
+	// Index declared aliases by kind to validate both lists in one pass over found.
+	// Sets are empty for a nil block.
 	wantCloud := indexEntries(plugins.CloudDrivers)
 	wantSSH := indexEntries(plugins.SSHProviders)
 	wantModules := indexEntries(plugins.SoulModules)
 
-	// Catalog key per kind — single point of correspondence kind → yaml-list.
-	catalogKey := map[string]string{
+	// Catalog key per kind — the single point of correspondence kind → yaml-list.
+	catalogKey := map[Kind]string{
 		KindCloudDriver: "cloud_drivers",
 		KindSSHProvider: "ssh_providers",
 		KindSoulModule:  "soul_modules",
 	}
-	want := map[string]map[string]struct{}{
+	want := map[Kind]map[string]struct{}{
 		KindCloudDriver: wantCloud,
 		KindSSHProvider: wantSSH,
 		KindSoulModule:  wantModules,
@@ -222,32 +236,39 @@ func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Disco
 		out      []Discovered
 		warnings []string
 	)
-	seen := map[string]map[string]bool{
+	seen := map[Kind]map[string]bool{
 		KindCloudDriver: make(map[string]bool, len(wantCloud)),
 		KindSSHProvider: make(map[string]bool, len(wantSSH)),
 		KindSoulModule:  make(map[string]bool, len(wantModules)),
 	}
+	warned := make(map[string]bool, len(found))
 	for _, d := range found {
-		kind := d.Manifest.Kind
-		wantNames, ok := want[kind]
+		kind := d.Kind()
+		wantAliases, ok := want[kind]
 		if !ok {
 			continue
 		}
-		if _, declared := wantNames[d.Manifest.Name]; declared {
+		if _, declared := wantAliases[d.Alias]; declared {
 			out = append(out, d)
-			seen[kind][d.Manifest.Name] = true
-		} else {
+			seen[kind][d.Alias] = true
+			continue
+		}
+		// One warning per undeclared ALIAS, not per module: an artifact serving
+		// three modules is one registration the operator forgot to declare.
+		key := string(kind) + "/" + d.Alias
+		if !warned[key] {
+			warned[key] = true
 			warnings = append(warnings, fmt.Sprintf(
 				"plugin %s (kind=%s) not declared in keeper.yml::plugins.%s",
-				d.Manifest.Address(), kind, catalogKey[kind]))
+				d.Alias, kind, catalogKey[kind]))
 		}
 	}
-	for _, kind := range []string{KindCloudDriver, KindSSHProvider, KindSoulModule} {
-		for name := range want[kind] {
-			if !seen[kind][name] {
+	for _, kind := range []Kind{KindCloudDriver, KindSSHProvider, KindSoulModule} {
+		for alias := range want[kind] {
+			if !seen[kind][alias] {
 				warnings = append(warnings, fmt.Sprintf(
-					"keeper.yml::plugins.%s[name=%s] declared but binary not found in cache",
-					catalogKey[kind], name))
+					"keeper.yml::plugins.%s[name=%s] declared but no artifact found in cache",
+					catalogKey[kind], alias))
 			}
 		}
 	}

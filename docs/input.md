@@ -13,7 +13,7 @@ This document is the **mandatory standard** for the `input:` block format in Sou
 |---|---|---|---|---|
 | destiny | `destiny.yml` | `input:` | `{{ input.<name> }}` | Keeper at render of the calling `apply:` + soul before apply ([destiny/input.md → Where is validated](destiny/input.md)) |
 | scenario | `scenario/<name>/main.yml` | `input:` | `{{ input.<name> }}` | Keeper at script start |
-| module manifest | manifest in the module itself (see ["Module Manifest"](architecture.md#module-manifest)) | `input:` inside each `state` | n/a (validated before Apply) | soul before calling the module state form |
+| module schema | the module's own schema document (see ["Module schema document"](architecture.md#module-schema-document)) | `input:` inside each `state` | n/a (validated before Apply) | soul before calling the module state form |
 
 Linter ([soul-lint](soul-lint.md)) checks the schema statically in all three cases.
 

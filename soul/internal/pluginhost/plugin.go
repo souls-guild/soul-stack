@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"google.golang.org/grpc"
 )
@@ -32,8 +33,8 @@ func newPluginFromBase(base *sharedhost.BasePlugin) *Plugin {
 
 // errKindMismatch is the Spawn error when wrapping a plugin of the wrong kind
 // into a kind-specific wrapper. Indicates a bad Discovered construction (e.g.
-// in a test) or drift between the Discover filter and the plugin's manifest.
-func errKindMismatch(want, got string) error {
+// in a test) or drift between the Discover filter and the artifact's schema.
+func errKindMismatch(want, got sharedplugin.Kind) error {
 	return fmt.Errorf("pluginhost: expected kind=%s, got kind=%q", want, got)
 }
 

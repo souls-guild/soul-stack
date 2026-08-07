@@ -422,7 +422,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.plugin.allow",
-			Description:  "Allows a plugin (namespace, name) under an operator-asserted ref label in the plugin_sigils allow-list: Keeper reads the current binary from the single-slot cache, computes sha256, signs it and inserts the record. Permission: plugin.allow. Fails with code=plugin-not-in-cache if the plugin isn't in the cache, and sigil-already-active if an active allowance for (ns, name, ref) already exists.",
+			Description:  "Approves the plugin artifact registered under {alias} on the identity (source, ref) in the plugin_sigils allow-list: Keeper reads the current artifact and its stamped schema document from the alias's cache slot WITHOUT executing it, computes sha256, signs the block over (source, ref, sha256, schema) and inserts the record. The alias is address level 1 and is NOT signed; source+ref are the artifact's only signed identity. Permission: plugin.allow. Fails with code=plugin-not-in-cache if no artifact is registered under that alias; sigil-already-active either because the alias is taken (pick another) or because that (source, ref) is already approved under some alias (revoke that grant first - an artifact identity carries at most one active approval, so renaming an alias is revoke-then-approve with the plugin unapproved in between); validation-failed if the alias is malformed or reserved.",
 			InputSchema:  schemaPluginAllowInput,
 			OutputSchema: schemaPluginAllowOutput,
 		},
@@ -431,7 +431,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.plugin.revoke",
-			Description:  "Revokes an active allowance (namespace, name, ref) from the plugin_sigils allow-list (the binary stops passing Sigil verification). Permission: plugin.revoke. Fails with code=sigil-not-found if no active record exists.",
+			Description:  "Revokes the active grant registered under {alias} from the plugin_sigils allow-list (the artifact stops passing Sigil verification). Takes the ALIAS - the name the operator registered and the one every address uses - not the source URL; at most one active grant holds a given alias, so it names exactly one row. Use keeper.plugin.list to see the alias -> (source, ref) mapping. Permission: plugin.revoke. Fails with code=sigil-not-found if no active grant exists for that alias.",
 			InputSchema:  schemaPluginRevokeInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -440,7 +440,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.plugin.list",
-			Description:  "Lists active plugin_sigils allow-list entries (without signature/manifest), newest first. Permission: plugin.list.",
+			Description:  "Lists active plugin_sigils allow-list entries (without signature/schema), newest first. Each entry carries BOTH identities: alias (the registration, what revoke takes) and source+ref (what the signature covers) - an operator who cannot see the mapping cannot revoke confidently. Permission: plugin.list.",
 			InputSchema:  schemaEmptyObject,
 			OutputSchema: schemaPluginListOutput,
 		},
@@ -1728,32 +1728,30 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["namespace","name","ref"],
+"required":["alias","source","ref"],
 "properties":{
-"namespace":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$","description":"Plugin namespace (kebab-case + dots/underscore; no slashes)."},
-"name":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$","description":"Plugin name."},
-"ref":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$","description":"Operator-asserted allowance label (tag-ref shaped like v1.0.0). A branch-ref with a slash isn't supported in MVP."}}}`)
+"alias":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Registration alias - address level 1, chosen by the operator. Must not be a reserved name (core, keeper, soul, ...). NOT signed."},
+"source":{"type":"string","maxLength":2048,"description":"Artifact source: the git remote the module repository was fetched from. Signed, together with ref: the artifact carries no self-name, so this is its only signed identity."},
+"ref":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$","description":"Operator-asserted allowance label (tag-ref shaped like v1.0.0). Signed. A branch-ref with a slash isn't supported in MVP."}}}`)
 
 	schemaPluginAllowOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["namespace","name","ref","sha256"],
+"required":["alias","source","ref","sha256"],
 "properties":{
-"namespace":{"type":"string"},
-"name":{"type":"string"},
+"alias":{"type":"string"},
+"source":{"type":"string"},
 "ref":{"type":"string"},
-"sha256":{"type":"string","description":"SHA-256 (hex) of the allowed binary."}}}`)
+"sha256":{"type":"string","description":"SHA-256 (hex) of the approved artifact."}}}`)
 
 	schemaPluginRevokeInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["namespace","name","ref"],
+"required":["alias"],
 "properties":{
-"namespace":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-"name":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-"ref":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}}}`)
+"alias":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Registration alias of the grant to revoke; it names exactly one active grant."}}}`)
 
 	schemaPluginListOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1764,10 +1762,10 @@ var (
 "sigils":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["namespace","name","ref","sha256","allowed_by_aid","allowed_at","revoked_at"],
+"required":["alias","source","ref","sha256","allowed_by_aid","allowed_at","revoked_at"],
 "properties":{
-"namespace":{"type":"string"},
-"name":{"type":"string"},
+"alias":{"type":"string"},
+"source":{"type":"string"},
 "ref":{"type":"string"},
 "sha256":{"type":"string"},
 "allowed_by_aid":{"type":"string"},

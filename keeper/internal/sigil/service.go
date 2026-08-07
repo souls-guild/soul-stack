@@ -2,37 +2,48 @@ package sigil
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
-	"github.com/goccy/go-yaml"
-
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// ErrPluginNotInCache signals an allow request for a plugin not in the host cache
-// (slot `<cacheRoot>/<ns>-<name>/` missing or invalid binary/manifest).
-// Transport maps to 404. Wraps [pluginhost.ErrSlotNotFound] — service boundary
-// must not leak pluginhost sentinels to handlers.
+// ErrPluginNotInCache signals an allow request for an alias with no readable slot in
+// the host cache (`<cacheRoot>/<alias>/` missing, or holding no artifact with a
+// readable schema). Transport maps it to 404. Wraps [pluginhost.ErrSlotNotFound] — the
+// service boundary must not leak pluginhost sentinels to handlers.
 var ErrPluginNotInCache = errors.New("sigil: plugin not found in host cache")
 
-// SlotReader is the surface for reading plugin slots from the cache by (namespace, name).
-// Implemented by [cacheSlotReader] over [pluginhost.ReadSlot] /
-// [pluginhost.SlotCommitSHA] (with fixed cacheRoot); narrowing to interface
-// allows unit-testing Service without a real cache directory. Variant C: ref
-// does not participate in lookup (single-active slot via current-symlink).
+// ErrAliasReserved signals an allow request for an alias that is malformed or on the
+// closed reserved list ([sharedplugin.IsReserved]). Transport maps it to 422.
+//
+// The check exists because NIM-377 moved the choice of the name: an artifact used to
+// declare its own namespace, so nobody could call themselves `core` without saying so;
+// now an operator picks the word, and `core.file.present` in a diff must keep meaning
+// the engine.
+var ErrAliasReserved = errors.New("sigil: alias is reserved or malformed")
+
+// SlotReader is the surface for reading plugin slots from the cache by REGISTRATION
+// ALIAS. Implemented by [cacheSlotReader] over [pluginhost.ReadSlot] /
+// [pluginhost.SlotCommitSHA] (with a fixed cacheRoot); narrowing to an interface allows
+// unit-testing Service without a real cache directory.
+//
+// The alias is the only key there is: the artifact carries no self-name, so nothing
+// else could find a slot. `ref` is an operator-asserted label on the grant and takes no
+// part in the lookup.
 //
 // SlotCommitSHA returns the commit_sha of the ACTIVE slot (current-symlink target,
-// A1-S1) — audit provenance marker written to plugin_sigils on allow
-// (ADR-026(g), outside signature). Missing/corrupted current → [ErrSlotNotFound]
-// (fail-closed, symmetric to ReadSlot).
+// A1-S1) — the audit provenance marker written to plugin_sigils on allow (ADR-026(g),
+// outside the signature). Missing/corrupted current → [ErrSlotNotFound] (fail-closed,
+// symmetric to ReadSlot).
 type SlotReader interface {
-	ReadSlot(namespace, name string) (*pluginhost.SlotContents, error)
-	SlotCommitSHA(namespace, name string) (string, error)
+	ReadSlot(alias string) (*pluginhost.SlotContents, error)
+	SlotCommitSHA(alias string) (string, error)
 }
 
 // cacheSlotReader adapts [pluginhost.ReadSlot] / [pluginhost.SlotCommitSHA]
@@ -42,12 +53,12 @@ type cacheSlotReader struct {
 	cacheRoot string
 }
 
-func (r cacheSlotReader) ReadSlot(namespace, name string) (*pluginhost.SlotContents, error) {
-	return pluginhost.ReadSlot(r.cacheRoot, namespace, name)
+func (r cacheSlotReader) ReadSlot(alias string) (*pluginhost.SlotContents, error) {
+	return pluginhost.ReadSlot(r.cacheRoot, alias)
 }
 
-func (r cacheSlotReader) SlotCommitSHA(namespace, name string) (string, error) {
-	return pluginhost.SlotCommitSHA(r.cacheRoot, namespace, name)
+func (r cacheSlotReader) SlotCommitSHA(alias string) (string, error) {
+	return pluginhost.SlotCommitSHA(r.cacheRoot, alias)
 }
 
 // NewCacheSlotReader constructs [SlotReader] over the Keeper-host cache
@@ -62,7 +73,7 @@ func NewCacheSlotReader(cacheRoot string) SlotReader {
 // in unit tests.
 type Store interface {
 	Insert(ctx context.Context, s *Sigil) error
-	Revoke(ctx context.Context, namespace, name, ref, revokedByAID string) error
+	Revoke(ctx context.Context, alias, revokedByAID string) error
 	ListActive(ctx context.Context) ([]*Sigil, error)
 }
 
@@ -81,8 +92,8 @@ func (s *pgStore) Insert(ctx context.Context, rec *Sigil) error {
 	return Insert(ctx, s.db, rec)
 }
 
-func (s *pgStore) Revoke(ctx context.Context, namespace, name, ref, revokedByAID string) error {
-	return Revoke(ctx, s.db, namespace, name, ref, revokedByAID)
+func (s *pgStore) Revoke(ctx context.Context, alias, revokedByAID string) error {
+	return Revoke(ctx, s.db, alias, revokedByAID)
 }
 
 func (s *pgStore) ListActive(ctx context.Context) ([]*Sigil, error) {
@@ -112,14 +123,14 @@ type ServiceDeps struct {
 }
 
 // Service implements Sigil business logic (allow / revoke / list) over S3 (Signer +
-// Store) and host cache (SlotReader). Single source of truth for transport
-// facades (OpenAPI — S4a, MCP — S4b): handler decodes input → service-call →
-// maps sentinel errors.
+// Store) and the host cache (SlotReader). Single source of truth for the transport
+// facades (OpenAPI — S4a, MCP — S4b): a handler decodes input → service call → maps
+// sentinel errors.
 //
-// Variant C (ADR-026, operator-asserted ref): Allow reads CURRENT binary+
-// manifest from the single slot `<cacheRoot>/<ns>-<name>/` (key without ref);
-// `ref` arrives as operator-provided label and does not participate in slot lookup.
-// Integrity authority: sha256+signature, not git-verified ref.
+// Variant C (ADR-026, operator-asserted ref): Allow reads the CURRENT artifact from the
+// slot `<cacheRoot>/<alias>/`; `source` and `ref` are what the operator asserts about
+// where those bytes came from, and neither takes part in the slot lookup. The integrity
+// authority is the sha256 plus the signature, not a git-verified ref.
 //
 // Concurrency-safe: deps immutable, no state held (ed25519.Sign does not mutate key;
 // atomicity at Store/PG level).
@@ -199,72 +210,80 @@ func (s *Service) invalidate(ctx context.Context) {
 }
 
 // AllowInput are the parameters for [Service.Allow].
+//
+// Alias is the registration the operator is creating — address level 1, the slot's
+// name, the runtime lookup key. Source and Ref are what they assert about the artifact
+// now sitting in that slot, and are the only identity the signature will be over.
 type AllowInput struct {
-	Namespace string
-	Name      string
+	Alias     string
+	Source    string
 	Ref       string
 	CallerAID string
 }
 
-// Allow permits plugin (namespace, name) under operator-asserted label ref
-// in the allow-list plugin_sigils.
+// Allow approves the artifact in the slot registered under Alias, on the identity
+// (Source, Ref), and records the grant in plugin_sigils.
 //
-// Steps (variant C):
-//  1. reads current binary+manifest from slot `<cacheRoot>/<ns>-<name>/`
-//     (ref does not participate in lookup); no slot → [ErrPluginNotInCache];
-//  2. reads commit_sha of ACTIVE slot (current-symlink target) — audit provenance
-//     mark (ADR-026(g)); missing/corrupted current → [ErrPluginNotInCache]
-//     (fail-closed: allow provenance must be fixed);
-//  3. signs Sigil block via Signer over (ns, name, ref, binary_sha256,
-//     manifest_bytes) — commit_sha not in block, signature unchanged;
-//  4. inserts record into registry (commit_sha as separate audit column); existing
-//     active record on (ns, name, ref) → [ErrSigilAlreadyActive].
+// Steps:
+//  1. the alias must be well-formed and NOT reserved → [ErrAliasReserved]. First,
+//     before any disk read: a name that cannot be registered is not worth reading a
+//     slot for, and an alias like `core` would shadow an engine address;
+//  2. reads the current artifact and its stamped schema document from
+//     `<cacheRoot>/<alias>/` — WITHOUT executing it, since at this moment the binary is
+//     precisely what is not yet approved. No slot, no artifact, no readable trailer →
+//     [ErrPluginNotInCache];
+//  3. reads the commit_sha of the ACTIVE slot (the current-symlink target) as the audit
+//     provenance mark (ADR-026(g)); a missing or corrupted `current` →
+//     [ErrPluginNotInCache] (fail-closed: an approval's provenance must be pinned);
+//  4. signs the Sigil block over (source, ref, binary_sha256, schema_sha256) —
+//     commit_sha stays outside the block, the alias too;
+//  5. inserts the row (commit_sha as a separate audit column). An existing active grant
+//     on (source, ref) → [ErrSigilAlreadyActive]; on the alias →
+//     [ErrAliasAlreadyRegistered].
 //
-// Returns sha256 of allowed binary (hex) — handler places in 201 response.
+// Returns the sha256 of the approved artifact (hex) — the handler puts it in the 201.
 func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
-	slot, err := s.slots.ReadSlot(in.Namespace, in.Name)
+	if err := ValidateAlias(in.Alias); err != nil {
+		return "", err
+	}
+
+	slot, err := s.slots.ReadSlot(in.Alias)
 	if err != nil {
 		if errors.Is(err, pluginhost.ErrSlotNotFound) {
-			return "", fmt.Errorf("%w: %s-%s", ErrPluginNotInCache, in.Namespace, in.Name)
+			return "", fmt.Errorf("%w: %s", ErrPluginNotInCache, in.Alias)
 		}
 		return "", fmt.Errorf("sigil: read plugin slot: %w", err)
 	}
 
-	// commit_sha of ACTIVE slot (current-symlink target). Source is the same
-	// current that ReadSlot follows when reading binary/manifest, so commit_sha
-	// aligns exactly with signed binary. fail-closed: legacy slot without current
-	// yields ErrSlotNotFound → reject without fixed provenance (same contract as slot absence).
-	commitSHA, err := s.slots.SlotCommitSHA(in.Namespace, in.Name)
+	// commit_sha of the ACTIVE slot (current-symlink target). It is the same `current`
+	// that ReadSlot followed to read the artifact, so the commit lines up exactly with
+	// the bytes being signed. Fail-closed: a slot without `current` yields
+	// ErrSlotNotFound → refuse rather than approve with unpinned provenance.
+	commitSHA, err := s.slots.SlotCommitSHA(in.Alias)
 	if err != nil {
 		if errors.Is(err, pluginhost.ErrSlotNotFound) {
-			return "", fmt.Errorf("%w: %s-%s (no resolved commit_sha)", ErrPluginNotInCache, in.Namespace, in.Name)
+			return "", fmt.Errorf("%w: %s (no resolved commit_sha)", ErrPluginNotInCache, in.Alias)
 		}
 		return "", fmt.Errorf("sigil: read plugin slot commit_sha: %w", err)
 	}
 
-	signature, err := s.signer.Load().Sign(in.Namespace, in.Name, in.Ref, slot.BinarySHA256, slot.ManifestBytes)
+	signature, err := s.signer.Load().Sign(in.Source, in.Ref, slot.BinarySHA256, slot.SchemaBytes)
 	if err != nil {
 		return "", fmt.Errorf("sigil: sign: %w", err)
 	}
 
-	manifestJSON, err := manifestYAMLToJSON(slot.ManifestBytes)
-	if err != nil {
-		return "", fmt.Errorf("sigil: convert manifest to JSON: %w", err)
-	}
-
 	rec := &Sigil{
-		Namespace: in.Namespace,
-		Name:      in.Name,
+		Alias:     in.Alias,
+		Source:    in.Source,
 		Ref:       in.Ref,
 		SHA256:    slot.BinarySHA256,
 		CommitSHA: commitSHA,
 		Signature: signature,
-		// ManifestRaw — SAME bytes that went into Sign above (single ReadSlot),
-		// byte-exact canon for S6-verify/broadcast. Manifest is derived JSONB
-		// projection for query/audit. Sources must not diverge: invariant
-		// "signed exactly these bytes" will decay.
-		ManifestRaw:  slot.ManifestBytes,
-		Manifest:     manifestJSON,
+		// Schema — the SAME bytes that went into Sign above (one ReadSlot), the
+		// byte-exact canon for S6-verify and for the broadcast. There is no second,
+		// derived copy: a projection that could disagree with the signed bytes is how
+		// the invariant "signed exactly these bytes" decays.
+		Schema:       slot.SchemaBytes,
 		AllowedByAID: in.CallerAID,
 	}
 	if err := s.store.Insert(ctx, rec); err != nil {
@@ -276,10 +295,10 @@ func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 	return slot.BinarySHA256, nil
 }
 
-// Revoke revokes active allow (namespace, name, ref). No active record →
+// Revoke revokes the active grant registered under alias. No active grant →
 // [ErrSigilNotFound].
-func (s *Service) Revoke(ctx context.Context, namespace, name, ref, callerAID string) error {
-	if err := s.store.Revoke(ctx, namespace, name, ref, callerAID); err != nil {
+func (s *Service) Revoke(ctx context.Context, alias, callerAID string) error {
+	if err := s.store.Revoke(ctx, alias, callerAID); err != nil {
 		return err
 	}
 	// Cluster-wide re-broadcast of active set (S6c): revoked allow disappears
@@ -289,12 +308,29 @@ func (s *Service) Revoke(ctx context.Context, namespace, name, ref, callerAID st
 	return nil
 }
 
-// SigilView is a projection of active record for list delivery. WITHOUT signature and
-// manifest: signature is raw crypto material (not for API), manifest is large
-// JSONB query/audit layer (not allow-list feed). Symmetric to rbac.RoleView.
+// ValidateAlias checks a registration alias: well-formed ([sharedplugin.AliasPattern])
+// and not on the closed reserved list. Exported so the transports can reject early with
+// the same rule the service enforces — one list, one shape, no second opinion.
+func ValidateAlias(alias string) error {
+	switch {
+	case alias == "":
+		return fmt.Errorf("%w: alias is required", ErrAliasReserved)
+	case !sharedplugin.ValidAlias(alias):
+		return fmt.Errorf("%w: %q must match %s", ErrAliasReserved, alias, sharedplugin.AliasPattern)
+	case sharedplugin.IsReserved(alias):
+		return fmt.Errorf("%w: %q is reserved (%s)", ErrAliasReserved, alias,
+			strings.Join(sharedplugin.ReservedNames(), ", "))
+	}
+	return nil
+}
+
+// SigilView is a projection of an active grant for the list feed. WITHOUT the signature
+// and the schema: the signature is raw crypto material that has no business on an API,
+// and the schema is a large document served by the module catalog rather than by the
+// allow-list feed. Symmetric to rbac.RoleView.
 type SigilView struct {
-	Namespace    string
-	Name         string
+	Alias        string
+	Source       string
 	Ref          string
 	SHA256       string
 	AllowedByAID string
@@ -302,7 +338,7 @@ type SigilView struct {
 	RevokedAt    *time.Time
 }
 
-// List returns feed of active allows (newest first) without signature/manifest.
+// List returns the feed of active grants (newest first) without signature/schema.
 func (s *Service) List(ctx context.Context) ([]SigilView, error) {
 	recs, err := s.store.ListActive(ctx)
 	if err != nil {
@@ -311,30 +347,14 @@ func (s *Service) List(ctx context.Context) ([]SigilView, error) {
 	out := make([]SigilView, 0, len(recs))
 	for _, r := range recs {
 		out = append(out, SigilView{
-			Namespace:    r.Namespace,
-			Name:         r.Name,
+			Alias:        r.Alias,
+			Source:       r.Source,
 			Ref:          r.Ref,
 			SHA256:       r.SHA256,
 			AllowedByAID: r.AllowedByAID,
 			AllowedAt:    r.AllowedAt,
 			RevokedAt:    r.RevokedAt,
 		})
-	}
-	return out, nil
-}
-
-// manifestYAMLToJSON converts raw manifest.yaml bytes to JSON for JSONB
-// plugin_sigils.manifest column (query/audit layer, NOT canon for verify —
-// canon held on raw bytes via NormalizeManifestBytes, S3↔S6).
-// Uses same goccy/go-yaml as shared/plugin parser.
-func manifestYAMLToJSON(yamlBytes []byte) ([]byte, error) {
-	var v any
-	if err := yaml.Unmarshal(yamlBytes, &v); err != nil {
-		return nil, fmt.Errorf("yaml unmarshal: %w", err)
-	}
-	out, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("json marshal: %w", err)
 	}
 	return out, nil
 }

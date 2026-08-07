@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	grpclib "google.golang.org/grpc"
@@ -63,19 +64,20 @@ func newBroadcastHandler(t *testing.T, store SigilStore) *eventStreamHandler {
 	return newEventStreamHandler(deps, discardLogger(t))
 }
 
-// TestBroadcastSigils_SendsSnapshotWithManifestRaw — the connect-time
-// broadcast sends ONE SigilSnapshot (ReplaceAll, ADR-026(h)), not
-// individual PluginSigil messages. Manifest inside the snapshot is
-// byte-exact ManifestRaw (M1), not the JSONB projection.
-func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
+// TestBroadcastSigils_SendsSnapshotWithSignedSchema — the connect-time broadcast sends
+// ONE SigilSnapshot (ReplaceAll, ADR-026(h)), not individual PluginSigil messages. The
+// schema inside it is the byte-exact bytes the signature covers, and both identities
+// ride: the alias so a Soul can look the grant up, the source because that is what was
+// signed.
+func TestBroadcastSigils_SendsSnapshotWithSignedSchema(t *testing.T) {
 	rec := &sigil.Sigil{
-		Namespace:   "core",
-		Name:        "template",
-		Ref:         "v1.0.0",
-		SHA256:      "deadbeef",
-		Signature:   []byte("ed25519-sig"),
-		ManifestRaw: []byte("raw: signed\nbytes: yes\n"),
-		Manifest:    []byte(`{"raw":"signed"}`), // JSONB projection — must NOT make it onto the wire
+		Alias:     "template",
+		Source:    "https://example.com/soul-mod-template.git",
+		Ref:       "v1.0.0",
+		SHA256:    "deadbeef",
+		Signature: []byte("ed25519-sig"),
+		Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
+		CommitSHA: "0123456789abcdef0123456789abcdef01234567",
 	}
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: []*sigil.Sigil{rec}})
 	stream := &fakeBidiStream{}
@@ -93,21 +95,25 @@ func TestBroadcastSigils_SendsSnapshotWithManifestRaw(t *testing.T) {
 		t.Fatalf("snapshot sigils = %d, want 1", len(snap.GetSigils()))
 	}
 	got := snap.GetSigils()[0]
-	if got.GetNamespace() != "core" || got.GetName() != "template" || got.GetRef() != "v1.0.0" {
+	if got.GetAlias() != "template" || got.GetSource() != rec.Source || got.GetRef() != "v1.0.0" {
 		t.Errorf("identity = %+v", got)
 	}
 	if got.GetBinarySha256() != "deadbeef" {
 		t.Errorf("binary_sha256 = %q, want deadbeef", got.GetBinarySha256())
 	}
-	// CRITICAL (M1): Manifest = ManifestRaw byte-exact, NOT the JSONB projection.
-	if !bytes.Equal(got.GetManifest(), rec.ManifestRaw) {
-		t.Errorf("manifest = %q, want byte-equal ManifestRaw %q", got.GetManifest(), rec.ManifestRaw)
-	}
-	if bytes.Equal(got.GetManifest(), rec.Manifest) {
-		t.Errorf("manifest equals the JSONB projection - should be ManifestRaw")
+	// CRITICAL (M1): the schema on the wire is the byte-exact signed document — a Soul
+	// re-hashes exactly these bytes, so anything re-derived here would verify against
+	// nothing.
+	if !bytes.Equal(got.GetSchema(), rec.Schema) {
+		t.Errorf("schema = %q, want byte-equal %q", got.GetSchema(), rec.Schema)
 	}
 	if !bytes.Equal(got.GetSignature(), rec.Signature) {
 		t.Errorf("signature = %q, want %q", got.GetSignature(), rec.Signature)
+	}
+	// commit_sha is Keeper-side audit and sits OUTSIDE the signed block, so it must not
+	// ride: on the wire it would be an unverifiable claim.
+	if strings.Contains(got.String(), rec.CommitSHA) {
+		t.Errorf("commit_sha leaked onto the wire: %v", got)
 	}
 }
 
@@ -154,8 +160,8 @@ func TestBroadcastSigils_ListErrorDoesNotPanicAndSkips(t *testing.T) {
 
 func TestBroadcastSigils_SendFailDoesNotPanic(t *testing.T) {
 	recs := []*sigil.Sigil{
-		{Namespace: "core", Name: "a", Ref: "v1", SHA256: "aa", Signature: []byte("s1"), ManifestRaw: []byte("m1")},
-		{Namespace: "core", Name: "b", Ref: "v1", SHA256: "bb", Signature: []byte("s2"), ManifestRaw: []byte("m2")},
+		{Alias: "a", Source: "https://example.com/a.git", Ref: "v1", SHA256: "aa", Signature: []byte("s1"), Schema: []byte("m1")},
+		{Alias: "b", Source: "https://example.com/b.git", Ref: "v1", SHA256: "bb", Signature: []byte("s2"), Schema: []byte("m2")},
 	}
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: recs})
 	stream := &fakeBidiStream{failAt: 1}

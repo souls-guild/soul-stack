@@ -9,29 +9,26 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 )
 
-const soulModuleManifestYAML = `kind: soul_module
-protocol_version: 1
-namespace: community
-name: redis
-spec:
-  states:
-    pinged: {}
-`
+// soulModuleSchemaJSON is a canonical soul_module document. The modules are named;
+// the ARTIFACT is not — address level 1 comes from the grant's alias.
+const soulModuleSchemaJSON = `{"kind":"soul_module","modules":[{"name":"acl","states":{"present":{"description":"the ACL user exists"}}}],"protocol_version":1}`
 
-// mapSlotReader is SlotReader keyed by "<ns>-<name>" (for lookup tests with
-// multiple slots; fakeSlotReader returns a single fixed slot).
+const moduleSourceURL = "https://example.com/soul-mod-redis.git"
+
+// mapSlotReader is a SlotReader keyed by ALIAS (for lookup tests with several slots;
+// fakeSlotReader returns a single fixed slot).
 type mapSlotReader struct {
 	slots map[string]*pluginhost.SlotContents
 }
 
-func (m mapSlotReader) ReadSlot(ns, name string) (*pluginhost.SlotContents, error) {
-	if s, ok := m.slots[ns+"-"+name]; ok {
+func (m mapSlotReader) ReadSlot(alias string) (*pluginhost.SlotContents, error) {
+	if s, ok := m.slots[alias]; ok {
 		return s, nil
 	}
 	return nil, pluginhost.ErrSlotNotFound
 }
 
-func (m mapSlotReader) SlotCommitSHA(string, string) (string, error) {
+func (m mapSlotReader) SlotCommitSHA(string) (string, error) {
 	return testCommitSHA, nil
 }
 
@@ -39,19 +36,19 @@ const moduleSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 func moduleSigil(sha string) *Sigil {
 	return &Sigil{
-		Namespace:   "community",
-		Name:        "redis",
-		Ref:         "v1.0.0",
-		SHA256:      sha,
-		ManifestRaw: []byte(soulModuleManifestYAML),
+		Alias:  "redis",
+		Source: moduleSourceURL,
+		Ref:    "v1.0.0",
+		SHA256: sha,
+		Schema: []byte(soulModuleSchemaJSON),
 	}
 }
 
 func moduleSlot(sha string) *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
-		BinaryPath:    "/cache/community-redis/current/soul-mod-redis",
-		ManifestBytes: []byte(soulModuleManifestYAML),
-		BinarySHA256:  sha,
+		BinaryPath:   "/cache/redis/current/redis",
+		SchemaBytes:  []byte(soulModuleSchemaJSON),
+		BinarySHA256: sha,
 	}
 }
 
@@ -67,13 +64,13 @@ func lookupService(t *testing.T, store Store, slots SlotReader) *Service {
 func TestService_LookupModuleBinary_Allowed(t *testing.T) {
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{moduleSigil(moduleSHA)}},
-		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"community-redis": moduleSlot(moduleSHA)}},
+		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"redis": moduleSlot(moduleSHA)}},
 	)
 	path, err := svc.LookupModuleBinary(context.Background(), moduleSHA)
 	if err != nil {
 		t.Fatalf("LookupModuleBinary: %v", err)
 	}
-	if path != "/cache/community-redis/current/soul-mod-redis" {
+	if path != "/cache/redis/current/redis" {
 		t.Fatalf("path = %q", path)
 	}
 }
@@ -81,7 +78,7 @@ func TestService_LookupModuleBinary_Allowed(t *testing.T) {
 func TestService_LookupModuleBinary_NotAllowed(t *testing.T) {
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{moduleSigil(moduleSHA)}},
-		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"community-redis": moduleSlot(moduleSHA)}},
+		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"redis": moduleSlot(moduleSHA)}},
 	)
 	_, err := svc.LookupModuleBinary(context.Background(), strings.Repeat("bb", 32))
 	if !errors.Is(err, ErrModuleNotAllowed) {
@@ -90,15 +87,17 @@ func TestService_LookupModuleBinary_NotAllowed(t *testing.T) {
 }
 
 func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
-	// Active allow with same sha but kind=cloud_driver — NOT a module, reject.
+	// An active grant on the same sha but kind=cloud_driver — NOT a module, reject.
+	// The kind is read from the grant's SIGNED schema, not from the cache: the grant is
+	// what was approved, the cache is what a resolver last wrote there.
 	rec := moduleSigil(moduleSHA)
-	rec.Namespace, rec.Name = "cloud", "hetzner"
-	rec.ManifestRaw = []byte(cloudManifestYAML)
+	rec.Alias = "hetzner"
+	rec.Schema = []byte(cloudSchemaJSON)
 	slot := slotFixture()
 	slot.BinarySHA256 = moduleSHA
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{rec}},
-		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"cloud-hetzner": slot}},
+		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"hetzner": slot}},
 	)
 	_, err := svc.LookupModuleBinary(context.Background(), moduleSHA)
 	if !errors.Is(err, ErrModuleNotAllowed) {
@@ -112,7 +111,7 @@ func TestService_LookupModuleBinary_SlotDriftRejected(t *testing.T) {
 	driftSHA := strings.Repeat("cc", 32)
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{moduleSigil(moduleSHA)}},
-		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"community-redis": moduleSlot(driftSHA)}},
+		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"redis": moduleSlot(driftSHA)}},
 	)
 	_, err := svc.LookupModuleBinary(context.Background(), moduleSHA)
 	if !errors.Is(err, ErrModuleNotAllowed) {
@@ -135,7 +134,7 @@ func TestService_Allow_SoulModuleKindAgnostic(t *testing.T) {
 	store := &fakeStore{}
 	svc := lookupService(t, store, fakeSlotReader{slot: moduleSlot(moduleSHA), commit: testCommitSHA})
 	sha, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "community", Name: "redis", Ref: "v1.0.0", CallerAID: "archon-ops",
+		Alias: "redis", Source: moduleSourceURL, Ref: "v1.0.0", CallerAID: "archon-ops",
 	})
 	if err != nil {
 		t.Fatalf("Allow(kind=soul_module): %v", err)
@@ -143,7 +142,7 @@ func TestService_Allow_SoulModuleKindAgnostic(t *testing.T) {
 	if sha != moduleSHA {
 		t.Fatalf("sha = %q, want %q", sha, moduleSHA)
 	}
-	if store.inserted == nil || store.inserted.Namespace != "community" || store.inserted.Name != "redis" {
+	if store.inserted == nil || store.inserted.Alias != "redis" || store.inserted.Source != moduleSourceURL {
 		t.Fatalf("inserted = %+v", store.inserted)
 	}
 }

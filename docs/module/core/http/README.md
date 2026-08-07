@@ -83,7 +83,7 @@ full UTF-8 rune).
 
 - **Does not execute subprocesses.** Pure in-memory HTTP client
 ([`probe.go`](../../../../soul/internal/coremod/http/probe.go) - `doer.Do`); in
-manifest ([`http.yaml`](../../../../shared/coremanifest/http.yaml)) declared
+manifest ([`http` module](../../../../shared/coremanifest/mod_http.go)) declared
 only [`network_outbound`](../../../naming-rules.md#required_capabilities-enum)
 (outgoing request), **without** `exec_subprocess` and `fs_write_root`.
 - **Read-only, does not write anything.** Unlike [`core.url`](../url/README.md) (that

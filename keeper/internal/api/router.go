@@ -81,7 +81,7 @@ import (
 //	POST   /v1/souls/{sid}/issue-token               — reissue bootstrap token.
 //	POST   /v1/plugins/sigils                        — allow plugin Sigil (ADR-026 S4a).
 //	GET    /v1/plugins/sigils                        — list active Sigils (ADR-026 S4a).
-//	DELETE /v1/plugins/sigils/{namespace}/{name}/{ref} — revoke Sigil (ADR-026 S4a).
+//	DELETE /v1/plugins/sigils/{alias} — revoke the grant registered under the alias (ADR-026 S4a).
 //	POST   /v1/sigil/keys                            — introduce signing key (ADR-026(h) R3-S7).
 //	GET    /v1/sigil/keys                             — list active signing keys (R3-S7).
 //	POST   /v1/sigil/keys/{key_id}/primary           — set primary signing key (R3-S7).

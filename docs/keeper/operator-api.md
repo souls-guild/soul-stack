@@ -540,7 +540,7 @@ Admission/revocation/list of entries of the allow-list `plugin_sigils` (the plug
 |---|---|---|---|
 | `POST` | `/v1/plugins/sigils` | `plugin.allow` | `keeper.plugin.allow` |
 | `GET` | `/v1/plugins/sigils` | `plugin.list` | `keeper.plugin.list` |
-| `DELETE` | `/v1/plugins/sigils/{namespace}/{name}/{ref}` | `plugin.revoke` | `keeper.plugin.revoke` |
+| `DELETE` | `/v1/plugins/sigils/{alias}` | `plugin.revoke` | `keeper.plugin.revoke` |
 
 Mutating 2 routes (`allow`/`revoke`) are audited (supply-chain-mutations, [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `plugin.list` - read-only, no audit. Routes are mounted only when Sigil is configured (`keeper.yml → sigil.signing_key_ref`); when Sigil is turned off, the block `/v1/plugins/sigils*` **is not mounted** - the request is caught by catch-all → `404 not-found` (`router.go`: `if sigilH != nil`).
 

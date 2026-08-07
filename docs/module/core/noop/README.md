@@ -39,7 +39,7 @@ are ignored - the anchor task has no inputs.
 ## Capabilities / side-effects
 
 - **Does not execute or write anything.** In the manifest
-  ([`noop.yaml`](../../../../shared/coremanifest/noop.yaml)) `required_capabilities`
+  ([`noop` module](../../../../shared/coremanifest/mod_noop.go)) `required_capabilities`
 empty: there is no `exec_subprocess`, `fs_write_root`, or `network_outbound`.
 - **`changed = false` constructive** (see "Read-only: doesn't change anything").
 - **Errand-safe** ([ADR-033](../../../adr/0033-errand.md)): no-op is safe to

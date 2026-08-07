@@ -442,18 +442,18 @@ type stubOraclePool struct{ oracle.ServicePool }
 type stubSigilStore struct{}
 
 func (stubSigilStore) Insert(context.Context, *sigil.Sigil) error { return nil }
-func (stubSigilStore) Revoke(context.Context, string, string, string, string) error {
+func (stubSigilStore) Revoke(context.Context, string, string) error {
 	return nil
 }
 func (stubSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return nil, nil }
 
 type stubSlotReader struct{}
 
-func (stubSlotReader) ReadSlot(string, string) (*pluginhost.SlotContents, error) {
+func (stubSlotReader) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return nil, sigil.ErrPluginNotInCache
 }
 
-func (stubSlotReader) SlotCommitSHA(string, string) (string, error) {
+func (stubSlotReader) SlotCommitSHA(string) (string, error) {
 	return "", pluginhost.ErrSlotNotFound
 }
 

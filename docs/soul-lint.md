@@ -92,43 +92,89 @@ Cross-passage flow-control gating detector is connected ([ADR-056](adr/0056-stag
 
 For `on:`-literals: format (`kebab-case` / `${ ... }`-CEL / `keeper`) - implemented (codes `enum_invalid`, `name_invalid_format`, `type_mismatch`); The hook `CovenLabelValidator` (interface in `shared/config`, no-op by default) is attached to every non-CEL-wrapped coven literal via `SetCovenLabelValidator`. The real covens directory (Q1b ADR-008-amend) will replace no-op without changing the public API; Until then, the linter does not flag the "existence" of coven (this is runtime).
 
-## Plugin module params: `--modules DIR`
+## Plugin module params: `--modules <alias>=<path>`
 
-A task's `params:` are checked against the module's manifest — unknown key, missing
-required, type mismatch, unknown state. For `core.*` the manifests are compiled into
-the linter, so this is always on. A **plugin** manifest lives beside its binary, so
-the linter has to be handed it ([ADR-0076(x–z)](adr/0076-engine-compat-window.md)):
+A task's `params:` are checked against the module's declared schema — unknown key,
+missing required, type mismatch, unknown state. For `core.*` the declarations are
+compiled into the linter, so this is always on. A **plugin**'s schema ships with its
+artifact, so the linter has to be handed it
+([ADR-0076(x–z)](adr/0076-engine-compat-window.md)):
 
 ```sh
-soul-lint validate-scenario <path> --modules <dir>
+soul-lint validate-scenario <path> --modules redis=./soul-mod-redis/dist/schema.json
 ```
 
-`<dir>` is any tree containing plugin `manifest.yaml` files; they are indexed by the
-`namespace`/`name` each manifest **declares**, not by the directory it sits in — a
-plugin directory is named after its binary (`soul-mod-community-redis`) while a task
-addresses `community.redis`. Non-`soul_module` manifests (cloud drivers, SSH
-providers) in the same tree are skipped, and one unparseable manifest does not cost
-you the rest.
+That path is the **published sidecar** `soul-mod stamp` writes next to the artifact, so
+the usual binding costs no download: the same bytes are stamped into the binary, but
+`schema.json` is right there in the checkout.
 
-Where a module's manifest does not resolve — no flag, or a tree that does not carry
-it — the linter emits **`plugin_params_unchecked`**, a hint, once per module address:
+The flag is **repeatable** — one binding per plugin, appended in order.
+
+**`<path>`** is a `schema.json`, a stamped artifact, or the `dist/` directory holding
+one. The two carriers are told apart **by content**, not by extension: a canonical
+document is a JSON object and begins with `{`, an artifact does not. Guessing from the
+filename would misread `dist/soul-mod-redis.json` and — worse — would read an artifact
+named `schema.json` as text and report a parse error instead of a missing trailer.
+
+**The alias is stated on the flag, not inferred**, and this is the part that surprises
+people, so it is worth the paragraph.
+
+The artifact declares **no name at all**
+([ADR-020(p)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)):
+nothing in the bytes says what a task should call it. Address level 1 is the
+registration alias an operator picks, and the same artifact registered as `redis` and
+as `redis-community` serves two address spaces without a byte changing. So the linter
+cannot learn an address from a file — **somebody has to state it**, and the author is
+the one who knows which alias their cluster used.
+
+It goes on the flag rather than being read off the directory because directory naming
+was already rejected once, for the manifest form, and every reason still holds: a
+checkout is named after its binary, or after whatever `git clone` produced, while a
+task addresses `community.redis`. Infer the alias from the path and a definition's
+address starts depending on where a file happens to sit — **rename the folder and the
+same definition starts or stops validating, with nothing in the definition changed.**
+You write the same `redis` the task writes in `redis.acl.present`, and it means the
+same thing in both places.
+
+The alias is rejected if it is malformed (`^[a-z][a-z0-9-]{0,62}$`) or
+**[reserved](naming-rules.md#reserved-namespace-names)** — the same grammar and the
+same list a registration is checked against. Binding `core=` would let a document of
+the author's choosing define what `core.*` accepts, which is exactly what the reserved
+list exists to stop; refusing it here also tells the author early that the alias they
+had in mind will not survive `plugin.allow` either.
+
+### A broken binding and an absent one are different answers
+
+These two look alike and must not be conflated — the whole value of the flag is in the
+difference:
+
+| Situation | Answer |
+|---|---|
+| An alias **bound on the command line** whose document cannot be read — missing path, missing or malformed trailer, unparseable or invalid document, wrong `kind`, duplicate alias, a binding without `=` | **Fatal, exit 2.** |
+| A module **nobody bound at all** | **`plugin_params_unchecked`**, a hint. Never fails a lint. |
+
+**A broken binding is fatal because the author asked for that check explicitly.**
+Printing `OK:` while silently not running a check that was requested is the exact
+failure this flag exists to remove — and the old tree-walk did it by design, where one
+unparseable manifest cost you that module and nothing said so. There is no longer a
+tree to be partially readable: there are only bindings the author wrote down.
+
+**An unbound module is a hint because nothing was claimed about it.** That is the case
+`plugin_params_unchecked` actually describes, one per module address:
 
 ```
 main.yml:223:13: hint: [plugin_params_unchecked] params of community.redis were not
 checked: no module manifests were supplied
 ```
 
-It never fails a lint. Its job is to keep "checked and clean" from looking identical
-to "never looked", which is how the drift in NIM-206 survived long enough to be found
-by hand.
-
-A missing or unreadable `--modules` directory **is** fatal (exit 2): you asked for
-these checks, and running without them while reporting success is the failure this
-flag exists to remove.
+Its job is to keep "checked and clean" from looking identical to "never looked", which
+is how the drift in NIM-206 survived long enough to be found by hand. A definition's
+author usually cannot produce somebody else's schema, so failing them for its absence
+would punish the wrong person.
 
 The same check runs inside Keeper, resolving from the plugins the cluster has
 allow-listed, so a definition linted here and rendered there is held to the same
-manifest. Either way an undeclared key fails the task on the host
+schema. Either way an undeclared key fails the task on the host
 ([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
 where the definition is being written.
 

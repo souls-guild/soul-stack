@@ -165,7 +165,7 @@ and fails loudly (`directory … is not empty`) otherwise - nothing is deleted.
   `mode`, `owner`, `group` must come from Destiny/scenario. For directories with
   sensitive contents set `mode` explicitly (`"0700"`/`"0750"`) and `owner`/`group`.
 - **Privileges.** Manifest
-  [`directory.yaml`](../../../../shared/coremanifest/directory.yaml) announces
+  [`directory` module](../../../../shared/coremanifest/mod_directory.go) announces
   [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum) (writing
   outside `/var/lib/soul-stack/`). Writing to / removing system paths in practice
   requires root - the module is executed with the privileges of the `soul` agent

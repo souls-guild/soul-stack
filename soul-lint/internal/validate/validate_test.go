@@ -169,41 +169,27 @@ func TestGolden_ScenarioVaultStaged(t *testing.T) {
 	}
 }
 
+// The `manifest-*` fixtures are schema DOCUMENTS since NIM-377 — generated JSON, the
+// form `soul-mod stamp` publishes — because there is no manifest.yaml any more. They
+// carry `.schema.json` rather than plain `.json` so the glob cannot pick up the
+// `.expected.json` companion beside each one.
+
 func TestGolden_ManifestSoulModule(t *testing.T) {
-	runExpect(t, "../../testdata/manifest-golden/soul-module.yaml", KindManifest, false, ExitOK, nil)
+	runExpect(t, "../../testdata/manifest-golden/soul-module.schema.json", KindManifest, false, ExitOK, nil)
 }
 
 func TestGolden_ManifestCloudDriver(t *testing.T) {
-	runExpect(t, "../../testdata/manifest-golden/cloud-driver.yaml", KindManifest, false, ExitOK, nil)
+	runExpect(t, "../../testdata/manifest-golden/cloud-driver.schema.json", KindManifest, false, ExitOK, nil)
 }
 
 func TestGolden_ManifestSSHProvider(t *testing.T) {
-	runExpect(t, "../../testdata/manifest-golden/ssh-provider.yaml", KindManifest, false, ExitOK, nil)
-}
-
-// TestGolden_ManifestExamplesFromRepo — each of the three examples in
-// examples/module/ must validate directly with 0 errors. Regression
-// contract: if ADR-020 or docs/keeper/plugins.md changes and examples/ are
-// updated, this test will either fail (if the validator doesn't account for
-// the new pattern) or pass.
-func TestGolden_ManifestExamplesFromRepo(t *testing.T) {
-	cases := []string{
-		"../../../examples/module/soul-mod-redis-failover/manifest.yaml",
-		"../../../examples/module/soul-cloud-aws/manifest.yaml",
-		"../../../examples/module/soul-ssh-vault/manifest.yaml",
-	}
-	for _, p := range cases {
-		p := p
-		t.Run(filepath.Base(filepath.Dir(p)), func(t *testing.T) {
-			runExpect(t, p, KindManifest, false, ExitOK, nil)
-		})
-	}
+	runExpect(t, "../../testdata/manifest-golden/ssh-provider.schema.json", KindManifest, false, ExitOK, nil)
 }
 
 // TestBroken_ManifestFixtures — symmetric with the other TestBroken_*: every
-// .yaml fixture requires a companion .expected.json with the full set of codes.
+// .schema.json fixture requires a companion .expected.json with its codes.
 func TestBroken_ManifestFixtures(t *testing.T) {
-	matches, err := filepath.Glob("../../testdata/manifest-broken/*.yaml")
+	matches, err := filepath.Glob("../../testdata/manifest-broken/*.schema.json")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
@@ -214,7 +200,7 @@ func TestBroken_ManifestFixtures(t *testing.T) {
 		p := p
 		base := filepath.Base(p)
 		t.Run(base, func(t *testing.T) {
-			expPath := strings.TrimSuffix(p, ".yaml") + ".expected.json"
+			expPath := strings.TrimSuffix(p, ".schema.json") + ".expected.json"
 			raw, rerr := os.ReadFile(expPath)
 			if rerr != nil {
 				t.Fatalf("missing companion %s: %v", expPath, rerr)

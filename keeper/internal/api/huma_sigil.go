@@ -33,9 +33,9 @@ func registerHumaSigilAllow(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 			return nil, sigilMissingClaims()
 		}
 		reply, err := sigilH.AllowTyped(ctx, claims, handlers.SigilAllowInput{
-			Namespace: in.Body.Namespace,
-			Name:      in.Body.Name,
-			Ref:       in.Body.Ref,
+			Alias:  in.Body.Alias,
+			Source: in.Body.Source,
+			Ref:    in.Body.Ref,
 		})
 		if err != nil {
 			return nil, sigilProblem(err)
@@ -61,9 +61,9 @@ func registerHumaSigilList(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	})
 }
 
-// registerHumaSigilRevoke mounts DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}
-// via huma (WRITE+AUDIT variant B — event plugin.revoked). sigilH nil → no-op.
-// Handler: claims → RevokeTyped(triple) → audit payload → empty 204 output.
+// registerHumaSigilRevoke mounts DELETE /v1/plugins/sigils/{alias} via huma
+// (WRITE+AUDIT variant B — event plugin.revoked). sigilH nil → no-op.
+// Handler: claims → RevokeTyped(alias) → audit payload → empty 204 output.
 func registerHumaSigilRevoke(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 	if sigilH == nil {
 		return
@@ -73,7 +73,7 @@ func registerHumaSigilRevoke(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 		if !ok {
 			return nil, sigilMissingClaims()
 		}
-		reply, err := sigilH.RevokeTyped(ctx, claims, in.Namespace, in.Name, in.Ref)
+		reply, err := sigilH.RevokeTyped(ctx, claims, in.Alias)
 		if err != nil {
 			return nil, sigilProblem(err)
 		}

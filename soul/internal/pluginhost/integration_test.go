@@ -16,19 +16,25 @@ import (
 	"time"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// sigilFor signs a valid SigilRecord for the binary+manifest from Discovered,
-// using the same helper Keeper uses for Sign (BuildSigilBlock +
-// NormalizeManifestBytes — sign/verify symmetry). Returns a trust-anchor and
-// a lookup with the single grant, ready to attach to a Host.
+// testAlias is the registration the test slot is named by. It is the operator's
+// choice, and the artifact knows nothing about it.
+const testAlias = "acme-echo"
+
+// sigilFor signs a valid SigilRecord for a discovered artifact, using the same helpers
+// Keeper uses at Sign (BuildSigilBlock + SchemaDigest — sign/verify symmetry). The
+// grant is filed under the registration ALIAS and signed over the SOURCE, which is the
+// split the whole model rests on. Returns a trust-anchor and a lookup holding the
+// single grant, ready to attach to a Host.
 func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLookup) {
 	t.Helper()
-	manifest, err := os.ReadFile(filepath.Join(d.Dir, "manifest.yaml"))
+	schemaDoc, err := schema.ReadTrailerFile(d.BinaryPath)
 	if err != nil {
-		t.Fatalf("read manifest for sigil: %v", err)
+		t.Fatalf("read stamped schema: %v", err)
 	}
 	binDigest := fileSHA256Hex(t, d.BinaryPath)
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -36,24 +42,27 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 		t.Fatalf("genkey: %v", err)
 	}
 	binRaw, _ := hex.DecodeString(binDigest)
-	manDigest := sha256.Sum256(sharedhost.NormalizeManifestBytes(manifest))
-	const ref = "v1.0.0"
-	block := sharedhost.BuildSigilBlock(d.Manifest.Namespace, d.Manifest.Name, ref, binRaw, manDigest[:])
+	schemaDigest := sharedhost.SchemaDigest(schemaDoc)
+	const (
+		ref    = "v1.0.0"
+		source = "https://github.com/souls-guild/soul-mod-echo"
+	)
+	block := sharedhost.BuildSigilBlock(source, ref, binRaw, schemaDigest[:])
 	rec := &sharedhost.SigilRecord{
-		Namespace:       d.Manifest.Namespace,
-		Name:            d.Manifest.Name,
+		Alias:           d.Alias,
+		Source:          source,
 		Ref:             ref,
 		BinarySHA256hex: binDigest,
 		Signature:       ed25519.Sign(priv, block),
-		Manifest:        manifest,
+		Schema:          schemaDoc,
 	}
-	return pub, testLookup{d.Manifest.Namespace + "." + d.Manifest.Name: rec}
+	return pub, testLookup{d.Alias: rec}
 }
 
-// testLookup is a minimal sharedhost.SigilLookup backed by a map.
+// testLookup is a minimal sharedhost.SigilLookup backed by a map keyed by alias.
 type testLookup map[string]*sharedhost.SigilRecord
 
-func (l testLookup) Get(ns, name string) *sharedhost.SigilRecord { return l[ns+"."+name] }
+func (l testLookup) Get(alias string) *sharedhost.SigilRecord { return l[alias] }
 
 func fileSHA256Hex(t *testing.T, path string) string {
 	t.Helper()
@@ -63,6 +72,22 @@ func fileSHA256Hex(t *testing.T, path string) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
+}
+
+// stampArtifact does what `soul-mod stamp` does: ask the artifact for its own schema
+// document and append it as a trailer. Going through the artifact's `schema`
+// subcommand rather than rebuilding the document in the test is the point — it is the
+// same path the real build uses, so a drift between what the bundle serves and what it
+// declares would show up here.
+func stampArtifact(t *testing.T, binPath string) {
+	t.Helper()
+	out, err := exec.Command(binPath, schema.SchemaSubcommand).Output()
+	if err != nil {
+		t.Fatalf("%s schema: %v", binPath, err)
+	}
+	if err := schema.WriteTrailerFile(binPath, out); err != nil {
+		t.Fatalf("stamp %s: %v", binPath, err)
+	}
 }
 
 // buildEchoPlugin builds the testdata/echo-plugin test plugin and places it in
@@ -104,36 +129,22 @@ func shortHostDir(t *testing.T, prefix string) string {
 	return dir
 }
 
-func setupHostAndDiscovered(t *testing.T) (*Host, Discovered, func()) {
+// setupHostAndDiscovered builds and stamps the echo bundle into one slot, discovers
+// it, and returns the host plus the discovered entries keyed by MODULE name. One
+// artifact, two addressable modules — the shape everything below is about.
+func setupHostAndDiscovered(t *testing.T) (*Host, map[string]Discovered, func()) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("plugin host requires Unix sockets")
 	}
 	modulesRoot := shortHostDir(t, "ss-mods-")
 	socketDir := shortHostDir(t, "ss-sock-")
-	moduleDir := filepath.Join(modulesRoot, "acme-echo")
+	moduleDir := filepath.Join(modulesRoot, testAlias)
 	if err := os.Mkdir(moduleDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	binPath := buildEchoPlugin(t, moduleDir)
-	if err := os.WriteFile(filepath.Join(moduleDir, "manifest.yaml"), []byte(`kind: soul_module
-protocol_version: 1
-namespace: acme
-name: echo
-required_capabilities: []
-side_effects: []
-spec:
-  states:
-    applied:
-      description: Echo applied.
-      input:
-        name: { type: string, required: true }
-    fail:
-      description: Force failure for tests.
-      input: {}
-`), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	stampArtifact(t, binPath)
 
 	found, warns, err := Discover(modulesRoot)
 	if err != nil {
@@ -142,8 +153,12 @@ spec:
 	if len(warns) != 0 {
 		t.Logf("discovery warnings: %v", warns)
 	}
-	if len(found) != 1 {
-		t.Fatalf("expected 1 discovered plugin, got %d", len(found))
+	if len(found) != 2 {
+		t.Fatalf("expected 2 discovered modules from the bundle, got %d", len(found))
+	}
+	mods := make(map[string]Discovered, len(found))
+	for _, d := range found {
+		mods[d.Module] = d
 	}
 
 	pub, sigils := sigilFor(t, found[0])
@@ -154,13 +169,13 @@ spec:
 		SigilAnchors:   sharedhost.NewAnchorSet([]ed25519.PublicKey{pub}),
 		Sigils:         sigils,
 	}}
-	_ = binPath // marks it used
-	return h, found[0], func() {}
+	return h, mods, func() {}
 }
 
 func TestSpawnApplyHappyPath(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -175,8 +190,8 @@ func TestSpawnApplyHappyPath(t *testing.T) {
 		}
 	}()
 
-	if p.Manifest().Address() != "acme.echo" {
-		t.Errorf("Manifest.Address = %q", p.Manifest().Address())
+	if got := p.Discovered().Address(); got != testAlias+".echo" {
+		t.Errorf("Discovered.Address = %q, want %q", got, testAlias+".echo")
 	}
 
 	params, _ := structpb.NewStruct(map[string]any{"name": "world"})
@@ -239,8 +254,9 @@ func TestSpawnApplyHappyPath(t *testing.T) {
 }
 
 func TestSpawnApplyValidationFailure(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -261,8 +277,9 @@ func TestSpawnApplyValidationFailure(t *testing.T) {
 }
 
 func TestSpawnCloseIdempotent(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -280,29 +297,78 @@ func TestSpawnCloseIdempotent(t *testing.T) {
 }
 
 func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
-	// The plugin manifest in our fixture has required_capabilities: [].
-	// Feed it a non-empty required: vault_access, while the host only allows
-	// network_outbound.
-	d.Manifest.RequiredCapabilities = []string{"vault_access"}
+	// The bundle declares network_outbound for `echo` and vault_access for
+	// `reverse`. Allowing only network_outbound must let `echo` through and stop
+	// `reverse` — the check is per module, and a sibling's declaration neither
+	// widens nor narrows it.
 	h.AllowedCapabilities = map[pluginv1.Capability]struct{}{
 		pluginv1.Capability_CAPABILITY_NETWORK_OUTBOUND: {},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := h.Spawn(ctx, d); err == nil {
+	if _, err := h.Spawn(ctx, mods["reverse"]); err == nil {
 		t.Fatal("expected denial for vault_access not in allowed-list")
+	}
+	p, err := h.Spawn(ctx, d)
+	if err != nil {
+		t.Fatalf("echo declares only network_outbound and must spawn: %v", err)
+	}
+	_ = p.Close()
+}
+
+// GUARD: dispatch reaches the module the host named, not "the only one" and not "the
+// first one". Both modules answer the same input differently, so the output says which
+// implementation actually ran — the strongest available statement that argv decided it.
+func TestSpawnDispatchesToTheNamedModule(t *testing.T) {
+	h, mods, cleanup := setupHostAndDiscovered(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for module, want := range map[string]string{"echo": "world", "reverse": "dlrow"} {
+		p, err := h.Spawn(ctx, mods[module])
+		if err != nil {
+			t.Fatalf("Spawn(%s): %v", module, err)
+		}
+		params, _ := structpb.NewStruct(map[string]any{"name": "world"})
+		stream, err := p.Apply(ctx, &pluginv1.ApplyRequest{State: "applied", Params: params})
+		if err != nil {
+			_ = p.Close()
+			t.Fatalf("Apply(%s): %v", module, err)
+		}
+		var got string
+		for {
+			ev, rerr := stream.Recv()
+			if errors.Is(rerr, io.EOF) {
+				break
+			}
+			if rerr != nil {
+				_ = p.Close()
+				t.Fatalf("apply recv(%s): %v", module, rerr)
+			}
+			if v, ok := ev.GetOutput().GetFields()["echo"]; ok {
+				got = v.GetStringValue()
+			}
+		}
+		_ = p.Close()
+		if got != want {
+			t.Errorf("module %q produced %q, want %q - the wrong implementation ran", module, got, want)
+		}
 	}
 }
 
 // TestSpawnParallel verifies multiple concurrent Spawns work correctly
 // (distinct sockets, no name collisions).
 func TestSpawnParallel(t *testing.T) {
-	h, d, cleanup := setupHostAndDiscovered(t)
+	h, mods, cleanup := setupHostAndDiscovered(t)
 	defer cleanup()
+	d := mods["echo"]
 
 	const n = 4
 	var wg sync.WaitGroup

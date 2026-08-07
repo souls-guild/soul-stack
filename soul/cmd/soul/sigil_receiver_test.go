@@ -50,8 +50,13 @@ func snapshotMsg(sigs ...*keeperv1.PluginSigil) *keeperv1.FromKeeper {
 	}}
 }
 
-func pluginSigil(ns, name, ref, sha string) *keeperv1.PluginSigil {
-	return &keeperv1.PluginSigil{Namespace: ns, Name: name, Ref: ref, BinarySha256: sha}
+func pluginSigil(alias, ref, sha string) *keeperv1.PluginSigil {
+	return &keeperv1.PluginSigil{
+		Alias:        alias,
+		Source:       "https://example.com/" + alias,
+		Ref:          ref,
+		BinarySha256: sha,
+	}
 }
 
 // TestReceiverAppliesSnapshot — SigilSnapshot populates the cache via ReplaceAll.
@@ -59,18 +64,18 @@ func TestReceiverAppliesSnapshot(t *testing.T) {
 	sigils := sigilcache.New()
 
 	dispatchPayload(snapshotMsg(
-		pluginSigil("core", "pkg", "v1.2.3", "deadbeef"),
-		pluginSigil("cloud", "hetzner", "v2", "cafef00d"),
+		pluginSigil("core-pkg", "v1.2.3", "deadbeef"),
+		pluginSigil("cloud-hetzner", "v2", "cafef00d"),
 	), sigils, nil)
 
-	got := sigils.Get("core", "pkg")
+	got := sigils.Get("core-pkg")
 	if got == nil {
 		t.Fatal("receiver did not put the snapshot Sigil into the cache")
 	}
 	if got.GetRef() != "v1.2.3" || got.GetBinarySha256() != "deadbeef" {
 		t.Fatalf("wrong Sigil in cache: ref=%q sha=%q", got.GetRef(), got.GetBinarySha256())
 	}
-	if sigils.Get("cloud", "hetzner") == nil {
+	if sigils.Get("cloud-hetzner") == nil {
 		t.Fatal("receiver lost the second Sigil from the snapshot")
 	}
 }
@@ -82,20 +87,20 @@ func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 
 	// allow: snapshot with two allow entries.
 	dispatchPayload(snapshotMsg(
-		pluginSigil("core", "pkg", "v1", "aa"),
-		pluginSigil("core", "file", "v1", "bb"),
+		pluginSigil("core-pkg", "v1", "aa"),
+		pluginSigil("core-file", "v1", "bb"),
 	), sigils, nil)
-	if sigils.Get("core", "pkg") == nil || sigils.Get("core", "file") == nil {
+	if sigils.Get("core-pkg") == nil || sigils.Get("core-file") == nil {
 		t.Fatal("precondition: both entries must be in the cache")
 	}
 
 	// revoke core/pkg: the new snapshot no longer includes it.
-	dispatchPayload(snapshotMsg(pluginSigil("core", "file", "v1", "bb")), sigils, nil)
+	dispatchPayload(snapshotMsg(pluginSigil("core-file", "v1", "bb")), sigils, nil)
 
-	if sigils.Get("core", "pkg") != nil {
+	if sigils.Get("core-pkg") != nil {
 		t.Fatal("near-instant revoke did not work: the revoked entry is still in the cache")
 	}
-	if sigils.Get("core", "file") == nil {
+	if sigils.Get("core-file") == nil {
 		t.Fatal("ReplaceAll wrongly erased a still-valid entry")
 	}
 }
@@ -104,14 +109,14 @@ func TestReceiverSnapshotRevokesAbsent(t *testing.T) {
 // allowed (revoke all).
 func TestReceiverEmptySnapshotClearsCache(t *testing.T) {
 	sigils := sigilcache.New()
-	dispatchPayload(snapshotMsg(pluginSigil("core", "pkg", "v1", "aa")), sigils, nil)
-	if sigils.Get("core", "pkg") == nil {
+	dispatchPayload(snapshotMsg(pluginSigil("core-pkg", "v1", "aa")), sigils, nil)
+	if sigils.Get("core-pkg") == nil {
 		t.Fatal("precondition: the entry must be in the cache")
 	}
 
 	dispatchPayload(snapshotMsg(), sigils, nil) // empty snapshot
 
-	if sigils.Get("core", "pkg") != nil {
+	if sigils.Get("core-pkg") != nil {
 		t.Fatal("an empty snapshot must clear the cache (no plugin allowed)")
 	}
 }
@@ -122,21 +127,21 @@ func TestReceiverSinglePluginSigilDoesNotMutate(t *testing.T) {
 	sigils := sigilcache.New()
 
 	// The authoritative set comes from the snapshot.
-	dispatchPayload(snapshotMsg(pluginSigil("core", "pkg", "v1", "aa")), sigils, nil)
+	dispatchPayload(snapshotMsg(pluginSigil("core-pkg", "v1", "aa")), sigils, nil)
 
 	// A single PluginSigil must NOT add a new one or replace an existing one.
 	dispatchPayload(&keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_PluginSigil{
-		PluginSigil: pluginSigil("core", "pkg", "v2", "bb"),
+		PluginSigil: pluginSigil("core-pkg", "v2", "bb"),
 	}}, sigils, nil)
 	dispatchPayload(&keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_PluginSigil{
-		PluginSigil: pluginSigil("community", "new", "v1", "cc"),
+		PluginSigil: pluginSigil("community-new", "v1", "cc"),
 	}}, sigils, nil)
 
-	got := sigils.Get("core", "pkg")
+	got := sigils.Get("core-pkg")
 	if got == nil || got.GetRef() != "v1" || got.GetBinarySha256() != "aa" {
 		t.Fatalf("a lone PluginSigil must not change the authoritative set, got %v", got)
 	}
-	if sigils.Get("community", "new") != nil {
+	if sigils.Get("community-new") != nil {
 		t.Fatal("a lone PluginSigil must not add an entry to the set")
 	}
 }
@@ -150,7 +155,7 @@ func TestReceiverIgnoresNonSigilPayload(t *testing.T) {
 
 	dispatchPayload(msg, sigils, nil)
 
-	if got := sigils.Get("core", "pkg"); got != nil {
+	if got := sigils.Get("core-pkg"); got != nil {
 		t.Fatalf("a non-Sigil payload must not populate the cache, got %v", got)
 	}
 }

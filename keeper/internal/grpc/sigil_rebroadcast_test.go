@@ -10,33 +10,30 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// TestSigilRecordsToProto_MapsManifestRaw — converting the set to the wire
-// format takes byte-exact ManifestRaw (the verify canon, M1), NOT the
-// JSONB Manifest projection.
-func TestSigilRecordsToProto_MapsManifestRaw(t *testing.T) {
+// TestSigilRecordsToProto_MapsBothIdentitiesAndSchema — converting the set to the wire
+// format carries the byte-exact signed schema (the verify canon, M1) and BOTH
+// identities: the alias a Soul looks the grant up by, and the source the signature
+// actually covers.
+func TestSigilRecordsToProto_MapsBothIdentitiesAndSchema(t *testing.T) {
 	recs := []*sigil.Sigil{{
-		Namespace:   "core",
-		Name:        "pkg",
-		Ref:         "v1",
-		SHA256:      "aa",
-		Signature:   []byte("sig"),
-		ManifestRaw: []byte("raw: signed\nbytes: yes\n"),
-		Manifest:    []byte(`{"raw":"signed"}`),
+		Alias:     "pkg",
+		Source:    "https://example.com/soul-mod-pkg.git",
+		Ref:       "v1",
+		SHA256:    "aa",
+		Signature: []byte("sig"),
+		Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 	}}
 	got := SigilRecordsToProto(recs)
 	if len(got) != 1 {
 		t.Fatalf("len = %d, want 1", len(got))
 	}
 	p := got[0]
-	if p.GetNamespace() != "core" || p.GetName() != "pkg" || p.GetRef() != "v1" ||
+	if p.GetAlias() != "pkg" || p.GetSource() != recs[0].Source || p.GetRef() != "v1" ||
 		p.GetBinarySha256() != "aa" {
 		t.Errorf("identity = %+v", p)
 	}
-	if !bytes.Equal(p.GetManifest(), recs[0].ManifestRaw) {
-		t.Errorf("manifest = %q, want byte-equal ManifestRaw %q", p.GetManifest(), recs[0].ManifestRaw)
-	}
-	if bytes.Equal(p.GetManifest(), recs[0].Manifest) {
-		t.Errorf("manifest equals JSONB projection - should be ManifestRaw")
+	if !bytes.Equal(p.GetSchema(), recs[0].Schema) {
+		t.Errorf("schema = %q, want byte-equal %q", p.GetSchema(), recs[0].Schema)
 	}
 }
 
@@ -72,8 +69,8 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 	ob := newOutboundForTest(t, m, nopAudit{})
 
 	set := []*keeperv1.PluginSigil{
-		{Namespace: "core", Name: "pkg", Ref: "v1", BinarySha256: "aa"},
-		{Namespace: "cloud", Name: "hetzner", Ref: "v2", BinarySha256: "bb"},
+		{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v1", BinarySha256: "aa"},
+		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2", BinarySha256: "bb"},
 	}
 
 	delivered := ob.RebroadcastSigils(context.Background(), set)
@@ -135,7 +132,7 @@ func TestOutbound_RebroadcastSigils_NoStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})
 	if got := ob.RebroadcastSigils(context.Background(),
-		[]*keeperv1.PluginSigil{{Namespace: "core", Name: "pkg"}}); got != 0 {
+		[]*keeperv1.PluginSigil{{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git"}}); got != 0 {
 		t.Fatalf("delivered = %d, want 0", got)
 	}
 }

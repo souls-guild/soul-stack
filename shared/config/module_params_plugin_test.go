@@ -10,9 +10,9 @@ import (
 // fakeManifests — a resolver over an in-memory table, standing in for whatever
 // the caller can actually see: keeper resolves from its Sigil grants, soul-lint
 // from a directory of manifests.
-type fakeManifests map[string]*plugin.Manifest
+type fakeManifests map[string]plugin.ModuleDef
 
-func (f fakeManifests) ResolveModule(ns, name string) (*plugin.Manifest, bool) {
+func (f fakeManifests) ResolveModule(ns, name string) (plugin.ModuleDef, bool) {
 	m, ok := f[ns+"."+name]
 	return m, ok
 }
@@ -21,16 +21,14 @@ func (f fakeManifests) ResolveModule(ns, name string) (*plugin.Manifest, bool) {
 // all four checks.
 func redisManifest() fakeManifests {
 	return fakeManifests{"community.redis": {
-		Kind:      "soul_module",
-		Namespace: "community",
-		Name:      "redis",
-		Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
+		Name: "redis",
+		States: map[string]plugin.StateDef{
 			"config": {Input: map[string]plugin.InputParamDef{
 				"addr":    {Type: "string", Required: true},
 				"config":  {Type: "map"},
 				"rewrite": {Type: "bool"},
 			}},
-		}},
+		},
 	}}
 }
 
@@ -170,6 +168,111 @@ func TestPluginParams_ReachesTasksInsideBlock(t *testing.T) {
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "unknown_param") {
 		t.Errorf("a plugin task inside block: went unchecked: %v", diagCodesP(diags))
+	}
+}
+
+// Reserved names never reach a resolver (NIM-377).
+//
+// The bypass at the top of the walk used to read `ns == "core"`, which was safe only
+// while a namespace meant a publisher. Address level 1 is now an alias an operator
+// picks, so that test would let anything registered as `core` into the branch reserved
+// for built-ins — checked by no one and reported by no one. These pin the two halves of
+// the fix: the branch keys on the compiled-in registry, and no catalog gets to answer
+// for a reserved name.
+
+// spyManifests records every lookup, so a test can assert the walk never CONSULTED the
+// resolver — a stronger claim than "ignored what it said".
+type spyManifests struct {
+	table fakeManifests
+	asked []string
+}
+
+func (s *spyManifests) ResolveModule(alias, name string) (plugin.ModuleDef, bool) {
+	s.asked = append(s.asked, alias+"."+name)
+	return s.table.ResolveModule(alias, name)
+}
+
+// coreDecoy — the resolver a plugin registered under a reserved alias would produce:
+// a schema for `core.redis` that says `bogus` is a fine parameter.
+func coreDecoy() *spyManifests {
+	return &spyManifests{table: fakeManifests{
+		"core.redis": {Name: "redis", States: map[string]plugin.StateDef{
+			"config": {Input: map[string]plugin.InputParamDef{"bogus": {Type: "int"}}},
+		}},
+		"core.exec": {Name: "exec", States: map[string]plugin.StateDef{
+			"run": {Input: map[string]plugin.InputParamDef{"command": {Type: "string"}}},
+		}},
+		"keeper.push": {Name: "push", States: map[string]plugin.StateDef{
+			"run": {Input: map[string]plugin.InputParamDef{"anything": {Type: "string"}}},
+		}},
+	}}
+}
+
+func TestPluginParams_ReservedAliasDoesNotReachTheBuiltinBypass(t *testing.T) {
+	r := coreDecoy()
+	src := "- name: t\n  module: core.redis.config\n  params:\n    bogus: 1\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
+		ValidateOptions{ModuleManifests: r})
+
+	if len(r.asked) != 0 {
+		t.Errorf("the resolver was consulted for a reserved name %v — a plugin registered as `core` would define what core.* accepts", r.asked)
+	}
+	if !hasCodeP(diags, DiagPluginParamsUnchecked) {
+		t.Errorf("core.redis passed in silence: %v", diagCodesP(diags))
+	}
+	if diag.HasErrors(diags) {
+		t.Errorf("an engine-vs-definition gap was reported as an error: %v", diags)
+	}
+}
+
+// The same for a reserved name that is not `core`: `ns != "core"` used to be the whole
+// definition of "this is a plugin", which sent `keeper.push` straight to the catalog.
+func TestPluginParams_ReservedNonCoreNameDoesNotReachTheResolver(t *testing.T) {
+	r := coreDecoy()
+	src := "- name: t\n  module: keeper.push.run\n  params:\n    anything: x\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
+		ValidateOptions{ModuleManifests: r})
+
+	if len(r.asked) != 0 {
+		t.Errorf("the resolver answered for reserved `keeper`: %v", r.asked)
+	}
+	if !hasCodeP(diags, DiagPluginParamsUnchecked) {
+		t.Errorf("keeper.push passed in silence: %v", diagCodesP(diags))
+	}
+}
+
+// A module the compiled-in registry really does serve is still bypassed here and still
+// checked at decode — and a decoy schema for the same address does not soften it.
+func TestPluginParams_BuiltinModuleIsCheckedAgainstTheEmbeddedRegistry(t *testing.T) {
+	r := coreDecoy()
+	src := "- name: t\n  module: core.exec.run\n  params:\n    command: \"true\"\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
+		ValidateOptions{ModuleManifests: r})
+
+	if len(r.asked) != 0 {
+		t.Errorf("a built-in module was resolved through the catalog: %v", r.asked)
+	}
+	if !hasCodeP(diags, "unknown_param") {
+		t.Errorf("a decoy schema declaring `command` suppressed the built-in check: %v", diagCodesP(diags))
+	}
+	if hasCodeP(diags, DiagPluginParamsUnchecked) {
+		t.Error("a compiled-in module reported as unchecked")
+	}
+}
+
+// `core.<something this build does not have>` is an engine older than the definition
+// (ADR-0076), not an author error — but it is not a pass either, and it used to produce
+// nothing at all.
+func TestPluginParams_UnknownBuiltinIsReportedAsUnchecked(t *testing.T) {
+	src := "- name: t\n  module: core.haproxy.present\n  params:\n    whatever: 1\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+
+	d := firstWithCode(diags, DiagPluginParamsUnchecked)
+	if d == nil {
+		t.Fatalf("core.haproxy passed in silence: %v", diagCodesP(diags))
+	}
+	if d.Level != diag.LevelHint {
+		t.Errorf("level is %q — an engine that predates the definition is not the author's error", d.Level)
 	}
 }
 

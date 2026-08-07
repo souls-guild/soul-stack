@@ -8,7 +8,7 @@ Sigil allow-list plugin integrity ([ADR-026](../../adr/0026-sigil.md)). 1:1 with
 
 #### `keeper.plugin.allow`
 
-Allowing `(namespace, name, ref)` in the allow-list `plugin_sigils`: Keeper reads the active cache slot binary via `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), reads `sha256`, signs and inserts the entry. Permission: `plugin.allow`. Endpoint: [`POST /v1/plugins/sigils`](../operator-api/plugins.md). Async: no.
+Allowing an artifact in the allow-list `plugin_sigils`: the body is `{alias, source, ref}` — `source`+`ref` are the signed artifact identity, `alias` is address level 1 and is **not** signed (NIM-377 / NIM-438). Keeper reads the active cache slot binary via the `current` symlink (R-nested `<alias>/<commit_sha>/`), reads `sha256`, signs and inserts the entry. Permission: `plugin.allow`. Endpoint: [`POST /v1/plugins/sigils`](../operator-api/plugins.md). Async: no.
 
 **Input:**
 
@@ -29,7 +29,7 @@ Errors: `plugin-not-in-cache` (the plugin is not in the host's cache), `sigil-al
 
 #### `keeper.plugin.revoke`
 
-Revocation of active clearance `(namespace, name, ref)` from `plugin_sigils` (the binary no longer passes Sigil verification). Permission: `plugin.revoke`. Endpoint: [`DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}`](../operator-api/plugins.md). Async: no.
+Revocation of an active clearance from `plugin_sigils` by its registration alias (the binary no longer passes Sigil verification). Permission: `plugin.revoke`. Endpoint: [`DELETE /v1/plugins/sigils/{alias}`](../operator-api/plugins.md). Async: no.
 
 **Input:**
 

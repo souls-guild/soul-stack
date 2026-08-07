@@ -1,13 +1,30 @@
-# Makefile for the {{.BinaryName}} plugin (SoulModule {{.Namespace}}.{{.Name}}).
+# Makefile for the {{.BinaryName}} module bundle.
+#
+# `dist/` holds exactly ONE executable and the schema document generated from it.
+# The host takes the executable it finds; there is no filename convention, and
+# the artifact carries no name of its own.
 
-BIN_DIR := bin
-BINARY  := $(BIN_DIR)/{{.BinaryName}}
+DIST   := dist
+BINARY := $(DIST)/{{.BinaryName}}
 
-.PHONY: build test fmt vet check
+# soul-mod is the SDK's build tool: `stamp` puts the generated schema document
+# inside the artifact AND writes dist/schema.json, `verify` fails the build when
+# the stamped document disagrees with the code it was generated from.
+SOUL_MOD ?= soul-mod
+
+.PHONY: build stamp verify test fmt vet check clean
 
 build:
-	@mkdir -p $(BIN_DIR)
-	@go build -o $(BINARY) ./cmd/{{.BinaryName}}
+	@mkdir -p $(DIST)
+	@go build -trimpath -ldflags="-s -w" -o $(BINARY) ./cmd/{{.BinaryName}}
+
+# Stamping is part of building: an unstamped artifact has no disclosure, and a
+# host reading one fails closed rather than assuming an empty schema.
+stamp: build
+	@$(SOUL_MOD) stamp $(BINARY)
+
+verify:
+	@$(SOUL_MOD) verify $(BINARY)
 
 test:
 	@go test ./...
@@ -18,5 +35,8 @@ fmt:
 vet:
 	@go vet ./...
 
-check: fmt vet test build
+check: fmt vet test stamp verify
 	@echo "check: $(BINARY) ok"
+
+clean:
+	@rm -rf $(DIST)

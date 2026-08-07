@@ -1,11 +1,17 @@
-// Guard on the manifest ↔ implementation contract (NIM-206).
+// Guard on the schema document ↔ implementation contract (NIM-206).
 //
-// `spec.states.<state>.input` is the ONLY thing param-level strictness reads
-// (ADR-0076, NIM-163): a key a state omits has no declaration, so since NIM-204
-// enforced strictness for plugins too (ADR-0076(t)) a legitimate call carrying
-// it FAILS with module.unknown_param. A prose promise in the manifest header is
+// `modules[redis].states.<state>.input` is the ONLY thing param-level strictness
+// reads (ADR-0076, NIM-163): a key a state omits has no declaration, so since
+// NIM-204 enforced strictness for plugins too (ADR-0076(t)) a legitimate call
+// carrying it FAILS with module.unknown_param. A prose promise in a comment is
 // not a declaration — four states used to carry that promise and declare nothing,
 // which is what this file exists to prevent from coming back.
+//
+// Since NIM-377 the declaration lives in the generated schema document
+// (`schema.json`) rather than a hand-written `manifest.yaml`, and it carries no
+// `namespace:`/`name:` of its own: this artifact serves the module `redis`, and
+// address level 1 (`community` in `community.redis.acl`) comes from the alias an
+// operator registers it under, which appears nowhere in these bytes.
 //
 // The two halves are checked together on purpose. TestConnectParams* proves the
 // key lists below are the ones the Go parse path actually reads (a rename in
@@ -19,9 +25,12 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/goccy/go-yaml"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// moduleName is the one module this artifact serves — address level 2.
+const moduleName = "redis"
 
 // connectParams — read by parseConnConfig (which calls parseTLS) for EVERY state
 // dispatched through the shared connect path in Apply, i.e. all but cluster.
@@ -54,33 +63,38 @@ var secretParams = map[string]bool{
 	"master_tls_ca": true, "master_tls_cert": true, "master_tls_key": true,
 }
 
-type manifestFile struct {
-	Spec struct {
-		States map[string]struct {
-			Input map[string]struct {
-				Type     string `yaml:"type"`
-				Required bool   `yaml:"required"`
-				Secret   bool   `yaml:"secret"`
-				Pattern  string `yaml:"pattern"`
-			} `yaml:"input"`
-		} `yaml:"states"`
-	} `yaml:"spec"`
-}
-
-func loadManifest(t *testing.T) manifestFile {
+// loadModule reads the published schema document and returns the module this
+// artifact serves. It also runs the SDK validator: a document that keeper would
+// reject at `plugin.allow` must not pass here either.
+func loadModule(t *testing.T) schema.Module {
 	t.Helper()
-	raw, err := os.ReadFile("manifest.yaml")
+	raw, err := os.ReadFile(schema.SchemaFileName)
 	if err != nil {
-		t.Fatalf("read manifest: %v", err)
+		t.Fatalf("read %s: %v", schema.SchemaFileName, err)
 	}
-	var m manifestFile
-	if err := yaml.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("parse manifest: %v", err)
+	doc, err := schema.Unmarshal(raw)
+	if err != nil {
+		t.Fatalf("parse %s: %v", schema.SchemaFileName, err)
 	}
-	if len(m.Spec.States) == 0 {
-		t.Fatal("manifest declares no states")
+	for _, i := range schema.Validate(doc) {
+		if i.Level == schema.LevelError {
+			t.Errorf("%s is invalid: %s at %s", schema.SchemaFileName, i, i.Path)
+		}
 	}
-	return m
+	// The bytes are canonical (sorted keys, no insignificant whitespace) because
+	// they are hashed and signed — a hand edit that reformats them is a finding.
+	canonical, err := schema.IsCanonical(raw)
+	if err != nil || !canonical {
+		t.Errorf("%s is not canonical (%v) — regenerate it, do not hand-edit", schema.SchemaFileName, err)
+	}
+	mod, ok := doc.Module(moduleName)
+	if !ok {
+		t.Fatalf("%s declares no module %q, only %v", schema.SchemaFileName, moduleName, doc.ModuleNames())
+	}
+	if len(mod.States) == 0 {
+		t.Fatalf("module %q declares no states", moduleName)
+	}
+	return mod
 }
 
 // with returns base plus extra as a fresh slice — the shared *Params vars must
@@ -131,17 +145,17 @@ func TestManifestStatesDeclareWhatTheyAccept(t *testing.T) {
 			"master_name", "monitor", "config", "auth_user", "auth_pass", "redis_version"),
 	}
 
-	m := loadManifest(t)
-	if len(m.Spec.States) != len(want) {
-		t.Fatalf("manifest declares %d states, table covers %d — a new state needs a row here",
-			len(m.Spec.States), len(want))
+	mod := loadModule(t)
+	if len(mod.States) != len(want) {
+		t.Fatalf("module %q declares %d states, table covers %d — a new state needs a row here",
+			moduleName, len(mod.States), len(want))
 	}
 
 	for state, wantKeys := range want {
 		t.Run(state, func(t *testing.T) {
-			def, ok := m.Spec.States[state]
+			def, ok := mod.States[state]
 			if !ok {
-				t.Fatalf("manifest has no state %q", state)
+				t.Fatalf("module %q has no state %q", moduleName, state)
 			}
 			got := make([]string, 0, len(def.Input))
 			for name := range def.Input {
@@ -164,8 +178,8 @@ func TestManifestStatesDeclareWhatTheyAccept(t *testing.T) {
 // TestManifestSecretParamsAreMasked — a password/PEM param must be declared
 // secret with the vault-ref pattern, or it reaches logs/traces/UI in the clear.
 func TestManifestSecretParamsAreMasked(t *testing.T) {
-	m := loadManifest(t)
-	for state, def := range m.Spec.States {
+	mod := loadModule(t)
+	for state, def := range mod.States {
 		for name, p := range def.Input {
 			if !secretParams[name] {
 				continue

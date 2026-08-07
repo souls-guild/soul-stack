@@ -1,76 +1,50 @@
 package pluginhost
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-func writeManifest(t *testing.T, dir, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, sharedplugin.FileName), []byte(content), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
+// sshProviderDoc / soulModuleDoc build minimally valid documents of the two other kinds
+// keeper discovers. Like [cloudDriverDoc] they declare no name of their own.
+func sshProviderDoc() schema.Document {
+	return schema.Document{
+		Kind:            schema.KindSSHProvider,
+		ProtocolVersion: 1,
+		ProviderKind:    "vault_ssh_ca",
 	}
 }
 
-func writeFakeBinary(t *testing.T, dir, name string, executable bool) {
-	t.Helper()
-	mode := os.FileMode(0o644)
-	if executable {
-		mode = 0o755
+func soulModuleDoc(modules ...string) schema.Document {
+	mods := make([]schema.Module, 0, len(modules))
+	for _, name := range modules {
+		mods = append(mods, schema.Module{
+			Name:   name,
+			States: map[string]schema.State{"present": {Description: "the resource exists"}},
+		})
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), mode); err != nil {
-		t.Fatalf("write bin: %v", err)
-	}
-}
-
-// writeNestedSlot creates R-nested slot <root>/<ns>-<name>/<commit>/ +
-// current → <commit> with manifest and binary (A1-S1 layout).
-func writeNestedSlot(t *testing.T, root, key, commit, manifest, binName string) {
-	t.Helper()
-	pluginDir := filepath.Join(root, key)
-	slot := filepath.Join(pluginDir, commit)
-	if err := os.MkdirAll(slot, 0o755); err != nil {
-		t.Fatalf("mkdir slot: %v", err)
-	}
-	writeManifest(t, slot, manifest)
-	writeFakeBinary(t, slot, binName, true)
-	if err := os.Symlink(commit, filepath.Join(pluginDir, "current")); err != nil {
-		t.Fatalf("symlink current: %v", err)
-	}
+	return schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1, Modules: mods}
 }
 
 func TestDiscoverFiltersKeeperKinds(t *testing.T) {
-	// Lay out all three kinds in R-nested slots. Keeper-host discovers
-	// cloud+ssh+soul_module (S1 epic core.module.installed: keeper is registry
-	// of SoulModule plugins for distribution to Souls).
+	// Lay out all three kinds in R-nested slots, each named by its REGISTRATION
+	// ALIAS. Keeper-host discovers cloud+ssh+soul_module (S1 epic
+	// core.module.installed: keeper is the registry of SoulModule artifacts for
+	// distribution to Souls).
 	root := t.TempDir()
-	const commit = "0123456789abcdef0123456789abcdef01234567"
 
-	writeNestedSlot(t, root, "soulstack-aws", commit, `kind: cloud_driver
-protocol_version: 1
-namespace: soulstack
-name: aws
-spec: { provider_kind: aws, profile_schema: { type: object } }
-`, "soul-cloud-aws")
+	cloud := cloudDriverDoc()
+	writeSlot(t, root, "aws", &cloud, "aws")
 
-	writeNestedSlot(t, root, "soulstack-vault-ssh", commit, `kind: ssh_provider
-protocol_version: 1
-namespace: soulstack
-name: vault-ssh
-spec: { provider_kind: vault_ssh_ca }
-`, "soul-ssh-vault-ssh")
+	ssh := sshProviderDoc()
+	writeSlot(t, root, "vault-ssh", &ssh, "vault-ssh")
 
-	writeNestedSlot(t, root, "acme-redis-failover", commit, `kind: soul_module
-protocol_version: 1
-namespace: acme
-name: redis-failover
-spec: { states: { promoted: {} } }
-`, "soul-mod-redis-failover")
+	mod := soulModuleDoc("failover")
+	writeSlot(t, root, "redis-failover", &mod, "redis-failover")
 
 	found, warns, err := Discover(root)
 	if err != nil {
@@ -82,12 +56,66 @@ spec: { states: { promoted: {} } }
 	if len(warns) != 0 {
 		t.Errorf("warns = %d, want 0: %v", len(warns), warns)
 	}
-	kinds := map[string]bool{}
+	kinds := map[schema.Kind]bool{}
+	aliases := map[string]bool{}
 	for _, d := range found {
-		kinds[d.Manifest.Kind] = true
+		kinds[d.Kind()] = true
+		aliases[d.Alias] = true
 	}
 	if !kinds[KindSoulModule] {
 		t.Errorf("soul_module not discovered: %v", kinds)
+	}
+	// Address level 1 comes from the SLOT directory, not from the artifact or from
+	// the `current` symlink's basename (which is a commit sha).
+	for _, want := range []string{"aws", "vault-ssh", "redis-failover"} {
+		if !aliases[want] {
+			t.Errorf("alias %q missing from discovery: %v", want, aliases)
+		}
+	}
+}
+
+// TestDiscoverYieldsOneEntryPerModule — an artifact serving three modules is three
+// addressable entries, because the unit a host spawns and a task addresses is the
+// module, not the file.
+func TestDiscoverYieldsOneEntryPerModule(t *testing.T) {
+	root := t.TempDir()
+	mod := soulModuleDoc("acl", "config", "info")
+	writeSlot(t, root, "redis", &mod, "redis")
+
+	found, _, err := Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(found) != 3 {
+		t.Fatalf("found = %d, want one entry per module", len(found))
+	}
+	addrs := map[string]bool{}
+	for _, d := range found {
+		addrs[d.Address()] = true
+	}
+	for _, want := range []string{"redis.acl", "redis.config", "redis.info"} {
+		if !addrs[want] {
+			t.Errorf("address %q missing: %v", want, addrs)
+		}
+	}
+}
+
+// TestDiscoverSkipsAmbiguousSlot — a slot with two executables is skipped with a
+// warning rather than resolved by listing order.
+func TestDiscoverSkipsAmbiguousSlot(t *testing.T) {
+	root := t.TempDir()
+	cloud := cloudDriverDoc()
+	writeSlot(t, root, "aws", &cloud, "artifact-a", "artifact-b")
+
+	found, warns, err := Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(found) != 0 {
+		t.Fatalf("found = %d, want 0 (ambiguous slot must be skipped): %v", len(found), found)
+	}
+	if len(warns) == 0 {
+		t.Error("an ambiguous slot must produce a warning, not a silent skip")
 	}
 }
 
@@ -99,18 +127,28 @@ func TestDiscoverRootMissing(t *testing.T) {
 }
 
 func TestFilterByCatalog(t *testing.T) {
-	// Prepare discovered plugins of three kinds; keeper.yml catalog declares
-	// only aws (cloud), vault-ssh (ssh), and redis (soul_module).
-	mk := func(kind, name string) Discovered {
-		return Discovered{Manifest: &Manifest{Kind: kind, Name: name, Namespace: "soulstack"}}
+	// Discovered entries of three kinds; the keeper.yml catalog declares only aws
+	// (cloud), vault-ssh (ssh) and redis (soul_module). The comparison is on the
+	// ALIAS — the artifact has no name of its own to compare instead.
+	mkCloud := func(alias string) Discovered {
+		doc := cloudDriverDoc()
+		return Discovered{Alias: alias, Doc: &doc}
+	}
+	mkSSH := func(alias string) Discovered {
+		doc := sshProviderDoc()
+		return Discovered{Alias: alias, Doc: &doc}
+	}
+	mkMod := func(alias, module string) Discovered {
+		doc := soulModuleDoc(module)
+		return Discovered{Alias: alias, Module: module, Doc: &doc}
 	}
 	found := []Discovered{
-		mk(KindCloudDriver, "aws"),
-		mk(KindCloudDriver, "gcp"),
-		mk(KindSSHProvider, "vault-ssh"),
-		mk(KindSSHProvider, "teleport"),
-		mk(KindSoulModule, "redis"),
-		mk(KindSoulModule, "postgres"),
+		mkCloud("aws"),
+		mkCloud("gcp"),
+		mkSSH("vault-ssh"),
+		mkSSH("teleport"),
+		mkMod("redis", "acl"),
+		mkMod("postgres", "role"),
 	}
 	plugins := &config.KeeperPlugins{
 		CloudDrivers: []config.PluginCatalogEntry{
@@ -130,25 +168,25 @@ func TestFilterByCatalog(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("out = %d, want 3: %v", len(out), out)
 	}
-	names := map[string]bool{}
+	aliases := map[string]bool{}
 	for _, d := range out {
-		names[d.Manifest.Name] = true
+		aliases[d.Alias] = true
 	}
-	if !names["aws"] || !names["vault-ssh"] || !names["redis"] {
-		t.Errorf("expected aws+vault-ssh+redis, got %v", names)
+	if !aliases["aws"] || !aliases["vault-ssh"] || !aliases["redis"] {
+		t.Errorf("expected aws+vault-ssh+redis, got %v", aliases)
 	}
 
-	// Warnings: gcp/teleport/postgres not declared; yc/mongo declared but not discovered.
+	// Warnings: gcp/teleport/postgres not declared; yc/mongo declared but not in cache.
 	var gotGcp, gotTeleport, gotYc, gotPostgres, gotMongo bool
 	for _, w := range warns {
 		switch {
-		case strings.Contains(w, "soulstack.gcp"):
+		case strings.Contains(w, "plugin gcp"):
 			gotGcp = true
-		case strings.Contains(w, "soulstack.teleport"):
+		case strings.Contains(w, "plugin teleport"):
 			gotTeleport = true
 		case strings.Contains(w, "name=yc"):
 			gotYc = true
-		case strings.Contains(w, "soulstack.postgres"):
+		case strings.Contains(w, "plugin postgres"):
 			gotPostgres = true
 		case strings.Contains(w, "name=mongo"):
 			gotMongo = true
@@ -160,8 +198,24 @@ func TestFilterByCatalog(t *testing.T) {
 	}
 }
 
+// TestFilterByCatalogWarnsOncePerAlias — an undeclared artifact serving three modules
+// is ONE registration the operator forgot, so it is one warning and not three.
+func TestFilterByCatalogWarnsOncePerAlias(t *testing.T) {
+	doc := soulModuleDoc("acl", "config", "info")
+	found := []Discovered{
+		{Alias: "redis", Module: "acl", Doc: &doc},
+		{Alias: "redis", Module: "config", Doc: &doc},
+		{Alias: "redis", Module: "info", Doc: &doc},
+	}
+	_, warns := FilterByCatalog(found, &config.KeeperPlugins{})
+	if len(warns) != 1 {
+		t.Fatalf("warns = %d, want 1 per undeclared alias: %v", len(warns), warns)
+	}
+}
+
 func TestFilterByCatalogNil(t *testing.T) {
-	found := []Discovered{{Manifest: &Manifest{Kind: KindCloudDriver, Name: "aws"}}}
+	doc := cloudDriverDoc()
+	found := []Discovered{{Alias: "aws", Doc: &doc}}
 	out, warns := FilterByCatalog(found, nil)
 	if len(out) != 0 {
 		t.Errorf("expected 0 with nil catalog, got %d", len(out))

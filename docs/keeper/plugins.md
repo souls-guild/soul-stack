@@ -1,14 +1,23 @@
 # Plugin infrastructure Soul Stack
 
-Regulatory specification of the `manifest.yaml` format, handshake strings, plugin lifecycle, versioning, capabilities and side_effects. The source of truth for the solutions is [ADR-020](../adr/0020-plugin-infrastructure.md). This document contains field tables, JSON handshake schema, lifecycle diagram, enum tables, complete manifest examples for all three kinds of plugins.
+Normative specification of the **schema document**, handshake strings, plugin lifecycle, versioning, capabilities and side_effects. The source of truth for the decisions is [ADR-020](../adr/0020-plugin-infrastructure.md). This document contains field tables, the JSON handshake schema, a lifecycle diagram, the enum tables and complete examples for all kinds of plugins.
 
-The document covers **all three kinds of plugins** (manifest format is the same, [ADR-020(e)](../adr/0020-plugin-infrastructure.md)):
+> **Rewritten 2026-08-06 (NIM-377).** Three things a returning reader must not carry over from the previous version of this page:
+>
+> - **There is no `manifest.yaml`.** It is not authored, not shipped, not parsed. A module declares itself as a `module.Def` value in Go; the schema document is **generated** from it and stamped into the artifact ([ADR-020(n)/(o)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)).
+> - **The artifact carries no name.** No `namespace:`, no `name:`, no binary-name convention. Address level 1 is the **registration alias** the operator chose ([ADR-020(p)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)).
+> - **`required_capabilities` and `side_effects` are disclosure, not controls** — see [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure). The previous version of this page described enforcement that does not exist in the code.
 
-| Kind | Host | Binar | Destination |
-|---|---|---|---|
-| `soul_module` | `soul` (agent or push) | `soul-mod-<name>` | Implements Destiny steps: [`SoulModule`](#service-contract-soulmodule). Also see [`../soul/modules.md`](../soul/modules.md). |
-| `cloud_driver` | `keeper` (module `keeper.cloud`) | `soul-cloud-<provider>` | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). |
-| `ssh_provider` | `keeper` (module `keeper.push`) | `soul-ssh-<provider>` | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
+The document covers **all kinds of plugins** (the schema-document format is the same, [ADR-020(e)](../adr/0020-plugin-infrastructure.md)):
+
+| Kind | Host | Destination |
+|---|---|---|
+| `soul_module` | `soul` (agent or push) | Implements Destiny steps: [`SoulModule`](#service-contract-soulmodule). Also see [`../soul/modules.md`](../soul/modules.md). |
+| `cloud_driver` | `keeper` (module `keeper.cloud`) | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). |
+| `ssh_provider` | `keeper` (module `keeper.push`) | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
+| `soul_beacon` | `soul` | Read-only host observation for Vigil: [ADR-030 V5-2](../adr/0030-vigil-oracle.md). |
+
+**There is no binary-name column, and that is the point.** `soul-mod-<name>` / `soul-cloud-<provider>` / `soul-ssh-<provider>` used to be listed here as the naming convention; the loader computed a filename from the artifact's own `name:` and looked for it. With no self-name in the artifact there is nothing to compute — `dist/` holds **exactly one executable** and the host takes it, whatever it is called. Repositories may keep naming their output `soul-mod-redis` for the humans reading `dist/`; nothing reads it.
 
 ## Type conventions
 
@@ -27,38 +36,151 @@ A single type dictionary is used, as in [`config.md`](config.md):
 
 `default: —` is a required field. Optional fields are marked `optional`. Closed enum means: value expansion - via PR in `proto/plugin/vN/`, not via freeform.
 
-## Manifest
+## Schema document
 
-Static file `manifest.yaml` in **the root of the plugin repository** and **next to the binary** in the host cache ([ADR-020(a)](../adr/0020-plugin-infrastructure.md)). Parsed by `soul-lint` **without running the binary** (requirement [ADR-009](../adr/0009-scenario-dsl.md)).
+The plugin's self-description. **Generated** from Go, never authored ([ADR-020(n)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)), and published in two places by one generator:
 
-Operator command: `soul-lint validate-manifest <path> [--json]`. Does: parse YAML, check `kind`/`required_capabilities`/`side_effects`, regex namespace/name/state-name, `protocol_version ∈ SupportedProtocolVersions` closed, kind-specific `spec` (`states` for `soul_module` / `profile_schema` for `cloud_driver` / `provider_kind` for `ssh_provider`) and first-level input-DSL (type/required/secret/pattern). Exit-code: `0` = ok, `1` = there are errors, `2` = I/O fatal. The parser and validator live in `shared/plugin/manifest.go` - a shared source of truth with runtime-discovery in `soul/internal/pluginhost/`.
+- **stamped into the artifact** — so Keeper always has it, whatever route the binary took;
+- **written to `dist/schema.json`** — so `soul-lint` can validate a destiny without downloading the binary. An author binds it to the address their tasks use: `soul-lint validate-scenario <path> --modules redis=./soul-mod-redis/dist/schema.json` ([soul-lint.md](../soul-lint.md#plugin-module-params---modules-aliaspath)). The **alias goes on the flag** because the artifact carries none — nothing on disk could say what a task should call it.
 
-### General fields (for all kinds)
+Keeper reads it **without executing the artifact**. That constraint is not stylistic: the schema is read at `plugin.allow`, and at that moment the operator has not yet approved the binary. A design where the host runs `<plugin> --schema` to find out what it is would execute the thing it is deciding whether to trust.
+
+**Format — canonical JSON**: sorted keys, no insignificant whitespace, one generator, byte-deterministic. Authors never read or write it, so line/column diagnostics stop earning their cost; determinism starts mattering, because these bytes are hashed and signed ([Integrity-model](#integrity-model)).
+
+### Authoring shape
+
+The source of truth is a `module.Def` value beside the module's own code:
+
+```go
+// internal/acl/acl.go
+var Module = module.Def{
+	Name:         "acl",
+	Description:  "Redis ACL users",
+	Capabilities: []module.Capability{module.NetworkOutbound},
+	SideEffects:  []module.SideEffect{{User: "redis_acl_user"}},
+	Impl:         &ACL{},
+
+	States: map[string]module.State{
+		"present": {
+			Description: "The ACL user exists, enabled as requested, with the given password and rules",
+			Input: module.Input{
+				"host": {Type: module.String, Required: true,
+					Description: "Redis host to connect to"},
+				"port": {Type: module.Int, Default: 6379},
+				"login_password": {Type: module.String, Secret: true, Pattern: `^vault:.*`,
+					Description: "Password for login_username; MUST be a vault-ref"},
+				"tls_enable": {Type: module.Bool, Default: false},
+			},
+		},
+		"absent": {Description: "…", Input: module.Input{ /* … */ }},
+	},
+}
+
+type ACL struct{ module.BaseModule }
+
+func (a *ACL) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	switch req.GetState() {
+	case "present":
+		return a.present(req, stream)
+	case "absent":
+		return a.absent(req, stream)
+	}
+	return util.SendFailed(stream, "unknown state: "+req.GetState())
+}
+```
+
+`Def.Name` is the **module** name — level 2 of the address (`acl` in `redis.acl.present`). It is not the plugin's name and not a namespace; the artifact has neither.
+
+One artifact serves several modules, declared as a bundle:
+
+```go
+// cmd/soul-mod-redis/main.go
+func main() {
+	module.ServeBundle(module.Bundle{
+		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
+		Modules: []module.Def{acl.Module, config.Module, info.Module},
+	})
+}
+```
+
+**Declaration and implementation cannot drift**, because there is only one of each. The self-test and the post-MVP `soul-mod gen-manifest --check` that [ADR-020(a)](../adr/0020-plugin-infrastructure.md) proposed as mitigations are unnecessary: the drift class they guarded is gone at the root.
+
+### Stamping and verification
+
+```make
+build:
+	go build -trimpath -ldflags="-s -w" -o dist/soul-mod-redis ./cmd/soul-mod-redis
+	soul-mod stamp dist/soul-mod-redis        # schema into the artifact + dist/schema.json
+
+check:
+	soul-mod verify dist/soul-mod-redis       # stamped schema == code schema
+```
+
+- **`soul-mod stamp`** appends the schema to the built artifact and writes `dist/schema.json` beside it.
+- **`soul-mod verify`** is the CI gate: an artifact whose stamped schema disagrees with the schema its code produces **fails the build**. This is the guard that keeps stamping honest — without it, a stale stamp would ship a description of a module that no longer exists.
+
+**Stamping mechanism — a trailer:** the payload plus a fixed-size footer carrying its length and a magic marker, appended after the executable image. No ELF/Mach-O/PE parsing is involved — a reader takes the footer in one read from the end of the file and seeks back by the length — and ELF, Mach-O and PE loaders all ignore bytes past the image, so the artifact still runs. The magic is versioned, so a future format change makes older readers stop recognizing new artifacts rather than misread them. **Readers fail closed:** a missing or malformed trailer is an error, never an empty schema and never a fallback to a neighbouring file.
+
+`soul-lint validate-manifest <path> [--json]` validates a schema document offline (`dist/schema.json`, or one extracted from an artifact): `kind`, the `capabilities` / `side_effects` enums, module-name and state-name grammar, `protocol_version ∈ SupportedProtocolVersions`, the kind-specific root fields, and the input DSL (type/required/secret/pattern). Exit code `0` = ok, `1` = errors, `2` = I/O fatal. The parser and validator live in `shared/plugin` — one source of truth shared with runtime discovery.
+
+> The subcommand keeps the name `validate-manifest` — **decided, not pending** (NIM-377 wave 2): it reads a schema document, telling a `schema.json` from a stamped artifact **by content** rather than by extension. The name is a mild misnomer and was left alone deliberately; renaming a shipped subcommand costs every author's muscle memory and every script, to buy a word.
+
+### Registration alias
+
+The artifact has no name of its own, so **address level 1 comes entirely from registration**. The operator picks it in the catalog entry ([Plugin directory](#plugin-directory-in-keeperyml)), and it is the name every consumer sees:
+
+| The operator registers the artifact as… | …and the destiny step is |
+|---|---|
+| `redis` | `redis.acl.present` |
+| `redis-community` | `redis-community.acl.present` |
+
+**Same artifact, same bytes, same digest — no rebuild.** This is what removes the collision that `namespace:` never actually prevented: two publishers both shipping something that calls itself `community.redis` used to fight over one identity, and which one an operator got depended on resolution order. Now the operator names both, because the operator is the one who knows which is which.
+
+The alias also names the **host slot** (`<cache_root>/<alias>/…`, `<paths.modules>/<alias>/`) and, in destiny, the level-1 component of `required_modules:`. It is **not** the Sigil registry key — that keys on the artifact source ([ADR-026(a)](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations) as amended); registering one artifact under two aliases is one trust decision, not two.
+
+Aliases from the [reserved list](../naming-rules.md#reserved-namespace-names) are refused at registration. The full addressing model is **NIM-376**, a separate open ticket.
+
+### Root fields (for all kinds)
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Plugin type discriminator. private enum; extension - via PR in `proto/plugin/vN/manifest.proto`, without breaking ([ADR-020(e)](../adr/0020-plugin-infrastructure.md)). `soul_beacon` — Soul-side event-driven monitoring plugin (ADR-030 V5-2). |
+| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Plugin type discriminator. Closed enum; extension — via PR in `proto/plugin/vN/manifest.proto`, without breaking ([ADR-020(e)](../adr/0020-plugin-infrastructure.md)). `soul_beacon` — Soul-side event-driven monitoring plugin (ADR-030 V5-2). **`kind` is a type, not a name:** it survived the removal of `namespace:`/`name:` because the soul-host accepts only `soul_module` and the keeper-host only `cloud_driver` / `ssh_provider`, and nothing about it identifies the subject. |
 | `protocol_version` | `int32` | — | Version `proto/plugin/vN/`. Duplicated in the handshake line; cross-check inside the plugin and vs `SupportedProtocolVersions` host ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)). **Not artifact version** is an API compat flag, an exception to [ADR-007](../adr/0007-versioning-git-ref.md). `int32` (and not `int`) is a deliberate exception from the type dictionary: the protocol version will not grow beyond 2³¹, at the wire level the type is fixed in `proto/plugin/v1/manifest.proto`. |
-| `namespace` | `string` (kebab-case) | — | Plugin collection. For core: `core`. For third-party: `acme` / `community` / organization name. |
-| `name` | `string` (kebab-case) | — | The name of the plugin inside the collection. Addressing is `<namespace>.<name>.<state>` for modules. |
-| `required_capabilities` | `list<enum>` | `[]` | Closed enum, see [capabilities table](#required_capabilities-table). `soul-lint` checks with `plugin_runtime.allowed_capabilities` host. |
-| `side_effects` | `list<map<enum,value>>` | `[]` | Strict contract of touched resources, see [side_effects table](#side_effects-table). Runtime violation (the plugin touches a resource not declared in `side_effects`) → the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact form of the field is a separate audit-pipeline standardization task for `side_effects`, see backlog). |
-| `introduced_in` | `string` (`MAJOR.MINOR.PATCH`) | `""` | Optional: the **engine release** in which this module first appeared ([ADR-0076(i)](../adr/0076-engine-compat-window.md)). Same grammar as a `compat:` bound — no `v` prefix, no pre-release suffix — and only a **released** version (a feature that has not shipped carries none). Empty = at or before the baseline. Read from **core** manifests, whose metadata ships with the parser; on a plugin manifest the key parses but states nothing about a keeper release (a plugin has its own version line). Published by `GET /v1/modules`. |
-| `spec` | kind-specific block | — | Kind-specific fields; the form depends on `kind:` (see below). |
-| `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional - empty until signature **Sigil** ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` - consistent with `plugin_sigils.sha256` (TEXT CHECK hex64). |
+| `compat` | `{keeper: <range>}` | `{}` | The engine window the artifact declares ([ADR-0076(c)](../adr/0076-engine-compat-window.md)), e.g. `{"keeper": ">=0.9 <2.0"}`. Empty = no declared bound, which an operator reads as "the author made no promise". Declared once per artifact — a bundle's modules ship together and share a version line. |
+| `modules` | `list<module>` | — | **`kind: soul_module` only.** The modules this artifact serves; see [Per-module fields](#per-module-fields). Names must be unique. |
+| `provider_kind` | `string` | — | **`kind: ssh_provider`.** `vault_ssh_ca` / `static_key` / `teleport` by convention, or the author's own. Affects UI/docs, **not** the `Sign`/`Authorize` contract. |
+| `profile_schema` | `JSON Schema` | — | **`kind: cloud_driver`.** Schema of the VM-profile parameters, used when creating a Profile via OpenAPI/MCP (see [`cloud.md`](cloud.md)). |
+| `params_schema` | `JSON Schema` | `{}` | **`kind: ssh_provider` and `kind: soul_beacon`.** Schema of the endpoint parameters — the provider params passed via env for `ssh_provider`, the Vigil `params` for `soul_beacon`. |
+| ~~`namespace`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no publisher and no collection. Level 1 is the registration alias (above). |
+| ~~`name`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no subject name. Level 2 is the **module** name, declared per entry of `modules[]`. |
+| ~~`spec`~~ | — | — | **REMOVED (NIM-377).** The wrapper is gone: `modules[]` replaces `spec.states` and the three kind-specific schemas sit at the root. There is only one document shape left to wrap. |
+| `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional — empty until the **Sigil** signature ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` — consistent with `plugin_sigils.sha256` (TEXT CHECK hex64). |
 
-The input schema format inside `spec:` depends on `kind:`. For `soul_module` - Soul Stack input-DSL ([`docs/input.md`](../input.md)) in `spec.states.<name>.input`. For `cloud_driver` and `ssh_provider` - JSON Schema draft 2020-12 in `spec.profile_schema` / `spec.params_schema` respectively.
+### Per-module fields
 
-### `spec` for `kind: soul_module`
+`kind: soul_module` only. One entry per module the artifact serves — `acl`, `config`, `info`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `spec.states` | `map<state-name, {input, description?}>` | — | Map of supported states (or verb forms). The key is the state name (`installed` / `running` / `run` / ...). |
-| `spec.states.<name>.input` | input-schema (see [`docs/input.md`](../input.md)) | `{}` | Contract parameters for this state — **enforced at run time**, see [The input declaration is a contract](#the-input-declaration-is-a-contract). |
-| `spec.states.<name>.description` | `string` (optional) | — | Human-readable description for documentation/UI. |
-| `spec.states.<name>.introduced_in` | `string` (optional) | — | The engine release that added **this state**, same grammar as the top-level field. |
-| `spec.states.<name>.input.<param>.introduced_in` | `string` (optional) | — | The engine release that added **this parameter**. The granularity that matters most: a new parameter on a long-standing state is invisible to an author, and an older engine rejects it as `unknown_param`. |
-| `spec.states.<name>.input.<param>.deprecated` | `{since, removed_in, use?}` (optional) | — | The param is still honored but is on its way out ([ADR-0076](../adr/0076-engine-compat-window.md), amendment (r)). See [Deprecating a param](#deprecating-a-param). |
+| `modules[].name` | `string` (kebab-case) | — | **Address level 2** — the `acl` in `redis.acl.present`. Unique within the artifact. Also the **subcommand** the host passes to select this module (see [Lifecycle](#lifecycle)); `schema` is reserved and rejected as a module name, because an artifact must always be able to print its own document. |
+| `modules[].description` | `string` (optional) | — | Human-readable description for documentation / UI. |
+| `modules[].introduced_in` | `string` (`MAJOR.MINOR.PATCH`) | `""` | Optional: the **engine release** in which this module first appeared ([ADR-0076(i)](../adr/0076-engine-compat-window.md)). Same grammar as a `compat:` bound — no `v` prefix, no pre-release suffix — and only a **released** version. Empty = at or before the baseline. Read from **core** manifests, whose metadata ships with the parser; on a plugin it parses but states nothing about a keeper release (a plugin has its own version line, its git ref). Published by `GET /v1/modules`. |
+| `modules[].capabilities` | `list<enum>` | `[]` | Closed enum, see [capabilities table](#required_capabilities-table). **Disclosure to the operator, not a control** — see [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure). |
+| `modules[].side_effects` | `list<{<resource-type>: <value>}>` | `[]` | Declared touched resources, see [side_effects table](#side_effects-table). **Disclosure to the operator, not a contract** — nothing enforces it. |
+| `modules[].states` | `map<state-name, state>` | — | The supported states (or verb forms). The key is the state name (`installed` / `running` / `run` / …). |
+
+**`capabilities` and `side_effects` sit per module, not per artifact.** They were root-level when one artifact meant one module; a bundle makes the distinction matter. Invoking `acl` must not disclose what `config` touches, and an operator approving a bundle should be able to read each module's footprint separately rather than a union that describes none of them.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `…states.<name>.description` | `string` (optional) | — | Human-readable description for documentation / UI. |
+| `…states.<name>.introduced_in` | `string` (optional) | — | The engine release that added **this state**, same grammar as above. |
+| `…states.<name>.input` | input-schema (see [`docs/input.md`](../input.md)) | `{}` | Contract parameters for this state — **enforced at run time**, see [The input declaration is a contract](#the-input-declaration-is-a-contract). |
+| `…states.<name>.output` | same shape as `input` | `{}` | The fields the state publishes to a caller's `register:`, described with the same scheme as `input` — one vocabulary for both ends of the contract, as in destiny ([output.md](../destiny/output.md)). **Declarative disclosure only:** the engine does not yet forward module outputs into `register.<name>.<field>`, so this block documents the contract without gating anything. |
+| `…input.<param>.introduced_in` | `string` (optional) | — | The engine release that added **this parameter**. The granularity that matters most: a new parameter on a long-standing state is invisible to an author, and an older engine rejects it as `unknown_param`. |
+| `…input.<param>.deprecated` | `{since, removed_in, use?}` (optional) | — | The param is still honored but is on its way out ([ADR-0076](../adr/0076-engine-compat-window.md), amendment (r)). See [Deprecating a param](#deprecating-a-param). |
+
+Parameter fields are type / required / secret / pattern / description / default, plus the [ADR-045](../adr/0045-param-dsl.md) form fields (`enum`, `format`, `source`, `multiline`, `example`) and `items` for `list`/`map` element and value types. **Nothing the old manifest could express became inexpressible** — that was a constraint on the migration, not a happy accident.
 
 #### The input declaration is a contract
 
@@ -116,41 +238,36 @@ The engine-version axis genuinely does not reach a plugin's module: a plugin's `
 
 **Deprecating a module is therefore not unsupported — it goes through a different door.** If you are retiring a plugin module, cut a new ref and say so in its release notes; consumers move when they re-pin. If a `core.` module or state is going away, that is a release-notes event, and the author meets it as a positioned lint error rather than a silent no-op.
 
-### `spec` for `kind: cloud_driver`
+### Which root field belongs to which kind
 
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `spec.profile_schema` | `JSON Schema` | — | Schema of VM profile parameters. Used when creating a Profile via OpenAPI/MCP for validation (see [`cloud.md`](cloud.md)). |
-| `spec.provider_kind` | `string` (optional) | — | Cloud provider family (`aws` / `gcp` / `yandex-cloud` / `openstack`). Information field. |
+`modules[]` describes a **set of named modules**; the other three kinds describe a **single endpoint** and use a root-level schema instead. The validator rejects a field on the wrong kind rather than ignoring it.
 
-### `spec` for `kind: ssh_provider`
+| Kind | Carries | Must not carry |
+|---|---|---|
+| `soul_module` | `modules[]` | `provider_kind`, `profile_schema`, `params_schema` |
+| `cloud_driver` | `profile_schema`, opt. `provider_kind` (the provider family — `aws` / `gcp` / `yandex-cloud` / `openstack`; informational) | `modules[]`, `params_schema` |
+| `ssh_provider` | `provider_kind`, opt. `params_schema` (the provider params delivered via env, e.g. `vault_mount` for `vault_ssh_ca`) | `modules[]`, `profile_schema` |
+| `soul_beacon` | opt. `params_schema` (the Vigil `params` an operator sets via OpenAPI/MCP; runtime checks beyond JSON Schema go through `SoulBeacon.Validate`) | `modules[]`, `provider_kind`, `profile_schema` |
 
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `spec.provider_kind` | `string` (convention: `vault_ssh_ca` / `static_key` / `teleport`; extension via PR without proto editing) | — | SSH provider type; affects the UI/documentation, but **not** the contract `Sign`/`Authorize`. At the proto level - an open line for forward-compat (without editing `proto/plugin/vN/`). |
-| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Schema of provider parameters specified in `keeper.yml` (for example, `vault_mount` for `vault_ssh_ca`). |
+`soul_beacon` is read-only by design ([ADR-030 V5-2](../adr/0030-vigil-oracle.md) + [amendment 2026-05-26](../adr/0030-vigil-oracle.md#amendment-2026-05-26-s5-closure)): `Check` observes the host and does not mutate it, which is why it has no states.
 
-### `spec` for `kind: soul_beacon`
+> **Open, not decided by NIM-377.** The Go-side generator (`sdk/module`) is specified for **SoulModule bundles**. What authors the schema document for `cloud_driver` / `ssh_provider` / `soul_beacon` — whose `profile_schema` / `params_schema` are JSON Schema objects rather than a Go declaration — is not settled. The document format, the source-keyed registry, the alias-named slot and the single-executable convention apply to every kind regardless, because discovery and the slot layout are shared code.
 
-Soul-side event-driven monitoring plugin ([ADR-030 V5-2](../adr/0030-vigil-oracle.md) + [amendment 2026-05-26](../adr/0030-vigil-oracle.md#amendment-2026-05-26-s5-closure), binary `soul-beacon-<name>`). Read-only by design: `Check` observes the state of the host and does NOT mutate the system. Vigil addressing is `<namespace>.<name>` in the `VigilDef.check` field (the Soul-side dispatcher distinguishes built-in `core.beacon.*` from plugin-beacons by namespace).
+### Schema extension
 
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Schema of Vigil `params`, specified by the operator via OpenAPI/MCP. Runtime checks (what is not expressed by JSON Schema) - via `SoulBeacon.Validate`. |
+New kinds (`secrets_provider`, `audit_sink`, …) — add a variant to the `kind` enum and the corresponding root field. Forward-compat: a host of an earlier version sees an unknown `kind:` → rejects the plugin with `unknown kind=X, host supports [...]`.
 
-Not allowed: `spec.states` (one operation type - `Check`, no SoulModule state semantics), `spec.provider_kind` (only for `ssh_provider`), `spec.profile_schema` (only for `cloud_driver`).
+Adding a field to the parameter shape is a **forward-compat event**, not a free extension: decoding is strict, so an older engine reading a newer document fails on the key it does not know ([ADR-0076(i)/(q)](../adr/0076-engine-compat-window.md)).
 
-### manifest extension
+### Drift between declaration and code
 
-New kinds (`secrets_provider`, `audit_sink`, ...) - adding a variant to enum `kind` and a new submessage `*Spec` to `proto/plugin/vN/manifest.proto`. Forward-compat: host of earlier version sees unknown `kind:` → rejects plugin with message `unknown kind=X, host supports [...]`.
+**This class of bug no longer exists.** It used to: `manifest.yaml` was authored separately from the `Apply` it described, so an author could change one and forget the other, and [ADR-020(a)](../adr/0020-plugin-infrastructure.md) mitigated it with a self-test plus a proposed `soul-mod gen-manifest --check`. Both mitigations are now unnecessary — **there is one declaration**, in Go, and the document is generated from it.
 
-### Drift manifest ↔ plugin code
+What remains is the narrower risk that a **stamped** artifact carries an out-of-date copy of its own schema — a build that recompiled without re-stamping. That is what `soul-mod verify` exists for, and it is a CI gate rather than a runtime check because it is a build mistake, not an attack:
 
-The discrepancy between the declaration in `manifest.yaml` and the actual behavior of the code is a real risk. Protection:
-
-- **Self-test:** the plugin must return `INVALID_ARGUMENT` when calling `Apply` with parameters outside the input-schema. It is assumed that the SDK generates the validator from the schema automatically.
-- **Cross-check `kind`:** `manifest.kind != handshake.kind` → host rejects startup ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)).
-- **Generated manifest (post-MVP):** `soul-mod gen-manifest --check` from SDK - compares declarations in code vs `manifest.yaml`. Not part of the MVP.
+- **`soul-mod verify`** — stamped schema == the schema the code produces. Fails the build on a mismatch.
+- **Cross-check `kind`:** `document.kind != handshake.kind` → the host refuses to start the plugin ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)).
+- **Fail-closed trailer read:** a missing or malformed trailer is an error, never an empty schema.
 
 ## Handshake
 
@@ -165,8 +282,8 @@ When launched, the plugin writes **exactly one line** with JSON-payload to stdou
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `soul_stack` | `string` (constant `"plugin-v1"`) | — | Magic sanity field. Host ignores all stdout lines up to the first with this field. The value is independent of `protocol_version` - this is the "handshake-string format v1" marker; changes only when breaking changes the handshake format itself (separate ADR). |
-| `protocol_version` | `int32` | — | Plugin protocol version (see [Versioning](#versioning)). Must match `manifest.protocol_version`. The type `int32` (not `int`) is the same intentional exception as in the common Manifest fields. |
-| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Must match `manifest.kind`. |
+| `protocol_version` | `int32` | — | Plugin protocol version (see [Versioning](#versioning)). Must match the schema document's `protocol_version`. The type `int32` (not `int`) is the same intentional exception as in the root fields. |
+| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Must match the schema document's `kind`. |
 | `network` | `string` (MVP convention: `"unix"`; future `"named_pipe"` / `"tcp"`) | — | Socket type. MVP - only `unix`. Extension `named_pipe` (Windows) / `tcp` (loopback) - post-MVP, without editing `proto/plugin/vN/` (at the proto level - an open line for forward-compat). |
 | `address` | `path` | — | Path to the Unix-socket on which the plugin listens to gRPC. Must match the `SOUL_PLUGIN_SOCKET` passed to env-var (see [Lifecycle](#lifecycle)). |
 | `server_cert` | `base64-pem` (optional) | `""` | Reserved for optional mTLS post-MVP. In MVP there is always `""` ([ADR-020(h)](../adr/0020-plugin-infrastructure.md)). |
@@ -180,8 +297,8 @@ Expansion through new **optional** keys (`features`, `capabilities`, ...) - with
 | stdout string is not parsed as JSON | Ignored, the next line is read. |
 | stdout string is valid JSON, but without `"soul_stack":"plugin-v1"` | Ignored. |
 | Handshake line appeared, but `protocol_version ∉ SupportedProtocolVersions` host | Hard fail: `protocol_version=N, host supports [...]`. SIGTERM plugin. |
-| `manifest.protocol_version != handshake.protocol_version` | Hard fail: drift inside the plugin. SIGTERM. |
-| `manifest.kind != handshake.kind` | Hard fail: drift inside the plugin. SIGTERM. |
+| `document.protocol_version != handshake.protocol_version` | Hard fail: drift inside the plugin. SIGTERM. |
+| `document.kind != handshake.kind` | Hard fail: drift inside the plugin. SIGTERM. |
 | Handshake did not appear for `plugin_runtime.startup_timeout` (default `10s`) | Hard fail: startup timeout. SIGTERM, via `shutdown_grace` - SIGKILL. |
 | Handshake OK, but connect to `address` failed | Hard fail: socket unreachable. SIGTERM. |
 | Several lines with `"soul_stack":"plugin-v1"` | The first is handshake; all subsequent ones on stdout are ignored (after the handshake, stdout is "closed" for the plugin protocol). |
@@ -206,13 +323,16 @@ Plugin - **one-shot process per Apply** ([ADR-020(d)](../adr/0020-plugin-infrast
 ### Diagram
 
 ```
-host (keeper / soul)                              plugin (soul-mod-* / soul-cloud-* / soul-ssh-*)
+host (keeper / soul)                              plugin (the single executable in the slot)
 ─────────────────────                              ─────────────────────────────────────────────
+   0. digest gate: verify against the Sigil BEFORE any exec (ADR-026) — a binary
+      whose sha256 differs from the approved one never reaches step 3
    1. mkdir /var/run/soul-stack/plugins/  (mode 0700, owned by service user)
-   2. socket_path := "/var/run/.../plugins/<namespace>-<name>-<pid>.sock"
+   2. socket_path := "/var/run/.../plugins/<alias>-<module>-<pid>.sock"
    3. fork():
       env SOUL_PLUGIN_SOCKET=<socket_path>
-      exec <plugin_binary>             ─────────►   init(); read env SOUL_PLUGIN_SOCKET
+      exec <plugin_binary> <module>    ─────────►   ServeBundle dispatches on argv[1]
+                                                    init(); read env SOUL_PLUGIN_SOCKET
                                                     listen(unix, $SOUL_PLUGIN_SOCKET, mode 0700)
                                                     register gRPC services
                                                     print one-line JSON handshake to stdout
@@ -230,6 +350,8 @@ host (keeper / soul)                              plugin (soul-mod-* / soul-clou
   10. unlink per-pid socket file if still exists.
 ```
 
+**The module is selected by subcommand** (`<artifact> acl`), not by which binary was forked ([ADR-020(q)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)). One artifact serves several modules, and the process serves exactly one of them for exactly one Apply. `<artifact> schema` prints the artifact's own schema document — which is why `schema` cannot be a module name.
+
 ### Lifecycle parameters (configurable via `plugin_runtime:` block)
 
 Block `plugin_runtime:` in [`keeper.yml`](config.md) / [`soul.yml`](../soul/config.md) - regulatory specification: [`config.md → plugin_runtime`](config.md#plugin_runtime) (Keeper-side) and [`../soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime) (Soul-side). Defaults are fixed in [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md); the table below duplicates them inline for ease of reading this document.
@@ -238,8 +360,8 @@ Block `plugin_runtime:` in [`keeper.yml`](config.md) / [`soul.yml`](../soul/conf
 |---|---|---|
 | `startup_timeout` | `10s` | Time from fork to the appearance of the handshake line. Excess → SIGTERM. |
 | `shutdown_grace` | `10s` | Time from SIGTERM to SIGKILL. |
-| `allowed_capabilities` | all 6 capabilities from the [table](#required_capabilities-table) | List of capabilities allowed on this host; `soul-lint` checks against `manifest.required_capabilities`. |
-| `conflict_policy` | `warn` | What to do if there is a conflict between `side_effects` two plugins: `warn` / `fail`. |
+| `allowed_capabilities` | unset = **no filter** (everything allowed) | Capabilities allowed on this host. Checked by the **host at spawn**, not by `soul-lint` — see [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure). |
+| `conflict_policy` | `warn` | ⚠ **Parsed and read by nothing.** Documented as the resolution policy for two plugins claiming one resource; no conflict is ever detected. See [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure). |
 | `enable_tls` | `false` | Post-MVP option: enable mTLS on the plugin socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md)). |
 
 Full field typing, value validation and per-field hot-reload policy - in [`config.md → plugin_runtime`](config.md#plugin_runtime) (Keeper) and [`../soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime) (Soul).
@@ -251,7 +373,7 @@ Full field typing, value validation and per-field hot-reload policy - in [`confi
 | `soul` | `/var/run/soul-stack/plugins/` | `0700` | service user `soul` |
 | `keeper` | `/var/run/soul-stack-keeper/plugins/` | `0700` | service user `keeper` |
 
-The socket file name is `<namespace>-<name>-<pid>.sock` (the dot from the plugin's `<namespace>.<name>` addressing has been replaced with a hyphen for consistency with file grammar). Example: for plugin `acme.haproxy` with pid `12345` → `acme-haproxy-12345.sock`. After the plugin exits, the host deletes the file (in case the plugin is not unlinked itself).
+The socket file name is derived from the registration alias and the module (`<alias>-<module>-<pid>.sock`, e.g. `redis-acl-12345.sock`), the dot of the address replaced with a hyphen for file grammar. **The name matters for logs, not for the protocol** — the plugin reads its socket path from `SOUL_PLUGIN_SOCKET` and never constructs it. After the plugin exits the host deletes the file, in case the plugin did not unlink it itself.
 
 ## Integrity-model
 
@@ -263,35 +385,41 @@ The plugin binary in the host cache is forked with service-user rights (`keeper`
 
 | What | Where |
 |---|---|
-| **Allow-list** `(namespace, name, ref) → sha256` | PG table `plugin_sigils` (Keeper-state). The entry is added **only when the Archon explicitly allows** the plugin via OpenAPI (`POST /v1/plugins/sigils`, S4a) / MCP (S4b) - permission `plugin.allow`, [rbac.md → Plugin Sigil](rbac.md#plugin-sigil-3). `ref` - **git-verified** (Keeper resolves `source`+`ref` into `commit_sha` cache slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)); chain of trust `ref` → `commit_sha` → `binary_sha256` → Keeper signature. |
+| **Allow-list** `(artifact source, ref) → sha256` | PG table `plugin_sigils` (Keeper-state). The entry is added **only when the Archon explicitly allows** the plugin via OpenAPI (`POST /v1/plugins/sigils`, S4a) / MCP (S4b) — permission `plugin.allow`, [rbac.md → Plugin Sigil](rbac.md#plugin-sigil-3). `ref` — **git-verified** (Keeper resolves `source`+`ref` into a `commit_sha` cache slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)); chain of trust `source` → `ref` → `commit_sha` → `binary_sha256` → Keeper signature. ⚠ **The key was `(namespace, name, ref)`** and moved onto the source in NIM-377, because the artifact no longer carries a name to key on ([ADR-026(a)](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations)); the migration and route shapes are **NIM-438**. The **registration alias is a different axis** — it names the address and the slot, not the trust record. Two partial unique indexes do two different jobs: `(source, ref)` is the **trust** key (re-approving one artifact is a conflict an operator resolves by revoking first, never a silent second grant); `(alias)` is a **registration** invariant, so `<alias>.<module>.<state>` names one set of bytes and the runtime lookup has exactly one answer. |
 | **Keeper signing key** (private) | Vault KV - according to the pattern `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md)). |
 | **Keeper public key** (trust-anchor host) | Soul arrives in **bootstrap** along with a CA-chain (the same channel `BootstrapReply` as mTLS CA, [ADR-012(f)](../adr/0012-keeper-soul-grpc.md#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add)): single `sigil_pubkey_pem` or multi-anchor `sigil_pubkey_pem_set` (priority set > single). The runtime set of anchors is delivered to `SigilTrustAnchors` and **completely replaces** bootstrap-anchors (replace, not merge; R3 rotation) - see [Active set and replace semantics](#active-set-and-replace-semantics). |
 
-**Sigil** = `sign_keeper(block)`, where the block being signed carries `(namespace, name, ref, binary_sha256, manifest)`. The signature **covers the manifest** with the attached `binary_sha256` ([ADR-026(c)](../adr/0026-sigil.md)) → declared `side_effects` / `required_capabilities` / `protocol_version` cease to be forged (you cannot replace the manifest without breaking the signature).
+**Sigil** = `sign_keeper(block)`, where the signed block carries the artifact identity, the `ref`, `binary_sha256` and the schema-document hash. The signature **covers the schema document** with the attached `binary_sha256` ([ADR-026(c)](../adr/0026-sigil.md)): the declared `side_effects` / `capabilities` / `protocol_version` cannot be substituted without breaking the signature.
 
-> **`ref` - git-verified** ([ADR-026(g)](../adr/0026-sigil.md), **Option A, F-fetch**). Keeper itself resolves `source`+`ref` from the `keeper.yml` directory via **go-git**: shallow `clone`→`fetch`→`ResolveRevision(<ref>^{commit})` (resolved in 40-hex `commit_sha`)→detached-HEAD `checkout`, then extracts the **ALREADY compiled** binary `dist/<binary-name>` + `manifest.yaml` (F-fetch - no compilation on Keeper). Boundary "verified" = "Keeper checked this particular `ref` and recorded the result (`commit_sha` + `binary_sha256`)", **NOT** bit-reproducibility of the assembly. Cache - **R-nested**: `<cacheRoot>/<ns>-<name>/<commit_sha>/` (immutable slot) + symlink `current → <commit_sha>` (atomically permutable pointer to the active slot). **Single-active-per-pair**: `current` points to exactly one `commit_sha`, but multiple `commit_sha` slots under one `(namespace, name)` coexist. `plugin.allow` reads the binary+manifest of the ACTIVE slot via `current` ([`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go)), reads `sha256`, signs and inserts the record; `ref` is not involved in the slot lookup. **Integrity Authority = `sha256` + signature** (invariant (b) ADR-026 not weakened); `ref`/`commit_sha` carry provenance and audit-readability, not trust. `commit_sha` — audit mark OUTSIDE the signature (signature is above `(namespace, name, ref, binary_sha256, manifest_sha256)`); will be added as a column to `plugin_sigils` at S3.
+> **What that buys, precisely.** The operator's **disclosure** becomes trustworthy — what they read at `plugin.allow` is what the artifact actually claimed, so an attacker cannot pair a hostile binary with a reassuring declaration. It does **not** make those declarations enforceable; nothing enforces them ([Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure)). `protocol_version` is the one signed field with a consumer that acts on it. **The control is the digest**, and it consults no declaration.
+
+> **`ref` - git-verified** ([ADR-026(g)](../adr/0026-sigil.md), **Option A, F-fetch**). Keeper itself resolves `source`+`ref` from the `keeper.yml` directory via **go-git**: shallow `clone`→`fetch`→`ResolveRevision(<ref>^{commit})` (resolved in 40-hex `commit_sha`)→detached-HEAD `checkout`, then extracts the **ALREADY compiled** binary — **the single executable in `dist/`** — and reads the schema document from its trailer (F-fetch: no compilation on Keeper, and no execution of the artifact either). Boundary "verified" = "Keeper checked this particular `ref` and recorded the result (`commit_sha` + `binary_sha256`)", **NOT** bit-reproducibility of the assembly. Cache - **R-nested**: `<cacheRoot>/<alias>/<commit_sha>/` (immutable slot) + symlink `current → <commit_sha>` (atomically permutable pointer to the active slot). **Single-active-per-slot**: `current` points to exactly one `commit_sha`, but multiple `commit_sha` slots under one alias coexist. `plugin.allow` reads the binary + schema of the ACTIVE slot via `current` ([`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go)), reads `sha256`, signs and inserts the record; `ref` is not involved in the slot lookup. **Integrity Authority = `sha256` + signature** (invariant (b) ADR-026 not weakened); `ref`/`commit_sha` carry provenance and audit-readability, not trust. `commit_sha` — audit mark OUTSIDE the signature; will be added as a column to `plugin_sigils` at S3.
 
 ### Signed block format (normative, S3)
 
 The block is assembled with a pure deterministic function (`shared/pluginhost.BuildSigilBlock`) - common code for signature on Keeper (S3) and verification on Soul (S6), **without** proto-marshal (proto-serialization is non-deterministic - it was deliberately excluded):
 
 ```
-block = DST || LP(namespace) || LP(name) || LP(ref) || LP(binary_sha256) || LP(manifest_sha256)
+block = DST || LP(source) || LP(ref) || LP(binary_sha256) || LP(schema_sha256)
 ```
+
+> **Re-keyed onto the artifact source (NIM-377 / NIM-438, landed).** The block used to carry `namespace` and `name`; the artifact declares neither, so the identity it is bound to is now the git **source** the operator asserted, at a `ref`. **The DST moved to `soul-stack/sigil/v2`** — so every v1 signature stops verifying against this code by construction, not by accident. Migration 113 empties `plugin_sigils` for exactly that reason: those grants were already cryptographically dead, and keeping them would have shown live approvals in the UI that nothing could verify. Approvals are re-issued with `keeper.plugin.allow`.
+>
+> **The alias is deliberately NOT in the block.** An alias is operator-chosen text; binding a signature to it would mean the identity an approval covers is a value the same operator can rename — renaming would walk around an approved hash instead of requiring a fresh approval. The source is the one identity an operator *asserts about the bytes* rather than *picks for them*.
 
 - **`DST`** — domain-separation tag, ASCII constant `soul-stack/sigil/v1` (without length-prefix, fixed known prefix). Version `/v1` is required: change of block format → `…/v2`, old signatures no longer work against the new code (an obvious compatibility gap). DST first → the signature over the Sigil cannot be reused in another protocol.
 - **`LP(x)`** = 4 bytes of big-endian uint32 length `x`, then the bytes themselves `x`. Applies to **every** variable field - field boundary protection: without length-prefix, the concatenation of `("ab","c")` and `("a","bc")` would result in one block, and the signature over one set would fit into the other.
 - Hashes (`binary_sha256`, `manifest_sha256`) are put in **raw bytes** (for SHA-256 - 32 bytes), **not** a hex string.
-- The order of the fields is fixed exactly: `namespace`, `name`, `ref`, `binary_sha256`, `manifest_sha256`.
+- The field order is fixed exactly — `source`, `ref`, `binary_sha256`, `schema_sha256` — and cannot change without bumping the DST to `/v3`.
 
 **Signing key - ed25519** (asymmetry is required, unlike the HS256-symmetric JWT signing-key): the private person lives in Vault KV at `sigil.signing_key_ref` ([config.md → sigil](config.md#sigil)), signature - raw 64 bytes; the public part goes to Soul in bootstrap as a trust-anchor.
 
-**S3↔S6-invariant (manifest bytes).** The `manifest.yaml` bytes that Keeper hashes when signing must match the bytes that Soul re-hashes when verify. Guarantee: (1) manifest and binary are delivered in one artifact stream; (2) both sides run raw bytes through `NormalizeManifestBytes` before SHA-256 - **byte-only** canonicalization (strip BOM, CRLF→LF, exactly one trailing `\n`), **no** re-parse/re-emit YAML (hash should not depend on the version of the yaml emitter).
+**S3↔S6-invariant (schema bytes).** The schema-document bytes Keeper hashes when signing must be the bytes Soul re-hashes when verifying. Since NIM-377 this holds **by construction**: the document lives in the artifact's trailer, so the schema and the binary are physically the same object and cannot be separated in transit. The document is already canonical JSON from one generator, so `NormalizeManifestBytes` collapses to identity for it — the byte-only canonicalization (strip BOM, CRLF→LF, exactly one trailing newline) that used to carry this invariant for hand-written YAML now has nothing to normalize.
 
-**Canon vs projection in `plugin_sigils`.** The registry keeps manifest in **two** columns:
+**One column, not two (migration 113).** The registry stores the signed document **once**, as bytes:
 
-- **`manifest_raw` (`bytea`, migration 030) - CANON.** Byte-exact the same raw bytes that are signed (single `ReadSlot` with `plugin.allow`). They are the ones that go to `PluginSigil.manifest` for broadcast and are re-hashed by Soul during verify. The column is nullable at the DDL level (forward-only for old rows), but `allow`-path requires non-NULL: `Insert` rejects empty `manifest_raw` (empty signed bytes = calling bug, root of trust; `{}`-fallback here **not applicable** - `Normalize("{}") != Normalize("")`).
-- **`manifest` (`jsonb`, migration 028) - derived.** Projection for query/audit (search by `side_effects` / `required_capabilities`, show in UI). **NOT** canon for verify: JSONB roundtrip does not save bytes. Using `manifest` (JSONB) for verify/broadcast is an error; the source of truth is always `manifest_raw`.
+- **`schema` (`bytea`, `NOT NULL`) — the canon.** Byte-exact the bytes the signature covers: the canonical-JSON schema document read out of the artifact's trailer by a single `ReadSlot` at `plugin.allow`. They are what rides in `PluginSigil.schema` and what Soul re-hashes during verify. `NOT NULL` because a grant whose signed bytes are absent cannot be verified by anything — such a row can only fail closed later, so it is rejected at write time.
+- **The old `manifest_raw` (bytea canon) + `manifest` (jsonb projection) split is gone.** `manifest_raw` was renamed to `schema` and the jsonb projection was **dropped**. The split existed because a hand-written YAML manifest needed a byte-exact canon *and* a queryable form; the document is already canonical JSON, so keeping both would be two copies of one value that can disagree — and the one free to drift would be the copy the signature was **not** placed over.
 
 ### Mechanism
 
@@ -327,7 +455,7 @@ After each mutation, the mutating node publishes `sigil:anchors-changed` to the 
 
 | Object | Mode | Owner | Requirement |
 |---|---|---|---|
-| Cache directory `<cacheRoot>/<ns>-<name>/<commit_sha>/` (R-nested per-commit slot + symlink `current → <commit_sha>`, [ADR-026(g)](../adr/0026-sigil.md)) | `0755` | service-user (`keeper` / `soul`) | Recording is for the owner only. Group/other - read-only, so that an extraneous process does not replace the binary or sidecar. |
+| Cache directory `<cacheRoot>/<alias>/<commit_sha>/` (R-nested per-commit slot + symlink `current → <commit_sha>`, [ADR-026(g)](../adr/0026-sigil.md)) | `0755` | service-user (`keeper` / `soul`) | Recording is for the owner only. Group/other - read-only, so that an extraneous process does not replace the binary or sidecar. |
 | Plugin binary | `0755` | service-user | Executable, writable only by owner. |
 | Sidecar `.sha256` | `0400` | service-user | Read-only after recording. |
 
@@ -337,13 +465,13 @@ Host **must** run under a dedicated least-privilege service-user, not root (exce
 
 The previous TOFU model protected against binary substitution **after** the first loading into the cache, but **not** from a malicious plugin during the **first** loading (if the attacker replaced the binary in artifact-source / during Keeper-checkout of git-ref before the host saw it for the first time) - he went through integrity-gate "as is" and forked with service-user rights (RCE vector). **This gap is closed by Sigil** ([ADR-026](../adr/0026-sigil.md)): first-load is no longer "trust as is" - the host verifies the Keeper's signature and checks the digest with the value **to** seal/exec explicitly approved by the Archon. A Malicious binary without a valid Sigil does not receive control.
 
-> **Implementation (host-side verify - LIVE).** Plugin directory Git resolver ready (A1-S1): [`keeper/internal/plugingit`](../../keeper/internal/plugingit) (go-git F-fetch, R-nested cache `<ns>-<name>/<commit_sha>/` + `current`, scheme-allowlist, git-egress size-limit (ADR-026(g)), sentinels `ErrRefNotResolved`/`ErrManifestNotFound`/`ErrArtifactNotFound`/`ErrSourceUnavailable`/`ErrCloneTooLarge`/`ErrArtifactTooLarge`), config fields `plugins.work_root`/`plugins.fetch_timeout`/`plugins.max_artifact_size_mb`/`plugins.max_clone_size_mb`; reading active slot at `plugin.allow` - [`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go) via `current`. Keeper-side signature is ready (S3): general block build helper + canonicalization manifest in [`shared/pluginhost`](../../shared/pluginhost) (`BuildSigilBlock` / `NormalizeManifestBytes`), ed25519-signature + CRUD registry `plugin_sigils` in [`keeper/internal/sigil`](../../keeper/internal/sigil), config `sigil.signing_key_ref`. `plugin.allow` persists signed raw bytes in `manifest_raw` (M1-storage, migration 030) - `ListActive` / `GetActive` give them to S6-sender/S6b-verify byte-exact. **Host-side verify-against-Sigil - LIVE (S6):** TOFU branch first-load is replaced by verify by Sigil + multi-anchor set in [`shared/pluginhost`](../../shared/pluginhost) (SHA-256 verification before each `exec` remains defense-in-depth). **Multi-anchor rotation of signature keys - LIVE (R3, [ADR-026(h)](../adr/0026-sigil.md)):** registry `sigil_signing_keys` (migration 037, [`keeper/internal/sigil/keys.go`](../../keeper/internal/sigil/keys.go)), multi-anchor Signer, broadcast `SigilTrustAnchors` + Redis channel `sigil:anchors-changed` (cluster reload), operator-facing rotation (R3-S7: REST `/v1/sigil/keys*` + MCP `keeper.sigil.key.*`, permissions `sigil.key-introduce|retire|list|set-primary`, audit `sigil.key-introduced|retired|primary-set`), bootstrap-reply from live anchor source. Deferred: column `commit_sha` in `plugin_sigils` (A1-S3, audit-label of origin, OUTSIDE signature).
+> **Implementation (host-side verify - LIVE).** Plugin directory Git resolver ready (A1-S1): [`keeper/internal/plugingit`](../../keeper/internal/plugingit) (go-git F-fetch, R-nested cache `<alias>/<commit_sha>/` + `current`, scheme-allowlist, git-egress size-limit (ADR-026(g)), sentinels `ErrRefNotResolved`/`ErrManifestNotFound`/`ErrArtifactNotFound`/`ErrSourceUnavailable`/`ErrCloneTooLarge`/`ErrArtifactTooLarge`), config fields `plugins.work_root`/`plugins.fetch_timeout`/`plugins.max_artifact_size_mb`/`plugins.max_clone_size_mb`; reading active slot at `plugin.allow` - [`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go) via `current`. Keeper-side signature is ready (S3): general block build helper + canonicalization manifest in [`shared/pluginhost`](../../shared/pluginhost) (`BuildSigilBlock` / `NormalizeManifestBytes`), ed25519-signature + CRUD registry `plugin_sigils` in [`keeper/internal/sigil`](../../keeper/internal/sigil), config `sigil.signing_key_ref`. `plugin.allow` persists the signed bytes in `schema` (M1-storage, migration 030, renamed and made NOT NULL by migration 113) - `ListActive` / `GetActive` give them to S6-sender/S6b-verify byte-exact. **Host-side verify-against-Sigil - LIVE (S6):** TOFU branch first-load is replaced by verify by Sigil + multi-anchor set in [`shared/pluginhost`](../../shared/pluginhost) (SHA-256 verification before each `exec` remains defense-in-depth). **Multi-anchor rotation of signature keys - LIVE (R3, [ADR-026(h)](../adr/0026-sigil.md)):** registry `sigil_signing_keys` (migration 037, [`keeper/internal/sigil/keys.go`](../../keeper/internal/sigil/keys.go)), multi-anchor Signer, broadcast `SigilTrustAnchors` + Redis channel `sigil:anchors-changed` (cluster reload), operator-facing rotation (R3-S7: REST `/v1/sigil/keys*` + MCP `keeper.sigil.key.*`, permissions `sigil.key-introduce|retire|list|set-primary`, audit `sigil.key-introduced|retired|primary-set`), bootstrap-reply from live anchor source. Deferred: column `commit_sha` in `plugin_sigils` (A1-S3, audit-label of origin, OUTSIDE signature).
 
 ## Versioning
 
 `protocol_version: int` - plugin protocol version. **One field - two places** ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)):
 
-- In `manifest.yaml` - for static `soul-lint`.
+- In the schema document - for static `soul-lint`.
 - In the handshake line - for runtime sanity before opening gRPC.
 
 ### Match `protocol_version` ↔ `proto/plugin/vN/`
@@ -364,14 +492,14 @@ Summary list of cross-checks between manifest, handshake string and host constan
 
 | fail condition | Where | Behavior |
 |---|---|---|
-| `manifest.protocol_version != handshake.protocol_version` | host, after handshake | Hard fail: drift inside the plugin. |
-| `manifest.protocol_version ∉ SupportedProtocolVersions` | `soul-lint` when validating destiny | Destiny validation error **before launch**. |
+| `document.protocol_version != handshake.protocol_version` | host, after handshake | Hard fail: drift inside the plugin. |
+| `document.protocol_version ∉ SupportedProtocolVersions` | `soul-lint` when validating destiny (from a `--modules <alias>=<path>` binding) | Destiny validation error **before launch**. |
 | `handshake.protocol_version ∉ SupportedProtocolVersions` | host, after handshake | Hard fail: `protocol_version=N, host supports [...]`. |
-| `manifest.kind != handshake.kind` | host, after handshake | Hard fail: drift inside the plugin. |
+| `document.kind != handshake.kind` | host, after handshake | Hard fail: drift inside the plugin. |
 
 ## `required_capabilities`-table
 
-Closed enum capabilities. The plugin declares what it needs from the host system; `soul-lint` checks against `plugin_runtime.allowed_capabilities` host (mismatch → destiny validation error **before launch**).
+Closed enum capabilities. The plugin declares what it needs from the host system. The **host** compares that declaration against `plugin_runtime.allowed_capabilities` at spawn and refuses to exec on a mismatch; `soul-lint` does **not** check capabilities at all, and nothing confines the process once it starts — see [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure).
 
 | Capability | Meaning |
 |---|---|
@@ -384,7 +512,32 @@ Closed enum capabilities. The plugin declares what it needs from the host system
 
 Enum expansion is done via PR in `proto/plugin/vN/manifest.proto`, without breaking. Freeform-extensions with the prefix `x-` (open-ended capabilities) **rejected in MVP** - will be added on the first real request.
 
-**Declaration, not runtime-enforcement.** `required_capabilities` is a *static declaration* of what the plugin needs from the host, to check `soul-lint` with `plugin_runtime.allowed_capabilities` host: with mismatch - destiny validation error **before launch**. The host **does not raise rights in this field** - the step is executed exactly with the privileges of the process (`soul` / `keeper`), and the rights field itself does not issue. So, `run_as_root` means "the module only works correctly when the host process is UID 0" (environment requirement), not "the module is promoted to root itself." Built-in core modules (`soul`-side, statically compiled) declare `required_capabilities` in their manifests [`shared/coremanifest/<name>.yaml`](../../shared/coremanifest) and undergo the same** static verification - for them the field does not carry any other (runtime) semantics than for external plugins.
+`run_as_root` means "this module only works correctly when the host process is UID 0" — an environment requirement. It does **not** mean the module is raised to root: the step runs with exactly the privileges the host process (`soul` / `keeper`) already has, and no field grants any.
+
+Built-in core modules (Soul-side, statically compiled) declare their capabilities as Go values in [`shared/coremanifest/mod_<name>.go`](../../shared/coremanifest). For them the field carries no runtime semantics either.
+
+## Capabilities and side_effects are disclosure
+
+Neither `capabilities` nor `side_effects` constrains what a plugin can do. Both are **disclosure to the operator before approval** ([ADR-020(r)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)). This section is the correction to an earlier version of this page, which described enforcement the code does not have — worth stating flatly, because a reader who believes the old text will make a security decision on it.
+
+**What is actually there:**
+
+| Mechanism | Status |
+|---|---|
+| Sandbox at spawn confining the plugin to its declared capabilities | **Does not exist.** No `SysProcAttr`, no seccomp, no `Setuid`, no rlimit anywhere in `shared/pluginhost`. A plugin declaring `[]` and then opening a socket is stopped by nothing. |
+| `soul-lint` statically checking `capabilities` ⊆ `allowed_capabilities` | **Does not exist.** `soul-lint` never reads capabilities. |
+| Host check against `plugin_runtime.allowed_capabilities` | **Exists**, at spawn (`pluginhost.CheckCapabilities`). It compares strings and refuses to exec on a mismatch. With `allowed_capabilities` unset — the default — it is a no-op. It gates on the **declaration**, so it stops an honest plugin the operator did not want, not a dishonest one. |
+| `side_effects` violation → step `failed`, reason `policy_violation` | **Does not exist.** No production code emits `policy_violation`; the string appears only in test fixtures. |
+| Conflict detection between two plugins claiming one resource (`plugin_runtime.conflict_policy`) | **Does not exist.** `conflict_policy` is parsed and enum-validated in `shared/config` and read by nothing. |
+| Audit event per touched resource | **Does not exist.** |
+
+`side_effects` values are read in exactly one place in the tree — the grammar validator. Nothing consumes them.
+
+**Why the fields stay.** `plugin.allow` is a human act: an Archon decides that a specific artifact may run with the service user's privileges, which on a Keeper host means access to Vault, Postgres and the PKI. What that artifact says it needs and what it says it will touch is exactly the material that decision is made on. Deleting the declarations would not make anything safer — it would remove the only thing the operator has to read. And under [Sigil](#integrity-model) the disclosure is signed, so what the operator approved is what the artifact actually claimed.
+
+**The one real control is unchanged and is not one of these fields:** the operator approves a specific sha256, and the host refuses to exec anything whose digest differs. It consults no declaration, so no declaration being false can weaken it.
+
+Making either field a control is a **separate ADR** with a real cost — enforcing `side_effects` means interposing on the plugin's syscalls, enforcing `capabilities` means an actual sandbox. Neither is designed, and neither should be assumed to exist because a schema key spells it.
 
 ## `side_effects`-table
 
@@ -415,37 +568,39 @@ side_effects:
   - { port: 80 }
 ```
 
-manifest parser validates: entry with more than one pair → error `multiple_resource_types_in_side_effect_entry`. Several resources of the **same** type are also written as separate records (for example, two different files - two `{ file: … }` records).
+The validator rejects an entry with zero or more than one pair. Several resources of the **same** type are also separate entries (two different files → two `{ file: … }` entries).
+
+In the Go declaration the resource type is a **struct field**, not a map key — `module.SideEffect{User: "redis_acl_user"}` — so a typo is a compile error in the author's own build rather than a validation error someone else finds later. It serializes to the same single-key object.
 
 ### Host behavior on side_effects
 
-| Situation | Behavior |
-|---|---|
-| Each resource touched at `Apply` | An entry in audit-event indicating the plugin (`namespace.name`) and `apply_id`. |
-| Two plugins in one run on the same resource | According to the `plugin_runtime.conflict_policy` policy: `warn` (default) or `fail`. |
-| The plugin touches a resource not from `side_effects` | The step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact form of the field is a separate audit-pipeline standardization task for `side_effects`, see backlog). |
+**The host does nothing with `side_effects` at run time.** No audit event, no conflict detection, no violation check — see [Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure) for the full list of what the previous version of this section claimed and what the code does. The values are read once, by the grammar validator, and never again.
+
+The audience for this field is the operator reading the schema at `plugin.allow`.
 
 ## Service contract `SoulModule`
 
-Host is a `soul` binary. Binary - `soul-mod-<name>` (for example, `soul-mod-haproxy`).
+Host is the `soul` binary. The artifact is **the single executable in `dist/`** — its filename is not a contract ([Registration alias](#registration-alias)).
+
+**The host selects a module by subcommand:** it forks `<artifact> <module>` — `soul-mod-redis acl` — and the process serves that one module for that one Apply. `ServeBundle` dispatches on the argument and also answers a `schema` subcommand, which is why `schema` is a reserved module name. This costs no proto change and does not move `protocol_version`: the host already forks per Apply ([ADR-020(d)](../adr/0020-plugin-infrastructure.md), one-shot), so multiplexing several modules over one socket would buy nothing.
 
 | Method | Destination |
 |---|---|
-| `Validate(ValidateRequest) → ValidateReply` | Runtime parameter checks (the full schema in `manifest.spec.states.<state>.input` has already been checked by `soul-lint`; here are additional semantic checks that require access to the host system). |
+| `Validate(ValidateRequest) → ValidateReply` | Runtime parameter checks (the declared schema in `modules[].states.<state>.input` has already been checked; here are the additional semantic checks that need access to the host system). |
 | `Plan(PlanRequest) → stream PlanEvent` | Dry-run: the module calculates changes without applying them. Returns the progress event stream. |
 | `Apply(ApplyRequest) → stream ApplyEvent` | Applies the changes. Stream events for long-running operations (see the clause about MVP in [ADR-012](../adr/0012-keeper-soul-grpc.md) - progress is aggregated on Soul, only the final result goes out through `TaskEvent`). |
 
-`Manifest()` RPC in MVP **not entered** - the manifest is read by the host from the static `manifest.yaml` ([ADR-020(a)](../adr/0020-plugin-infrastructure.md)). A possible future method (for self-test "compare yourself with the declared one") is in `proto/plugin/v2/`.
+There is **no `Manifest()` RPC**, and now there is a second reason for it. The original one stands — `soul-lint` must validate a destiny offline, without starting the plugin ([ADR-009](../adr/0009-scenario-dsl.md)). The stronger one is the approval order: Keeper reads the schema at `plugin.allow`, when the binary is **not yet approved**, so asking the artifact to describe itself would mean executing the thing being gated. The schema comes from the trailer instead.
 
 Destiny step addressing is `<namespace>.<name>.<state>` (see [`../soul/modules.md`](../soul/modules.md), [naming-rules.md → Destiny Modules](../naming-rules.md)).
 
 ## Service contract `CloudDriver`
 
-Host - `keeper` (module `keeper.cloud`, see [`cloud.md`](cloud.md)). Binary - `soul-cloud-<provider>` (for example, `soul-cloud-aws`, `soul-cloud-yc`).
+Host - `keeper` (module `keeper.cloud`, see [`cloud.md`](cloud.md)). The artifact is the single executable in `dist/`; repositories conventionally name it `soul-cloud-<provider>`, and nothing reads that name.
 
 | Method | Destination |
 |---|---|
-| `Schema(SchemaRequest) → SchemaReply` | Publishes `profile_schema` (JSON Schema of the VM profile; must match `manifest.spec.profile_schema`). Used when creating a Profile via OpenAPI/MCP for validation. `SchemaRequest` is an empty message (instead of `google.protobuf.Empty`) for forward-compat to add fields without breaking change. |
+| `Schema(SchemaRequest) → SchemaReply` | Publishes `profile_schema` (JSON Schema of the VM profile; must match the schema document's root `profile_schema`). Used when creating a Profile via OpenAPI/MCP for validation. `SchemaRequest` is an empty message (instead of `google.protobuf.Empty`) for forward-compat to add fields without breaking change. |
 | `Validate(ValidateProfileRequest) → ValidateProfileReply` | Runtime checks of profile parameters (quotas, image availability, subnet validity - things that are not expressed by JSON Schema). The request/reply name is different from SoulModule `ValidateRequest/Reply` - a single proto-package `soulstack.plugin.v1`, message names must be unique. |
 | `Create(CreateRequest) → stream CreateEvent` | Creates a VM (one or N), streams progress. The closing wait-until-ready phase runs on its own budget (`clouddriver.DefaultWaitBackoff`, `SOUL_CLOUD_WAIT_BUDGET`), not on the API-retry backoff - see [cloud.md → Wait-until-ready budget](cloud.md#wait-until-ready-budget). |
 | `Destroy(DestroyRequest) → stream DestroyEvent` | Deletes a VM and CONFIRMS it is gone (`clouddriver.ConfirmDestroy`): an accepted delete call is not a deletion, so a teardown the driver could not confirm is reported `failed=true` with the `vm_id`, never as a success - see [cloud.md → Confirmed teardown](cloud.md#confirmed-teardown). Under guard-rails - see [cloud.md → Security destroy](cloud.md). |
@@ -456,7 +611,7 @@ Usage - in [`cloud.md`](cloud.md). Cloud-create is built into scenarios as a ste
 
 ## Service contract `SshProvider`
 
-Host - `keeper` (module `keeper.push`, see [`push.md`](push.md)). Binary - `soul-ssh-<provider>` (for example, `soul-ssh-vault`, `soul-ssh-static`, `soul-ssh-teleport`).
+Host - `keeper` (module `keeper.push`, see [`push.md`](push.md)). The artifact is the single executable in `dist/`; repositories conventionally name it `soul-ssh-<provider>`, and nothing reads that name.
 
 | Method | Destination |
 |---|---|
@@ -465,80 +620,147 @@ Host - `keeper` (module `keeper.push`, see [`push.md`](push.md)). Binary - `soul
 
 This contract covers Vault SSH CA, static-key, Teleport - three candidates for MVP, a specific set of required implementations - [open Q SSH-2 / No. 3](../architecture.md). Usage is in [`push.md → SSH authentication`](push.md#ssh-authentication--pluggable-provider).
 
-## Full manifest examples
+## Full examples
+
+**Nobody writes these documents.** For `kind: soul_module` the author writes Go and the document is generated; the JSON below is shown so you can recognize what `soul-mod stamp` produced and what an operator reads at `plugin.allow`. Note that the artifact names no publisher and no subject — only its modules.
 
 ### `kind: soul_module` (HAProxy)
 
-```yaml
-# soul-mod-haproxy/manifest.yaml
-kind: soul_module
-protocol_version: 1
-namespace: acme
-name: haproxy
+What the author writes:
 
-required_capabilities:
-  - run_as_root
-  - exec_subprocess
+```go
+// internal/haproxy/haproxy.go
+var Module = module.Def{
+	Name:        "haproxy",
+	Description: "HAProxy service and configuration",
+	Capabilities: []module.Capability{module.RunAsRoot, module.ExecSubprocess},
+	SideEffects: []module.SideEffect{
+		{Service: "haproxy"},
+		{File: "/etc/haproxy/haproxy.cfg"},
+		{Package: "haproxy"},
+	},
+	Impl: &HAProxy{},
 
-side_effects:
-  - { service: haproxy }
-  - { file: /etc/haproxy/haproxy.cfg }
-  - { package: haproxy }
-
-spec:
-  states:
-    running:
-      description: HAProxy is running and enabled in systemd.
-      input:
-        name:        { type: string, required: true }
-        enabled:     { type: boolean, default: true }
-        config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
-    stopped:
-      description: HAProxy has stopped.
-      input:
-        name: { type: string, required: true }
-    restarted:
-      description: HAProxy has been restarted (force-restart).
-      input:
-        name:        { type: string, required: true }
-        config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
-    reloaded:
-      description: HAProxy reload (SIGHUP) without downtime.
-      input:
-        name: { type: string, required: true }
+	States: map[string]module.State{
+		"running": {
+			Description: "HAProxy is running and enabled in systemd",
+			Input: module.Input{
+				"name":        {Type: module.String, Required: true},
+				"enabled":     {Type: module.Bool, Default: true},
+				"config_path": {Type: module.String, Default: "/etc/haproxy/haproxy.cfg"},
+			},
+		},
+		"stopped": {
+			Description: "HAProxy is stopped",
+			Input:       module.Input{"name": {Type: module.String, Required: true}},
+		},
+		"reloaded": {
+			Description: "HAProxy reloaded (SIGHUP), without downtime",
+			Input:       module.Input{"name": {Type: module.String, Required: true}},
+		},
+	},
+}
 ```
+
+```go
+// cmd/soul-mod-haproxy/main.go
+func main() {
+	module.ServeBundle(module.Bundle{
+		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
+		Modules: []module.Def{haproxy.Module},
+	})
+}
+```
+
+What `soul-mod stamp` generates (shown indented for reading; the real document is canonical JSON with sorted keys and no insignificant whitespace):
+
+```json
+{
+  "kind": "soul_module",
+  "protocol_version": 1,
+  "compat": { "keeper": ">=0.9 <2.0" },
+  "modules": [
+    {
+      "name": "haproxy",
+      "description": "HAProxy service and configuration",
+      "capabilities": ["run_as_root", "exec_subprocess"],
+      "side_effects": [
+        { "service": "haproxy" },
+        { "file": "/etc/haproxy/haproxy.cfg" },
+        { "package": "haproxy" }
+      ],
+      "states": {
+        "running": {
+          "description": "HAProxy is running and enabled in systemd",
+          "input": {
+            "name":        { "type": "string", "required": true },
+            "enabled":     { "type": "bool", "default": true },
+            "config_path": { "type": "string", "default": "/etc/haproxy/haproxy.cfg" }
+          }
+        },
+        "stopped": {
+          "description": "HAProxy is stopped",
+          "input": { "name": { "type": "string", "required": true } }
+        },
+        "reloaded": {
+          "description": "HAProxy reloaded (SIGHUP), without downtime",
+          "input": { "name": { "type": "string", "required": true } }
+        }
+      }
+    }
+  ]
+}
+```
+
+Registered as `acme`, this artifact answers `acme.haproxy.running`; registered as `haproxy-community`, the same bytes answer `haproxy-community.haproxy.running`.
+
+### `kind: soul_module` (a bundle: redis)
+
+One artifact, three modules — the shape NIM-377 exists for:
+
+```json
+{
+  "kind": "soul_module",
+  "protocol_version": 1,
+  "compat": { "keeper": ">=0.9 <2.0" },
+  "modules": [
+    { "name": "acl",    "capabilities": ["network_outbound"],
+      "side_effects": [{ "user": "redis_acl_user" }],
+      "states": { "present": { "input": { "host": { "type": "string", "required": true } } },
+                  "absent":  { "input": { "host": { "type": "string", "required": true } } } } },
+    { "name": "config", "capabilities": ["network_outbound"], "states": { "present": {} } },
+    { "name": "info",   "capabilities": ["network_outbound"], "states": { "read": {} } }
+  ]
+}
+```
+
+Registered as `redis`, it serves `redis.acl.present`, `redis.config.present` and `redis.info.read`. The host forks `<artifact> acl` for the first of those.
 
 ### `kind: cloud_driver` (AWS)
 
-```yaml
-# soul-cloud-aws/manifest.yaml
-kind: cloud_driver
-protocol_version: 1
-namespace: soulstack
-name: aws
-
-required_capabilities:
-  - network_outbound
-  - vault_access
-
-side_effects: []   # cloud_driver does not touch the local resources of the host
-
-spec:
-  provider_kind: aws
-  profile_schema:
-    type: object
-    required: [image_id, instance_type, subnet_id]
-    properties:
-      image_id:      { type: string, pattern: "^ami-[0-9a-f]+$" }
-      instance_type: { type: string }
-      subnet_id:     { type: string, pattern: "^subnet-[0-9a-f]+$" }
-      security_group_ids:
-        type: array
-        items: { type: string, pattern: "^sg-[0-9a-f]+$" }
-      tags:
-        type: object
-        additionalProperties: { type: string }
+```json
+{
+  "kind": "cloud_driver",
+  "protocol_version": 1,
+  "provider_kind": "aws",
+  "profile_schema": {
+    "type": "object",
+    "required": ["image_id", "instance_type", "subnet_id"],
+    "properties": {
+      "image_id":      { "type": "string", "pattern": "^ami-[0-9a-f]+$" },
+      "instance_type": { "type": "string" },
+      "subnet_id":     { "type": "string", "pattern": "^subnet-[0-9a-f]+$" },
+      "security_group_ids": {
+        "type": "array",
+        "items": { "type": "string", "pattern": "^sg-[0-9a-f]+$" }
+      },
+      "tags": { "type": "object", "additionalProperties": { "type": "string" } }
+    }
+  }
+}
 ```
+
+A `cloud_driver` has no `modules[]` and no `side_effects`: it touches nothing on the local host. Its `capabilities` (`network_outbound`, `vault_access`) are declared per module and a driver has none — the endpoint-shaped kinds carry no capability block, which is one of the loose ends listed under [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind).
 
 ### `kind: ssh_provider` (Vault SSH CA)
 
@@ -556,46 +778,39 @@ The actual implementation is [`examples/module/soul-ssh-vault/`](../../examples/
 **Params** come via env `SOUL_SSH_VAULT_PARAMS` (JSON by `schema.json`, symmetrically by `SOUL_SSH_STATIC_PARAMS`). The SshProvider contract does not carry per-request provider parameters, so the config is sent at the start of the process, like the path to the socket (`SOUL_PLUGIN_SOCKET`).
 
 ```yaml
-# soul-ssh-vault/manifest.yaml
+# schema document for soul-ssh-vault (generated; shown as YAML for readability)
 kind: ssh_provider
 protocol_version: 1
-namespace: ssh
-name: vault
 
-required_capabilities:
-  - network_outbound          # Vault API HTTP calls
-  - vault_access              # plugin CAM goes to Vault (variant B)
-
-side_effects: []              # ssh_provider does not touch local resources of the host
-
-spec:
-  provider_kind: vault_ssh_ca
-  params_schema:
-    type: object
-    required: [vault_addr, role]
-    properties:
-      vault_addr:  { type: string, pattern: "^https?://" }
-      vault_mount: { type: string, default: "ssh" }
-      role:        { type: string }
-      auth_method: { type: string, enum: [token, approle], default: token }
-      token:       { type: string }                    # SENSITIVE; for auth_method=token
-      approle:
+provider_kind: vault_ssh_ca
+params_schema:
+  type: object
+  required: [vault_addr, role]
+  properties:
+    vault_addr:  { type: string, pattern: "^https?://" }
+    vault_mount: { type: string, default: "ssh" }
+    role:        { type: string }
+    auth_method: { type: string, enum: [token, approle], default: token }
+    token:       { type: string }                    # SENSITIVE; for auth_method=token
+    approle:
+      type: object
+      properties:
+        role_id:   { type: string }
+        secret_id: { type: string }                  # SENSITIVE
+        mount:     { type: string, default: "approle" }
+    valid_principals:                                # local allowlist over Vault role
+      type: array
+      items: { type: string }
+    deny:                                            # deny-list paras (host, user); empty = allow-all
+      type: array
+      items:
         type: object
         properties:
-          role_id:   { type: string }
-          secret_id: { type: string }                  # SENSITIVE
-          mount:     { type: string, default: "approle" }
-      valid_principals:                                # local allowlist over Vault role
-        type: array
-        items: { type: string }
-      deny:                                            # deny-list paras (host, user); empty = allow-all
-        type: array
-        items:
-          type: object
-          properties:
-            host: { type: string }
-            user: { type: string }
+          host: { type: string }
+          user: { type: string }
 ```
+
+> The old manifest declared `required_capabilities: [network_outbound, vault_access]`. The schema document declares capabilities **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind).
 
 Example `SOUL_SSH_VAULT_PARAMS` (JSON, passed to the plugin env during fork):
 
@@ -616,35 +831,29 @@ Example `SOUL_SSH_VAULT_PARAMS` (JSON, passed to the plugin env during fork):
 Reference implementation of SshProvider (circulation pilot) - [`examples/module/soul-ssh-static/`](../../examples/module/soul-ssh-static). Static-key: long-lived private key on the keeper host, its public part is in `authorized_keys` target hosts ([push.md → static key](push.md)). `Sign` gives a ready pair (`certificate=""`), `Authorize` — deny-list (default allow-all, for dev/test). Params of the provider (`key_path` / deny-list) arrive at the start via env (SshProvider contract does not carry per-request parameters of the provider; `vault_ref` resolves `keeper.push` to `key_path` before launching the plugin - A-flow, parallel with cloud credentials).
 
 ```yaml
-# soul-ssh-static/manifest.yaml
+# schema document for soul-ssh-static (generated; shown as YAML for readability)
 kind: ssh_provider
 protocol_version: 1
-namespace: ssh
-name: static
 
-required_capabilities:
-  - vault_access            # optional key resolution from Vault KV
-
-side_effects: []            # ssh_provider does not touch the local resources of the host
-
-spec:
-  provider_kind: static_key
-  params_schema:
-    type: object
-    oneOf:                  # exactly one key source
-      - required: [key_path]
-      - required: [vault_ref]
-    properties:
-      key_path:  { type: string }
-      vault_ref: { type: string }
-      deny:                 # deny-list paras (host, user); empty = allow-all
-        type: array
-        items:
-          type: object
-          properties:
-            host: { type: string }
-            user: { type: string }
+provider_kind: static_key
+params_schema:
+  type: object
+  oneOf:                  # exactly one key source
+    - required: [key_path]
+    - required: [vault_ref]
+  properties:
+    key_path:  { type: string }
+    vault_ref: { type: string }
+    deny:                 # deny-list paras (host, user); empty = allow-all
+      type: array
+      items:
+        type: object
+        properties:
+          host: { type: string }
+          user: { type: string }
 ```
+
+> The old manifest declared `required_capabilities: [vault_access]`. The schema document declares capabilities **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind).
 
 ### `kind: ssh_provider` (Teleport)
 
@@ -659,41 +868,35 @@ The actual implementation is [`examples/module/soul-ssh-teleport/`](../../exampl
 **Params** come via env `SOUL_SSH_TELEPORT_PARAMS` (JSON by `schema.json`, symmetrically `SOUL_SSH_VAULT_PARAMS` / `SOUL_SSH_STATIC_PARAMS`).
 
 ```yaml
-# soul-ssh-teleport/manifest.yaml
+# schema document for soul-ssh-teleport (generated; shown as YAML for readability)
 kind: ssh_provider
 protocol_version: 1
-namespace: ssh
-name: teleport
 
-required_capabilities:
-  - network_outbound          # gRPC calls to Teleport Auth API via Teleport-proxy
-
-side_effects: []              # ssh_provider does not touch the local resources of the host
-
-spec:
-  provider_kind: teleport
-  params_schema:
-    type: object
-    required: [proxy_addr]
-    properties:
-      proxy_addr:    { type: string }            # Teleport proxy host:port (goes to SignReply.proxy_jump)
-      cluster_name:  { type: string }            # multi-cluster trust (optional)
-      identity_file: { type: string }            # path to Teleport identity-file (creds-flow B)
-      tbot_socket:   { type: string }            # or tbot socket (mutually exclusive with identity_file)
-      roles:                                     # requested Teleport roles (optional)
-        type: array
-        items: { type: string }
-      valid_principals:                          # local allowlist over Teleport role
-        type: array
-        items: { type: string }
-      deny:                                      # deny-list paras (host, user); empty = allow-all
-        type: array
-        items:
-          type: object
-          properties:
-            host: { type: string }
-            user: { type: string }
+provider_kind: teleport
+params_schema:
+  type: object
+  required: [proxy_addr]
+  properties:
+    proxy_addr:    { type: string }            # Teleport proxy host:port (goes to SignReply.proxy_jump)
+    cluster_name:  { type: string }            # multi-cluster trust (optional)
+    identity_file: { type: string }            # path to Teleport identity-file (creds-flow B)
+    tbot_socket:   { type: string }            # or tbot socket (mutually exclusive with identity_file)
+    roles:                                     # requested Teleport roles (optional)
+      type: array
+      items: { type: string }
+    valid_principals:                          # local allowlist over Teleport role
+      type: array
+      items: { type: string }
+    deny:                                      # deny-list paras (host, user); empty = allow-all
+      type: array
+      items:
+        type: object
+        properties:
+          host: { type: string }
+          user: { type: string }
 ```
+
+> The old manifest declared `required_capabilities: [network_outbound]`. The schema document declares capabilities **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind).
 
 Example `SOUL_SSH_TELEPORT_PARAMS` (JSON, passed to the plugin env during fork):
 
@@ -711,24 +914,18 @@ Example `SOUL_SSH_TELEPORT_PARAMS` (JSON, passed to the plugin env during fork):
 ### `kind: soul_beacon` (ZFS pool health, ADR-030 V5-2)
 
 ```yaml
+# schema document (generated; shown as YAML for readability)
 kind: soul_beacon
 protocol_version: 1
 
-namespace: community
-name: zfs-degraded
-
-required_capabilities:
-  - exec_subprocess           # launch `zpool status`
-
-side_effects: []              # read-only, beacon does not mutate the host
-
-spec:
-  params_schema:
-    type: object
-    required: [pool]
-    properties:
-      pool: { type: string }  # ZFS pool name to poll
+params_schema:
+  type: object
+  required: [pool]
+  properties:
+    pool: { type: string }    # ZFS pool name to poll
 ```
+
+> The old manifest declared `required_capabilities: [exec_subprocess]` and `side_effects: []`. The schema document declares both **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind). The Vigil address of a plugin beacon is level-1 the registration alias, level-2 the beacon, exactly as for modules.
 
 SDK - [`sdk/beacon`](../../sdk/beacon/beacon.go). Minimum plugin code:
 
@@ -780,6 +977,8 @@ plugins:
 
 Plugin version is **git ref** (tag or branch) according to [ADR-007](../adr/0007-versioning-git-ref.md). No semver-range.
 
+**`name:` in a catalog entry is the registration alias** — the operator's choice, and address level 1 for everything the artifact serves ([Registration alias](#registration-alias)). It is not read from the artifact, and the artifact has no opinion about it: registering the same `source`+`ref` twice under two aliases gives two slots and two addresses. Aliases from the [reserved list](../naming-rules.md#reserved-namespace-names) are refused.
+
 ### What Keeper does as a resolver (git-verified, F-fetch)
 
 Keeper resolves the directory itself at startup - via [`keeper/internal/plugingit`](../../keeper/internal/plugingit) ([ADR-026(g)](../adr/0026-sigil.md), A1-S1). For each entry:
@@ -788,10 +987,10 @@ Keeper resolves the directory itself at startup - via [`keeper/internal/plugingi
 2. shallow `clone` (`Depth=1`) working clone in `<work_root>/<name>/` (STRICTLY outside `cache_root`), or `fetch` if there is already a clone. Transport - **go-git** (pure-Go, without system fork `git`); auth - SSH agent for ssh/scp forms.
 3. `ResolveRevision(<ref>^{commit})` → 40-hex `commit_sha` (candidates: tag → remote-tracking-branch → full hash; unresolved → `ErrRefNotResolved`).
 4. detached-HEAD `checkout` on `commit_sha` (does not execute go-git hooks).
-5. parse `manifest.yaml` checkout (no → `ErrManifestNotFound`) → by `kind` → `dist/<binary-name>` convention (the binary is already built, **F-fetch - Keeper does not compile**; no / not a regular file → `ErrArtifactNotFound`).
-6. atomic-extract manifest+binary into immutable slot `<cache_root>/<ns>-<name>/<commit_sha>/` (staging on the same fs → fsync → `rename`); `commit_sha`-slot is immutable (re-resolving the same commit - skip).
-7. atomic switching symlink `<cache_root>/<ns>-<name>/current → <commit_sha>`.
-8. `binary_sha256 := sha256(<slot>/<binary-name>)`.
+5. take **the single executable in `dist/`** (the binary is already built, **F-fetch — Keeper does not compile**) and read the schema document from its trailer **without executing it**. Zero executables, several of them, a non-regular file, or a missing / malformed trailer → fail-closed for this entry (the exact sentinel set is fixed by the resolver slice; today's `ErrArtifactNotFound` covers the not-found case).
+6. atomic-extract schema+binary into the immutable slot `<cache_root>/<alias>/<commit_sha>/` (staging on the same fs → fsync → `rename`); the `commit_sha` slot is immutable (re-resolving the same commit — skip).
+7. atomic switching symlink `<cache_root>/<alias>/current → <commit_sha>`.
+8. `binary_sha256 := sha256(<the executable in the slot>)`.
 
 Per-entry resolve **fail-closed**: broken entry (any sentinel above / unreachable remote / timeout) → per-entry warning, Keeper does not crash. During apply operations, the plugin is launched from the active slot (`current`).
 
@@ -800,7 +999,7 @@ git stack - go-git by-design: hooks are not executed, submodules are not recursi
 **Size-limit (ADR-026(g), fail-closed).** `source` operator-asserted, but the repository is untrusted, and `fetch_timeout` limits egress only in time. Two caps in size protect the keeper-host disk from DoS by a hostile/huge repo:
 
 - `plugins.max_clone_size_mb` (default 1024 MiB) - the total size of the clone working tree (du-like walk checkout + `.git`), checked **after checkout, before extracting the artifact**. Excess → `ErrCloneTooLarge` + cleanup `work_root/<name>`.
-- `plugins.max_artifact_size_mb` (default 256 MiB) - binary size `dist/<binary-name>`, checked against `os.Stat` before copying and `io.LimitReader` during copy (defense-in-depth). Excess → `ErrArtifactTooLarge`, slot does not materialize.
+- `plugins.max_artifact_size_mb` (default 256 MiB) - size of the executable in `dist/`, checked against `os.Stat` before copying and `io.LimitReader` during copy (defense-in-depth). Excess → `ErrArtifactTooLarge`, slot does not materialize.
 
 Both sentinels are per-entry fail-closed (warning, like `ErrArtifactNotFound`/`ErrSourceUnavailable`): the broken entry is skipped, the slot is not created → the plugin has **nothing to allow** through Sigil.
 
@@ -808,10 +1007,10 @@ Resolver Config fields in [`config.md → plugins`](config.md):
 
 | Field | Default | Meaning |
 |---|---|---|
-| `plugins.cache_root` | `pluginhost.DefaultCacheRoot` | Root of the R-nested slot cache (`<ns>-<name>/<commit_sha>/`). Absolute path. |
+| `plugins.cache_root` | `pluginhost.DefaultCacheRoot` | Root of the R-nested slot cache (`<alias>/<commit_sha>/`). Absolute path. |
 | `plugins.work_root` | `/var/lib/soul-stack-keeper/plugin-src` | The root of the resolver's working git clones. **STRICTLY outside `cache_root`** (`.git`/checkout does not go into the readable cache directory). Absolute path. |
 | `plugins.fetch_timeout` | `120s` | The ceiling of one chain of go-git resolve operations (clone→fetch→checkout). git-egress - external call, timeout required. |
-| `plugins.max_artifact_size_mb` | `256` | Binary size ceiling `dist/<binary-name>` (size-limit hardening). Excess → `ErrArtifactTooLarge`, fail-closed. |
+| `plugins.max_artifact_size_mb` | `256` | Size ceiling of the executable in `dist/` (size-limit hardening). Excess → `ErrArtifactTooLarge`, fail-closed. |
 | `plugins.max_clone_size_mb` | `1024` | Clone working tree size ceiling (checkout + `.git`). Excess → `ErrCloneTooLarge` + cleanup, fail-closed. |
 
 Directory of `SoulModule` plugins - **`plugins.soul_modules[]`** in the same format (`{name, source, ref}`; [ADR-065](../adr/0065-core-module-installed.md), amendment [ADR-020](../adr/0020-plugin-infrastructure.md)): resolved by the same resolver in `cache_root`, allowed by the same Sigil flow. Distribution to Soul hosts - server-streaming RPC `FetchModule` (content-addressed: Keeper distributes only bytes whose sha256 is in the active permission `kind: soul_module`) + core module `core.module.installed` (see [`../soul/modules.md`](../soul/modules.md)). Install steps `core.module.installed` Keeper usually synthesizes itself from `service.yml::modules[]` ([keeper/modules.md → Auto-synthesis](modules.md)).
@@ -835,4 +1034,6 @@ Directory of `SoulModule` plugins - **`plugins.soul_modules[]`** in the same for
 - [architecture.md → ADR-007](../adr/0007-versioning-git-ref.md) - `ref:` as a plugin version, exception for `protocol_version`.
 - [architecture.md → ADR-011](../adr/0011-go-layout.md) - `proto/plugin/` submodule and `sdk/handshake/`.
 - [architecture.md → ADR-016](../adr/0016-parity-license.md) - why is it not dependent on `hashicorp/go-plugin`.
-- [naming-rules.md](../naming-rules.md) — `Manifest`, `Handshake`, `kind`, `SoulModule`, `CloudDriver`, `SshProvider`, capabilities-enum, resource-types-enum.
+- [naming-rules.md](../naming-rules.md) — `Schema document`, `Registration alias`, `Handshake`, `kind`, `SoulModule`, `CloudDriver`, `SshProvider`, capabilities-enum, resource-types-enum.
+- [naming-rules.md → Reserved namespace names](../naming-rules.md#reserved-namespace-names) — the closed list an alias may not be taken from.
+- [module-collections.md](../module-collections.md) — the collection as an entity; level 1 is now the registration alias.

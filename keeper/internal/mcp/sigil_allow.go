@@ -18,22 +18,24 @@ import (
 const sigilNotConfigured = "sigil is not configured"
 
 // pluginAllowArgs — arguments for keeper.plugin.allow (schemaPluginAllowInput):
-// namespace + name + ref are required. The triple is validated by
-// reSigilSegment (closed charset, like REST DELETE path segments).
+// alias + source + ref are all required.
+//
+// alias is the registration being created (address level 1, the slot to read) and is
+// NOT signed; source + ref are what the operator asserts about the artifact in that
+// slot, and are the only identity the signature covers.
 type pluginAllowArgs struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Ref       string `json:"ref"`
+	Alias  string `json:"alias"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
 }
 
-// pluginAllowOutput — output of keeper.plugin.allow: echoes the triple +
-// sha256 of the allowed binary (parity with REST POST /v1/plugins/sigils
-// 201 response).
+// pluginAllowOutput — output of keeper.plugin.allow: echoes the request + the sha256 of
+// the approved artifact (parity with the REST POST /v1/plugins/sigils 201 response).
 type pluginAllowOutput struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Ref       string `json:"ref"`
-	SHA256    string `json:"sha256"`
+	Alias  string `json:"alias"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
+	SHA256 string `json:"sha256"`
 }
 
 // callPluginAllow — mutating tool keeper.plugin.allow. A transport over
@@ -66,13 +68,13 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if msg, valid := validateSigilTriple(a.Namespace, a.Name, a.Ref); !valid {
+	if msg, valid := validateSigilAllowArgs(a); !valid {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, msg)
 	}
 
 	sha256, err := h.deps.SigilSvc.Allow(ctx, sigil.AllowInput{
-		Namespace: a.Namespace,
-		Name:      a.Name,
+		Alias:     a.Alias,
+		Source:    a.Source,
 		Ref:       a.Ref,
 		CallerAID: claims.Subject,
 	})
@@ -80,8 +82,8 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 		code, detail := mapSigilErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: plugin.allow failed",
-				slog.String("namespace", a.Namespace),
-				slog.String("name", a.Name),
+				slog.String("alias", a.Alias),
+				slog.String("source", a.Source),
 				slog.String("ref", a.Ref),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
@@ -90,21 +92,21 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — mirrors the REST handler (supply-chain control, ADR-022):
-	// payload {namespace, name, ref, sha256, allowed_by_aid}. signature/manifest
-	// (crypto material / large JSONB) are NOT written — same as REST.
+	// Audit — mirrors the REST handler (supply-chain control, ADR-022): payload
+	// {alias, source, ref, sha256, allowed_by_aid}. The signature and the schema
+	// (crypto material / a large document) are NOT written — same as REST.
 	h.writeAudit(audit.EventPluginAllowed, claims.Subject, map[string]any{
-		"namespace":      a.Namespace,
-		"name":           a.Name,
+		"alias":          a.Alias,
+		"source":         a.Source,
 		"ref":            a.Ref,
 		"sha256":         sha256,
 		"allowed_by_aid": claims.Subject,
 	})
 
 	return h.toolResult(req.ID, pluginAllowOutput{
-		Namespace: a.Namespace,
-		Name:      a.Name,
-		Ref:       a.Ref,
-		SHA256:    sha256,
+		Alias:  a.Alias,
+		Source: a.Source,
+		Ref:    a.Ref,
+		SHA256: sha256,
 	})
 }

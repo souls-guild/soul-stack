@@ -19,11 +19,12 @@ import (
 // Callers compare via errors.Is to distinguish tamper from other Spawn I/O errors.
 var ErrPluginDigestMismatch = errors.New("pluginhost: plugin binary digest mismatch")
 
-// DigestSidecarName is the sidecar file next to the plugin binary in the host
-// cache. The leading dot doesn't hide it from a listing but visually separates it
-// from the binary and manifest.yaml. Exported for the core.module.installed
-// install-flow (ADR-065): on slot binary replacement the stale sidecar is removed
-// before the atomic rename.
+// DigestSidecarName is the sidecar file next to the artifact in the host cache. The
+// leading dot both separates it visually from the artifact and keeps slot discovery
+// from mistaking it for one (see artifactIn: a slot holds exactly one executable, and
+// dot-files are not candidates). Exported for the core.module.installed install-flow
+// (ADR-065): on slot artifact replacement the stale sidecar is removed before the
+// atomic rename.
 const DigestSidecarName = ".sha256"
 
 // digestSidecarMode — the sidecar is written read-only: no writes are expected
@@ -48,21 +49,23 @@ func computeFileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// verifySigilAndSeal — fail-closed verify of the plugin binary against the Sigil
-// trust seal (ADR-026, slice S6b), replacing the first-load TOFU branch. Returns
-// nil only if the plugin is allowed and integrity is confirmed; any failure →
-// *VerifyError (errors.Is(err, ErrSigilVerify)) and the plugin does NOT start.
+// verifySigilAndSeal — fail-closed verify of the artifact against the Sigil trust seal
+// (ADR-026, slice S6b), replacing the first-load TOFU branch. Returns nil only if the
+// artifact is allowed and integrity is confirmed; any failure → *VerifyError
+// (errors.Is(err, ErrSigilVerify)) and the plugin does NOT start.
 //
 // Steps (normative order, symmetric to the Keeper-side Sign in keeper/internal/sigil):
-//  1. binary digest from disk (binDigestHex);
-//  2. lookup by (ns, name); rec == nil → fail-closed no_sigil (a Sigil that didn't
-//     arrive = "not allowed", NOT "error → allow");
+//  1. artifact digest from disk (binDigestHex);
+//  2. lookup by registration alias; rec == nil → fail-closed no_sigil (a Sigil that
+//     didn't arrive = "not allowed", NOT "error → allow");
 //  3. empty anchor set → fail-closed no_trust_anchor (Sigil not configured on Keeper);
-//  4. compare the binary digest with the allowed hash (binary_sha256) → digest_mismatch;
-//  5. manifest_sha256 = SHA-256(NormalizeManifestBytes(rec.Manifest)) — bytes FROM
-//     TRANSPORT (M1), NOT the file on disk;
-//  6. block = BuildSigilBlock(...) — the same helper Keeper uses at Sign (sign↔verify
-//     symmetry guaranteed by the compiler, not a second implementation);
+//  4. compare the artifact digest with the approved hash (binary_sha256) →
+//     digest_mismatch. This is the one real control: the operator approved a sha256,
+//     and no other bytes get to exec;
+//  5. schema_sha256 = SchemaDigest(rec.Schema) — bytes FROM TRANSPORT (M1), NOT the
+//     trailer on disk;
+//  6. block = BuildSigilBlock(source, ref, …) — the same helper Keeper uses at Sign
+//     (sign↔verify symmetry guaranteed by the compiler, not a second implementation);
 //  7. OR loop over the anchor set (ADR-026(h), multi-anchor): the signature is valid
 //     if ANY anchor in the set verifies it via ed25519.Verify → pass; none of a
 //     non-empty set → bad_signature. OR semantics give seamless signing-key rotation
@@ -73,10 +76,12 @@ func computeFileDigest(path string) (string, error) {
 // sidecar (see [Host.Spawn] calls again — the sidecar matches). But a missing sidecar
 // no longer means "trust": it means "Sigil-verify needed", performed here every time.
 //
-// ns/name come from the plugin manifest (d.Manifest.Namespace/.Name); ref from rec
-// (operator-asserted, not checked against disk, single-slot). anchors — a snapshot of
-// the trust-anchor set (ADR-026(h)); empty set → no_trust_anchor.
-func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed25519.PublicKey, sigils SigilLookup) error {
+// Verification is per ARTIFACT and knows nothing about modules: a grant approves
+// bytes, and every module of an artifact is those same bytes. alias is the slot's
+// registration; source/ref come from rec (operator-asserted, not checked against disk,
+// single-slot). anchors — a snapshot of the trust-anchor set (ADR-026(h)); empty set →
+// no_trust_anchor.
+func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicKey, sigils SigilLookup) error {
 	binDigestHex, err := computeFileDigest(binaryPath)
 	if err != nil {
 		return err
@@ -84,9 +89,9 @@ func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed255
 
 	var rec *SigilRecord
 	if sigils != nil {
-		rec = sigils.Get(namespace, name)
+		rec = sigils.Get(alias)
 	}
-	if err := verifyRecordAgainstDigest(binDigestHex, namespace, name, rec, anchors); err != nil {
+	if err := verifyRecordAgainstDigest(binDigestHex, alias, rec, anchors); err != nil {
 		return err
 	}
 
@@ -111,44 +116,53 @@ func verifySigilAndSeal(dir, binaryPath, namespace, name string, anchors []ed255
 // yet, the first Spawn after install seals it.
 func VerifyArtifactBytes(data []byte, rec *SigilRecord, anchors *AnchorSet) error {
 	sum := sha256.Sum256(data)
-	var namespace, name string
+	var alias string
 	if rec != nil {
-		namespace, name = rec.Namespace, rec.Name
+		alias = rec.Alias
 	}
-	return verifyRecordAgainstDigest(hex.EncodeToString(sum[:]), namespace, name, rec, anchors.snapshot())
+	return verifyRecordAgainstDigest(hex.EncodeToString(sum[:]), alias, rec, anchors.snapshot())
 }
 
 // verifyRecordAgainstDigest — the shared middle of verify (steps 2–7 of the
 // normative order in [verifySigilAndSeal]): lookup result → anchors → digest compare
 // → block signature. binDigestHex is the actual digest of the artifact under check
 // (file or in-memory bytes).
-func verifyRecordAgainstDigest(binDigestHex, namespace, name string, rec *SigilRecord, anchors []ed25519.PublicKey) error {
+func verifyRecordAgainstDigest(binDigestHex, alias string, rec *SigilRecord, anchors []ed25519.PublicKey) error {
 	if rec == nil {
-		return verifyErrorFor(VerifyReasonNoSigil, namespace, name, "")
+		return verifyErrorFor(VerifyReasonNoSigil, alias, "", "")
+	}
+	// A lookup must answer for the key it was asked about. Nothing downstream reads
+	// the alias — it is a selector, not a claim — but a lookup that answered with
+	// some OTHER registration's grant would move an approval between registrations
+	// without anything noticing: the digest and signature would check out, against
+	// bytes approved for a different alias. So the contract is enforced rather than
+	// assumed, and a mis-wired adapter fails closed instead of silently widening.
+	if rec.Alias != alias {
+		return verifyErrorFor(VerifyReasonNoSigil, alias, "", "")
 	}
 	if len(anchors) == 0 {
-		return verifyErrorFor(VerifyReasonNoTrustAnchor, namespace, name, rec.Ref)
+		return verifyErrorFor(VerifyReasonNoTrustAnchor, alias, rec.Source, rec.Ref)
 	}
 
 	binRaw, err := hex.DecodeString(rec.BinarySHA256hex)
 	if err != nil {
-		// Allowed hash isn't hex — the record is broken, fail-closed as mismatch
-		// (the binary can't match an invalid reference).
-		return verifyErrorFor(VerifyReasonDigestMismatch, namespace, name, rec.Ref)
+		// Approved hash isn't hex — the record is broken, fail-closed as mismatch
+		// (the artifact can't match an invalid reference).
+		return verifyErrorFor(VerifyReasonDigestMismatch, alias, rec.Source, rec.Ref)
 	}
 	actualRaw, err := hex.DecodeString(binDigestHex)
 	if err != nil {
 		// computeFileDigest always returns valid hex — defensive.
-		return fmt.Errorf("pluginhost: decode binary digest %q: %w", binDigestHex, err)
+		return fmt.Errorf("pluginhost: decode artifact digest %q: %w", binDigestHex, err)
 	}
 	if subtle.ConstantTimeCompare(binRaw, actualRaw) != 1 {
-		return verifyErrorFor(VerifyReasonDigestMismatch, namespace, name, rec.Ref)
+		return verifyErrorFor(VerifyReasonDigestMismatch, alias, rec.Source, rec.Ref)
 	}
 
-	manifestDigest := sha256.Sum256(NormalizeManifestBytes(rec.Manifest))
-	block := BuildSigilBlock(rec.Namespace, rec.Name, rec.Ref, binRaw, manifestDigest[:])
+	schemaDigest := SchemaDigest(rec.Schema)
+	block := BuildSigilBlock(rec.Source, rec.Ref, binRaw, schemaDigest[:])
 	if !verifyAnyAnchor(anchors, block, rec.Signature) {
-		return verifyErrorFor(VerifyReasonBadSignature, namespace, name, rec.Ref)
+		return verifyErrorFor(VerifyReasonBadSignature, alias, rec.Source, rec.Ref)
 	}
 	return nil
 }

@@ -120,7 +120,7 @@ attack surface part: if they come from `input.*` / `register.*` /
 Format-validation ≠ authorization: it catches the injection, not "dangerous, but valid"
 meaning.
 - **Privileges.** Manifest
-[`user.yaml`](../../../../shared/coremanifest/user.yaml) announces
+[`user` module](../../../../shared/coremanifest/mod_user.go) announces
   `required_capabilities: [run_as_root, exec_subprocess]` — `useradd` / `userdel`
 rules `/etc/passwd`, `/etc/shadow`, `/etc/group` and without UID 0 will not work, but
 both actions are launching subprocesses. This is a **declaration** for static reconciliation

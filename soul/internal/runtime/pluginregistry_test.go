@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,7 +10,7 @@ import (
 	"testing"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/soul/internal/pluginhost"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -141,6 +140,96 @@ func TestRun_DispatchesToPluginViaComposite(t *testing.T) {
 	}
 }
 
+// GUARD: one artifact serving several modules registers one address per module, and
+// the level-1 name comes from the slot the operator named. Two registrations of the
+// same bundle therefore coexist without either shadowing the other.
+func TestPluginRegistry_BundleRegistersOneAddressPerModule(t *testing.T) {
+	root := t.TempDir()
+	writeSlot(t, root, "redis", "acl", "config")
+	writeSlot(t, root, "redis-community", "acl", "config")
+
+	discovered, warns, err := pluginhost.Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(warns) != 0 {
+		t.Fatalf("discovery warnings: %v", warns)
+	}
+	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
+
+	for _, want := range []string{
+		"redis.acl", "redis.config",
+		"redis-community.acl", "redis-community.config",
+	} {
+		if _, ok := r.Lookup(want); !ok {
+			t.Errorf("Lookup(%s): not found; registered %v", want, r.Names())
+		}
+	}
+	if got := len(r.Names()); got != 4 {
+		t.Errorf("registered %d addresses, want 4: %v", got, r.Names())
+	}
+}
+
+// GUARD: a spawn of `redis.acl` reaches the artifact with module `acl` — the registry
+// hands the spawner the entry it resolved, and the module name on it is what argv
+// carries.
+func TestPluginRegistry_ApplySpawnsTheAddressedModule(t *testing.T) {
+	root := t.TempDir()
+	writeSlot(t, root, "redis", "acl", "config")
+	discovered, _, err := pluginhost.Discover(root)
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	spawner := &fakeSpawner{makeSession: func() *fakeSession {
+		return &fakeSession{events: []*pluginv1.ApplyEvent{{Changed: true}}}
+	}}
+	r := NewPluginRegistry(spawner, discovered, nil)
+
+	mod, ok := r.Lookup("redis.config")
+	if !ok {
+		t.Fatal("Lookup(redis.config): not found")
+	}
+	if err := mod.Apply(&pluginv1.ApplyRequest{State: "applied"}, newInProcApplyStream(context.Background())); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if spawner.lastDiscovered.Module != "config" {
+		t.Errorf("spawned module = %q, want config", spawner.lastDiscovered.Module)
+	}
+	if spawner.lastDiscovered.Alias != "redis" {
+		t.Errorf("spawned alias = %q, want redis", spawner.lastDiscovered.Alias)
+	}
+}
+
+// GUARD: StateInput reads the addressed module's states, never a sibling's. Both
+// modules of the bundle declare a state called `applied` with different inputs; asking
+// for one must not return the other's contract.
+func TestPluginRegistry_StateInputIsPerModule(t *testing.T) {
+	doc := testDocument("acl", "config")
+	for i := range doc.Modules {
+		doc.Modules[i].States = map[string]schema.State{
+			"applied": {Description: "x", Input: schema.Input{doc.Modules[i].Name + "_param": {Type: schema.String}}},
+		}
+	}
+	var discovered []pluginhost.Discovered
+	for _, m := range doc.Modules {
+		discovered = append(discovered, pluginhost.Discovered{
+			Alias: "redis", Module: m.Name, Doc: &doc, BinaryPath: "/bogus/redis", Dir: "/bogus",
+		})
+	}
+	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
+
+	in, strictness := r.StateInput("redis.acl", "applied")
+	if strictness != ParamsEnforced {
+		t.Fatalf("strictness = %v, want ParamsEnforced", strictness)
+	}
+	if _, ok := in["acl_param"]; !ok {
+		t.Errorf("redis.acl contract = %v, want its own acl_param", in)
+	}
+	if _, leaked := in["config_param"]; leaked {
+		t.Error("a sibling module's parameter leaked into the contract")
+	}
+}
+
 // --- Rescan (hot-register, ADR-065(d)) ---
 
 func TestPluginRegistry_RescanPicksUpNewModule(t *testing.T) {
@@ -151,16 +240,16 @@ func TestPluginRegistry_RescanPicksUpNewModule(t *testing.T) {
 		t.Fatalf("Discover: %v", err)
 	}
 	r := NewPluginRegistry(&fakeSpawner{}, discovered, nil)
-	if _, ok := r.Lookup("acme.extra"); ok {
-		t.Fatal("Lookup(acme.extra): found before installation")
+	if _, ok := r.Lookup("acme-extra.extra"); ok {
+		t.Fatal("Lookup(acme-extra.extra): found before installation")
 	}
 
-	writeSlot(t, root, "acme", "extra")
+	writeSlot(t, root, "acme-extra", "extra")
 	if _, err := r.Rescan(root); err != nil {
 		t.Fatalf("Rescan: %v", err)
 	}
-	if _, ok := r.Lookup("acme.extra"); !ok {
-		t.Error("Lookup(acme.extra) after Rescan: not found")
+	if _, ok := r.Lookup("acme-extra.extra"); !ok {
+		t.Error("Lookup(acme-extra.extra) after Rescan: not found")
 	}
 	if _, ok := r.Lookup("acme.echo"); !ok {
 		t.Error("Lookup(acme.echo): existing module lost after Rescan")
@@ -173,7 +262,7 @@ func TestCompositeRegistry_RescanKeepsCoreLayer(t *testing.T) {
 	core := mapRegistry{"core.pkg": &fakeModule{}}
 	c := NewCompositeRegistry(core, plug)
 
-	writeSlot(t, root, "acme", "extra")
+	writeSlot(t, root, "acme-extra", "extra")
 	if _, err := plug.Rescan(root); err != nil {
 		t.Fatalf("Rescan: %v", err)
 	}
@@ -181,7 +270,7 @@ func TestCompositeRegistry_RescanKeepsCoreLayer(t *testing.T) {
 	if !ok || got != core["core.pkg"] {
 		t.Error("core-layer composite affected by plugin-layer Rescan")
 	}
-	if _, ok := c.Lookup("acme.extra"); !ok {
+	if _, ok := c.Lookup("acme-extra.extra"); !ok {
 		t.Error("new module unavailable via composite after Rescan")
 	}
 }
@@ -228,42 +317,64 @@ func TestPluginRegistry_ConcurrentLookupAndRescan(t *testing.T) {
 
 // --- helpers ---
 
-// writeSlot materializes a valid directory slot `<root>/<ns>-<name>/`
-// (manifest.yaml + executable binary) — the core.module.installed format.
-func writeSlot(t *testing.T, root, namespace, name string) {
+// writeSlot materializes a valid slot `<root>/<alias>/` — one executable named by the
+// alias, with a stamped schema document declaring the given modules. This is the
+// core.module.installed format, and going through the real stamping keeps the fixture
+// from drifting away from what a host actually reads.
+func writeSlot(t *testing.T, root, alias string, modules ...string) {
 	t.Helper()
-	dir := filepath.Join(root, namespace+"-"+name)
+	dir := filepath.Join(root, alias)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	manifest := fmt.Sprintf("kind: soul_module\nnamespace: %s\nname: %s\nprotocol_version: 1\n"+
-		"spec:\n  states:\n    applied:\n      description: test state\n      input: {}\n", namespace, name)
-	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
+	path := filepath.Join(dir, alias)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "soul-mod-"+name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+	payload, err := schema.Marshal(testDocument(modules...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.WriteTrailerFile(path, payload); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func makeDiscovered(namespace, name string) pluginhost.Discovered {
+// testDocument builds a kind=soul_module document over the named modules, each with a
+// single `applied` state.
+func testDocument(modules ...string) schema.Document {
+	doc := schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1}
+	for _, name := range modules {
+		doc.Modules = append(doc.Modules, schema.Module{
+			Name:        name,
+			Description: name,
+			States: map[string]schema.State{
+				"applied": {Description: "test state"},
+			},
+		})
+	}
+	return doc
+}
+
+// makeDiscovered builds an in-memory entry for `<alias>.<module>` without touching
+// disk — for the registry tests, which never spawn anything real.
+func makeDiscovered(alias, module string) pluginhost.Discovered {
+	doc := testDocument(module)
 	return pluginhost.Discovered{
-		Manifest: &sharedplugin.Manifest{
-			Kind:            sharedplugin.KindSoulModule,
-			ProtocolVersion: 1,
-			Namespace:       namespace,
-			Name:            name,
-		},
-		BinaryPath: "/bogus/soul-mod-" + name,
+		Alias:      alias,
+		Module:     module,
+		Doc:        &doc,
+		BinaryPath: "/bogus/" + alias,
 		Dir:        "/bogus",
 	}
 }
 
 type fakeSpawner struct {
-	makeSession func() *fakeSession
-	spawnErr    error
-	spawnCount  int
-	lastSession *fakeSession
+	makeSession    func() *fakeSession
+	spawnErr       error
+	spawnCount     int
+	lastSession    *fakeSession
+	lastDiscovered pluginhost.Discovered
 }
 
 func (f *fakeSpawner) Spawn(ctx context.Context, d pluginhost.Discovered) (PluginSession, error) {
@@ -271,6 +382,7 @@ func (f *fakeSpawner) Spawn(ctx context.Context, d pluginhost.Discovered) (Plugi
 		return nil, f.spawnErr
 	}
 	f.spawnCount++
+	f.lastDiscovered = d
 	sess := f.makeSession()
 	f.lastSession = sess
 	return sess, nil

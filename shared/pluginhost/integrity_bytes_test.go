@@ -6,19 +6,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/sdk/schema"
 )
 
 // bytesTestEnv — in-memory artifact bytes + a consistent valid SigilRecord
 // (install-flow core.module.installed, ADR-065: verify BEFORE materialization).
 func setupBytesEnv(t *testing.T) ([]byte, *SigilRecord, *AnchorSet) {
 	t.Helper()
-	const (
-		ns       = "acme"
-		name     = "x"
-		ref      = "v1.0.0"
-		manifest = "kind: soul_module\nnamespace: acme\nname: x\nprotocol_version: 1\n"
-	)
-	data := []byte("#!/bin/sh\nexit 0\n")
+	schemaDoc, err := schema.Marshal(soulModuleDoc(modDef("acl", nil, nil)))
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	data := []byte(exitScript)
 	sum := sha256.Sum256(data)
 	digestHex := hex.EncodeToString(sum[:])
 
@@ -27,12 +27,12 @@ func setupBytesEnv(t *testing.T) ([]byte, *SigilRecord, *AnchorSet) {
 		t.Fatalf("generate key: %v", err)
 	}
 	rec := &SigilRecord{
-		Namespace:       ns,
-		Name:            name,
-		Ref:             ref,
+		Alias:           testAlias,
+		Source:          testSource,
+		Ref:             testRef,
 		BinarySHA256hex: digestHex,
-		Signature:       signFixture(t, priv, ns, name, ref, digestHex, []byte(manifest)),
-		Manifest:        []byte(manifest),
+		Signature:       signFixture(t, priv, testSource, testRef, digestHex, schemaDoc),
+		Schema:          schemaDoc,
 	}
 	return data, rec, NewAnchorSet([]ed25519.PublicKey{pub})
 }
@@ -66,9 +66,17 @@ func TestVerifyArtifactBytesFailures(t *testing.T) {
 			reason: VerifyReasonBadSignature,
 		},
 		{
-			name: "manifest tampered",
+			name: "schema tampered",
 			mutate: func(data []byte, rec *SigilRecord, anchors *AnchorSet) ([]byte, *SigilRecord, *AnchorSet) {
-				rec.Manifest = append(rec.Manifest, []byte("\n# tampered\n")...)
+				rec.Schema = append(rec.Schema, ' ')
+				return data, rec, anchors
+			},
+			reason: VerifyReasonBadSignature,
+		},
+		{
+			name: "source tampered",
+			mutate: func(data []byte, rec *SigilRecord, anchors *AnchorSet) ([]byte, *SigilRecord, *AnchorSet) {
+				rec.Source = "https://evil.example.com/soul-mod-redis"
 				return data, rec, anchors
 			},
 			reason: VerifyReasonBadSignature,

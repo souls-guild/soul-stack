@@ -80,34 +80,18 @@ func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 }
 
 // TestS7Amend_MapWithItemsValidatorAccepts — a declared map+items does not raise
-// items errors in the manifest validator, and a task with a map param passes the
+// items errors in the schema validator, and a task with a map param passes the
 // config validator (the public path, as in TestP5_*).
 func TestS7Amend_MapWithItemsValidatorAccepts(t *testing.T) {
-	const withItems = `kind: soul_module
-protocol_version: 1
-namespace: core
-name: probe
-spec:
-  states:
-    s:
-      input:
-        env: { type: map, items: { type: string } }
-`
-	if _, diags := plugin.LoadFromBytes("manifest.yaml", []byte(withItems)); hasItemsErr(diags) {
+	const withItems = `{"kind":"soul_module","protocol_version":1,"modules":[{"name":"probe",` +
+		`"states":{"s":{"description":"probe","input":{"env":{"type":"map","items":{"type":"string"}}}}}}]}`
+	if _, diags := plugin.ParseDocument(plugin.SchemaFileName, []byte(withItems)); hasItemsErr(diags) {
 		t.Errorf("map+items.type=string produced an items error: %v", diags)
 	}
 
-	const noItems = `kind: soul_module
-protocol_version: 1
-namespace: core
-name: probe
-spec:
-  states:
-    s:
-      input:
-        profile: { type: map }
-`
-	if _, diags := plugin.LoadFromBytes("manifest.yaml", []byte(noItems)); hasItemsErr(diags) {
+	const noItems = `{"kind":"soul_module","protocol_version":1,"modules":[{"name":"probe",` +
+		`"states":{"s":{"description":"probe","input":{"profile":{"type":"map"}}}}}]}`
+	if _, diags := plugin.ParseDocument(plugin.SchemaFileName, []byte(noItems)); hasItemsErr(diags) {
 		t.Errorf("map without items produced an items error: %v", diags)
 	}
 

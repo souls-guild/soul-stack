@@ -24,6 +24,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/souls-guild/soul-stack/sdk/schema"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
@@ -133,30 +135,22 @@ func setupAdapter(t *testing.T) *cloud.PluginAdapter {
 	}
 	cacheRoot := shortDir(t, "ss-cloud-mods-")
 	socketDir := shortDir(t, "ss-cloud-sock-")
-	// R-nested layout (ADR-026 A1-S1): <cacheRoot>/<ns>-<name>/<commit_sha>/ —
-	// immutable slot with binary+manifest; <ns>-<name>/current → <commit_sha>
-	// (relative symlink to active slot, populated by git-resolver via
-	// updateCurrentSymlink). Discover/ReadSlot read plugin ONLY via current.
-	pluginDir := filepath.Join(cacheRoot, "soulstack-fqdn")
+	// R-nested layout (ADR-026 A1-S1): <cacheRoot>/<alias>/<commit_sha>/ — the
+	// immutable slot holding ONE artifact; <alias>/current → <commit_sha> (a relative
+	// symlink to the active slot, populated by the git-resolver via
+	// updateCurrentSymlink). Discover/ReadSlot reach the artifact ONLY through current.
+	//
+	// The slot's name is the REGISTRATION ALIAS: the artifact carries no self-name
+	// (NIM-377), and the schema it offers lives in its trailer rather than in a file
+	// beside it.
+	pluginDir := filepath.Join(cacheRoot, "fqdn")
 	const commitSHA = "0123456789abcdef0123456789abcdef01234567"
 	slotDir := filepath.Join(pluginDir, commitSHA)
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		t.Fatalf("mkdir slot dir: %v", err)
 	}
-	buildFqdnPlugin(t, slotDir, "soul-cloud-fqdn")
-	if err := os.WriteFile(filepath.Join(slotDir, "manifest.yaml"), []byte(`kind: cloud_driver
-protocol_version: 1
-namespace: soulstack
-name: fqdn
-required_capabilities: []
-side_effects: []
-spec:
-  provider_kind: fake
-  profile_schema:
-    type: object
-`), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
-	}
+	buildFqdnPlugin(t, slotDir, "fqdn")
+	stampFqdnPlugin(t, filepath.Join(slotDir, "fqdn"))
 	// current → <commit_sha> relative target (as updateCurrentSymlink).
 	if err := os.Symlink(commitSHA, filepath.Join(pluginDir, pluginhost.CurrentLink)); err != nil {
 		t.Fatalf("symlink current: %v", err)
@@ -166,11 +160,12 @@ spec:
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(warns) != 0 {
-		t.Logf("discovery warnings: %v", warns)
-	}
+	// Discovery skips a slot it cannot read (unstamped artifact, invalid schema
+	// document, several executables) and says why in warns. When the count is
+	// wrong those warnings ARE the diagnosis, so they belong in the failure rather
+	// than in a Logf the reader has to go looking for.
 	if len(found) != 1 {
-		t.Fatalf("expected 1 plugin in cache, got %d", len(found))
+		t.Fatalf("expected 1 plugin in cache, got %d; discovery warnings: %v", len(found), warns)
 	}
 
 	// Sigil verify-gate (S6b) now gates Spawn: attach valid trust-anchor + permit
@@ -192,18 +187,46 @@ spec:
 	return adapter
 }
 
-// sigilForHost signs valid SigilRecord for binary+manifest from Discovered
-// using same helper as keeper at Sign (BuildSigilBlock + NormalizeManifestBytes).
-// Returns trust-anchor and lookup with single permit, ready to attach to Host.
+// stampFqdnPlugin appends the schema trailer to the just-built artifact — what
+// `soul-mod stamp` does in a real build. Without it the slot has no readable
+// disclosure and Discover skips it (fail-closed).
+//
+// A kind=cloud_driver document declares `profile_schema` and nothing belonging to
+// another kind: `provider_kind` is an ssh_provider field (ADR-020(e)), and the
+// validator now rejects it here rather than ignoring it. The old `manifest.yaml`
+// this fixture replaced did set it — the pre-NIM-377 validator checked
+// `provider_kind` only on soul_beacon, so a cloud driver carrying it was accepted
+// silently and the fixture inherited the gap.
+func stampFqdnPlugin(t *testing.T, path string) {
+	t.Helper()
+	payload, err := schema.Marshal(schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema:   map[string]any{"type": "object"},
+	})
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	if err := schema.WriteTrailerFile(path, payload); err != nil {
+		t.Fatalf("stamp artifact: %v", err)
+	}
+}
+
+// sigilForHost signs a valid SigilRecord over the discovered artifact through the SAME
+// helpers keeper-Signer uses at Sign (BuildSigilBlock + SchemaDigest). Returns a
+// trust-anchor and a lookup holding the single grant, ready to attach to a Host.
+//
+// The block is keyed on (source, ref) — the artifact's only signed identity. The ALIAS
+// is not in it; it is only the key the lookup is stored under.
 func sigilForHost(t *testing.T, d pluginhost.Discovered) (ed25519.PublicKey, sharedhost.SigilLookup) {
 	t.Helper()
-	manifest, err := os.ReadFile(filepath.Join(d.Dir, "manifest.yaml"))
+	schemaBytes, err := schema.ReadTrailerFile(d.BinaryPath)
 	if err != nil {
-		t.Fatalf("read manifest for sigil: %v", err)
+		t.Fatalf("read schema trailer for sigil: %v", err)
 	}
 	binBytes, err := os.ReadFile(d.BinaryPath)
 	if err != nil {
-		t.Fatalf("read binary for sigil: %v", err)
+		t.Fatalf("read artifact for sigil: %v", err)
 	}
 	binSum := sha256.Sum256(binBytes)
 	binHex := hex.EncodeToString(binSum[:])
@@ -213,24 +236,27 @@ func sigilForHost(t *testing.T, d pluginhost.Discovered) (ed25519.PublicKey, sha
 	if err != nil {
 		t.Fatalf("genkey: %v", err)
 	}
-	manDigest := sha256.Sum256(sharedhost.NormalizeManifestBytes(manifest))
-	const ref = "v1.0.0"
-	block := sharedhost.BuildSigilBlock(d.Manifest.Namespace, d.Manifest.Name, ref, binRaw, manDigest[:])
+	schemaDigest := sharedhost.SchemaDigest(schemaBytes)
+	const (
+		source = "https://example.com/soul-cloud-fqdn.git"
+		ref    = "v1.0.0"
+	)
+	block := sharedhost.BuildSigilBlock(source, ref, binRaw, schemaDigest[:])
 	rec := &sharedhost.SigilRecord{
-		Namespace:       d.Manifest.Namespace,
-		Name:            d.Manifest.Name,
+		Alias:           d.Alias,
+		Source:          source,
 		Ref:             ref,
 		BinarySHA256hex: binHex,
 		Signature:       ed25519.Sign(priv, block),
-		Manifest:        manifest,
+		Schema:          schemaBytes,
 	}
-	return pub, hostTestLookup{d.Manifest.Namespace + "." + d.Manifest.Name: rec}
+	return pub, hostTestLookup{d.Alias: rec}
 }
 
 // hostTestLookup is minimal sharedhost.SigilLookup over map for integration test.
 type hostTestLookup map[string]*sharedhost.SigilRecord
 
-func (l hostTestLookup) Get(ns, name string) *sharedhost.SigilRecord { return l[ns+"."+name] }
+func (l hostTestLookup) Get(alias string) *sharedhost.SigilRecord { return l[alias] }
 
 func mustStructIT(t *testing.T, m map[string]any) *structpb.Struct {
 	t.Helper()

@@ -117,10 +117,17 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 		}))
 	}
 
-	// 3) required_modules — two-level `<namespace>.<module>` form.
+	// 3) required_modules — two-level `<namespace>.<module>` form, and level 1 must
+	// not be a reserved name. The reserved check runs FIRST because `core.haproxy`
+	// is regex-valid: reporting it as a format error would send the author looking
+	// for a typo in a string that is spelled exactly as they meant it.
 	for i, mod := range m.RequiredModules {
-		if !reRequiredModule.MatchString(mod) {
-			out = append(out, atPath(root, fmt.Sprintf("$.required_modules[%d]", i), diag.Diagnostic{
+		yamlPath := fmt.Sprintf("$.required_modules[%d]", i)
+		switch {
+		case reservedModuleAddr(mod):
+			out = append(out, reservedModuleDiag(root, yamlPath, fmt.Sprintf("required_modules[%d]", i), mod))
+		case !reRequiredModule.MatchString(mod):
+			out = append(out, atPath(root, yamlPath, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "required_module_invalid_format",
 				Message: fmt.Sprintf("required_modules[%d] = %q does not match <namespace>.<module>", i, mod),

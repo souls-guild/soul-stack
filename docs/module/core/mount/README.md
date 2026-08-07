@@ -119,7 +119,7 @@ Erroneous `present` writes a persistent entry that will try to mount
 source on every boot - the cost of the error in `source`/`opts` is repeated on
 each boot, as opposed to the one-time `mounted`.
 - **Privileges.** Manifest
-[`mount.yaml`](../../../../shared/coremanifest/mount.yaml) announces
+[`mount` module](../../../../shared/coremanifest/mod_mount.go) announces
   `required_capabilities: [run_as_root, exec_subprocess, fs_write_root]` —
 `mount`/`umount` require UID 0, executed as subprocesses
 (`findmnt`/`mount`/`umount`), and edit `/etc/fstab` is an out-of-bounds write

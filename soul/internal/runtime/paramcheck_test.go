@@ -210,9 +210,7 @@ func TestParams_DryRunRejectsUnknownParam(t *testing.T) {
 func pluginLayer(t *testing.T, input map[string]sharedplugin.InputParamDef) (*ApplyRunner, *fakeSpawner, *PluginRegistry) {
 	t.Helper()
 	d := makeDiscovered("acme", "widget")
-	d.Manifest.Spec.States = map[string]sharedplugin.StateDef{
-		"applied": {Description: "x", Input: input},
-	}
+	withStateInput(d, "widget", "applied", input)
 	spawner := &fakeSpawner{makeSession: func() *fakeSession {
 		return &fakeSession{events: []*pluginv1.ApplyEvent{{Changed: true}}}
 	}}
@@ -379,9 +377,7 @@ func TestParams_DeprecationSurvivesAnUnknownParamOnTheSameTask(t *testing.T) {
 // manifest would describe params for the static module that actually runs.
 func TestParams_CompositeAsksTheServingLayer(t *testing.T) {
 	shadow := makeDiscovered("core", "pkg")
-	shadow.Manifest.Spec.States = map[string]sharedplugin.StateDef{
-		"installed": {Description: "x", Input: map[string]sharedplugin.InputParamDef{"anything": {Type: "string"}}},
-	}
+	withStateInput(shadow, "pkg", "installed", map[string]sharedplugin.InputParamDef{"anything": {Type: "string"}})
 	c := NewCompositeRegistry(
 		coreLayer(map[string]module.SoulModule{"core.pkg": &fakeModule{}}),
 		NewPluginRegistry(&fakeSpawner{}, []pluginhost.Discovered{shadow}, nil),
@@ -416,12 +412,12 @@ func TestParams_ProductionRegistryEnforcesEveryManifestedCoreModule(t *testing.T
 		if !hasManifest {
 			continue
 		}
-		for state := range man.Spec.States {
+		for state := range man.States {
 			in, strictness := schema.StateInput(name, state)
 			if strictness != ParamsEnforced {
 				t.Errorf("%s.%s: strictness = %v, want ParamsEnforced", name, state, strictness)
 			}
-			if in == nil && len(man.Spec.States[state].Input) > 0 {
+			if in == nil && len(man.States[state].Input) > 0 {
 				t.Errorf("%s.%s: input did not resolve", name, state)
 			}
 			checked++
@@ -444,4 +440,17 @@ func (m *planSafeModule) PlanReadSafe() {}
 func (m *planSafeModule) Plan(_ *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	m.planned = true
 	return stream.Send(&pluginv1.PlanEvent{Changed: false})
+}
+
+// withStateInput rewrites one state's input on a discovered entry's document, so a
+// test can describe the contract a custom module publishes.
+func withStateInput(d pluginhost.Discovered, module, state string, input map[string]sharedplugin.InputParamDef) {
+	for i := range d.Doc.Modules {
+		if d.Doc.Modules[i].Name != module {
+			continue
+		}
+		d.Doc.Modules[i].States = map[string]sharedplugin.StateDef{
+			state: {Description: "x", Input: input},
+		}
+	}
 }

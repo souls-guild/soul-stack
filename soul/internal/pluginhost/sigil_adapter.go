@@ -10,7 +10,7 @@ import (
 // soul/internal/pluginhost independent of the sigilcache package directly
 // (the adapter is bound in cmd/soul at wire-up).
 type sigilCache interface {
-	Get(namespace, name string) *keeperv1.PluginSigil
+	Get(alias string) *keeperv1.PluginSigil
 }
 
 // SigilLookupAdapter bridges Soul's Sigil runtime cache
@@ -29,27 +29,27 @@ func NewSigilLookupAdapter(cache sigilCache) *SigilLookupAdapter {
 	return &SigilLookupAdapter{cache: cache}
 }
 
-// Get resolves the active grant by (namespace, name) and projects
+// Get resolves the active grant by registration alias and projects
 // keeperv1.PluginSigil into shared.SigilRecord. nil (grant didn't arrive) →
 // nil (verify treats it as no_sigil).
 //
-// Manifest comes from PluginSigil.Manifest — the RAW manifest.yaml bytes
-// from the transport (M1), which verify runs through NormalizeManifestBytes
-// (S3↔S6 invariant: not the parsed form, not a file from disk).
-func (a *SigilLookupAdapter) Get(namespace, name string) *sharedhost.SigilRecord {
+// Schema comes from PluginSigil.Schema — the canonical schema-document bytes from the
+// transport (M1), which verify hashes with SchemaDigest (S3↔S6 invariant: not the
+// parsed form, not the trailer read from disk).
+func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 	if a.cache == nil {
 		return nil
 	}
-	sig := a.cache.Get(namespace, name)
+	sig := a.cache.Get(alias)
 	if sig == nil {
 		return nil
 	}
 	return &sharedhost.SigilRecord{
-		Namespace:       sig.GetNamespace(),
-		Name:            sig.GetName(),
+		Alias:           sig.GetAlias(),
+		Source:          sig.GetSource(),
 		Ref:             sig.GetRef(),
 		BinarySHA256hex: sig.GetBinarySha256(),
 		Signature:       sig.GetSignature(),
-		Manifest:        sig.GetManifest(),
+		Schema:          sig.GetSchema(),
 	}
 }

@@ -92,7 +92,7 @@ is subject to the same prohibition against untrusted interpolation as
 [`core.cmd`](../cmd/README.md). `creates` shell does not use - this is `os.Stat`
 along the way.
 - **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
-([`exec.yaml`](../../../../shared/coremanifest/exec.yaml)) only
+([`exec` module](../../../../shared/coremanifest/mod_exec.go)) only
   [`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum).
 The command is executed with the privileges of the `soul`-agent process, without elevation
 inside the module; For system operations, the agent in practice runs under root.

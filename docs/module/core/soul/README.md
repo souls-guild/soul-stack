@@ -88,7 +88,7 @@ the resulting set is the same as the current one (`sameSet`, order-independent c
 - **Keeper-side, not Soul-side - `root`/capability semantics are not applicable.** Step
 is executed in the Keeper process (`on: keeper` dispatcher), and not by the `soul` agent on
 host. The module does not have a manifest with `required_capabilities`
-([`soul.yaml`](../../../../shared/coremanifest/soul.yaml) declares only
+([`soul` module](../../../../shared/coremanifest/mod_soul.go) declares only
 states/input) is a keeper-internal operation on Postgres, not a host plugin.
 - **Writing to the registry `souls` is a privileged Keeper operation.** Module
 creates/modifies registry entries (`Insert`/`UpdateCoven`,

@@ -234,7 +234,7 @@ rely on `disabled` as a guarantee that the service is currently down (needs
 **systemd-only** - on openrc/sysv it is a loud error, never a silent no-op, so a
 masked step cannot give a false sense of protection on an unsupported init.
 - **Privileges.** Manifest
-[`service.yaml`](../../../../shared/coremanifest/service.yaml) announces
+[`service` module](../../../../shared/coremanifest/mod_service.go) announces
   `required_capabilities: [run_as_root, exec_subprocess]` —
 start/stop/restart/enable/disable/mask via init system always require root and
 launch subprocesses (`systemctl`/`rc-service`/`service`/`rc-update`/`chkconfig`,

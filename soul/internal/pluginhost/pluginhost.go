@@ -11,8 +11,8 @@
 //   - a Discover filter: the Soul host accepts kind=soul_module and
 //     kind=soul_beacon (cloud/ssh are Keeper-side, filtered into warnings).
 //
-// manifest.yaml parsing lives in `shared/plugin`; this package only
-// re-exports type aliases to avoid breaking existing call sites.
+// Schema-document reading lives in `shared/plugin`; this package only
+// re-exports type aliases for call-site convenience.
 package pluginhost
 
 import (
@@ -37,11 +37,11 @@ const (
 )
 
 // Re-export of shared types. Deliberate aliases: they give call sites the
-// familiar short names (`pluginhost.Discovered`, `pluginhost.Manifest`) and a
+// familiar short names (`pluginhost.Discovered`, `pluginhost.Document`) and a
 // stable Soul-host contract surface.
 type (
 	Discovered = sharedhost.Discovered
-	Manifest   = sharedplugin.Manifest
+	Document   = sharedplugin.Document
 )
 
 // Host is the Soul-side runtime for kind=soul_module plugins. A thin wrapper
@@ -51,13 +51,13 @@ type Host struct {
 	*sharedhost.Host
 }
 
-// Spawn forks a kind=soul_module plugin and wraps [sharedhost.BasePlugin] in
-// the kind-specific [Plugin] (SoulModule client). Errors if
-// Discovered.Manifest.Kind != soul_module (guards against kind mismatch when
+// Spawn forks the artifact for one kind=soul_module module and wraps
+// [sharedhost.BasePlugin] in the kind-specific [Plugin] (SoulModule client). Errors if
+// the discovered entry's kind is not soul_module (guards against kind mismatch when
 // Discovered is hand-built in tests). See [Host.SpawnBeacon] for kind=soul_beacon.
 func (h *Host) Spawn(ctx context.Context, d Discovered) (*Plugin, error) {
-	if d.Manifest != nil && d.Manifest.Kind != KindSoulModule {
-		return nil, errKindMismatch(KindSoulModule, d.Manifest.Kind)
+	if d.Doc != nil && d.Kind() != KindSoulModule {
+		return nil, errKindMismatch(KindSoulModule, d.Kind())
 	}
 	base, err := h.Host.Spawn(ctx, d)
 	if err != nil {
@@ -70,11 +70,11 @@ func (h *Host) Spawn(ctx context.Context, d Discovered) (*Plugin, error) {
 // in [BeaconPlugin] (SoulBeacon client). Mirrors [Host.Spawn] for the Soul
 // host's second kind (ADR-030 V5-2).
 //
-// Kind-mismatch guard: errors before forking if manifest.kind != soul_beacon
+// Kind-mismatch guard: errors before forking if the kind is not soul_beacon
 // (symmetric with the Keeper host, where each kind gets its own wrap function).
 func (h *Host) SpawnBeacon(ctx context.Context, d Discovered) (*BeaconPlugin, error) {
-	if d.Manifest != nil && d.Manifest.Kind != KindSoulBeacon {
-		return nil, errKindMismatch(KindSoulBeacon, d.Manifest.Kind)
+	if d.Doc != nil && d.Kind() != KindSoulBeacon {
+		return nil, errKindMismatch(KindSoulBeacon, d.Kind())
 	}
 	base, err := h.Host.Spawn(ctx, d)
 	if err != nil {
@@ -127,19 +127,19 @@ func NewHost(cfg *config.PluginRuntime, anchors []ed25519.PublicKey, sigils shar
 // Cache layout (docs/soul/modules.md):
 //
 //	/var/lib/soul-stack/modules/
-//	  <namespace>-<name>/
-//	    manifest.yaml
-//	    soul-mod-<name>        # for kind=soul_module
-//	    soul-beacon-<name>     # for kind=soul_beacon
+//	  <alias>/
+//	    <artifact>             # one executable, its schema in the trailer
+//	    .sha256                # digest sidecar
 //
-// External contract is unchanged: `[]Discovered, []string, error`. The caller
-// splits the result by kind (via `d.Manifest.Kind`) and registers into the
-// appropriate registry (module-registry / beacon-registry).
+// The result holds one entry PER MODULE — a soul_module artifact serving `acl`,
+// `config` and `info` under alias `redis` yields three. The caller splits by kind (via
+// `d.Kind()`) and registers into the appropriate registry (module-registry /
+// beacon-registry).
 func Discover(modulesRoot string) ([]Discovered, []string, error) {
 	all, warnings, err := sharedhost.Discover(modulesRoot)
 	if err != nil {
 		return nil, nil, err
 	}
-	soulOnly, filterWarns := sharedhost.FilterByKinds(all, []string{KindSoulModule, KindSoulBeacon})
+	soulOnly, filterWarns := sharedhost.FilterByKinds(all, []sharedplugin.Kind{KindSoulModule, KindSoulBeacon})
 	return soulOnly, append(warnings, filterWarns...), nil
 }

@@ -11,6 +11,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
+// testSource is the git remote the fixtures pretend their artifact came from — with no
+// self-name in the artifact, this and the ref are the whole signed identity.
+const testSource = "https://example.com/soul-cloud-hetzner.git"
+
 func newTestSigner(t *testing.T) (*Signer, ed25519.PublicKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -42,23 +46,43 @@ func TestSign_RejectsBadDigestFormat(t *testing.T) {
 		"AB" + "00000000000000000000000000000000000000000000000000000000000000", // uppercase
 	}
 	for _, h := range bad {
-		if _, err := s.Sign("ns", "name", "ref", h, []byte("manifest")); err == nil {
+		if _, err := s.Sign(testSource, "v1", h, []byte(`{"kind":"cloud_driver"}`)); err == nil {
 			t.Errorf("Sign accepted bad digest %q", h)
 		}
 	}
 }
 
-// Sign → Verify roundtrip: signature is valid with public key against block
-// built from same inputs (the path Soul will take on S6).
+// TestSign_RejectsEmptyIdentityOrSchema — the three inputs without which a signature
+// would mean nothing. An empty source leaves the grant with no identity at all (the
+// artifact carries none); an empty schema would produce a valid seal over "this
+// artifact discloses nothing".
+func TestSign_RejectsEmptyIdentityOrSchema(t *testing.T) {
+	s, _ := newTestSigner(t)
+	binHex := hex.EncodeToString(sha256Of("bin"))
+	doc := []byte(`{"kind":"cloud_driver"}`)
+
+	if _, err := s.Sign("", "v1", binHex, doc); err == nil {
+		t.Error("Sign accepted an empty source")
+	}
+	if _, err := s.Sign(testSource, "", binHex, doc); err == nil {
+		t.Error("Sign accepted an empty ref")
+	}
+	if _, err := s.Sign(testSource, "v1", binHex, nil); err == nil {
+		t.Error("Sign accepted an empty schema document")
+	}
+}
+
+// Sign → Verify roundtrip: the signature validates against a block rebuilt from the
+// same inputs (the path Soul takes at S6).
 func TestSign_VerifyRoundtrip(t *testing.T) {
 	s, pub := newTestSigner(t)
 
-	ns, name, ref := "cloud", "hetzner", "v1.0.0"
+	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("the-plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	manifest := []byte("kind: cloud_driver\nname: hetzner\n")
+	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
 
-	sig, err := s.Sign(ns, name, ref, binHex, manifest)
+	sig, err := s.Sign(testSource, ref, binHex, doc)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
@@ -66,40 +90,105 @@ func TestSign_VerifyRoundtrip(t *testing.T) {
 		t.Fatalf("signature size = %d, want %d", len(sig), ed25519.SignatureSize)
 	}
 
-	// Recover block exactly as S6 verifier would.
-	manDigest := sha256.Sum256(pluginhost.NormalizeManifestBytes(manifest))
-	block := pluginhost.BuildSigilBlock(ns, name, ref, binDigest[:], manDigest[:])
+	// Recover the block exactly as the S6 verifier would.
+	schemaDigest := pluginhost.SchemaDigest(doc)
+	block := pluginhost.BuildSigilBlock(testSource, ref, binDigest[:], schemaDigest[:])
 
 	if !ed25519.Verify(pub, block, sig) {
 		t.Fatal("Verify failed on honest block")
 	}
 }
 
-// Tampering with any block field breaks verify. Covers all Sigil fields.
-func TestSign_VerifyFailsOnTamper(t *testing.T) {
+// TestSign_AliasIsNotSigned is the guard for NIM-438. The alias must NOT reach the
+// block: it is operator-chosen, so trust anchored to it could be moved by renaming it.
+// Two grants over the same artifact under two aliases therefore carry the SAME
+// signature, and a forged alias cannot reach a signature at all.
+func TestSign_AliasIsNotSigned(t *testing.T) {
+	s, _ := newTestSigner(t)
+
+	const ref = "v1.0.0"
+	binHex := hex.EncodeToString(sha256Of("the-plugin-binary"))
+	doc := []byte(`{"kind":"soul_module","protocol_version":1}`)
+
+	// Sign takes no alias at all — that is the property. What it does take is the
+	// source, and changing THAT must change the signature.
+	a, err := s.Sign(testSource, ref, binHex, doc)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	b, err := s.Sign(testSource, ref, binHex, doc)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Error("the same (source, ref, digest, schema) must yield the same signature")
+	}
+	c, err := s.Sign("https://example.com/other.git", ref, binHex, doc)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	if string(a) == string(c) {
+		t.Error("a different source must yield a different signature")
+	}
+}
+
+// TestSign_V1DomainSeparatorDoesNotVerify pins the DST bump. The v1 block was keyed on
+// (namespace, name) and tagged `soul-stack/sigil/v1`; a signature made over the v2
+// block must not verify against a v1-shaped block, so no pre-NIM-377 grant can be
+// replayed into the new identity model.
+func TestSign_V1DomainSeparatorDoesNotVerify(t *testing.T) {
 	s, pub := newTestSigner(t)
 
-	ns, name, ref := "cloud", "hetzner", "v1.0.0"
-	binDigest := sha256.Sum256([]byte("orig-binary"))
+	const ref = "v1.0.0"
+	binDigest := sha256.Sum256([]byte("the-plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	manifest := []byte("kind: cloud_driver\n")
+	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+	schemaDigest := pluginhost.SchemaDigest(doc)
 
-	sig, err := s.Sign(ns, name, ref, binHex, manifest)
+	sig, err := s.Sign(testSource, ref, binHex, doc)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 
-	manDigest := sha256.Sum256(pluginhost.NormalizeManifestBytes(manifest))
+	// Rebuild the v1 block by hand: DST v1, then LP(namespace) LP(name) LP(ref)
+	// LP(binary) LP(manifest). This is what a pre-NIM-377 verifier computes.
+	v1 := []byte("soul-stack/sigil/v1")
+	for _, field := range [][]byte{
+		[]byte("cloud"), []byte("hetzner"), []byte(ref), binDigest[:], schemaDigest[:],
+	} {
+		n := uint32(len(field))
+		v1 = append(v1, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		v1 = append(v1, field...)
+	}
+	if ed25519.Verify(pub, v1, sig) {
+		t.Fatal("a v2 signature verified against a v1-DST block — the version bump is not doing its job")
+	}
+}
+
+// Tampering with any block field breaks verify. Covers every signed Sigil field.
+func TestSign_VerifyFailsOnTamper(t *testing.T) {
+	s, pub := newTestSigner(t)
+
+	const ref = "v1.0.0"
+	binDigest := sha256.Sum256([]byte("orig-binary"))
+	binHex := hex.EncodeToString(binDigest[:])
+	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+
+	sig, err := s.Sign(testSource, ref, binHex, doc)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	schemaDigest := pluginhost.SchemaDigest(doc)
 
 	tampered := []struct {
 		name  string
 		block []byte
 	}{
-		{"namespace", pluginhost.BuildSigilBlock("evil", name, ref, binDigest[:], manDigest[:])},
-		{"name", pluginhost.BuildSigilBlock(ns, "evil", ref, binDigest[:], manDigest[:])},
-		{"ref", pluginhost.BuildSigilBlock(ns, name, "v9.9.9", binDigest[:], manDigest[:])},
-		{"binary_sha256", pluginhost.BuildSigilBlock(ns, name, ref, sha256Of("evil-binary"), manDigest[:])},
-		{"manifest_sha256", pluginhost.BuildSigilBlock(ns, name, ref, binDigest[:], sha256Of("evil: manifest"))},
+		{"source", pluginhost.BuildSigilBlock("https://evil.example/repo.git", ref, binDigest[:], schemaDigest[:])},
+		{"ref", pluginhost.BuildSigilBlock(testSource, "v9.9.9", binDigest[:], schemaDigest[:])},
+		{"binary_sha256", pluginhost.BuildSigilBlock(testSource, ref, sha256Of("evil-binary"), schemaDigest[:])},
+		{"schema_sha256", pluginhost.BuildSigilBlock(testSource, ref, binDigest[:], sha256Of(`{"kind":"evil"}`))},
 	}
 	for _, tc := range tampered {
 		if ed25519.Verify(pub, tc.block, sig) {

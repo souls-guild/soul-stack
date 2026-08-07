@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -47,26 +48,28 @@ func setupBeaconHostAndDiscovered(t *testing.T) (*Host, Discovered, func()) {
 	}
 	modulesRoot := shortHostDir(t, "ss-bmods-")
 	socketDir := shortHostDir(t, "ss-bsock-")
-	moduleDir := filepath.Join(modulesRoot, "acme-echo")
+	moduleDir := filepath.Join(modulesRoot, testAlias)
 	if err := os.Mkdir(moduleDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	binPath := buildBeaconEchoPlugin(t, moduleDir)
-	// manifest.name=echo → BinaryName=soul-beacon-echo (Manifest.BinaryName convention).
-	if err := os.WriteFile(filepath.Join(moduleDir, "manifest.yaml"), []byte(`kind: soul_beacon
-protocol_version: 1
-namespace: acme
-name: echo
-required_capabilities: []
-side_effects: []
-spec:
-  params_schema:
-    type: object
-    required: [topic]
-    properties:
-      topic: { type: string }
-`), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
+	// A beacon serves a single endpoint, so its document declares no modules and its
+	// address is the bare alias. `sdk/beacon` has no `schema` subcommand yet, so the
+	// test stamps the document it would print.
+	beaconDoc, err := schema.Marshal(schema.Document{
+		Kind:            schema.KindSoulBeacon,
+		ProtocolVersion: 1,
+		ParamsSchema: map[string]any{
+			"type":       "object",
+			"required":   []any{"topic"},
+			"properties": map[string]any{"topic": map[string]any{"type": "string"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal beacon schema: %v", err)
+	}
+	if err := schema.WriteTrailerFile(binPath, beaconDoc); err != nil {
+		t.Fatalf("stamp beacon artifact: %v", err)
 	}
 
 	found, warns, err := Discover(modulesRoot)
@@ -79,8 +82,11 @@ spec:
 	if len(found) != 1 {
 		t.Fatalf("expected 1 discovered plugin, got %d", len(found))
 	}
-	if found[0].Manifest.Kind != KindSoulBeacon {
-		t.Fatalf("discovered kind = %q, want soul_beacon", found[0].Manifest.Kind)
+	if found[0].Kind() != KindSoulBeacon {
+		t.Fatalf("discovered kind = %q, want soul_beacon", found[0].Kind())
+	}
+	if found[0].Module != "" {
+		t.Fatalf("beacon entry has module %q, want empty (single endpoint)", found[0].Module)
 	}
 
 	pub, sigils := sigilFor(t, found[0])
@@ -115,8 +121,8 @@ func TestSpawnBeaconHappyPath(t *testing.T) {
 		}
 	}()
 
-	if p.Manifest().Address() != "acme.echo" {
-		t.Errorf("Manifest.Address = %q", p.Manifest().Address())
+	if got := p.Discovered().Address(); got != testAlias {
+		t.Errorf("Discovered.Address = %q, want the bare alias %q", got, testAlias)
 	}
 
 	params, _ := structpb.NewStruct(map[string]any{"topic": "filesystem"})
@@ -175,7 +181,7 @@ func TestSpawnBeaconRejectsKindMismatch(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := h.SpawnBeacon(ctx, modD); err == nil {
+	if _, err := h.SpawnBeacon(ctx, modD["echo"]); err == nil {
 		t.Fatal("expected kind-mismatch denial for soul_module under SpawnBeacon")
 	}
 }

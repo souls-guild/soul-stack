@@ -8,61 +8,75 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 
-	"github.com/souls-guild/soul-stack/shared/diag"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// ErrSlotNotFound indicates cache has no slot `<cacheRoot>/<ns>-<name>/` or it has no
-// valid manifest.yaml / binary. Returned by [ReadSlot] when plugin by
-// key (namespace, name) not found in host's cache; sigil.Service maps it to
-// ErrPluginNotInCache → 404.
+// ErrSlotNotFound indicates the cache has no slot `<cacheRoot>/<alias>/`, or the slot
+// holds no readable artifact. Returned by [ReadSlot] when the registration alias
+// resolves to nothing usable; sigil.Service maps it to ErrPluginNotInCache → 404.
 var ErrSlotNotFound = errors.New("pluginhost: plugin slot not found in cache")
 
-// CurrentLink is the name of symlink to active commit_sha-slot in R-nested layout
-// (ADR-026 F-fetch, A1-S1): `<cacheRoot>/<ns>-<name>/current → <commit_sha>`.
-// Resolver ([plugingit.Resolver]) updates it atomically when populating cache.
+// CurrentLink is the name of the symlink to the active commit_sha-slot in the R-nested
+// layout (ADR-026 F-fetch, A1-S1): `<cacheRoot>/<alias>/current → <commit_sha>`.
+// The resolver ([plugingit.Resolver]) updates it atomically when it populates the cache.
 const CurrentLink = "current"
 
-// SlotContents is the contents of plugin slot in cache, read by key
-// (namespace, name): binary path + raw manifest.yaml bytes + SHA-256
-// of binary (hex, lowercase).
+// SlotContents is what one slot holds, read by REGISTRATION ALIAS: the artifact's
+// path, the canonical schema document stamped into it, and the artifact's SHA-256.
 //
-// This is input for Sigil signature (ADR-026): Keeper reads ACTIVE binary+manifest
-// of slot `<cacheRoot>/<ns>-<name>/current/` (R-nested layout, A1-S1: `current` is
-// symlink to immutable commit_sha-slot populated by git-resolver).
-// `ref` in allow-record is operator-asserted label, not used in slot lookup.
+// This is the input to the Sigil signature (ADR-026): Keeper reads the ACTIVE artifact
+// of `<cacheRoot>/<alias>/current/` (R-nested layout, A1-S1: `current` is a symlink to
+// the immutable commit_sha-slot the git resolver populated).
+//
+// The alias is the ONLY lookup key. The artifact carries no self-name since NIM-377 —
+// no namespace, no name, no filename convention — so there is nothing else a slot
+// could be found by, and the alias is what the grant, the slot and every address
+// derived from it agree on. `ref` is an operator-asserted label on the grant and takes
+// no part in the lookup.
 type SlotContents struct {
-	// BinaryPath is absolute path to plugin executable file.
+	// BinaryPath is the absolute path of the artifact.
 	BinaryPath string
-	// ManifestBytes are RAW manifest.yaml bytes as on disk (without
-	// canonicalization: done by sigil.Signer before hashing — S3↔S6 invariant).
-	ManifestBytes []byte
-	// BinarySHA256 is SHA-256 of binary (hex, lowercase, 64 chars). Passed to
+	// SchemaBytes are the canonical schema-document bytes read from the artifact's
+	// TRAILER — byte-exact, as [sharedhost.SchemaDigest] will hash them. Reading them
+	// from a sibling `schema.json` instead would let the signed disclosure differ from
+	// the one inside the bytes being approved.
+	SchemaBytes []byte
+	// Doc is SchemaBytes parsed and validated, for callers that need the kind or the
+	// module set without re-parsing. Never nil when ReadSlot returns no error.
+	Doc *sharedplugin.Document
+	// BinarySHA256 is the artifact's SHA-256 (hex, lowercase, 64 chars). Passed to
 	// Signer.Sign and stored in plugin_sigils.sha256.
 	BinarySHA256 string
 }
 
-// ReadSlot reads binary+manifest of ACTIVE plugin slot via current-symlink
-// `<cacheRoot>/<namespace>-<name>/current/` (R-nested layout, A1-S1). `ref` not
-// used in slot lookup — integrity authority = sha256 + Sigil signature.
+// ReadSlot reads the ACTIVE artifact of the slot registered under alias, through the
+// current-symlink `<cacheRoot>/<alias>/current/` (R-nested layout, A1-S1).
 //
 // Steps:
-//  1. active slot `<cacheRoot>/<ns>-<name>/current/` (symlink to commit_sha-
+//  1. active slot `<cacheRoot>/<alias>/current/` (a symlink to a commit_sha
 //     directory); missing / broken symlink → [ErrSlotNotFound];
-//  2. reads manifest.yaml as raw bytes and parses it (needs kind → binary name convention
-//     [sharedplugin.Manifest.BinaryName]); invalid manifest → validation error;
-//  3. binary by convention next to manifest; missing / not executable →
-//     [ErrSlotNotFound];
-//  4. streaming SHA-256 of binary.
+//  2. the slot's SINGLE executable — there is no filename to look up, so "exactly
+//     one" is the rule and zero or several is an error, never a first-match guess;
+//  3. the canonical schema document from the artifact's trailer;
+//  4. streaming SHA-256 of the artifact.
 //
-// Read-only: ReadSlot does NOT fork plugin, does NOT touch handshake/Discover,
-// does NOT write sidecar. Contract of [Discover]/[Host.Spawn] unaffected.
+// # Fail closed
 //
-// os.Stat follows current symlink, so st.IsDir() check works for active slot too
-// (broken/dangling current gives ENOENT → [ErrSlotNotFound]).
-func ReadSlot(cacheRoot, namespace, name string) (*SlotContents, error) {
-	dir := filepath.Join(cacheRoot, namespace+"-"+name, CurrentLink)
+// A missing trailer, a malformed trailer or a document that does not validate is an
+// ERROR, not a warning: the schema is the disclosure the operator is about to approve,
+// and there is no fallback to a sibling file and no empty-document default. An
+// artifact whose disclosure cannot be read has not been approved.
+//
+// Read-only: ReadSlot does NOT fork the plugin and does NOT write the digest sidecar.
+//
+// os.Stat follows the current symlink, so the IsDir check covers the active slot too
+// (a dangling `current` gives ENOENT → [ErrSlotNotFound]).
+func ReadSlot(cacheRoot, alias string) (*SlotContents, error) {
+	dir := filepath.Join(cacheRoot, alias, CurrentLink)
 	st, err := os.Stat(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -74,34 +88,21 @@ func ReadSlot(cacheRoot, namespace, name string) (*SlotContents, error) {
 		return nil, fmt.Errorf("%w: %s is not a directory", ErrSlotNotFound, dir)
 	}
 
-	manifestPath := filepath.Join(dir, sharedplugin.FileName)
-	manifestBytes, err := os.ReadFile(manifestPath)
+	binPath, err := SingleArtifactIn(dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: no %s in %s", ErrSlotNotFound, sharedplugin.FileName, dir)
-		}
-		return nil, fmt.Errorf("pluginhost: read %q: %w", manifestPath, err)
+		return nil, fmt.Errorf("%w: %s: %v", ErrSlotNotFound, dir, err)
 	}
 
-	m, diags := sharedplugin.LoadFromBytes(manifestPath, manifestBytes)
-	if err := firstManifestError(diags); err != nil {
-		return nil, fmt.Errorf("pluginhost: invalid manifest %q: %w", manifestPath, err)
-	}
-	binName := m.BinaryName()
-	if binName == "" {
-		return nil, fmt.Errorf("pluginhost: manifest %q has no binary convention for kind=%q", manifestPath, m.Kind)
-	}
-
-	binPath := filepath.Join(dir, binName)
-	bst, err := os.Stat(binPath)
+	schemaBytes, err := schema.ReadTrailerFile(binPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: binary %s missing in %s", ErrSlotNotFound, binName, dir)
-		}
-		return nil, fmt.Errorf("pluginhost: stat binary %q: %w", binPath, err)
+		return nil, fmt.Errorf("pluginhost: read schema of %q: %w", binPath, err)
 	}
-	if bst.IsDir() {
-		return nil, fmt.Errorf("%w: %s is a directory in %s", ErrSlotNotFound, binName, dir)
+	doc, diags := sharedplugin.ParseDocument(binPath, schemaBytes)
+	if derr := sharedplugin.FirstError(diags); derr != nil {
+		return nil, fmt.Errorf("pluginhost: invalid schema document in %q: %w", binPath, derr)
+	}
+	if doc == nil {
+		return nil, fmt.Errorf("pluginhost: artifact %q carries no readable schema document", binPath)
 	}
 
 	digest, err := fileDigest(binPath)
@@ -110,41 +111,41 @@ func ReadSlot(cacheRoot, namespace, name string) (*SlotContents, error) {
 	}
 
 	return &SlotContents{
-		BinaryPath:    binPath,
-		ManifestBytes: manifestBytes,
-		BinarySHA256:  digest,
+		BinaryPath:   binPath,
+		SchemaBytes:  schemaBytes,
+		Doc:          doc,
+		BinarySHA256: digest,
 	}, nil
 }
 
-// SlotCommitSHA reads commit_sha of ACTIVE plugin slot (namespace, name) —
-// directory name that symlink `<cacheRoot>/<ns>-<name>/current` points to
-// (R-nested layout, A1-S1). commit_sha is audit tag for binary origin,
-// filled in plugin_sigils on allow (ADR-026(g), outside signature).
+// SlotCommitSHA reads the commit_sha of the ACTIVE slot registered under alias — the
+// directory name the symlink `<cacheRoot>/<alias>/current` points at (R-nested layout,
+// A1-S1). commit_sha is the audit tag for the artifact's origin, written to
+// plugin_sigils on allow (ADR-026(g), outside the signature).
 //
-// Reads ONLY target of symlink (os.Readlink, without following it): target is
-// relative target `<commit_sha>` (see [plugingit.updateCurrentSymlink]),
-// so basic name of that is returned. Reading just target not stat of slot
-// makes helper cheap and independent of binary/manifest presence (their validity
-// already checked by [ReadSlot] at allow step).
+// Reads ONLY the symlink target (os.Readlink, without following it): the target is the
+// relative `<commit_sha>` (see [plugingit.updateCurrentSymlink]), so its base name is
+// what comes back. Reading the target rather than stat-ing the slot keeps the helper
+// cheap and independent of whether the artifact is readable — [ReadSlot] already
+// settled that at the allow step.
 //
 // fail-closed:
-//   - missing directory `<ns>-<name>/` or missing/broken `current` symlink (legacy slot
-//     without current, dangling link) → [ErrSlotNotFound];
-//   - `current` exists but is not symlink → [ErrSlotNotFound] (R-nested invariant
-//     broken: current must be symlink to commit_sha directory).
+//   - missing `<alias>/` directory, or a missing/broken `current` symlink → [ErrSlotNotFound];
+//   - `current` exists but is not a symlink → [ErrSlotNotFound] (the R-nested invariant
+//     is broken: current must be a symlink to a commit_sha directory).
 //
-// Returns basic name of target as-is (without 40-hex validation): commit_sha validity
-// guaranteed by git-resolver when populating cache; here only reading
-// already-fixed value.
-func SlotCommitSHA(cacheRoot, namespace, name string) (string, error) {
-	link := filepath.Join(cacheRoot, namespace+"-"+name, CurrentLink)
+// The target's base name comes back as-is (no 40-hex check): the git resolver
+// guarantees its validity when populating the cache, and this only reads what is
+// already fixed.
+func SlotCommitSHA(cacheRoot, alias string) (string, error) {
+	link := filepath.Join(cacheRoot, alias, CurrentLink)
 	target, err := os.Readlink(link)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("%w: %s", ErrSlotNotFound, link)
 		}
-		// EINVAL (current is not symlink) and other errors — legacy/corrupted slot:
-		// commit_sha cannot be reliably extracted, fail-closed.
+		// EINVAL (current is not a symlink) and anything else — a corrupted slot:
+		// commit_sha cannot be extracted reliably, so fail closed.
 		return "", fmt.Errorf("%w: read current symlink %q: %v", ErrSlotNotFound, link, err)
 	}
 	commitSHA := filepath.Base(target)
@@ -154,31 +155,61 @@ func SlotCommitSHA(cacheRoot, namespace, name string) (string, error) {
 	return commitSHA, nil
 }
 
-// fileDigest computes SHA-256 of file streaming (plugin binaries are tens of MB).
-// Duplicate of computeFileDigest from shared/pluginhost (unexported there); local
-// copy avoids expanding shared's public surface just for reading slot.
+// SingleArtifactIn returns the one executable in dir.
+//
+// There is no name to look up — the artifact declares none since NIM-377 — so the rule
+// is arithmetic: EXACTLY one executable. None is an empty directory; more than one is
+// ambiguous, and taking the first would let directory listing order decide which code
+// gets signed and later executed. Both are errors, never a guess.
+//
+// Dot-files are ignored: that is the digest sidecar and the temp files an atomic write
+// leaves behind. Non-executables are ignored too, which is what lets `dist/` carry the
+// published `schema.json` next to the artifact without becoming ambiguous.
+//
+// os.Stat rather than the DirEntry: a slot may reach its artifact through a symlink,
+// and lstat would report the link instead of what it points at.
+func SingleArtifactIn(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(dir, name))
+		if err != nil || st.IsDir() || st.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		found = append(found, name)
+	}
+	switch len(found) {
+	case 1:
+		return filepath.Join(dir, found[0]), nil
+	case 0:
+		return "", errors.New("no executable artifact in the directory")
+	default:
+		sort.Strings(found)
+		return "", fmt.Errorf("directory holds %d executables (%s), exactly one artifact is expected",
+			len(found), strings.Join(found, ", "))
+	}
+}
+
+// fileDigest computes a file's SHA-256 streaming (plugin artifacts are tens of MB).
+// Duplicate of computeFileDigest in shared/pluginhost (unexported there); the local
+// copy avoids widening shared's public surface just to read a slot.
 func fileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("pluginhost: open binary for digest %q: %w", path, err)
+		return "", fmt.Errorf("pluginhost: open artifact for digest %q: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", fmt.Errorf("pluginhost: read binary for digest %q: %w", path, err)
+		return "", fmt.Errorf("pluginhost: read artifact for digest %q: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// firstManifestError returns first error-level diagnostic from diags
-// (diagnostics below error level — warning/hint — ignored:
-// manifest valid for signing). nil means no fatal errors.
-func firstManifestError(diags []diag.Diagnostic) error {
-	for _, d := range diags {
-		if d.Level == diag.LevelError {
-			return errors.New(d.Code + ": " + d.Message)
-		}
-	}
-	return nil
 }

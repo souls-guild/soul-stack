@@ -7,8 +7,28 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 )
+
+// cloudEntry builds a discovered cloud_driver registered under alias. The artifact
+// declares no name of its own (NIM-377), so the alias IS the provider name.
+func cloudEntry(alias string) pluginhost.Discovered {
+	doc := schema.Document{
+		Kind:            schema.KindCloudDriver,
+		ProtocolVersion: 1,
+		ProfileSchema:   map[string]any{"type": "object"},
+	}
+	return pluginhost.Discovered{Alias: alias, Doc: &doc}
+}
+
+func sshEntry(alias string) pluginhost.Discovered {
+	doc := schema.Document{
+		Kind:            schema.KindSSHProvider,
+		ProtocolVersion: 1,
+		ProviderKind:    "static_key",
+	}
+	return pluginhost.Discovered{Alias: alias, Doc: &doc}
+}
 
 func TestNewPluginAdapter_NilHost(t *testing.T) {
 	if _, err := cloud.NewPluginAdapter(nil, nil); err == nil {
@@ -16,11 +36,11 @@ func TestNewPluginAdapter_NilHost(t *testing.T) {
 	}
 }
 
-func TestNewPluginAdapter_IndexesByName(t *testing.T) {
+func TestNewPluginAdapter_IndexesByAlias(t *testing.T) {
 	h := &pluginhost.Host{}
 	a, err := cloud.NewPluginAdapter(h, []pluginhost.Discovered{
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindCloudDriver, Namespace: "soulstack", Name: "aws"}},
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindCloudDriver, Namespace: "soulstack", Name: "gcp"}},
+		cloudEntry("aws"),
+		cloudEntry("gcp"),
 	})
 	if err != nil {
 		t.Fatalf("NewPluginAdapter: %v", err)
@@ -40,9 +60,9 @@ func TestNewPluginAdapter_IndexesByName(t *testing.T) {
 func TestNewPluginAdapter_SkipsNonCloudKinds(t *testing.T) {
 	h := &pluginhost.Host{}
 	a, err := cloud.NewPluginAdapter(h, []pluginhost.Discovered{
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindCloudDriver, Namespace: "soulstack", Name: "aws"}},
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindSSHProvider, Namespace: "soulstack", Name: "vault-ssh"}},
-		{Manifest: nil},
+		cloudEntry("aws"),
+		sshEntry("vault-ssh"),
+		{Alias: "no-schema"},
 	})
 	if err != nil {
 		t.Fatalf("NewPluginAdapter: %v", err)
@@ -52,11 +72,11 @@ func TestNewPluginAdapter_SkipsNonCloudKinds(t *testing.T) {
 	}
 }
 
-func TestNewPluginAdapter_RejectsDuplicateNames(t *testing.T) {
+func TestNewPluginAdapter_RejectsDuplicateAliases(t *testing.T) {
 	h := &pluginhost.Host{}
 	_, err := cloud.NewPluginAdapter(h, []pluginhost.Discovered{
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindCloudDriver, Namespace: "a", Name: "aws"}},
-		{Manifest: &sharedplugin.Manifest{Kind: pluginhost.KindCloudDriver, Namespace: "b", Name: "aws"}},
+		cloudEntry("aws"),
+		cloudEntry("aws"),
 	})
 	if err == nil {
 		t.Fatal("expected duplicate-name error")

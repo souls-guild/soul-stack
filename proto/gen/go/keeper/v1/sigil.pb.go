@@ -28,30 +28,40 @@ const (
 // re-assemble the signed block and check the ed25519 signature with the trust
 // anchor from bootstrap (BootstrapReply.sigil_pubkey_pem):
 //
-//   - namespace + name + ref: identity of the allowed plugin;
-//   - binary_sha256: hash of the binary, which Soul checks against the local binary;
-//   - signature: ed25519 signature of the block (ns, name, ref, binary_sha256, manifest);
-//   - manifest: raw bytes of manifest.yaml (M1), which Soul runs through
-//     shared/pluginhost.NormalizeManifestBytes before hashing (the S3<->S6 invariant).
+//   - alias: the operator's registration, and the key a Soul looks the grant up by.
+//     Deliberately NOT part of the signed block;
+//   - source + ref: what was actually signed. The artifact carries no self-name
+//     (NIM-377), so where it came from is the only identity a signature can be over;
+//   - binary_sha256: hash of the artifact, which Soul checks against the local file.
+//     This is the one real control on the spawn path;
+//   - signature: ed25519 signature of the block (source, ref, binary_sha256,
+//     schema_sha256);
+//   - schema: canonical schema-document bytes (M1), which Soul hashes with
+//     shared/pluginhost.SchemaDigest (the S3<->S6 invariant).
 //
-// S2b introduces ONLY this contract. Keeper distributing PluginSigil messages and
-// the actual verify on Soul are slice S6.
+// Fields 1, 2 and 6 held the pre-NIM-377 shape (namespace / name / manifest) and are
+// reserved rather than reused: ADR-012 forbids reusing a field number, so an old
+// sender talking to a new receiver fails to populate anything instead of landing a
+// namespace where an alias is expected.
 type PluginSigil struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Plugin namespace (e.g. `core`, `community`).
-	Namespace string `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// Plugin name within the namespace.
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// ref: an operator-asserted version label for the grant (ADR-026 Variant C);
-	// NOT part of binary integrity, but is included in the signed block.
+	// NOT part of artifact integrity, but is included in the signed block.
 	Ref string `protobuf:"bytes,3,opt,name=ref,proto3" json:"ref,omitempty"`
-	// SHA-256 of the plugin binary, hex lowercase (64 characters).
+	// SHA-256 of the artifact, hex lowercase (64 characters).
 	BinarySha256 string `protobuf:"bytes,4,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
 	// Raw ed25519 signature of the block (64 bytes, no base64/PEM).
 	Signature []byte `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
-	// Raw bytes of manifest.yaml (M1). The canonical form for verify is these bytes
-	// through NormalizeManifestBytes, not the parsed form.
-	Manifest      []byte `protobuf:"bytes,6,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	// Registration alias — address level 1, chosen by the operator, and the key Soul
+	// resolves a slot by. Not signed: an alias is a local naming choice, so registering
+	// the same bytes twice must not need a second signature.
+	Alias string `protobuf:"bytes,7,opt,name=alias,proto3" json:"alias,omitempty"`
+	// Artifact source the grant is on (the module repository's remote). Signed.
+	Source string `protobuf:"bytes,8,opt,name=source,proto3" json:"source,omitempty"`
+	// Canonical schema-document bytes (M1). The canonical form for verify is these
+	// bytes as-is — the document is byte-deterministic by construction, so there is
+	// nothing to normalize before hashing.
+	Schema        []byte `protobuf:"bytes,9,opt,name=schema,proto3" json:"schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -86,20 +96,6 @@ func (*PluginSigil) Descriptor() ([]byte, []int) {
 	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PluginSigil) GetNamespace() string {
-	if x != nil {
-		return x.Namespace
-	}
-	return ""
-}
-
-func (x *PluginSigil) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
 func (x *PluginSigil) GetRef() string {
 	if x != nil {
 		return x.Ref
@@ -121,9 +117,23 @@ func (x *PluginSigil) GetSignature() []byte {
 	return nil
 }
 
-func (x *PluginSigil) GetManifest() []byte {
+func (x *PluginSigil) GetAlias() string {
 	if x != nil {
-		return x.Manifest
+		return x.Alias
+	}
+	return ""
+}
+
+func (x *PluginSigil) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+func (x *PluginSigil) GetSchema() []byte {
+	if x != nil {
+		return x.Schema
 	}
 	return nil
 }
@@ -180,15 +190,17 @@ func (x *SigilSnapshot) GetSigils() []*PluginSigil {
 	return nil
 }
 
-// PluginFetchRequest requests a SoulModule plugin's bytes (FetchModule, epic
+// PluginFetchRequest requests a SoulModule artifact's bytes (FetchModule, epic
 // core.module.installed S2). The authority for the grant is binary_sha256
 // (content-addressed, same format as PluginSigil.binary_sha256: hex lowercase,
-// 64 characters); namespace/name are context for Keeper's logs/audit.
+// 64 characters); alias is context for Keeper's logs/audit.
+//
+// Fields 1 and 2 held namespace/name before NIM-377 and are reserved, not reused
+// (ADR-012).
 type PluginFetchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Namespace     string                 `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	BinarySha256  string                 `protobuf:"bytes,3,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
+	Alias         string                 `protobuf:"bytes,4,opt,name=alias,proto3" json:"alias,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -223,23 +235,16 @@ func (*PluginFetchRequest) Descriptor() ([]byte, []int) {
 	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *PluginFetchRequest) GetNamespace() string {
-	if x != nil {
-		return x.Namespace
-	}
-	return ""
-}
-
-func (x *PluginFetchRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
 func (x *PluginFetchRequest) GetBinarySha256() string {
 	if x != nil {
 		return x.BinarySha256
+	}
+	return ""
+}
+
+func (x *PluginFetchRequest) GetAlias() string {
+	if x != nil {
+		return x.Alias
 	}
 	return ""
 }
@@ -349,20 +354,19 @@ var File_keeper_v1_sigil_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_sigil_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/sigil.proto\x12\x13soulstack.keeper.v1\"\xb0\x01\n" +
-	"\vPluginSigil\x12\x1c\n" +
-	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
+	"\x15keeper/v1/sigil.proto\x12\x13soulstack.keeper.v1\"\xd5\x01\n" +
+	"\vPluginSigil\x12\x10\n" +
 	"\x03ref\x18\x03 \x01(\tR\x03ref\x12#\n" +
 	"\rbinary_sha256\x18\x04 \x01(\tR\fbinarySha256\x12\x1c\n" +
-	"\tsignature\x18\x05 \x01(\fR\tsignature\x12\x1a\n" +
-	"\bmanifest\x18\x06 \x01(\fR\bmanifest\"I\n" +
+	"\tsignature\x18\x05 \x01(\fR\tsignature\x12\x14\n" +
+	"\x05alias\x18\a \x01(\tR\x05alias\x12\x16\n" +
+	"\x06source\x18\b \x01(\tR\x06source\x12\x16\n" +
+	"\x06schema\x18\t \x01(\fR\x06schemaJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x06\x10\aR\tnamespaceR\x04nameR\bmanifest\"I\n" +
 	"\rSigilSnapshot\x128\n" +
-	"\x06sigils\x18\x01 \x03(\v2 .soulstack.keeper.v1.PluginSigilR\x06sigils\"k\n" +
-	"\x12PluginFetchRequest\x12\x1c\n" +
-	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12#\n" +
-	"\rbinary_sha256\x18\x03 \x01(\tR\fbinarySha256\"!\n" +
+	"\x06sigils\x18\x01 \x03(\v2 .soulstack.keeper.v1.PluginSigilR\x06sigils\"l\n" +
+	"\x12PluginFetchRequest\x12#\n" +
+	"\rbinary_sha256\x18\x03 \x01(\tR\fbinarySha256\x12\x14\n" +
+	"\x05alias\x18\x04 \x01(\tR\x05aliasJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\tnamespaceR\x04name\"!\n" +
 	"\vPluginChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"2\n" +
 	"\x11SigilTrustAnchors\x12\x1d\n" +

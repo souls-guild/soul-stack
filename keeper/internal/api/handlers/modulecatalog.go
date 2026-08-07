@@ -7,8 +7,9 @@
 //   - core — the static doc table [coreModuleDocs] (keeper does not see
 //     soul/internal/coremod per ADR-011; the implementations carry no declarative
 //     input schema — core params are empty, see modulecatalog_coredata.go);
-//   - plugin — active (non-revoked) plugin_sigils records, params read from the
-//     manifest `spec.states[*].input` (shared/plugin parser).
+//   - plugin — active (non-revoked) plugin_sigils grants, params read from the
+//     grant's signed schema document (`modules[*].states[*].input`). One entry per
+//     MODULE, named `<alias>.<module>`: the artifact contributes level 2 only.
 //
 // RBAC — service.list (read-only catalog; read without audit, the service.list /
 // role.list / plugin.list pattern). The permission is reused, no new one is added.
@@ -22,16 +23,25 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
+	"github.com/souls-guild/soul-stack/shared/diag"
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// PluginCatalogEntry — an active plugin grant for the catalog: coordinates +
-// byte-exact manifest (for parsing params). Returned by [ModuleCatalogPlugins].
+// PluginCatalogEntry — an active plugin grant for the catalog: the registration
+// alias, what it was granted on, and the byte-exact schema document the signature
+// covers (which is where the modules and their params come from). Returned by
+// [ModuleCatalogPlugins].
 type PluginCatalogEntry struct {
-	Namespace   string
-	Name        string
-	Ref         string
-	ManifestRaw []byte
+	// Alias is address level 1 — the operator's registration, and the only name the
+	// catalog can prefix a module with: the artifact carries none.
+	Alias string
+	// Source / Ref are the artifact's signed identity, shown so an operator can see
+	// which repository the modules in their catalog actually came from.
+	Source string
+	Ref    string
+	// Schema is the canonical schema document from the grant, not from the cache: the
+	// catalog must describe what was APPROVED, not what a resolver last wrote to disk.
+	Schema []byte
 }
 
 // ModuleCatalogPlugins — the read surface for active plugin grants for the
@@ -63,10 +73,11 @@ func NewModuleCatalogHandler(plugins ModuleCatalogPlugins, logger *slog.Logger) 
 	return &ModuleCatalogHandler{plugins: plugins, logger: logger}
 }
 
-// moduleParam — one module parameter in the output. Filled from the manifest
-// schema: for plugin — from manifest.yaml, for core — from the coremanifest
-// registry. The Enum/Pattern/Format/Source fields mirror [plugin.InputParamDef]
-// (ADR-045) — the backend builds the module's UI form from them.
+// moduleParam — one module parameter in the output. Filled from the schema
+// document: for a plugin from the grant's signed bytes, for core from the
+// coremanifest registry. The Enum/Pattern/Format/Source fields mirror
+// [plugin.InputParamDef] (ADR-045) — the backend builds the module's UI form from
+// them.
 type moduleParam struct {
 	Name        string `json:"name"`
 	Type        string `json:"type,omitempty"`
@@ -230,7 +241,7 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 		params := []moduleParam{}
 		introducedIn := ""
 		if m, ok := coremanifest.Default().Lookup(c.Name); ok {
-			params = manifestToParams(m.Spec)
+			params = moduleToParams(m)
 			introducedIn = m.IntroducedIn
 		}
 		items = append(items, moduleCatalogItem{
@@ -250,7 +261,7 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 			return nil, err
 		}
 		for _, e := range entries {
-			items = append(items, pluginCatalogItem(e))
+			items = append(items, pluginCatalogItems(e)...)
 		}
 	}
 
@@ -258,37 +269,55 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 	return items, nil
 }
 
-// pluginCatalogItem builds a catalog entry from an active plugin grant. The name is
-// `<namespace>.<name>` (the Soul Stack address form). States and params are read
-// from the manifest; an invalid/unreadable manifest yields an entry with empty
-// states/params (the plugin is granted → visible in the catalog, but without
-// metadata, rather than silently hiding it).
-func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
-	it := moduleCatalogItem{
-		Name:      e.Namespace + "." + e.Name,
+// pluginCatalogItems builds the catalog entries of ONE active plugin grant — one per
+// module the artifact serves, because one module is what a task addresses.
+//
+// The name is `<alias>.<module>`: level 1 is the registration alias the operator
+// chose, level 2 the module's own name. The artifact contributes only level 2 — it
+// carries no self-name — so the same bytes granted under two aliases would appear here
+// as two independent module sets, which is exactly what registering them twice means.
+//
+// A grant whose schema does not parse yields ONE entry named after the alias with empty
+// states/params: the plugin is granted, so hiding it would misreport the cluster, but
+// there is nothing to say about what it accepts.
+func pluginCatalogItems(e PluginCatalogEntry) []moduleCatalogItem {
+	bare := moduleCatalogItem{
+		Name:      e.Alias,
 		Kind:      "plugin",
-		Namespace: e.Namespace,
+		Namespace: e.Alias,
 		States:    []string{},
 		Params:    []moduleParam{},
 	}
 
-	m, _ := plugin.LoadFromBytes(plugin.FileName, e.ManifestRaw)
-	if m == nil || m.Kind != plugin.KindSoulModule {
-		// soul_module catalog: cloud_driver/ssh_provider/soul_beacon are not
-		// applied as a Destiny step in Run→Command. Manifest unreadable →
-		// an entry without states/params (the grant coordinates remain).
-		return it
+	doc, diags := plugin.ParseDocument(plugin.SchemaFileName, e.Schema)
+	if doc == nil || diag.HasErrors(diags) || doc.Kind != plugin.KindSoulModule {
+		// soul_module catalog: cloud_driver/ssh_provider/soul_beacon are not applied
+		// as a Destiny step in Run→Command, and an unreadable schema leaves nothing to
+		// describe — either way the grant's coordinates remain.
+		return []moduleCatalogItem{bare}
 	}
 
-	states := make([]string, 0, len(m.Spec.States))
-	for state := range m.Spec.States {
-		states = append(states, state)
+	out := make([]moduleCatalogItem, 0, len(doc.Modules))
+	for _, m := range doc.Modules {
+		states := make([]string, 0, len(m.States))
+		for state := range m.States {
+			states = append(states, state)
+		}
+		sort.Strings(states)
+		out = append(out, moduleCatalogItem{
+			Name:         e.Alias + "." + m.Name,
+			Kind:         "plugin",
+			Namespace:    e.Alias,
+			Description:  m.Description,
+			States:       states,
+			Params:       moduleToParams(m),
+			IntroducedIn: m.IntroducedIn,
+		})
 	}
-	sort.Strings(states)
-	it.States = states
-	it.Params = manifestToParams(m.Spec)
-	it.IntroducedIn = m.IntroducedIn
-	return it
+	if len(out) == 0 {
+		return []moduleCatalogItem{bare}
+	}
+	return out
 }
 
 // manifestToParams flattens the input schema of all manifest states into a flat,
@@ -302,27 +331,28 @@ func pluginCatalogItem(e PluginCatalogEntry) moduleCatalogItem {
 // deprecated, which is the safe direction — the author is told to look, and the
 // per-state truth is one manifest away.
 // Returns a non-nil slice (empty when there is no input).
-func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
+func moduleToParams(m plugin.ModuleDef) []moduleParam {
 	type pdef struct {
-		typ, desc, pattern, format, example string
-		introducedIn                        string
-		required, secret, multiline         bool
-		enum                                []any
-		source                              *plugin.InputSource
-		items                               *plugin.InputParamDef
-		deprecated                          *plugin.DeprecatedDef
+		typ                            plugin.ParamType
+		desc, pattern, format, example string
+		introducedIn                   string
+		required, secret, multiline    bool
+		enum                           []any
+		source                         *plugin.InputSource
+		items                          *plugin.InputParamDef
+		deprecated                     *plugin.DeprecatedDef
 	}
 	seen := make(map[string]*pdef)
 	order := make([]string, 0)
 	// States are visited in name order: "the first state where a field is set"
 	// only means something with a fixed traversal, and map order is not one.
-	stateNames := make([]string, 0, len(spec.States))
-	for state := range spec.States {
+	stateNames := make([]string, 0, len(m.States))
+	for state := range m.States {
 		stateNames = append(stateNames, state)
 	}
 	sort.Strings(stateNames)
 	for _, state := range stateNames {
-		def := spec.States[state]
+		def := m.States[state]
 		for pname, p := range def.Input {
 			cur, ok := seen[pname]
 			if !ok {
@@ -372,7 +402,7 @@ func manifestToParams(spec plugin.ManifestSpec) []moduleParam {
 		d := seen[pname]
 		params = append(params, moduleParam{
 			Name:         pname,
-			Type:         d.typ,
+			Type:         string(d.typ),
 			Required:     d.required,
 			Secret:       d.secret,
 			Description:  d.desc,
@@ -400,7 +430,7 @@ func toModuleParamItems(it *plugin.InputParamDef) *moduleParam {
 		return nil
 	}
 	return &moduleParam{
-		Type:        it.Type,
+		Type:        string(it.Type),
 		Required:    it.Required,
 		Secret:      it.Secret,
 		Description: it.Description,

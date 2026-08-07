@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/souls-guild/soul-stack/shared/diag"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
@@ -18,16 +19,17 @@ import (
 // S2 FetchModule maps to NotFound).
 var ErrModuleNotAllowed = errors.New("sigil: module sha256 has no active soul_module sigil")
 
-// LookupModuleBinary resolves sha256 (hex) to SoulModule plugin binary path
-// in host cache. Content-addressed guard:
+// LookupModuleBinary resolves a sha256 (hex) to the path of a SoulModule artifact in
+// the host cache. Content-addressed guard:
 //
-//  1. sha searched among ACTIVE allows plugin_sigils with kind=soul_module
-//     (kind from signed manifest bytes of allow, not cache);
-//  2. slot `<cacheRoot>/<ns>-<name>/current/` re-read, its current
-//     BinarySHA256 must match requested sha — else current moved and allowed
-//     bytes gone (record skipped, fail-closed).
+//  1. the sha is searched among ACTIVE plugin_sigils grants whose kind is soul_module —
+//     read from the grant's SIGNED schema bytes, not from the cache. The grant is what
+//     was approved; the cache is what a resolver last wrote there;
+//  2. the slot `<cacheRoot>/<alias>/current/` is re-read and its current BinarySHA256
+//     must equal the requested sha — otherwise `current` has moved and the approved
+//     bytes are gone (row skipped, fail-closed).
 //
-// Disallowed sha, revoked allow, wrong kind, missing/moved slot →
+// A disallowed sha, a revoked grant, the wrong kind, a missing or moved slot →
 // [ErrModuleNotAllowed].
 func (s *Service) LookupModuleBinary(ctx context.Context, sha256Hex string) (string, error) {
 	sha := strings.ToLower(sha256Hex)
@@ -39,22 +41,20 @@ func (s *Service) LookupModuleBinary(ctx context.Context, sha256Hex string) (str
 		if rec.SHA256 != sha {
 			continue
 		}
-		m, _ := sharedplugin.LoadFromBytes("plugin_sigils.manifest_raw", rec.ManifestRaw)
-		if m == nil || m.Kind != pluginhost.KindSoulModule {
+		doc, diags := sharedplugin.ParseDocument(sharedplugin.SchemaFileName, rec.Schema)
+		if doc == nil || diag.HasErrors(diags) || doc.Kind != pluginhost.KindSoulModule {
 			continue
 		}
-		slot, err := s.slots.ReadSlot(rec.Namespace, rec.Name)
+		slot, err := s.slots.ReadSlot(rec.Alias)
 		if err != nil {
 			s.logger.Warn("sigil: allowed soul_module has no readable slot — skip",
-				slog.String("namespace", rec.Namespace),
-				slog.String("name", rec.Name),
+				slog.String("alias", rec.Alias),
 				slog.Any("error", err))
 			continue
 		}
 		if slot.BinarySHA256 != sha {
-			s.logger.Warn("sigil: slot binary differs from allowed sha256 (current moved) — skip",
-				slog.String("namespace", rec.Namespace),
-				slog.String("name", rec.Name),
+			s.logger.Warn("sigil: slot artifact differs from allowed sha256 (current moved) — skip",
+				slog.String("alias", rec.Alias),
 				slog.String("allowed_sha256", sha),
 				slog.String("slot_sha256", slot.BinarySHA256))
 			continue

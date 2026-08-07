@@ -7,8 +7,16 @@
 // (`soul/internal/pluginhost`, `keeper/internal/pluginhost`) and build on top
 // of [BasePlugin].
 //
-// manifest.yaml parsing lives in [shared/plugin]; this package receives an
-// already-validated manifest via [Discovered].
+// Schema-document reading lives in [shared/plugin]; this package receives an
+// already-validated document via [Discovered], one entry per module.
+//
+// # One spawn, one module
+//
+// An artifact serves several modules and dispatch is a subcommand
+// (`soul-mod-redis acl`, NIM-377). Every [Host.Spawn] therefore names exactly one
+// module, and everything the host decides from the declaration — the capability check,
+// the disclosure it reports — reads that module alone. Widening one module's
+// declaration with another's would approve a footprint nobody agreed to.
 package pluginhost
 
 import (
@@ -60,8 +68,8 @@ type Host struct {
 	// [AnchorSet.SetAnchors] without a restart. Core modules are static and do
 	// not undergo Spawn-verify — this field does not affect them.
 	SigilAnchors *AnchorSet
-	// Sigils is the read surface for active Sigil grants by (ns, name), for
-	// fail-closed verify in [Host.Spawn]. nil = no grants → verify fail-closed
+	// Sigils is the read surface for active Sigil grants by registration alias,
+	// for fail-closed verify in [Host.Spawn]. nil = no grants → verify fail-closed
 	// (reason no_sigil). DI: the Soul-side adapter wraps the Sigil runtime cache
 	// so shared does NOT pull in keeper-proto.
 	Sigils SigilLookup
@@ -127,22 +135,27 @@ func NewHost(cfg *config.PluginRuntime, defaultSocketDir string) (*Host, error) 
 	return h, nil
 }
 
-// CheckCapabilities checks a plugin's required_capabilities against the host's
+// CheckCapabilities checks the capabilities THIS MODULE declares against the host's
 // allowed list. Returns an error on the first disallowed capability. nil
 // AllowedCapabilities = everything allowed (default).
-func (h *Host) CheckCapabilities(m *sharedplugin.Manifest) error {
+//
+// The scope is the module, not the artifact: a spawn of `redis.acl` is checked against
+// what `acl` declares, and `config` in the same artifact contributes nothing. Checking
+// the union would let an unrelated module's declaration decide whether this one may
+// run — in both directions, since a union both over-restricts and over-approves.
+func (h *Host) CheckCapabilities(d Discovered) error {
 	if h.AllowedCapabilities == nil {
 		return nil
 	}
-	for _, s := range m.RequiredCapabilities {
-		c, ok := sharedplugin.CapabilityFromString(s)
+	for _, c := range d.Capabilities() {
+		pc, ok := sharedplugin.CapabilityFromString(string(c))
 		if !ok {
-			// Should not happen — the manifest was already validated; the host
+			// Should not happen — the document was already validated; the host
 			// checks anyway rather than silently ignoring it.
-			return fmt.Errorf("pluginhost: unknown capability %q in %s", s, m.Address())
+			return fmt.Errorf("pluginhost: unknown capability %q in %s", c, d.Address())
 		}
-		if _, allowed := h.AllowedCapabilities[c]; !allowed {
-			return fmt.Errorf("pluginhost: capability %q is not allowed by host (manifest %s)", s, m.Address())
+		if _, allowed := h.AllowedCapabilities[pc]; !allowed {
+			return fmt.Errorf("pluginhost: capability %q is not allowed by host (module %s)", c, d.Address())
 		}
 	}
 	return nil
@@ -171,10 +184,16 @@ func WithEnv(env []string) SpawnOption {
 	return func(o *spawnOpts) { o.extraEnv = append(o.extraEnv, env...) }
 }
 
-// Spawn forks the plugin binary, reads the handshake, and dials gRPC. Returns a
-// [BasePlugin] ready to accept RPC via [BasePlugin.Conn]. On any error (timeout,
-// handshake drift, dial fail) the plugin process is stopped and the socket
+// Spawn forks the artifact for ONE named module, reads the handshake, and dials gRPC.
+// Returns a [BasePlugin] ready to accept RPC via [BasePlugin.Conn]. On any error
+// (timeout, handshake drift, dial fail) the plugin process is stopped and the socket
 // removed — no BasePlugin is returned.
+//
+// The module travels as argv: `soul-mod-redis acl`. d.Module says which one, and it is
+// the only one this spawn discloses, checks or serves; an artifact asked for a module
+// it does not have exits non-zero rather than falling through to another (sdk/module
+// → ServeBundle). A single-endpoint kind (cloud_driver / ssh_provider / soul_beacon)
+// has no module and is spawned with no arguments.
 //
 // One-shot per Spawn contract (ADR-020(d)): the caller invokes Spawn before each
 // RPC series and [BasePlugin.Close] after. Connection pooling is not provided —
@@ -191,17 +210,25 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	for _, opt := range opts {
 		opt(&so)
 	}
-	if err := h.CheckCapabilities(d.Manifest); err != nil {
+	if d.Doc == nil {
+		return nil, fmt.Errorf("pluginhost: %s: no schema document (the artifact was never read)", d.Address())
+	}
+	if err := h.CheckCapabilities(d); err != nil {
 		return nil, err
 	}
-	// Integrity gate (ADR-026, S6b): fail-closed verify of the binary against the
-	// Sigil trust seal BEFORE any exec. Replaces the first-load TOFU branch: a
-	// binary with no valid grant (no_sigil), no trust anchor (no_trust_anchor), a
+	// Integrity gate (ADR-026, S6b): fail-closed verify of the artifact against the
+	// Sigil trust seal BEFORE any exec. Replaces the first-load TOFU branch: an
+	// artifact with no valid grant (no_sigil), no trust anchor (no_trust_anchor), a
 	// mismatched digest (digest_mismatch), or a broken signature (bad_signature) →
-	// *VerifyError, plugin NOT started. The re-exec sidecar recheck stays inside
-	// as defense-in-depth. See docs/keeper/plugins.md → Integrity-model.
-	if err := verifySigilAndSeal(d.Dir, d.BinaryPath, d.Manifest.Namespace, d.Manifest.Name, h.SigilAnchors.snapshot(), h.Sigils); err != nil {
-		return nil, fmt.Errorf("pluginhost: %s: %w", d.Manifest.Address(), err)
+	// *VerifyError, plugin NOT started. This is the one real control on the spawn
+	// path — the operator approved a sha256, and nothing else may exec. The re-exec
+	// sidecar recheck stays inside as defense-in-depth. See docs/keeper/plugins.md →
+	// Integrity-model.
+	//
+	// Verify is per ARTIFACT, not per module: a grant approves bytes, and all of an
+	// artifact's modules are the same bytes.
+	if err := verifySigilAndSeal(d.Dir, d.BinaryPath, d.Alias, h.SigilAnchors.snapshot(), h.Sigils); err != nil {
+		return nil, fmt.Errorf("pluginhost: %s: %w", d.Address(), err)
 	}
 	if err := os.MkdirAll(h.SocketDir, 0o700); err != nil {
 		return nil, fmt.Errorf("pluginhost: mkdir socket dir %q: %w", h.SocketDir, err)
@@ -209,11 +236,18 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	// The socket name omits the plugin pid — that is only known after exec. We
 	// use the host process pid + an atomic counter for uniqueness; the name
 	// format matters for logs, not the protocol (the plugin reads the path from env).
-	sockName := fmt.Sprintf("%s-%s-%d-%d.sock",
-		d.Manifest.Namespace, d.Manifest.Name, os.Getpid(), sockCounter.Add(1))
+	sockName := fmt.Sprintf("%s-%d-%d.sock",
+		strings.ReplaceAll(d.Address(), ".", "-"), os.Getpid(), sockCounter.Add(1))
 	sockPath := filepath.Join(h.SocketDir, sockName)
 
-	cmd := exec.CommandContext(ctx, d.BinaryPath)
+	// Dispatch is a subcommand (NIM-377): the host decides which module runs, per
+	// spawn. The artifact never picks for itself — which module runs decides which
+	// host gets changed.
+	var argv []string
+	if d.Module != "" {
+		argv = append(argv, d.Module)
+	}
+	cmd := exec.CommandContext(ctx, d.BinaryPath, argv...)
 	cmd.Env = append(os.Environ(), handshake.SocketEnv+"="+sockPath)
 	// Extra env from the caller (ADR-020 amendment l, env-convention for
 	// SshProvider). Appended AFTER the handshake socket: the last entry in
@@ -246,24 +280,24 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	if err != nil {
 		_ = killAndWait(cmd, h.ShutdownGrace)
 		_ = os.Remove(sockPath)
-		return nil, fmt.Errorf("pluginhost: %s: %w (stderr-tail: %s)", d.Manifest.Address(), err, errTail.String())
+		return nil, fmt.Errorf("pluginhost: %s: %w (stderr-tail: %s)", d.Address(), err, errTail.String())
 	}
 
-	if err := validateHandshake(d.Manifest, hs, sockPath); err != nil {
+	if err := validateHandshake(d.Doc, hs, sockPath); err != nil {
 		_ = killAndWait(cmd, h.ShutdownGrace)
 		_ = os.Remove(sockPath)
-		return nil, fmt.Errorf("pluginhost: %s: %w (stderr-tail: %s)", d.Manifest.Address(), err, errTail.String())
+		return nil, fmt.Errorf("pluginhost: %s: %w (stderr-tail: %s)", d.Address(), err, errTail.String())
 	}
 
 	conn, err := grpc.NewClient("unix:"+sockPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		_ = killAndWait(cmd, h.ShutdownGrace)
 		_ = os.Remove(sockPath)
-		return nil, fmt.Errorf("pluginhost: %s: dial unix %s: %w", d.Manifest.Address(), sockPath, err)
+		return nil, fmt.Errorf("pluginhost: %s: dial unix %s: %w", d.Address(), sockPath, err)
 	}
 
 	return &BasePlugin{
-		manifest:   d.Manifest,
+		discovered: d,
 		cmd:        cmd,
 		conn:       conn,
 		sockPath:   sockPath,

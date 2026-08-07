@@ -68,21 +68,21 @@ func readHandshake(stdout io.ReadCloser, startupTimeout time.Duration) (*pluginv
 // validateHandshake — the cross-check matrix from docs/keeper/plugins.md.
 //
 // Checks that (1) the plugin's protocol_version is among those supported by the
-// host, (2) protocol_version matches the one declared in the manifest, (3) kind in
-// the handshake matches manifest.kind, (4) network=unix (the only MVP value),
+// host, (2) protocol_version matches the one declared in the schema document, (3) kind
+// in the handshake matches the document's kind, (4) network=unix (the only MVP value),
 // (5) address matches the socket the host passed to the plugin via env (guards
 // against the plugin accidentally listening on a socket other than ours).
-func validateHandshake(m *sharedplugin.Manifest, hs *pluginv1.Handshake, expectedAddr string) error {
+func validateHandshake(doc *sharedplugin.Document, hs *pluginv1.Handshake, expectedAddr string) error {
 	if !containsInt32(sharedplugin.SupportedProtocolVersions, hs.GetProtocolVersion()) {
 		return fmt.Errorf("handshake: protocol_version=%d, host supports %v",
 			hs.GetProtocolVersion(), sharedplugin.SupportedProtocolVersions)
 	}
-	if hs.GetProtocolVersion() != m.ProtocolVersion {
-		return fmt.Errorf("handshake: protocol_version drift manifest=%d handshake=%d",
-			m.ProtocolVersion, hs.GetProtocolVersion())
+	if hs.GetProtocolVersion() != doc.ProtocolVersion {
+		return fmt.Errorf("handshake: protocol_version drift schema=%d handshake=%d",
+			doc.ProtocolVersion, hs.GetProtocolVersion())
 	}
-	if hs.GetKind() != m.ProtoKind() {
-		return fmt.Errorf("handshake: kind drift manifest=%s handshake=%s", m.Kind, hs.GetKind())
+	if hs.GetKind() != sharedplugin.ProtoKind(doc.Kind) {
+		return fmt.Errorf("handshake: kind drift schema=%s handshake=%s", doc.Kind, hs.GetKind())
 	}
 	if hs.GetNetwork() != handshake.NetworkUnix {
 		return fmt.Errorf("handshake: network=%q, host supports only %q", hs.GetNetwork(), handshake.NetworkUnix)

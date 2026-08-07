@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -14,18 +13,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 )
 
-const cloudManifestYAML = `kind: cloud_driver
-protocol_version: 1
-namespace: cloud
-name: hetzner
-spec:
-  profile_schema:
-    type: object
-`
+// cloudSchemaJSON is a canonical cloud_driver document as the serializer produces it —
+// no namespace, no name, no publisher, because the format has nowhere to put one.
+const cloudSchemaJSON = `{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`
 
-// fakeSlotReader returns a preset slot (or error) and commit_sha
-// of the active slot (or commitErr). commit / commitErr are independent of slot / err:
-// tests A1-S4 check the branch "slot reads but current does not carry commit_sha".
+// fakeSlotReader returns a preset slot (or error) and the active slot's commit_sha (or
+// commitErr). commit / commitErr are independent of slot / err: the A1-S4 tests cover
+// the branch "the slot reads, but current carries no commit_sha".
 type fakeSlotReader struct {
 	slot      *pluginhost.SlotContents
 	err       error
@@ -33,11 +27,11 @@ type fakeSlotReader struct {
 	commitErr error
 }
 
-func (f fakeSlotReader) ReadSlot(string, string) (*pluginhost.SlotContents, error) {
+func (f fakeSlotReader) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return f.slot, f.err
 }
 
-func (f fakeSlotReader) SlotCommitSHA(string, string) (string, error) {
+func (f fakeSlotReader) SlotCommitSHA(string) (string, error) {
 	return f.commit, f.commitErr
 }
 
@@ -45,7 +39,7 @@ func (f fakeSlotReader) SlotCommitSHA(string, string) (string, error) {
 type fakeStore struct {
 	inserted   *Sigil
 	insertErr  error
-	revokedKey [4]string
+	revokedKey [2]string
 	revokeErr  error
 	listResult []*Sigil
 	listErr    error
@@ -59,8 +53,8 @@ func (s *fakeStore) Insert(_ context.Context, rec *Sigil) error {
 	return nil
 }
 
-func (s *fakeStore) Revoke(_ context.Context, ns, name, ref, by string) error {
-	s.revokedKey = [4]string{ns, name, ref, by}
+func (s *fakeStore) Revoke(_ context.Context, alias, by string) error {
+	s.revokedKey = [2]string{alias, by}
 	return s.revokeErr
 }
 
@@ -84,9 +78,9 @@ func testSigner(t *testing.T) *Signer {
 func slotFixture() *pluginhost.SlotContents {
 	digest := sha256.Sum256([]byte("cloud-binary"))
 	return &pluginhost.SlotContents{
-		BinaryPath:    "/cache/cloud-hetzner/soul-cloud-hetzner",
-		ManifestBytes: []byte(cloudManifestYAML),
-		BinarySHA256:  hex.EncodeToString(digest[:]),
+		BinaryPath:   "/cache/hetzner/current/hetzner",
+		SchemaBytes:  []byte(cloudSchemaJSON),
+		BinarySHA256: hex.EncodeToString(digest[:]),
 	}
 }
 
@@ -106,7 +100,7 @@ func TestService_Allow_Success(t *testing.T) {
 	}
 
 	sha, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
+		Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 	})
 	if err != nil {
 		t.Fatalf("Allow: %v", err)
@@ -118,8 +112,8 @@ func TestService_Allow_Success(t *testing.T) {
 		t.Fatal("Insert was not called")
 	}
 	got := store.inserted
-	if got.Namespace != "cloud" || got.Name != "hetzner" || got.Ref != "v1.0.0" {
-		t.Errorf("inserted key = (%q,%q,%q)", got.Namespace, got.Name, got.Ref)
+	if got.Alias != "hetzner" || got.Source != testSource || got.Ref != "v1.0.0" {
+		t.Errorf("inserted identity = (%q,%q,%q)", got.Alias, got.Source, got.Ref)
 	}
 	if got.SHA256 != slot.BinarySHA256 {
 		t.Errorf("inserted sha256 = %q, want %q", got.SHA256, slot.BinarySHA256)
@@ -133,31 +127,97 @@ func TestService_Allow_Success(t *testing.T) {
 	if len(got.Signature) != ed25519.SignatureSize {
 		t.Errorf("signature len = %d, want %d", len(got.Signature), ed25519.SignatureSize)
 	}
-	// Signature A1-S4 does NOT change: commit_sha is outside signed block (DST v1).
-	// Allow signature MUST match byte-for-byte with direct Sign over the same block
-	// (ns, name, ref, binary_sha256, manifest_bytes) — without commit_sha.
-	wantSig, err := signer.Sign("cloud", "hetzner", "v1.0.0", slot.BinarySHA256, slot.ManifestBytes)
+	// commit_sha stays OUTSIDE the signed block, so the Allow signature must equal a
+	// direct Sign over (source, ref, binary_sha256, schema) byte for byte.
+	wantSig, err := signer.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
 	if err != nil {
 		t.Fatalf("Sign (control): %v", err)
 	}
 	if !bytes.Equal(got.Signature, wantSig) {
-		t.Error("Allow signature diverged from direct Sign — commit_sha leaked into signed block")
+		t.Error("Allow signature diverged from direct Sign — commit_sha leaked into the signed block")
 	}
-	// Manifest is stored as JSON (not raw YAML).
-	var m map[string]any
-	if err := json.Unmarshal(got.Manifest, &m); err != nil {
-		t.Fatalf("inserted manifest not JSON: %v (%q)", err, got.Manifest)
+	// Schema is the byte-exact slot bytes (the CANON): the SAME bytes that went into
+	// Sign, from one ReadSlot. A second, re-derived copy is how the invariant "signed
+	// exactly these bytes" decays.
+	if !bytes.Equal(got.Schema, slot.SchemaBytes) {
+		t.Errorf("inserted schema is not byte-equal slot.SchemaBytes:\n got=%q\nslot=%q", got.Schema, slot.SchemaBytes)
 	}
-	if m["kind"] != "cloud_driver" {
-		t.Errorf("manifest JSON kind = %v, want cloud_driver", m["kind"])
+}
+
+// TestService_Allow_RejectsReservedAlias — the reserved list is enforced at
+// REGISTRATION, and before the slot is even read: `core.file.present` in a diff must
+// keep meaning the engine, not somebody's plugin.
+func TestService_Allow_RejectsReservedAlias(t *testing.T) {
+	for _, alias := range []string{"core", "keeper", "soul", "sigil", "soul-stack", "CORE", " core "} {
+		store := &fakeStore{}
+		svc, err := NewService(ServiceDeps{
+			Signer: testSigner(t),
+			Store:  store,
+			Slots:  fakeSlotReader{slot: slotFixture(), commit: testCommitSHA},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		_, err = svc.Allow(context.Background(), AllowInput{
+			Alias: alias, Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
+		})
+		if !errors.Is(err, ErrAliasReserved) {
+			t.Errorf("alias %q: err = %v, want ErrAliasReserved", alias, err)
+		}
+		if store.inserted != nil {
+			t.Errorf("alias %q: a reserved alias must not reach the registry", alias)
+		}
 	}
-	// ManifestRaw is byte-exact raw bytes of the slot (CANON), not a JSONB projection:
-	// same bytes that went into Sign (single ReadSlot).
-	if !bytes.Equal(got.ManifestRaw, slot.ManifestBytes) {
-		t.Errorf("inserted manifest_raw is not byte-equal slot.ManifestBytes:\n raw=%q\nslot=%q", got.ManifestRaw, slot.ManifestBytes)
+}
+
+// TestService_Allow_RejectsMalformedAlias — the alias names a cache directory and an
+// address level, so path-shaped, dotted and uppercase names are refused too.
+func TestService_Allow_RejectsMalformedAlias(t *testing.T) {
+	for _, alias := range []string{"", "../escape", "a/b", "Redis", "redis.acl", "9lives"} {
+		svc, err := NewService(ServiceDeps{
+			Signer: testSigner(t),
+			Store:  &fakeStore{},
+			Slots:  fakeSlotReader{slot: slotFixture(), commit: testCommitSHA},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		_, err = svc.Allow(context.Background(), AllowInput{
+			Alias: alias, Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
+		})
+		if !errors.Is(err, ErrAliasReserved) {
+			t.Errorf("alias %q: err = %v, want ErrAliasReserved", alias, err)
+		}
 	}
-	if bytes.Equal(got.ManifestRaw, got.Manifest) {
-		t.Error("manifest_raw matched JSONB projection — raw MUST carry raw YAML, not JSON")
+}
+
+// TestService_Allow_SameArtifactTwoAliasesOneSignature is the NIM-438 property from the
+// service side: the alias is not in the signed block, so registering the same artifact
+// under a second alias reuses the very same signature. Trust follows (source, ref); the
+// alias only says where to look it up.
+func TestService_Allow_SameArtifactTwoAliasesOneSignature(t *testing.T) {
+	slot := slotFixture()
+	signer := testSigner(t)
+
+	sigFor := func(alias string) []byte {
+		store := &fakeStore{}
+		svc, err := NewService(ServiceDeps{
+			Signer: signer, Store: store,
+			Slots: fakeSlotReader{slot: slot, commit: testCommitSHA},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		if _, err := svc.Allow(context.Background(), AllowInput{
+			Alias: alias, Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
+		}); err != nil {
+			t.Fatalf("Allow(%s): %v", alias, err)
+		}
+		return store.inserted.Signature
+	}
+
+	if !bytes.Equal(sigFor("redis"), sigFor("redis-community")) {
+		t.Error("two aliases over the same artifact produced different signatures — the alias leaked into the signed block")
 	}
 }
 
@@ -170,7 +230,7 @@ func TestService_Allow_PluginNotInCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	_, err = svc.Allow(context.Background(), AllowInput{Namespace: "cloud", Name: "absent", Ref: "v1"})
+	_, err = svc.Allow(context.Background(), AllowInput{Alias: "absent", Source: testSource, Ref: "v1"})
 	if !errors.Is(err, ErrPluginNotInCache) {
 		t.Fatalf("err = %v, want ErrPluginNotInCache", err)
 	}
@@ -186,7 +246,7 @@ func TestService_Allow_AlreadyActive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	_, err = svc.Allow(context.Background(), AllowInput{Namespace: "cloud", Name: "hetzner", Ref: "v1"})
+	_, err = svc.Allow(context.Background(), AllowInput{Alias: "hetzner", Source: testSource, Ref: "v1"})
 	if !errors.Is(err, ErrSigilAlreadyActive) {
 		t.Fatalf("err = %v, want ErrSigilAlreadyActive", err)
 	}
@@ -208,7 +268,7 @@ func TestService_Allow_NoCommitSHA_FailClosed(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	_, err = svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
+		Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 	})
 	if !errors.Is(err, ErrPluginNotInCache) {
 		t.Fatalf("err = %v, want ErrPluginNotInCache", err)
@@ -226,10 +286,10 @@ func TestService_Revoke_PassesKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	if err := svc.Revoke(context.Background(), "cloud", "hetzner", "v1.0.0", "archon-b"); err != nil {
+	if err := svc.Revoke(context.Background(), "hetzner", "archon-b"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if store.revokedKey != [4]string{"cloud", "hetzner", "v1.0.0", "archon-b"} {
+	if store.revokedKey != [2]string{"hetzner", "archon-b"} {
 		t.Errorf("revoked key = %v", store.revokedKey)
 	}
 }
@@ -241,20 +301,20 @@ func TestService_Revoke_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	err = svc.Revoke(context.Background(), "cloud", "hetzner", "v1", "archon-b")
+	err = svc.Revoke(context.Background(), "hetzner", "archon-b")
 	if !errors.Is(err, ErrSigilNotFound) {
 		t.Fatalf("err = %v, want ErrSigilNotFound", err)
 	}
 }
 
-func TestService_List_NoSignatureNoManifest(t *testing.T) {
+func TestService_List_NoSignatureNoSchema(t *testing.T) {
 	now := time.Now()
 	store := &fakeStore{listResult: []*Sigil{
 		{
-			Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0",
+			Alias: "hetzner", Source: testSource, Ref: "v1.0.0",
 			SHA256:       "deadbeef",
 			Signature:    []byte("secret-sig-bytes"),
-			Manifest:     []byte(`{"kind":"cloud_driver"}`),
+			Schema:       []byte(cloudSchemaJSON),
 			AllowedByAID: "archon-a",
 			AllowedAt:    now,
 		},
@@ -273,14 +333,14 @@ func TestService_List_NoSignatureNoManifest(t *testing.T) {
 		t.Fatalf("len(views) = %d, want 1", len(views))
 	}
 	v := views[0]
-	if v.Namespace != "cloud" || v.Name != "hetzner" || v.Ref != "v1.0.0" || v.SHA256 != "deadbeef" {
+	if v.Alias != "hetzner" || v.Source != testSource || v.Ref != "v1.0.0" || v.SHA256 != "deadbeef" {
 		t.Errorf("view = %+v", v)
 	}
 	if v.AllowedByAID != "archon-a" || !v.AllowedAt.Equal(now) {
 		t.Errorf("view audit-fields = %+v", v)
 	}
-	// SigilView does not carry signature/manifest by design — structural guarantee. Test
-	// ensures List returns exactly SigilView (without these fields).
+	// SigilView carries neither the signature nor the schema by design — a structural
+	// guarantee. This test pins that List returns exactly SigilView.
 }
 
 func TestService_List_NonNilEmpty(t *testing.T) {
@@ -318,20 +378,20 @@ func TestService_SetSigner_AllowUsesNewPrimary(t *testing.T) {
 	svc.SetSigner(newSigner)
 
 	if _, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
+		Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 	}); err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
 	got := store.inserted.Signature
 
-	wantNew, err := newSigner.Sign("cloud", "hetzner", "v1.0.0", slot.BinarySHA256, slot.ManifestBytes)
+	wantNew, err := newSigner.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
 	if err != nil {
 		t.Fatalf("Sign (new): %v", err)
 	}
 	if !bytes.Equal(got, wantNew) {
 		t.Error("Allow signed with NOT new primary after SetSigner")
 	}
-	wantOld, _ := oldSigner.Sign("cloud", "hetzner", "v1.0.0", slot.BinarySHA256, slot.ManifestBytes)
+	wantOld, _ := oldSigner.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
 	if bytes.Equal(got, wantOld) {
 		t.Error("Allow still signs with old primary — SetSigner was not applied")
 	}
@@ -352,7 +412,7 @@ func TestService_SetSigner_NilIgnored(t *testing.T) {
 	}
 	svc.SetSigner(nil)
 	if _, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
+		Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 	}); err != nil {
 		t.Fatalf("Allow after SetSigner(nil): %v", err)
 	}
@@ -383,7 +443,7 @@ func TestService_SetSigner_RaceWithAllow(t *testing.T) {
 	}()
 	for i := 0; i < 200; i++ {
 		_, _ = svc.Allow(context.Background(), AllowInput{
-			Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
+			Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 		})
 	}
 	<-done

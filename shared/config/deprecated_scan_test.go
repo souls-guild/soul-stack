@@ -13,8 +13,8 @@ import (
 func deprecatingRegistry() fakeCoreRegistry {
 	return fakeCoreRegistry{
 		"core.file": {
-			Namespace: "core", Name: "file",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
+			Name: "file",
+			States: map[string]plugin.StateDef{
 				"present": {Input: map[string]plugin.InputParamDef{
 					"path": {Type: "string"},
 					"mode": {Type: "string"},
@@ -23,7 +23,7 @@ func deprecatingRegistry() fakeCoreRegistry {
 					}},
 					"user": {Type: "string"},
 				}},
-			}},
+			},
 		},
 	}
 }
@@ -164,14 +164,14 @@ func TestScanDeprecated_UnresolvedIsDeduplicated(t *testing.T) {
 func TestScanDeprecated_OrderIsStable(t *testing.T) {
 	reg := fakeCoreRegistry{
 		"core.file": {
-			Namespace: "core", Name: "file",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
+			Name: "file",
+			States: map[string]plugin.StateDef{
 				"present": {Input: map[string]plugin.InputParamDef{
 					"alpha": {Deprecated: &plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: "0.6.0"}},
 					"beta":  {Deprecated: &plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: "0.6.0"}},
 					"gamma": {Deprecated: &plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: "0.6.0"}},
 				}},
-			}},
+			},
 		},
 	}
 	params := map[string]any{"alpha": 1, "beta": 2, "gamma": 3}
@@ -188,9 +188,9 @@ func TestScanDeprecated_OrderIsStable(t *testing.T) {
 
 // fakeModuleCatalog — the plugin half of the catalog, the shape NIM-228's
 // resolver supplies (keeper from Sigil grants, soul-lint from --modules).
-type fakeModuleCatalog map[string]*plugin.Manifest
+type fakeModuleCatalog map[string]plugin.ModuleDef
 
-func (f fakeModuleCatalog) ResolveModule(namespace, name string) (*plugin.Manifest, bool) {
+func (f fakeModuleCatalog) ResolveModule(namespace, name string) (plugin.ModuleDef, bool) {
 	m, ok := f[namespace+"."+name]
 	return m, ok
 }
@@ -198,15 +198,15 @@ func (f fakeModuleCatalog) ResolveModule(namespace, name string) (*plugin.Manife
 func redisCatalog() fakeModuleCatalog {
 	return fakeModuleCatalog{
 		"community.redis": {
-			Namespace: "community", Name: "redis",
-			Spec: plugin.ManifestSpec{States: map[string]plugin.StateDef{
+			Name: "redis",
+			States: map[string]plugin.StateDef{
 				"present": {Input: map[string]plugin.InputParamDef{
 					"addr": {Type: "string"},
 					"address": {Type: "string", Deprecated: &plugin.DeprecatedDef{
 						Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
 					}},
 				}},
-			}},
+			},
 		},
 	}
 }
@@ -277,5 +277,48 @@ func TestScanDeprecated_UnknownPluginStateIsAGap(t *testing.T) {
 
 	if len(scan.Unresolved) != 1 || scan.Unresolved[0].Reason != ReasonUnknownPluginState {
 		t.Fatalf("unresolved = %+v, want one unknown_plugin_state", scan.Unresolved)
+	}
+}
+
+// A reserved name is answered by the compiled-in registry or by nobody (NIM-377).
+//
+// The arm used to be chosen by `ns != "core"`, so `keeper.push` went to the plugin
+// catalog on the strength of not being spelled `core` — and anything a cluster had
+// registered under a reserved alias would have described what that address accepts.
+func TestScanDeprecated_ReservedNameNeverReachesTheCatalog(t *testing.T) {
+	r := &spyManifests{table: fakeManifests{
+		"keeper.push": {Name: "push", States: map[string]plugin.StateDef{
+			"run": {Input: map[string]plugin.InputParamDef{
+				"host": {Type: "string", Deprecated: &plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: "0.6.0"}},
+			}},
+		}},
+	}}
+	scan := scanTasksForDeprecated([]Task{
+		moduleTask("keeper.push.run", map[string]any{"host": "h1"}),
+	}, deprecatingRegistry(), r)
+
+	if len(r.asked) != 0 {
+		t.Errorf("the catalog was consulted for a reserved name: %v", r.asked)
+	}
+	if len(scan.Uses) != 0 {
+		t.Errorf("a reserved address produced findings from a foreign schema: %+v", scan.Uses)
+	}
+	if len(scan.Unresolved) != 1 || scan.Unresolved[0].Reason != ReasonReservedNamespace {
+		t.Fatalf("unresolved = %+v, want one %s", scan.Unresolved, ReasonReservedNamespace)
+	}
+	if scan.Clean() {
+		t.Error("Clean() is true although a module went unread — that is the lie this type exists to prevent")
+	}
+}
+
+// `core.<unknown>` keeps its own reason: the author's move is "upgrade the engine",
+// not "that name cannot exist".
+func TestScanDeprecated_UnknownBuiltinKeepsItsOwnReason(t *testing.T) {
+	scan := scanTasksForDeprecated([]Task{
+		moduleTask("core.haproxy.present", map[string]any{"x": 1}),
+	}, deprecatingRegistry(), nil)
+
+	if len(scan.Unresolved) != 1 || scan.Unresolved[0].Reason != ReasonUnknownCoreModule {
+		t.Fatalf("unresolved = %+v, want one %s", scan.Unresolved, ReasonUnknownCoreModule)
 	}
 }

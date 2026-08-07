@@ -2,6 +2,7 @@ package pluginhost
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +11,8 @@ import (
 	"time"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
-	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 func TestNewHostDefaults(t *testing.T) {
@@ -76,37 +77,68 @@ func TestNewHostRejectsUnknownCapability(t *testing.T) {
 	}
 }
 
-func TestCheckCapabilities(t *testing.T) {
+// mixedBundle is one artifact whose two modules need different capabilities — the
+// shape every per-module check is about.
+func mixedBundle(t *testing.T) map[string]Discovered {
+	t.Helper()
+	found := discoveredFor(t, "redis", soulModuleDoc(
+		modDef("acl", []schema.Capability{schema.NetworkOutbound}, nil),
+		modDef("config", []schema.Capability{schema.VaultAccess}, nil),
+	), exitScript)
+	byAddr := make(map[string]Discovered, len(found))
+	for _, d := range found {
+		byAddr[d.Address()] = d
+	}
+	return byAddr
+}
+
+// GUARD: the capability check reads the module being spawned, not the union across the
+// artifact. `acl` needs network_outbound and the host allows it; `config` in the very
+// same artifact needs vault_access and is refused. A union would have failed both, or
+// passed both.
+func TestCheckCapabilitiesIsPerModule(t *testing.T) {
 	h, _ := NewHost(&config.PluginRuntime{AllowedCapabilities: []string{"network_outbound"}}, "/tmp")
+	mods := mixedBundle(t)
 
-	allowed := &sharedplugin.Manifest{
-		Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "acme", Name: "ok",
-		RequiredCapabilities: []string{"network_outbound"},
+	if err := h.CheckCapabilities(mods["redis.acl"]); err != nil {
+		t.Errorf("CheckCapabilities(redis.acl): %v", err)
 	}
-	if err := h.CheckCapabilities(allowed); err != nil {
-		t.Errorf("CheckCapabilities(allowed): %v", err)
-	}
-
-	forbidden := &sharedplugin.Manifest{
-		Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "acme", Name: "bad",
-		RequiredCapabilities: []string{"vault_access"},
-	}
-	err := h.CheckCapabilities(forbidden)
+	err := h.CheckCapabilities(mods["redis.config"])
 	if err == nil {
-		t.Fatalf("expected denial for vault_access")
+		t.Fatal("expected denial for redis.config (vault_access)")
 	}
 	if !strings.Contains(err.Error(), "vault_access") {
 		t.Errorf("error %q does not mention vault_access", err.Error())
+	}
+	if strings.Contains(err.Error(), "network_outbound") {
+		t.Errorf("error %q mentions a sibling module's capability", err.Error())
+	}
+}
+
+// GUARD, the other direction: a sibling's capability must not be enough to let a
+// module through. The host allows only vault_access, so `acl` (network_outbound) is
+// refused even though `config` in the same artifact would pass.
+func TestCheckCapabilitiesSiblingDoesNotWiden(t *testing.T) {
+	h, _ := NewHost(&config.PluginRuntime{AllowedCapabilities: []string{"vault_access"}}, "/tmp")
+	mods := mixedBundle(t)
+
+	if err := h.CheckCapabilities(mods["redis.acl"]); err == nil {
+		t.Fatal("redis.acl passed the check on its sibling's capability")
+	}
+	if err := h.CheckCapabilities(mods["redis.config"]); err != nil {
+		t.Errorf("CheckCapabilities(redis.config): %v", err)
 	}
 }
 
 func TestCheckCapabilitiesNoFilterAllowsAll(t *testing.T) {
 	h, _ := NewHost(nil, "/tmp") // AllowedCapabilities == nil = all allowed.
-	m := &sharedplugin.Manifest{
-		Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "acme", Name: "ok",
-		RequiredCapabilities: []string{"network_outbound", "vault_access", "exec_subprocess"},
-	}
-	if err := h.CheckCapabilities(m); err != nil {
+	found := discoveredFor(t, "redis", soulModuleDoc(
+		modDef("acl", []schema.Capability{
+			schema.NetworkOutbound, schema.VaultAccess, schema.ExecSubprocess,
+		}, nil),
+	), exitScript)
+
+	if err := h.CheckCapabilities(found[0]); err != nil {
 		t.Errorf("CheckCapabilities with nil filter: %v", err)
 	}
 }
@@ -118,26 +150,133 @@ func TestCheckCapabilitiesNoFilterAllowsAll(t *testing.T) {
 // sigil_verify_test.go.
 func TestSpawnWithoutSigilRefused(t *testing.T) {
 	dir := t.TempDir()
-	binPath := filepath.Join(dir, "soul-mod-x")
-	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("write bin: %v", err)
+	writeArtifact(t, dir, "redis", soulModuleDoc(modDef("acl", nil, nil)), exitScript)
+	found, warns := DiscoverSlot("redis", dir)
+	if len(warns) != 0 {
+		t.Fatalf("discover: %v", warns)
 	}
 
 	h, _ := NewHost(nil, filepath.Join(t.TempDir(), "sock"))
 	// SigilAnchors and Sigils are unset → no trust-anchors and no grants.
-	d := Discovered{
-		Manifest: &sharedplugin.Manifest{
-			Kind: sharedplugin.KindSoulModule, ProtocolVersion: 1, Namespace: "acme", Name: "x",
-		},
-		BinaryPath: binPath,
-		Dir:        dir,
-	}
-
-	_, err := h.Spawn(context.Background(), d)
+	_, err := h.Spawn(context.Background(), found[0])
 	if !errors.Is(err, ErrSigilVerify) {
 		t.Fatalf("expected ErrSigilVerify (fail-closed), got %v", err)
 	}
 	if _, serr := os.Stat(filepath.Join(dir, DigestSidecarName)); !os.IsNotExist(serr) {
 		t.Fatalf("sidecar must NOT be sealed without Sigil, stat err = %v", serr)
+	}
+}
+
+// Spawn needs a document: an entry that never went through discovery has no
+// disclosure, and a host that spawned it would be running code nobody described.
+func TestSpawnWithoutDocumentRefused(t *testing.T) {
+	h, _ := NewHost(nil, filepath.Join(t.TempDir(), "sock"))
+	_, err := h.Spawn(context.Background(), Discovered{Alias: "redis", Module: "acl"})
+	if err == nil || !strings.Contains(err.Error(), "no schema document") {
+		t.Fatalf("err = %v, want a refusal about the missing document", err)
+	}
+}
+
+// argvScript records the artifact's arguments and then emits a valid handshake, so a
+// successful Spawn proves what the host actually passed on the command line.
+const argvScript = `#!/bin/sh
+printf '%s\n' "$@" > "$SPAWN_ARGV_FILE"
+printf '{"soul_stack":"plugin-v1","protocol_version":1,"kind":"KIND_SOUL_MODULE","network":"unix","address":"%s"}\n' "$SOUL_PLUGIN_SOCKET"
+exit 0
+`
+
+// GUARD: the module travels as argv. Spawning `redis.acl` runs the artifact as
+// `<artifact> acl`, and spawning `redis.config` runs the same file as
+// `<artifact> config` — which module runs decides which host gets changed, so it can
+// never be left to the artifact.
+func TestSpawnPassesTheModuleAsArgv(t *testing.T) {
+	e := setupSigilEnvForBundle(t, argvScript)
+	h := e.host(t, true)
+
+	for _, module := range []string{"acl", "config"} {
+		argvFile := filepath.Join(t.TempDir(), "argv")
+		p, err := h.Spawn(context.Background(), e.byAddr["redis."+module],
+			WithEnv([]string{"SPAWN_ARGV_FILE=" + argvFile}))
+		if err != nil {
+			t.Fatalf("Spawn(redis.%s): %v", module, err)
+		}
+		_ = p.Close()
+
+		got, rerr := os.ReadFile(argvFile)
+		if rerr != nil {
+			t.Fatalf("artifact did not record its argv: %v", rerr)
+		}
+		if strings.TrimSpace(string(got)) != module {
+			t.Errorf("argv = %q, want %q", strings.TrimSpace(string(got)), module)
+		}
+	}
+}
+
+// A refused digest means the artifact is never executed at all — not executed and then
+// judged. The recording file the artifact would have written stays absent.
+func TestSpawnDigestMismatchDoesNotExec(t *testing.T) {
+	e := setupSigilEnvForBundle(t, argvScript)
+	h := e.host(t, true)
+	e.rec.BinarySHA256hex = strings.Repeat("ab", 32)
+
+	argvFile := filepath.Join(t.TempDir(), "argv")
+	_, err := h.Spawn(context.Background(), e.byAddr["redis.acl"],
+		WithEnv([]string{"SPAWN_ARGV_FILE=" + argvFile}))
+	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonDigestMismatch {
+		t.Fatalf("reason = %q, want %q", ve.Reason, VerifyReasonDigestMismatch)
+	}
+	if _, serr := os.Stat(argvFile); !os.IsNotExist(serr) {
+		t.Fatalf("the artifact executed despite a digest mismatch (stat err = %v)", serr)
+	}
+}
+
+// bundleEnv is a two-module artifact with a valid grant — the fixture for spawn-level
+// tests, where the same bytes must be reachable under two addresses.
+type bundleEnv struct {
+	sigilTestEnv
+	byAddr map[string]Discovered
+}
+
+func setupSigilEnvForBundle(t *testing.T, script string) bundleEnv {
+	t.Helper()
+	dir := t.TempDir()
+	doc := soulModuleDoc(
+		modDef("acl", nil, nil),
+		modDef("config", nil, nil),
+	)
+	binPath := writeArtifact(t, dir, testAlias, doc, script)
+
+	found, warns := DiscoverSlot(testAlias, dir)
+	if len(warns) != 0 || len(found) != 2 {
+		t.Fatalf("discover bundle: found=%d warns=%v", len(found), warns)
+	}
+	schemaDoc, err := schema.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	byAddr := make(map[string]Discovered, len(found))
+	for _, d := range found {
+		byAddr[d.Address()] = d
+	}
+	return bundleEnv{
+		sigilTestEnv: sigilTestEnv{
+			dir:        dir,
+			binPath:    binPath,
+			discovered: found[0],
+			rec: &SigilRecord{
+				Alias:           testAlias,
+				Source:          testSource,
+				Ref:             testRef,
+				BinarySHA256hex: found[0].Digest,
+				Signature:       signFixture(t, priv, testSource, testRef, found[0].Digest, schemaDoc),
+				Schema:          schemaDoc,
+			},
+			pub: pub,
+		},
+		byAddr: byAddr,
 	}
 }

@@ -42,7 +42,7 @@ func TestService_Allow_TriggersInvalidate(t *testing.T) {
 	svc.SetInvalidator(inv)
 
 	if _, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1", CallerAID: "archon-test",
+		Alias: "hetzner", Source: testSource, Ref: "v1", CallerAID: "archon-test",
 	}); err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestService_Allow_NoInvalidateOnError(t *testing.T) {
 	svc.SetInvalidator(inv)
 
 	if _, err := svc.Allow(context.Background(), AllowInput{
-		Namespace: "cloud", Name: "hetzner", Ref: "v1", CallerAID: "archon-test",
+		Alias: "hetzner", Source: testSource, Ref: "v1", CallerAID: "archon-test",
 	}); err == nil {
 		t.Fatal("Allow: expected error ErrSigilAlreadyActive")
 	}
@@ -86,7 +86,7 @@ func TestService_Revoke_TriggersInvalidate(t *testing.T) {
 	}
 	svc.SetInvalidator(inv)
 
-	if err := svc.Revoke(context.Background(), "cloud", "hetzner", "v1", "archon-test"); err != nil {
+	if err := svc.Revoke(context.Background(), "hetzner", "archon-test"); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if got := inv.calls.Load(); got != 1 {
@@ -108,7 +108,7 @@ func TestService_Revoke_NoInvalidateOnError(t *testing.T) {
 	}
 	svc.SetInvalidator(inv)
 
-	if err := svc.Revoke(context.Background(), "cloud", "hetzner", "v1", "archon-test"); err == nil {
+	if err := svc.Revoke(context.Background(), "hetzner", "archon-test"); err == nil {
 		t.Fatal("Revoke: expected error ErrSigilNotFound")
 	}
 	if got := inv.calls.Load(); got != 0 {

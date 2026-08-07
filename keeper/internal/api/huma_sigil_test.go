@@ -47,22 +47,26 @@ type hsigilStore struct {
 }
 
 func (s *hsigilStore) Insert(context.Context, *sigil.Sigil) error { return nil }
-func (s *hsigilStore) Revoke(context.Context, string, string, string, string) error {
+func (s *hsigilStore) Revoke(context.Context, string, string) error {
 	return s.revokeErr
 }
 func (s *hsigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return s.listResult, nil }
 
-// hsigilSlots — a mock [sigil.SlotReader]: a successful slot (cloud/hetzner) + commit_sha.
+// hsigilSource — the git remote the fixture grants are issued on (the signed identity).
+const hsigilSource = "https://example.com/soul-cloud-hetzner.git"
+
+// hsigilSlots — a mock [sigil.SlotReader]: a readable slot + its commit_sha, keyed by
+// the registration alias.
 type hsigilSlots struct{}
 
-func (hsigilSlots) ReadSlot(string, string) (*pluginhost.SlotContents, error) {
+func (hsigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return &pluginhost.SlotContents{
-		BinaryPath:    "/cache/cloud-hetzner/soul-cloud-hetzner",
-		ManifestBytes: []byte("kind: cloud_driver\nprotocol_version: 1\nnamespace: cloud\nname: hetzner\nspec:\n  profile_schema:\n    type: object\n"),
-		BinarySHA256:  sigilFixtureSHA,
+		BinaryPath:   "/cache/hetzner/current/hetzner",
+		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
+		BinarySHA256: sigilFixtureSHA,
 	}, nil
 }
-func (hsigilSlots) SlotCommitSHA(string, string) (string, error) {
+func (hsigilSlots) SlotCommitSHA(string) (string, error) {
 	return "0123456789abcdef0123456789abcdef01234567", nil
 }
 
@@ -115,7 +119,7 @@ func humaSigilRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, aud
 func TestHumaSigil_Allow_GoldenWire(t *testing.T) {
 	r := humaSigilRouter(t, strictAllowAll{}, nil, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -125,7 +129,7 @@ func TestHumaSigil_Allow_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	golden := `{"name":"hetzner","namespace":"cloud","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `"}`
+	golden := `{"alias":"hetzner","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `","source":"` + hsigilSource + `"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift sigil.allow:\n got  = %s\n want = %s", got, golden)
 	}
@@ -134,7 +138,7 @@ func TestHumaSigil_Allow_GoldenWire(t *testing.T) {
 func TestHumaSigil_Allow_UnknownField_400(t *testing.T) {
 	r := humaSigilRouter(t, strictAllowAll{}, nil, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0","bogus":1}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`","ref":"v1.0.0","bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -145,7 +149,7 @@ func TestHumaSigil_Allow_UnknownField_400(t *testing.T) {
 func TestHumaSigil_Allow_MissingRef_422(t *testing.T) {
 	r := humaSigilRouter(t, strictAllowAll{}, nil, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
@@ -156,7 +160,7 @@ func TestHumaSigil_Allow_MissingRef_422(t *testing.T) {
 func TestHumaSigil_Allow_RBACDeny_403(t *testing.T) {
 	r := humaSigilRouter(t, strictDenyAll{}, nil, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -167,13 +171,13 @@ func TestHumaAudit_SigilAllow_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaSigilRouter(t, strictAllowAll{}, auditCap, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventPluginAllowed, map[string]any{
-		"namespace": "cloud", "name": "hetzner", "ref": "v1.0.0",
+		"alias": "hetzner", "source": hsigilSource, "ref": "v1.0.0",
 		"sha256": sigilFixtureSHA, "allowed_by_aid": "archon-alice",
 	})
 }
@@ -182,7 +186,7 @@ func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaSigilRouter(t, strictDenyAll{}, auditCap, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/plugins/sigils", strings.NewReader(`{"alias":"hetzner","source":"`+hsigilSource+`","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -197,8 +201,8 @@ func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
 func TestHumaSigil_List_GoldenWire(t *testing.T) {
 	allowedAt := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 	store := &hsigilStore{listResult: []*sigil.Sigil{{
-		Namespace:    "cloud",
-		Name:         "hetzner",
+		Alias:        "hetzner",
+		Source:       hsigilSource,
 		Ref:          "v1.0.0",
 		SHA256:       sigilFixtureSHA,
 		AllowedByAID: "archon-alice",
@@ -216,7 +220,7 @@ func TestHumaSigil_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	golden := `{"items":[{"allowed_at":"2026-06-13T10:00:00Z","allowed_by_aid":"archon-alice","name":"hetzner","namespace":"cloud","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `"}]}`
+	golden := `{"items":[{"alias":"hetzner","allowed_at":"2026-06-13T10:00:00Z","allowed_by_aid":"archon-alice","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `","source":"` + hsigilSource + `"}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift sigil.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -265,7 +269,7 @@ func TestHumaSigil_List_RBACDeny_403(t *testing.T) {
 func TestHumaSigil_Revoke_204(t *testing.T) {
 	r := humaSigilRouter(t, strictAllowAll{}, nil, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/cloud/hetzner/v1.0.0", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/hetzner", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
@@ -279,13 +283,13 @@ func TestHumaAudit_SigilRevoke_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaSigilRouter(t, strictAllowAll{}, auditCap, &hsigilStore{})
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/cloud/hetzner/v1.0.0", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/hetzner", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventPluginRevoked, map[string]any{
-		"namespace": "cloud", "name": "hetzner", "ref": "v1.0.0",
+		"alias": "hetzner",
 	})
 }
 
@@ -294,7 +298,7 @@ func TestHumaAudit_SigilRevoke_NoAudit_OnBadRef(t *testing.T) {
 	r := humaSigilRouter(t, strictAllowAll{}, auditCap, &hsigilStore{})
 	rec := httptest.NewRecorder()
 	// ref with a space → invalid path segment → 422 (domain validateSigilTriple).
-	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/cloud/hetzner/bad%20ref", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/plugins/sigils/bad%20alias", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (bad ref segment); body=%s", rec.Code, rec.Body.String())
@@ -316,7 +320,7 @@ func TestHumaSigil_OpenAPIFragment_3_1(t *testing.T) {
 	}
 	for _, want := range []string{
 		"allowPluginSigil", "listPluginSigils", "revokePluginSigil",
-		"namespace", "sha256",
+		"alias", "source", "sha256",
 	} {
 		if !strings.Contains(frag, want) {
 			t.Errorf("OpenAPI fragment does not contain %q:\n%s", want, frag)

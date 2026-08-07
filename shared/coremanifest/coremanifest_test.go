@@ -2,9 +2,9 @@ package coremanifest
 
 import "testing"
 
-// expectedModules is the full set of core manifests after the H2 rollout. Key is
+// expectedModules is the full set of core declarations after the H2 rollout. Key is
 // the top-level name (Namespace+"."+Name), value is the expected states. Guards
-// against "forgot to add a file to coreFiles" and against state-set regressions.
+// against "forgot to add the module to coreModules" and against state-set regressions.
 //
 // Keeper-side core (`core.soul`/`core.cloud`/`core.vault`/`core.choir`) are declared
 // via the same mechanism; state names are aligned with the actual dispatch of the
@@ -36,10 +36,9 @@ var expectedModules = map[string][]string{
 	"core.choir":     {"present", "absent"},               // keeper-side (ADR-044)
 }
 
-// TestDefault_EmbedManifestsParse — all embed manifests parse and are valid
-// (mustBuild does not panic); the registry contains exactly the expected set of
-// core modules with their states.
-func TestDefault_EmbedManifestsParse(t *testing.T) {
+// TestDefault_RegisteredCoreModules — the registry builds (mustBuild does not panic)
+// and contains exactly the expected set of core modules with their states.
+func TestDefault_RegisteredCoreModules(t *testing.T) {
 	reg := Default()
 	if got, want := len(reg.Names()), len(expectedModules); got != want {
 		t.Errorf("registry has %d modules, expected %d: %v", got, want, reg.Names())
@@ -51,12 +50,12 @@ func TestDefault_EmbedManifestsParse(t *testing.T) {
 			continue
 		}
 		for _, s := range states {
-			if _, ok := m.Spec.States[s]; !ok {
+			if _, ok := m.States[s]; !ok {
 				t.Errorf("%s: missing state %q", name, s)
 			}
 		}
-		if len(m.Spec.States) != len(states) {
-			t.Errorf("%s: states = %d, expected %d", name, len(m.Spec.States), len(states))
+		if len(m.States) != len(states) {
+			t.Errorf("%s: states = %d, expected %d", name, len(m.States), len(states))
 		}
 	}
 	if _, ok := reg.Lookup("core.nope"); ok {
@@ -65,13 +64,13 @@ func TestDefault_EmbedManifestsParse(t *testing.T) {
 }
 
 // TestDefault_RequiredParamsPresent — every required field of every state has a
-// non-empty type (the manifest validator checks this, but we duplicate it as a
-// drift guard: required without type is a manifest bug).
+// non-empty type (the schema validator checks this, but we duplicate it as a
+// drift guard: required without type is a declaration bug).
 func TestDefault_RequiredParamsPresent(t *testing.T) {
 	reg := Default()
 	for name := range expectedModules {
 		m, _ := reg.Lookup(name)
-		for state, def := range m.Spec.States {
+		for state, def := range m.States {
 			for pname, p := range def.Input {
 				if p.Required && p.Type == "" {
 					t.Errorf("%s.%s: required param %q without type", name, state, pname)

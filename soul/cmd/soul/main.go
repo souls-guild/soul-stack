@@ -1454,8 +1454,8 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				// The set self-heals from the next snapshot.
 				sig := payload.PluginSigil
 				logger.Debug("sigil: single notification (set unchanged, snapshot is authoritative)",
-					slog.String("namespace", sig.GetNamespace()),
-					slog.String("name", sig.GetName()),
+					slog.String("alias", sig.GetAlias()),
+					slog.String("source", sig.GetSource()),
 					slog.String("ref", sig.GetRef()),
 				)
 			case *keeperv1.FromKeeper_VigilSnapshot:

@@ -7,9 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// PluginManifestSource yields a point-in-time resolver over the plugin manifests
-// this cluster has allow-listed, so a definition's `params:` can be checked
-// against them while it is parsed (NIM-228).
+// PluginManifestSource yields a point-in-time resolver over the plugin module
+// schemas this cluster has allow-listed, so a definition's `params:` can be
+// checked against them while it is parsed (NIM-228).
 //
 // A snapshot rather than a live lookup: [config.ModuleManifestResolver] answers
 // synchronously with no ctx and no error, because it is consulted inside a YAML
@@ -42,11 +42,19 @@ func SnapshotModuleManifests(ctx context.Context, src PluginManifestSource) conf
 }
 
 // ModuleManifestMap is the plain in-memory resolver a snapshot resolves to,
-// keyed by `<namespace>.<name>`.
-type ModuleManifestMap map[string]*plugin.Manifest
+// keyed by `<alias>.<module>` — the first two levels of a task's address.
+//
+// The key is one MODULE of one registration, not one artifact: an artifact serves
+// several modules (`acl`, `config`, `info`) and a task addresses exactly one of
+// them. Level 1 is the alias the operator registered, which the artifact never
+// knew, so the key can only be assembled here — from the grant that carries the
+// alias and the schema document that carries the module.
+type ModuleManifestMap map[string]plugin.ModuleDef
 
-// ResolveModule implements [config.ModuleManifestResolver].
-func (m ModuleManifestMap) ResolveModule(namespace, name string) (*plugin.Manifest, bool) {
-	man, ok := m[namespace+"."+name]
-	return man, ok
+// ResolveModule implements [config.ModuleManifestResolver]. Its first argument is
+// address level 1, which is now a registration alias rather than a publisher
+// namespace; the parameter name follows the interface.
+func (m ModuleManifestMap) ResolveModule(alias, module string) (plugin.ModuleDef, bool) {
+	def, ok := m[alias+"."+module]
+	return def, ok
 }

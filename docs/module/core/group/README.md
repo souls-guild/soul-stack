@@ -79,7 +79,7 @@ privileges" for future membership. Group name from `input.*` / `register.*`
 / `soulprint.*` must be trusted (by Destiny/scenario) and not external
 input.
 - **Privileges.** Manifest
-[`group.yaml`](../../../../shared/coremanifest/group.yaml) announces
+[`group` module](../../../../shared/coremanifest/mod_group.go) announces
   `required_capabilities: [run_as_root, exec_subprocess]` — `groupadd` /
 `groupdel` rules `/etc/group` and without UID 0 will not work, and both actions -
 launching subprocesses. This is a **declaration** for static reconciliation of `soul-lint` with

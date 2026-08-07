@@ -896,7 +896,7 @@ CRUD of Oracle beacons circuit registries (Vigil - Soul-side check, Decree - rea
 
 | Permission | Semantics | Audit-event |
 |---|---|---|
-| `plugin.allow` | Allowance `(namespace, name, ref)` in allow-list `plugin_sigils` — Keeper reads the binary of the active cache slot via `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), reads `sha256`, signs and inserts the record. `ref` - git-verified (Keeper resolves `source`+`ref` into `commit_sha` slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)). Human-verified supply-chain control operation. | `plugin.allowed` |
+| `plugin.allow` | Allowance keyed on `(source, ref)` in the allow-list `plugin_sigils`, carrying the registration `alias` as a separate column (NIM-377 / NIM-438) — Keeper reads the binary of the active cache slot via the `current` symlink (R-nested `<alias>/<commit_sha>/`), reads `sha256`, signs and inserts the record. `ref` - git-verified (Keeper resolves `source`+`ref` into `commit_sha` slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)). Human-verified supply-chain control operation. | `plugin.allowed` |
 | `plugin.revoke` | Revocation of a previously accepted entry from `plugin_sigils` (the binary no longer passes Sigil verification). | `plugin.revoked` |
 | `plugin.list` | Enumeration of active entries of the allow-list `plugin_sigils` (without signature/manifest). | — (read-only) |
 

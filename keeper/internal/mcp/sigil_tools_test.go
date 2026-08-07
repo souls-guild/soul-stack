@@ -43,7 +43,7 @@ func (s *fakeSigilStore) Insert(_ context.Context, rec *sigil.Sigil) error {
 	return nil
 }
 
-func (s *fakeSigilStore) Revoke(_ context.Context, _, _, _, _ string) error {
+func (s *fakeSigilStore) Revoke(_ context.Context, _, _ string) error {
 	return s.revokeErr
 }
 
@@ -58,14 +58,14 @@ type fakeSigilSlots struct {
 	commitErr error
 }
 
-func (s fakeSigilSlots) ReadSlot(_, _ string) (*pluginhost.SlotContents, error) {
+func (s fakeSigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	return s.slot, nil
 }
 
-func (s fakeSigilSlots) SlotCommitSHA(_, _ string) (string, error) {
+func (s fakeSigilSlots) SlotCommitSHA(string) (string, error) {
 	if s.commitErr != nil {
 		return "", s.commitErr
 	}
@@ -81,12 +81,16 @@ func (s fakeSigilSlots) SlotCommitSHA(_, _ string) (string, error) {
 // (Signer.Sign requires exactly 64 lower-hex characters).
 var fixtureSHA256 = hex.EncodeToString(func() []byte { d := sha256.Sum256([]byte("cloud-binary")); return d[:] }())
 
-// sigilSlotFixture — valid cache slot (binary + manifest) for the Allow flow.
+// mcpSigilSource — the git remote the fixture grants are issued on (the signed
+// identity; the artifact carries no name of its own).
+const mcpSigilSource = "https://example.com/soul-cloud-hetzner.git"
+
+// sigilSlotFixture — a valid cache slot (artifact + stamped schema) for the Allow flow.
 func sigilSlotFixture() *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
-		BinaryPath:    "/cache/cloud-hetzner/soul-cloud-hetzner",
-		BinarySHA256:  fixtureSHA256,
-		ManifestBytes: []byte("kind: cloud_driver\nprotocol_version: 1\nnamespace: cloud\nname: hetzner\n"),
+		BinaryPath:   "/cache/hetzner/current/hetzner",
+		BinarySHA256: fixtureSHA256,
+		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
 	}
 }
 
@@ -199,7 +203,7 @@ func TestPluginTools_RBACForbidden(t *testing.T) {
 	// mutations don't run (RBAC happens first), audit stays empty.
 	h, rec := newSigilHandler(t, nil, &fakeSigilStore{}, fakeSigilSlots{slot: sigilSlotFixture()})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
-		`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`)
+		`{"alias":"hetzner","source":"`+mcpSigilSource+`","ref":"v1.0.0"}`)
 	if resp.Error == nil {
 		t.Fatal("expected forbidden error")
 	}
@@ -224,13 +228,17 @@ func TestPluginTools_Validation(t *testing.T) {
 		args string
 		want string
 	}{
-		{"allow-no-namespace", "keeper.plugin.allow", `{"name":"hetzner","ref":"v1.0.0"}`, mcpCodeValidationFailed},
-		{"allow-no-name", "keeper.plugin.allow", `{"namespace":"cloud","ref":"v1.0.0"}`, mcpCodeValidationFailed},
-		{"allow-no-ref", "keeper.plugin.allow", `{"namespace":"cloud","name":"hetzner"}`, mcpCodeValidationFailed},
-		{"allow-bad-ref-slash", "keeper.plugin.allow", `{"namespace":"cloud","name":"hetzner","ref":"feature/x"}`, mcpCodeValidationFailed},
-		{"allow-traversal", "keeper.plugin.allow", `{"namespace":"cloud","name":"hetzner","ref":".."}`, mcpCodeValidationFailed},
-		{"revoke-no-ref", "keeper.plugin.revoke", `{"namespace":"cloud","name":"hetzner"}`, mcpCodeValidationFailed},
-		{"allow-unknown-field", "keeper.plugin.allow", `{"namespace":"cloud","name":"hetzner","ref":"v1.0.0","x":1}`, mcpCodeMalformedRequest},
+		{"allow-no-alias", "keeper.plugin.allow", `{"source":"` + mcpSigilSource + `","ref":"v1.0.0"}`, mcpCodeValidationFailed},
+		{"allow-no-source", "keeper.plugin.allow", `{"alias":"hetzner","ref":"v1.0.0"}`, mcpCodeValidationFailed},
+		{"allow-no-ref", "keeper.plugin.allow", `{"alias":"hetzner","source":"` + mcpSigilSource + `"}`, mcpCodeValidationFailed},
+		{"allow-bad-ref-slash", "keeper.plugin.allow", `{"alias":"hetzner","source":"` + mcpSigilSource + `","ref":"feature/x"}`, mcpCodeValidationFailed},
+		{"allow-traversal-ref", "keeper.plugin.allow", `{"alias":"hetzner","source":"` + mcpSigilSource + `","ref":".."}`, mcpCodeValidationFailed},
+		{"allow-traversal-alias", "keeper.plugin.allow", `{"alias":"../escape","source":"` + mcpSigilSource + `","ref":"v1.0.0"}`, mcpCodeValidationFailed},
+		// The reserved list reaches the MCP surface too: one list, both transports.
+		{"allow-reserved-alias", "keeper.plugin.allow", `{"alias":"core","source":"` + mcpSigilSource + `","ref":"v1.0.0"}`, mcpCodeValidationFailed},
+		{"revoke-no-alias", "keeper.plugin.revoke", `{}`, mcpCodeValidationFailed},
+		{"revoke-reserved-alias", "keeper.plugin.revoke", `{"alias":"soul"}`, mcpCodeValidationFailed},
+		{"allow-unknown-field", "keeper.plugin.allow", `{"alias":"hetzner","source":"` + mcpSigilSource + `","ref":"v1.0.0","x":1}`, mcpCodeMalformedRequest},
 		{"list-unknown-field", "keeper.plugin.list", `{"x":1}`, mcpCodeMalformedRequest},
 	}
 	for _, tc := range cases {
@@ -252,13 +260,13 @@ func TestPluginAllow_Success(t *testing.T) {
 	store := &fakeSigilStore{}
 	h, rec := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{slot: sigilSlotFixture()})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
-		`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`)
+		`{"alias":"hetzner","source":"`+mcpSigilSource+`","ref":"v1.0.0"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	out := decodePluginAllowOutput(t, resp)
-	if out.Namespace != "cloud" || out.Name != "hetzner" || out.Ref != "v1.0.0" {
-		t.Errorf("output triple = %+v", out)
+	if out.Alias != "hetzner" || out.Source != mcpSigilSource || out.Ref != "v1.0.0" {
+		t.Errorf("output identity = %+v", out)
 	}
 	if out.SHA256 != fixtureSHA256 {
 		t.Errorf("sha256 = %q, want %q", out.SHA256, fixtureSHA256)
@@ -268,8 +276,8 @@ func TestPluginAllow_Success(t *testing.T) {
 	}
 
 	ev := requireSingleAudit(t, rec, string(audit.EventPluginAllowed))
-	if ev.Payload["namespace"] != "cloud" || ev.Payload["name"] != "hetzner" || ev.Payload["ref"] != "v1.0.0" {
-		t.Errorf("audit triple = %+v", ev.Payload)
+	if ev.Payload["alias"] != "hetzner" || ev.Payload["source"] != mcpSigilSource || ev.Payload["ref"] != "v1.0.0" {
+		t.Errorf("audit identity = %+v", ev.Payload)
 	}
 	if ev.Payload["sha256"] != fixtureSHA256 {
 		t.Errorf("audit sha256 = %v", ev.Payload["sha256"])
@@ -277,12 +285,13 @@ func TestPluginAllow_Success(t *testing.T) {
 	if ev.Payload["allowed_by_aid"] != "archon-alice" {
 		t.Errorf("audit allowed_by_aid = %v", ev.Payload["allowed_by_aid"])
 	}
-	// signature/manifest (crypto material / large JSONB) must NOT reach audit.
+	// The signature and the schema (crypto material / a large document) must NOT reach
+	// audit.
 	if _, ok := ev.Payload["signature"]; ok {
 		t.Error("audit payload leaks 'signature'")
 	}
-	if _, ok := ev.Payload["manifest"]; ok {
-		t.Error("audit payload leaks 'manifest'")
+	if _, ok := ev.Payload["schema"]; ok {
+		t.Error("audit payload leaks 'schema'")
 	}
 }
 
@@ -290,7 +299,7 @@ func TestPluginAllow_NotInCache(t *testing.T) {
 	// ReadSlot → ErrSlotNotFound → service ErrPluginNotInCache → plugin-not-in-cache.
 	h, rec := newSigilHandler(t, sigilAdminCfg(), &fakeSigilStore{}, fakeSigilSlots{err: pluginhost.ErrSlotNotFound})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
-		`{"namespace":"cloud","name":"ghost","ref":"v1.0.0"}`)
+		`{"alias":"ghost","source":"`+mcpSigilSource+`","ref":"v1.0.0"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -307,7 +316,7 @@ func TestPluginAllow_AlreadyActive(t *testing.T) {
 	store := &fakeSigilStore{insertErr: sigil.ErrSigilAlreadyActive}
 	h, rec := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{slot: sigilSlotFixture()})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
-		`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`)
+		`{"alias":"hetzner","source":"`+mcpSigilSource+`","ref":"v1.0.0"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -319,18 +328,75 @@ func TestPluginAllow_AlreadyActive(t *testing.T) {
 	}
 }
 
+// TestPluginAllow_ConflictsAreDistinguishable — both partial-unique indexes must
+// surface as a CLEAN 409-class answer that names which one was hit, never a bare
+// 23505 and never an internal-error. The two share a code and differ in the detail
+// because the operator's fix differs: an alias collision is resolved by picking
+// another alias, a (source, ref) collision by revoking the existing approval first.
+func TestPluginAllow_ConflictsAreDistinguishable(t *testing.T) {
+	cases := []struct {
+		name       string
+		insertErr  error
+		wantDetail string
+	}{
+		{"alias taken", sigil.ErrAliasAlreadyRegistered, "alias"},
+		{"artifact identity already approved", sigil.ErrSigilAlreadyActive, "(source, ref)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeSigilStore{insertErr: tc.insertErr}
+			h, rec := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{slot: sigilSlotFixture()})
+			resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
+				`{"alias":"hetzner","source":"`+mcpSigilSource+`","ref":"v1.0.0"}`)
+			if resp.Error == nil {
+				t.Fatal("expected a conflict error")
+			}
+			data := mustToolErrorData(t, resp.Error.Data)
+			if data.Code != mcpCodeSigilActive {
+				t.Errorf("code = %q, want %q (a conflict, not an internal error)", data.Code, mcpCodeSigilActive)
+			}
+			// The human-readable half rides Error.Message (toolError puts the detail
+			// there); Data carries the machine code.
+			msg := resp.Error.Message
+			if !strings.Contains(msg, tc.wantDetail) {
+				t.Errorf("message %q does not name which key was hit (want it to mention %q)", msg, tc.wantDetail)
+			}
+			// Both fixes must be actionable, not just descriptive.
+			if !strings.Contains(msg, "revoke") {
+				t.Errorf("message %q does not tell the operator what to do", msg)
+			}
+			if len(rec.events) != 0 {
+				t.Error("a failed allow must not write audit")
+			}
+		})
+	}
+}
+
+// TestPluginAllow_ReservedAliasIsValidationNotInternal — a reserved alias reaching
+// the service (rather than being caught by the tool's own validation) must still
+// come back as validation-failed. Falling through to internal-error would tell the
+// operator nothing about a name they can simply change.
+func TestPluginAllow_ReservedAliasFromServiceMapsToValidation(t *testing.T) {
+	code, detail := mapSigilErrorToMCP(sigil.ErrAliasReserved)
+	if code != mcpCodeValidationFailed {
+		t.Errorf("code = %q, want %q", code, mcpCodeValidationFailed)
+	}
+	if detail == "" {
+		t.Error("detail is empty — the operator needs to know which name was refused")
+	}
+}
+
 // --- tests: revoke ---
 
 func TestPluginRevoke_Success(t *testing.T) {
 	h, rec := newSigilHandler(t, sigilAdminCfg(), &fakeSigilStore{}, fakeSigilSlots{})
-	resp := callTool(t, h, "archon-alice", "keeper.plugin.revoke",
-		`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.plugin.revoke", `{"alias":"hetzner"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	ev := requireSingleAudit(t, rec, string(audit.EventPluginRevoked))
-	if ev.Payload["namespace"] != "cloud" || ev.Payload["name"] != "hetzner" || ev.Payload["ref"] != "v1.0.0" {
-		t.Errorf("audit triple = %+v", ev.Payload)
+	if ev.Payload["alias"] != "hetzner" {
+		t.Errorf("audit payload = %+v", ev.Payload)
 	}
 }
 
@@ -338,7 +404,7 @@ func TestPluginRevoke_NotFound(t *testing.T) {
 	store := &fakeSigilStore{revokeErr: sigil.ErrSigilNotFound}
 	h, rec := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.revoke",
-		`{"namespace":"cloud","name":"hetzner","ref":"v9.9.9"}`)
+		`{"alias":"hetzner"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -355,10 +421,10 @@ func TestPluginRevoke_NotFound(t *testing.T) {
 func TestPluginList_Success(t *testing.T) {
 	now := time.Now()
 	store := &fakeSigilStore{listResult: []*sigil.Sigil{
-		{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", SHA256: "abc",
+		{Alias: "hetzner", Source: mcpSigilSource, Ref: "v1.0.0", SHA256: "abc",
 			AllowedByAID: "archon-alice", AllowedAt: now,
-			// signature/manifest are present in the record, but List doesn't return them.
-			Signature: []byte("sig"), Manifest: []byte(`{"k":"v"}`)},
+			// signature/schema are on the record, but List does not return them.
+			Signature: []byte("sig"), Schema: []byte(`{"kind":"cloud_driver"}`)},
 	}}
 	h, _ := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.list", `{}`)
@@ -377,12 +443,13 @@ func TestPluginList_Success(t *testing.T) {
 		t.Fatalf("sigils = %d, want 1", len(out.Sigils))
 	}
 	s := out.Sigils[0]
-	if s.Namespace != "cloud" || s.Name != "hetzner" || s.Ref != "v1.0.0" || s.SHA256 != "abc" {
+	if s.Alias != "hetzner" || s.Source != mcpSigilSource || s.Ref != "v1.0.0" || s.SHA256 != "abc" {
 		t.Errorf("sigil = %+v", s)
 	}
-	// signature/manifest must NOT appear in the JSON output (checked against raw JSON).
-	if got := string(res.StructuredContent); strings.Contains(got, "signature") || strings.Contains(got, "manifest") || strings.Contains(got, "\"sig\"") {
-		t.Errorf("list output leaks signature/manifest: %s", got)
+	// The signature and the schema must NOT appear in the JSON output (checked against
+	// raw JSON).
+	if got := string(res.StructuredContent); strings.Contains(got, "signature") || strings.Contains(got, "schema") || strings.Contains(got, "\"sig\"") {
+		t.Errorf("list output leaks signature/schema: %s", got)
 	}
 }
 

@@ -1334,14 +1334,27 @@ check-vuln:
 # An empty category (no files under the glob) is skipped without error. Any
 # non-zero exit from soul-lint on a committed example fails the gate.
 #
-# LINT_MODULES_DIR feeds `validate-scenario --modules` (NIM-228): with it, a plugin
-# module's `params:` are checked against its resolved manifest by the same four checks
-# that `core.*` already gets. Without it the linter can only say
+# The `--modules` bindings feed `validate-scenario` (NIM-228): with them, a plugin
+# module's `params:` are checked against its schema document by the same four checks
+# that `core.*` already gets. Without them the linter can only say
 # `plugin_params_unchecked` and move on — which is what this corpus did for every
-# `community.redis` step, even though the module manifest sits in the SAME tree
+# `community.redis` step, even though the module's own document sits in the SAME tree
 # (NIM-294). The corpus is the one place where both halves are present, so leaving the
 # flag off meant validating it without the check it exists to demonstrate.
-LINT_MODULES_DIR ?= examples/module
+#
+# The flag takes `<alias>=<path>` since NIM-377, not a directory to walk. The artifact
+# carries no self-name — no `namespace:`, no `name:` — so address level 1 is the
+# registration alias an operator picks, and nothing in the bytes can tell the linter
+# what a task will call it. It has to be stated.
+#
+# The binding is PER SERVICE, and that is not a convenience. The corpus holds TWO
+# artifacts addressed `community.*` — soul-mod-community-redis serving module `redis`,
+# soul-mod-community-mongo serving module `mongo` — and one alias names one host slot
+# holding one artifact (keeper/internal/pluginhost/slot.go). So no single keeper could
+# serve both, and `--modules community=A --modules community=B` is refused outright.
+# One binding per lint run is exact, because no scenario in the corpus addresses both.
+LINT_MODULES_REDIS ?= examples/module/soul-mod-community-redis
+LINT_MODULES_MONGO ?= examples/module/soul-mod-community-mongo
 
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
@@ -1354,15 +1367,27 @@ lint: build
 		echo "validate-service $$f"; \
 		$(LINT_BIN) validate-service "$$f" || exit 1; \
 	done
-	@for f in examples/module/*/manifest.yaml; do \
+	@for f in examples/module/*/schema.json; do \
 		[ -e "$$f" ] || continue; \
 		echo "validate-manifest $$f"; \
 		$(LINT_BIN) validate-manifest "$$f" || exit 1; \
 	done
 	@for f in examples/service/*/scenario/*/main.yml; do \
 		[ -e "$$f" ] || continue; \
-		echo "validate-scenario $$f"; \
-		$(LINT_BIN) validate-scenario "$$f" --modules $(LINT_MODULES_DIR) || exit 1; \
+		svc=$$(echo "$$f" | cut -d/ -f3); \
+		case "$$svc" in \
+			mongo) mods="--modules=community=$(LINT_MODULES_MONGO)";; \
+			*)     mods="--modules=community=$(LINT_MODULES_REDIS)";; \
+		esac; \
+		echo "validate-scenario $$f $$mods"; \
+		out=$$($(LINT_BIN) validate-scenario "$$f" "$$mods" 2>&1); rc=$$?; \
+		echo "$$out"; \
+		[ $$rc -eq 0 ] || exit 1; \
+		if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+			echo "lint: FALSE-GREEN in $$f — a plugin module in the corpus has no --modules binding," >&2; \
+			echo "      so its params were NOT checked (NIM-294). Bind it above and re-run." >&2; \
+			exit 1; \
+		fi; \
 	done
 	@echo "lint: examples/ corpus is valid"
 

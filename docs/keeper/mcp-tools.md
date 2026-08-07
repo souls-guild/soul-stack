@@ -146,8 +146,8 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `soul-already-exists` | The SID is already registered in the registry `souls`. |
 | `bootstrap-token-active` | Soul already has an active bootstrap token - re-release with `force: true` (`keeper.soul.issue-token`). |
 | `plugin-not-in-cache` | The active plugin slot `(namespace, name)` is not in the host cache (no `current`-symlink / broken slot, `keeper.plugin.allow`). |
-| `sigil-already-active` | There is already an active permit for `(namespace, name, ref)` (`keeper.plugin.allow`). |
-| `sigil-not-found` | There is no active allow-list entry on `(namespace, name, ref)` (`keeper.plugin.revoke`). |
+| `sigil-already-active` | There is already an active permit for that artifact `(source, ref)`, or the `alias` is already registered (`keeper.plugin.allow`). |
+| `sigil-not-found` | There is no active allow-list entry for that alias (`keeper.plugin.revoke`). |
 | `sigil-key-not-found` | There is no signing key with this `key_id` (`keeper.sigil.key.set-primary` / `keeper.sigil.key.retire`). |
 | `sigil-key-last-active` | The last active signature key cannot be displayed - the set must not be empty (`keeper.sigil.key.retire`). |
 | `sigil-key-primary` | You cannot display the primary key directly - first set-primary to another active (`keeper.sigil.key.retire`). |

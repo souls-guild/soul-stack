@@ -1,0 +1,21 @@
+package main
+
+import "testing"
+
+// The schema document is generated from the Go value in
+// internal/{{.NamePackage}}, so a mistake in the declaration is a mistake in the
+// artifact's disclosure — the thing an operator approves before the binary is
+// allowed to run at all.
+//
+// This test is where that is caught. It runs the same validator the SDK runs at
+// startup and `soul-mod verify` runs in CI, so a secret without its
+// `^vault:.*` pattern, a state name that is not kebab-case, or a parameter with
+// no type fails here rather than at somebody's `plugin.allow`.
+//
+// It fails on WARNINGS too, deliberately: the scaffold ships clean, and a state
+// with no description is disclosure an operator does not get.
+func TestBundleIsValid(t *testing.T) {
+	for _, issue := range bundle.Validate() {
+		t.Errorf("%s [%s] %s", issue.Path, issue.Code, issue.Message)
+	}
+}
