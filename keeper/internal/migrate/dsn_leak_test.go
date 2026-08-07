@@ -3,11 +3,30 @@ package migrate
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
+
+// isolatePGEnv takes the libpq environment variables out of the parser's view.
+//
+// pgx merges `PG*` into every parse it performs, so a `PGSERVICE` or `PGSSLMODE`
+// left over in a shell decides the outcome of a table that names neither — red
+// about a DSN nobody touched, pointing at the DSN rather than at the shell.
+//
+// Clearing rather than unsetting is deliberate: pgconn's parseEnvSettings skips
+// empty values, so an empty variable is a real "not set" for the parser — and
+// [testing.T.Setenv] restores the developer's shell after.
+func isolatePGEnv(t *testing.T) {
+	t.Helper()
+	for _, kv := range os.Environ() {
+		if name, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(name, "PG") {
+			t.Setenv(name, "")
+		}
+	}
+}
 
 // leakPassword is the password planted in every DSN below. It is distinctive on
 // purpose: a substring search for it is only meaningful if the token cannot
@@ -29,11 +48,26 @@ func assertNoLeak(t *testing.T, dsn string, err error) {
 	if strings.Contains(msg, leakPassword) {
 		t.Errorf("error message leaks the password: %s", msg)
 	}
-	// The userinfo is the credential-bearing segment; if any of it survived,
-	// the password did too, whatever the password happens to be.
-	if user, _, ok := strings.Cut(strings.TrimPrefix(dsn, "postgres://"), "@"); ok && user != "" {
-		if strings.Contains(msg, user) {
-			t.Errorf("error message leaks the DSN userinfo %q: %s", user, msg)
+	// The userinfo is the credential-bearing segment; if any of it survived, the
+	// password did too, whatever the password happens to be — which is the point
+	// of the arm, since the check above only knows the one constant planted here.
+	//
+	// The cut is on `://` rather than off a `postgres://` prefix, because most
+	// of what this package refuses is not a postgres URL: `mysql://`, `pgx5://`,
+	// and keyword/value with no scheme at all. Trimming a prefix that is not
+	// there left the whole DSN to be cut on `@`, so the arm looked for the
+	// scheme as well and went dead on exactly those rows. Measured before
+	// changing it: a planted leak of the authority was still caught, by the
+	// constant above. So this is the arm doing its own job again, not a hole.
+	//
+	// Neither arm sees `user=keeper database=keeper`, which pgconn does emit.
+	// That is not a credential, and it is noted so nobody reads this helper as
+	// asserting that nothing of the DSN survives.
+	if scheme, rest, ok := strings.Cut(dsn, "://"); ok && scheme != "" && !strings.ContainsAny(scheme, "= ") {
+		if user, _, ok := strings.Cut(rest, "@"); ok && user != "" {
+			if strings.Contains(msg, user) {
+				t.Errorf("error message leaks the DSN userinfo %q: %s", user, msg)
+			}
 		}
 	}
 }
@@ -158,14 +192,20 @@ func TestToMigrateURL_AcceptsPasswordWithReservedCharacters(t *testing.T) {
 // find out whether that code echoes it — reading their source proves what one
 // version does today.
 func TestApply_ErrorsCarryNoDSN(t *testing.T) {
+	isolatePGEnv(t)
+
 	cases := []struct {
 		name string
 		dsn  string
+		// want is the sentinel the row has to reach. A nil want means the row
+		// must NOT stop at one — see the last case, which earns its keep only by
+		// getting past our own validation.
+		want error
 	}{
-		{"keyword/value", "host=localhost user=keeper password=" + leakPassword + " dbname=keeper"},
-		{"wrong scheme", "mysql://keeper:" + leakPassword + "@localhost:3306/keeper"},
-		{"invalid percent-escape", "postgres://keeper:" + leakPassword + "%@localhost:5432/keeper"},
-		{"fragment marker", "postgres://keeper:" + leakPassword + "#x@localhost:5432/keeper"},
+		{"keyword/value", "host=localhost user=keeper password=" + leakPassword + " dbname=keeper", ErrUnsupportedDSNScheme},
+		{"wrong scheme", "mysql://keeper:" + leakPassword + "@localhost:3306/keeper", ErrUnsupportedDSNScheme},
+		{"invalid percent-escape", "postgres://keeper:" + leakPassword + "%@localhost:5432/keeper", ErrMalformedDSN},
+		{"fragment marker", "postgres://keeper:" + leakPassword + "#x@localhost:5432/keeper", ErrMalformedDSN},
 		{
 			// Well-formed and unreachable: golang-migrate opens the database
 			// driver, pgx dials, the connection is refused.
@@ -175,6 +215,11 @@ func TestApply_ErrorsCarryNoDSN(t *testing.T) {
 			// and pgx sets a dial deadline only when the DSN asks for one. On a
 			// host that drops rather than refuses, the omission is this test
 			// hanging for the kernel's SYN-retry budget inside `make check`.
+			//
+			// `sslmode=disable` is load-bearing for the same reason and less
+			// obviously: with it pgx builds no TLS fallback, without it one, and
+			// each fallback is dialled in turn — so dropping it doubles the
+			// bound that `connect_timeout` was added to impose.
 			name: "well-formed URL, connection refused",
 			dsn:  "postgres://keeper:" + leakPassword + "@127.0.0.1:1/keeper?sslmode=disable&connect_timeout=2",
 		},
@@ -183,6 +228,20 @@ func TestApply_ErrorsCarryNoDSN(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Apply(context.Background(), tc.dsn, migrations.FS, ".")
+			if err == nil {
+				t.Fatal("want an error, got nil")
+			}
+			// Without this, a refusal moved earlier — a stricter check on
+			// `dsn_ref`, say — leaves every row green having never run the step
+			// it was written for. The last row fails the other way round: if it
+			// ever stops at our own validation it is no longer reaching the
+			// third-party code it exists to interrogate.
+			switch {
+			case tc.want != nil && !errors.Is(err, tc.want):
+				t.Fatalf("err = %v, want %v (branch not reached — the leak check below would prove nothing)", err, tc.want)
+			case tc.want == nil && (errors.Is(err, ErrUnsupportedDSNScheme) || errors.Is(err, ErrMalformedDSN)):
+				t.Fatalf("err = %v, want a failure past our own validation", err)
+			}
 			assertNoLeak(t, tc.dsn, err)
 		})
 	}

@@ -108,10 +108,11 @@ func NewPool(ctx context.Context, cfg config.KeeperPostgres, vc *keepervault.Cli
 // otherwise runs on — multi-host, IPv6 with a zone, `?host=/var/run/postgresql`
 // and percent-encoded or empty passwords all parse.
 func parsePoolConfig(dsn string) (*pgxpool.Config, error) {
-	// Both spellings of a password in a URL, collected for the containment
-	// check in describeParseConfigFailure. A keyword/value DSN has no
-	// equivalent — pgx's parser for that form is unexported, and every cause it
-	// reports is a constant.
+	// Every place a URL-form DSN can carry a password, in both the decoded and
+	// the as-written spelling, collected for the containment check in
+	// describeParseConfigFailure. A keyword/value DSN has no equivalent — pgx's
+	// parser for that form is unexported, and every cause it reports is a
+	// constant.
 	var secrets []string
 	if isURLDSN(dsn) {
 		u, err := url.Parse(dsn)
@@ -124,6 +125,7 @@ func parsePoolConfig(dsn string) (*pgxpool.Config, error) {
 		if password := u.Query().Get("password"); password != "" {
 			secrets = append(secrets, password)
 		}
+		secrets = append(secrets, rawURLSecrets(dsn, u)...)
 	}
 
 	cfg, err := pgxpool.ParseConfig(dsn)
@@ -131,6 +133,40 @@ func parsePoolConfig(dsn string) (*pgxpool.Config, error) {
 		return nil, fmt.Errorf("%w (%s)", ErrMalformedDSN, describeParseConfigFailure(err, secrets))
 	}
 	return cfg, nil
+}
+
+// rawURLSecrets returns the password runs of a URL-form DSN as they are
+// written, without percent-decoding.
+//
+// [url.URL] hands back decoded values: a DSN spelled `p%40ss` arrives as
+// `p@ss`, and containment on that alone would not recognise the password in a
+// message that quoted the connection string verbatim. Quoting the connection
+// string verbatim is the one disclosure route the check exists for, so both
+// spellings go in the list.
+//
+// The splits mirror net/url's rather than guess at them: the authority ends at
+// the first `/?#`, the userinfo ends at its LAST `@` (so a raw `@` inside a
+// password is not a separator), and the password begins after the FIRST `:` (so
+// a raw `:` inside one is not either).
+func rawURLSecrets(dsn string, u *url.URL) []string {
+	var raw []string
+	if _, rest, ok := strings.Cut(dsn, "://"); ok {
+		authority := rest
+		if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+			authority = authority[:end]
+		}
+		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+			if colon := strings.IndexByte(authority[:at], ':'); colon >= 0 {
+				raw = append(raw, authority[colon+1:at])
+			}
+		}
+	}
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		if password, ok := strings.CutPrefix(pair, "password="); ok {
+			raw = append(raw, password)
+		}
+	}
+	return raw
 }
 
 // isURLDSN reports whether pgx reads dsn as a URL rather than as libpq
@@ -172,7 +208,9 @@ func describeURLFailure(err error) string {
 // operator cannot read from Vault is a bad enough place to be.
 //
 // The containment check is the belt to that braces. Every cause pgx reports
-// today names a setting, a host or a file path — but that is a fact about one
+// today names a setting or quotes that setting's own value — `invalid port
+// (strconv.ParseUint: parsing "NOTAPORT")`, `time: invalid duration "NOTADUR"`
+// — and none of those settings is a credential. But that is a fact about one
 // version of a dependency, not a guarantee, and this package has already been
 // wrong once about how well pgx redacts. A password short enough to occur by
 // chance (`5432`) costs a diagnosis; the other way round costs a credential.
