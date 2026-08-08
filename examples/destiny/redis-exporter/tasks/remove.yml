@@ -1,0 +1,52 @@
+# Teardown is scoped strictly to input.instance_name. The shared binary is removed only
+# after this unit is gone and the host has no other redis_exporter-* units.
+- name: Stop only this redis_exporter instance
+  module: core.service.stopped
+  params:
+    name: "${ 'redis_exporter-' + input.instance_name }"
+
+- name: Disable only this redis_exporter instance
+  module: core.service.disabled
+  params:
+    name: "${ 'redis_exporter-' + input.instance_name }"
+
+- name: Remove only this redis_exporter unit
+  module: core.file.absent
+  register: redis_exporter_unit_removed
+  params:
+    path: "${ '/etc/systemd/system/redis_exporter-' + input.instance_name + '.service' }"
+
+- name: Reload systemd after removing this unit
+  module: core.exec.run
+  onchanges: [redis_exporter_unit_removed]
+  params:
+    cmd: systemctl
+    args: [daemon-reload]
+
+- name: Remove only this redis_exporter EnvironmentFile
+  module: core.file.absent
+  params:
+    path: "${ '/etc/default/redis_exporter-' + input.instance_name }"
+
+- name: Remove only this redis_exporter web-config
+  module: core.file.absent
+  params:
+    path: "${ '/etc/redis_exporter/' + input.instance_name + '/web.yml' }"
+
+- name: Remove only this redis_exporter web-config directory
+  module: core.directory.absent
+  params:
+    path: "${ '/etc/redis_exporter/' + input.instance_name }"
+
+# This is deliberately not core.file.absent: an unconditional file state would delete the
+# binary beneath another running instance. The argv contains no secrets. The command runs
+# only when this unit was actually removed and deletes the shared binary only after the
+# redis_exporter-* unit glob is empty.
+- name: Remove shared binary only when no exporter instance unit remains
+  module: core.exec.run
+  onchanges: [redis_exporter_unit_removed]
+  params:
+    cmd: /bin/sh
+    args:
+      - -c
+      - "${ 'set -- /etc/systemd/system/redis_exporter-*.service; [ -e \"$1\" ] || rm -f -- ' + input.bin_dir + '/redis_exporter' }"

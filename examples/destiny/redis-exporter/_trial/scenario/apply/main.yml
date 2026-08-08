@@ -1,51 +1,85 @@
-# L0 harness for destiny redis-exporter (Trial, ADR-023). Minimal scenario whose
-# sole job is apply:destiny redis-exporter, to give destiny
-# render-only L0. Canonical wrapper layout (ADR-023): subdirectory of the
-# destiny itself - `redis-exporter/_trial/scenario/apply/`. The L0 resolver mirrors
-# prod (slice A, ADR-023): apply:destiny resolves by name from
-# `_trial/service.yml::destiny[]` + URL from `default_destiny_source` of the test case.
 name: apply
-description: >-
-  Trial harness: delegates installing redis_exporter to destiny redis-exporter
-  via apply:destiny. Not a service - a wrapper around L0-render destiny.
+description: L0 wrapper for one redis-exporter destiny instance.
 
 input:
+  instance_name:
+    type: string
+    default: redis
+    pattern: "^[a-z][a-z0-9-]{0,31}$"
   version:
     type: string
     default: "1.62.0"
-    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
   sha256:
     type: string
-    required: true   # fail-closed: placeholder default removed (BUG-2)
+    required: true
     pattern: "^sha256:[0-9a-f]{64}$"
   arch:
     type: string
     default: amd64
     enum: [amd64, arm64]
-  redis_socket:
+  ensure:
     type: string
-    default: /var/run/redis/redis-server.sock
-    pattern: "^/[A-Za-z0-9._/-]+$"
+    default: present
+    enum: [present, absent]
+  listen:
+    type: string
+    default: ":9121"
+  redis_addr:
+    type: string
+    default: "unix:///var/run/redis/redis-server.sock"
+  dependency_unit:
+    type: string
+    default: redis-server.service
   redis_password:
     type: string
     required: true
     secret: true
     min_length: 16
-  # base_url_override - optional pass-through of a mirror/nexus into destiny.base_url.
-  # Empty (default "") -> destiny uses its own default (GitHub Releases). Needed
-  # for the L0 case base-url-override (node-exporter mirror).
+  redis_user:
+    type: string
+    default: ""
+  extra_args:
+    type: array
+    default: []
+    items: { type: string }
   base_url_override:
+    type: string
+    default: ""
+  allow_private:
+    type: boolean
+    default: false
+  basic_auth_username:
+    type: string
+    default: ""
+  basic_auth_password_hash:
+    type: string
+    default: ""
+  tls_cert_file:
+    type: string
+    default: ""
+  tls_key_file:
     type: string
     default: ""
 
 tasks:
-  - name: Apply redis-exporter destiny
+  - name: Apply one redis-exporter instance
     apply:
       destiny: redis-exporter
       input:
-        version:        "${ input.version }"
-        sha256:         "${ input.sha256 }"
-        arch:           "${ input.arch }"
-        redis_socket:   "${ input.redis_socket }"
+        instance_name: "${ input.instance_name }"
+        version: "${ input.version }"
+        sha256: "${ input.sha256 }"
+        arch: "${ input.arch }"
+        ensure: "${ input.ensure }"
+        listen: "${ input.listen }"
+        redis_addr: "${ input.redis_addr }"
+        dependency_unit: "${ input.dependency_unit }"
         redis_password: "${ input.redis_password }"
-        base_url:       "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/oliver006/redis_exporter/releases/download' }"
+        redis_user: "${ input.redis_user }"
+        extra_args: "${ input.extra_args }"
+        allow_private: "${ input.allow_private }"
+        base_url: "${ input.base_url_override != '' ? input.base_url_override : 'https://github.com/oliver006/redis_exporter/releases/download' }"
+        basic_auth_username: "${ input.basic_auth_username }"
+        basic_auth_password_hash: "${ input.basic_auth_password_hash }"
+        tls_cert_file: "${ input.tls_cert_file }"
+        tls_key_file: "${ input.tls_key_file }"

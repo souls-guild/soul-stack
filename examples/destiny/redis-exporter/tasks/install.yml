@@ -1,0 +1,136 @@
+# Artifact pipeline. Two instances may render these same steps; core.file.present compares
+# content and therefore converges the common binary idempotently.
+- name: Fetch redis_exporter tarball
+  module: core.url.fetched
+  retry: { count: 3, delay: 10s }
+  params:
+    url: "${ input.base_url + '/v' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '.tar.gz' }"
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    checksum: "${ input.sha256 }"
+    mode: "0644"
+    allow_private: "${ input.allow_private }"
+
+- name: Extract redis_exporter tarball
+  module: core.archive.extracted
+  params:
+    path: "${ '/tmp/redis_exporter-' + input.version + '.tar.gz' }"
+    dest: "${ '/tmp/redis_exporter-' + input.version }"
+
+- name: Install shared redis_exporter binary
+  module: core.file.present
+  register: redis_exporter_bin
+  params:
+    path: "${ input.bin_dir + '/redis_exporter' }"
+    src: "${ '/tmp/redis_exporter-' + input.version + '/redis_exporter-v' + input.version + '.linux-' + input.arch + '/redis_exporter' }"
+    mode: "0755"
+    owner: root
+    group: root
+
+# REDIS_PASSWORD is the only plaintext credential consumed by redis_exporter. The task is
+# no_log and the file is instance-specific, root-owned and 0600. The world-readable unit
+# contains only this path, never the value.
+- name: Render instance EnvironmentFile (root-only secret)
+  module: core.file.rendered
+  register: redis_exporter_env
+  no_log: true
+  params:
+    path: "${ '/etc/default/redis_exporter-' + input.instance_name }"
+    template: templates/redis_exporter.env.tmpl
+    mode: "0600"
+    owner: root
+    group: root
+    vars:
+      password: "${ input.redis_password }"
+
+- name: Render instance web-config when TLS or basic-auth is enabled
+  when: "input.basic_auth_username != '' || input.tls_cert_file != ''"
+  block:
+    - name: Ensure shared redis_exporter config directory
+      module: core.directory.present
+      params:
+        path: /etc/redis_exporter
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Ensure instance web-config directory
+      module: core.directory.present
+      params:
+        path: "${ '/etc/redis_exporter/' + input.instance_name }"
+        mode: "0700"
+        owner: root
+        group: root
+
+    - name: Render instance web-config (root-only secret)
+      module: core.file.rendered
+      register: redis_exporter_webconfig
+      no_log: true
+      params:
+        path: "${ '/etc/redis_exporter/' + input.instance_name + '/web.yml' }"
+        template: templates/redis_exporter.web.yml.tmpl
+        mode: "0600"
+        owner: root
+        group: root
+        vars:
+          unit_name: "${ 'redis_exporter-' + input.instance_name }"
+          basic_auth_username: "${ input.basic_auth_username }"
+          basic_auth_password_hash: "${ input.basic_auth_password_hash }"
+          tls_enabled: "${ input.tls_cert_file != '' }"
+
+# Converge away stale per-instance web credentials when a later apply disables them.
+- name: Remove disabled instance web-config
+  when: "input.basic_auth_username == '' && input.tls_cert_file == ''"
+  block:
+    - name: Remove disabled instance web-config file
+      module: core.file.absent
+      register: redis_exporter_webconfig_removed
+      params:
+        path: "${ '/etc/redis_exporter/' + input.instance_name + '/web.yml' }"
+
+    - name: Remove disabled instance web-config directory
+      module: core.directory.absent
+      params:
+        path: "${ '/etc/redis_exporter/' + input.instance_name }"
+
+- name: Render instance systemd unit
+  module: core.file.rendered
+  register: redis_exporter_unit
+  params:
+    path: "${ '/etc/systemd/system/redis_exporter-' + input.instance_name + '.service' }"
+    template: templates/redis_exporter.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      unit_name: "${ 'redis_exporter-' + input.instance_name }"
+      bin_dir: "${ input.bin_dir }"
+      listen: "${ input.listen }"
+      redis_addr: "${ input.redis_addr }"
+      redis_user: "${ input.redis_user }"
+      dependency_unit: "${ input.dependency_unit }"
+      unix_socket: "${ input.redis_addr.startsWith('unix:///') }"
+      env_file: "${ '/etc/default/redis_exporter-' + input.instance_name }"
+      web_config_enabled: "${ input.basic_auth_username != '' || input.tls_cert_file != '' }"
+      web_config_file: "${ '/etc/redis_exporter/' + input.instance_name + '/web.yml' }"
+      tls_enabled: "${ input.tls_cert_file != '' }"
+      tls_cert_file: "${ input.tls_cert_file }"
+      tls_key_file: "${ input.tls_key_file }"
+      extra_args: "${ input.extra_args }"
+
+- name: Ensure instance redis_exporter is running and enabled
+  module: core.service.running
+  params:
+    name: "${ 'redis_exporter-' + input.instance_name }"
+    enabled: true
+
+- name: Restart instance after binary or per-instance config changes
+  module: core.service.restarted
+  onchanges:
+    - redis_exporter_unit
+    - redis_exporter_bin
+    - redis_exporter_env
+    - redis_exporter_webconfig
+    - redis_exporter_webconfig_removed
+  timeout: 30s
+  params:
+    name: "${ 'redis_exporter-' + input.instance_name }"

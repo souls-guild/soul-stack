@@ -1,0 +1,14 @@
+{{/*
+  Root-only exporter-toolkit source. systemd LoadCredential publishes a protected runtime
+  copy to DynamicUser. TLS source files are likewise credentials; only their runtime paths
+  are written here.
+*/}}
+{{- if .vars.tls_enabled }}
+tls_server_config:
+  cert_file: /run/credentials/{{ .vars.unit_name }}.service/tls-cert
+  key_file: /run/credentials/{{ .vars.unit_name }}.service/tls-key
+{{- end }}
+{{- if .vars.basic_auth_username }}
+basic_auth_users:
+  {{ .vars.basic_auth_username }}: {{ .vars.basic_auth_password_hash }}
+{{- end }}

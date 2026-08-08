@@ -58,36 +58,23 @@ assert:
     # is not passed → default [] (ExecStart without extra tokens).
     - module: core.file.rendered
       params_subset:
-        path: /etc/systemd/system/redis_exporter.service
-        # the template path is replaced with literal content delivered by Keeper (A1, ADR-012(d)).
+        path: /etc/systemd/system/redis_exporter-redis.service
         template_content: "<present>"
         mode: "0644"
         owner: root
         group: root
-        # The text/template root is render_context {vars,self,role,service vars}
-        # (templating.md §3.2, BUG-A fix); the flat params.vars no longer exists.
-        render_context:
-          vars:
-            bin_dir: /usr/local/bin
-            listen: ":9121"
-            redis_addr: unix:///var/run/redis/redis-server.sock
-            password: change-me-please-32
-            # redis_user is not passed → default '' (requirepass model, back-compat):
-            # the --redis.user flag is NOT added to ExecStart (conditional template render).
-            redis_user: ""
-            extra_args: []
-          self:
-            sid: trial-host
-            choirs: []
-            # traits — a registry projection (ADR-060), an empty object with no labels.
-            traits: {}
-            # covens carries the incarnation.name label (scenario name = apply) —
-            # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
-            covens: []
-            role: ""
-          role: ""
+
+    # Password leaves the plan/log surface through a no_log render and lands in a
+    # distinct root-owned 0600 EnvironmentFile, not in the unit/argv.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/default/redis_exporter-redis
+        template_content: "<present>"
+        mode: "0600"
+        owner: root
+        group: root
 
     - module: core.service.running
       params_subset:
-        name: redis_exporter
+        name: redis_exporter-redis
         enabled: true

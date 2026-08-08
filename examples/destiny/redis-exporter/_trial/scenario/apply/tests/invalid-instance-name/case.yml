@@ -1,0 +1,12 @@
+name: redis-exporter rejects an instance name that could escape host resource paths
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  soulprint:
+    os: { arch: amd64 }
+  input:
+    instance_name: ../sentinel
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    redis_password: "invalid-instance-test-password"
+
+expect_render_error: "does not match pattern"

@@ -96,24 +96,31 @@ assert:
 
     # 2. redis-exporter is deployed (apply:destiny redis-exporter → render systemd unit).
     #    * redis_user=monitoring — the key assert for finding B (without it, WRONGPASS on the ACL).
-    #    redis_addr — unix socket (destiny default), password — the resolved keeper-side
-    #    password of the monitoring ACL user. render_context is checked FULLY (deep-compare
-    #    of the nested map): vars carries all 6 file vars, self is the single host, service vars
-    #    is empty (sub-destiny isolation, ADR-009). Disambiguator from the node_exporter unit — path.
+    #    redis_addr — unix socket; dependency is the Redis unit. The password is deliberately
+    #    absent from this world-readable unit context and goes to the separate no_log 0600
+    #    EnvironmentFile. render_context is checked FULLY (deep-compare).
     - module: core.file.rendered
       params_subset:
-        path: /etc/systemd/system/redis_exporter.service
+        path: /etc/systemd/system/redis_exporter-redis.service
         template_content: "<present>"
         mode: "0644"
         owner: root
         group: root
         render_context:
           vars:
+            unit_name: redis_exporter-redis
             bin_dir: /usr/local/bin
             listen: ":9121"
             redis_addr: "unix:///var/run/redis/redis-server.sock"
-            password: monitoring-sys-secret-pass
             redis_user: monitoring
+            dependency_unit: redis-server.service
+            unix_socket: true
+            env_file: /etc/default/redis_exporter-redis
+            web_config_enabled: false
+            web_config_file: /etc/redis_exporter/redis/web.yml
+            tls_enabled: false
+            tls_cert_file: ""
+            tls_key_file: ""
             extra_args: []
           self:
             sid: node-a.example.com
