@@ -128,13 +128,31 @@ func readCommunityRedisDocument(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("readCommunityRedisDocument: %v", err)
 	}
-	// Canonicality is the property the signature depends on (ADR-026): the bytes
-	// are hashed, and a reformatted copy is a different artifact. Checking it here
-	// means a hand edit to the published document is a finding in this gate too,
-	// not a confusing verify failure inside keeper three steps later.
+	// Refuse what keeper would refuse, in the order soul-mod's derivedDocument does:
+	// parse, validate, then canonical form. Validity is not implied by canonicality —
+	// a document can be perfectly formed bytes and still name a kind that does not
+	// exist — and keeper answers an invalid one with ErrSchemaUnreadable, which
+	// ResolveCatalog demotes to a per-entry warning. The stand then comes up green
+	// with the plugin silently absent, which is the failure this fixture exists to
+	// reproduce, not to inherit. dev/stamp-artifact.go checks the same three things.
+	doc, err := schema.Unmarshal(document)
+	if err != nil {
+		t.Fatalf("readCommunityRedisDocument: %s: %v", path, err)
+	}
+	if issues := schema.Validate(doc); schema.HasErrors(issues) {
+		for _, i := range issues {
+			if i.Level == schema.LevelError {
+				t.Errorf("readCommunityRedisDocument: %s: %s %s: %s", path, i.Path, i.Code, i.Message)
+			}
+		}
+		t.Fatalf("readCommunityRedisDocument: %s is invalid — regenerate it from the Go definition", path)
+	}
 	canonical, err := schema.IsCanonical(document)
-	if err != nil || !canonical {
-		t.Fatalf("readCommunityRedisDocument: %s is not canonical (%v) — regenerate it, do not hand-edit", path, err)
+	if err != nil {
+		t.Fatalf("readCommunityRedisDocument: %s: %v", path, err)
+	}
+	if !canonical {
+		t.Fatalf("readCommunityRedisDocument: %s is not in canonical form — regenerate it, do not hand-edit", path)
 	}
 	return document
 }
@@ -151,7 +169,8 @@ func buildCommunityRedisBinary(t *testing.T) string {
 			return
 		}
 		out := filepath.Join(outDir, communityRedisBinaryName)
-		cmd := exec.Command("go", "build", "-o", out, ".")
+		args := append([]string{"build"}, communityRedisBuildFlags...)
+		cmd := exec.Command("go", append(args, "-o", out, ".")...)
 		cmd.Dir = filepath.Join(repoRoot(t), communityRedisPluginDir)
 		cmd.Env = append(os.Environ(),
 			"GOWORK=off", "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")

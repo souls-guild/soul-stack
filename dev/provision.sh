@@ -414,24 +414,39 @@ provision_git_repo \
     "${KEEPER_DEV_DIR}/destiny/vector" \
     v1.0.0 "destiny vector"
 
-# 9b. community.redis plugin (SoulModule) - materializing the BUILT binary into a git repo.
+# 9b. community.redis plugin (SoulModule) - materializing the STAMPED artifact into a git repo.
 #
-# Unlike service/destiny (provision_git_repo commits SOURCES), the plugingit
-# resolver (ADR-026 F-fetch) on Keeper does NOT compile - it expects a ready binary in
-# dist/<binary-name> next to manifest.yaml. The layout mirrors the harness
-# tests/e2e-live/harness/plugin.go (parity with plugingit/resolver_test.go fixtureRepo).
+# Unlike service/destiny (provision_git_repo commits SOURCES), the plugingit resolver
+# (ADR-026 F-fetch) on Keeper neither compiles nor executes: it takes the one executable
+# in dist/ and reads the plugin's disclosure out of a TRAILER on that artifact. There is
+# no manifest.yaml - NIM-377 deleted it and put the generated schema document in its
+# place, and ADR-065(g) says the slot holds the artifact and nothing else. So this step
+# publishes what a plugin author publishes: build, stamp the document into the binary,
+# put the same bytes beside it as schema.json.
+#
+# Parity with tests/e2e-live/harness/plugin.go (BuildCommunityRedisPlugin), which builds
+# the same fixture for L3b, and with plugingit/resolver_test.go fixtureRepo. Held by
+# tests/e2e-live/harness/devprovision_test.go: the two must not drift, or a stand stops
+# being able to reproduce what the gate sees. This step read manifest.yaml for a whole
+# release after NIM-377 removed it, and every fresh stand died at bring-up (NIM-516).
 #
 # In-place build (cwd=source directory): the plugin's go.mod uses relative-replace
 # (../../../sdk, ../../../proto/plugin) - the tree cannot be copied. GOWORK=off - the plugin
 # is outside go.work (precedent from Makefile test-plugins). -trimpath -ldflags "-buildid=" -
 # a reproducible sha256: otherwise a repeat provision changes the binary → invalidates an
-# already-issued Sigil grant.
+# already-issued Sigil grant. Stamping keeps that property: the same binary and the same
+# document append the same bytes.
 provision_community_redis_plugin() {
     local src="${EXAMPLES}/module/soul-mod-community-redis"
     local dest="${KEEPER_DEV_DIR}/plugin-repos/community-redis"
     local bin="soul-mod-redis"
-    if [ ! -f "${src}/manifest.yaml" ]; then
-        fail "community.redis plugin manifest not found: ${src}/manifest.yaml"
+    # The document IS the module's contract now, and it is read without running the
+    # artifact (at plugin.allow the binary is not approved yet). Absent, there is nothing
+    # to stamp - and an unstamped artifact is one plugingit rejects per-entry, so the
+    # stand would come up looking healthy and the first scenario touching community.redis
+    # would fail at runtime, where the cause costs far more to find.
+    if [ ! -f "${src}/schema.json" ]; then
+        fail "community.redis plugin schema document not found: ${src}/schema.json"
     fi
 
     log "building community.redis plugin (${bin}, linux/amd64, reproducible)"
@@ -442,21 +457,49 @@ provision_community_redis_plugin() {
         rm -rf "${tmp}"
         fail "go build of the community.redis plugin failed (${src})"
     fi
+    # cwd=REPO_ROOT so `go run` finds go.work and resolves sdk/schema - the trailer format
+    # is defined there and nowhere else (see dev/stamp-artifact.go).
+    # GOWORK= (empty, not `off`) resets an operator's exported GOWORK: stamp-artifact.go
+    # is outside every module and resolves sdk/schema only through the workspace.
+    if ! ( cd "${REPO_ROOT}" && GOWORK= go run ./dev/stamp-artifact.go "${tmp}/${bin}" "${src}/schema.json" ); then
+        rm -rf "${tmp}"
+        fail "stamping the schema document into the community.redis artifact failed"
+    fi
 
     # Rebuild from scratch: deterministic commit (GIT_* above) → same SHA for an
     # unchanged binary, keeper reuses the snapshot instead of spawning orphans in the cache.
     rm -rf "${dest}"
     mkdir -p "${dest}/dist"
-    cp "${src}/manifest.yaml" "${dest}/manifest.yaml"
     cp "${tmp}/${bin}" "${dest}/dist/${bin}"
     chmod 0755 "${dest}/dist/${bin}"
+    # The published copy sits beside the artifact for soul-lint, which should not have to
+    # download a binary to check a destiny. Non-executable, so dist/ still holds exactly
+    # one executable and the resolver's single-artifact rule stays unambiguous.
+    cp "${src}/schema.json" "${dest}/dist/schema.json"
+    chmod 0644 "${dest}/dist/schema.json"
     rm -rf "${tmp}"
 
     git -C "${dest}" init -q -b main
     git -C "${dest}" add -A
+    # The resolver takes THE single executable in dist/ (pluginhost.SingleArtifactIn) and
+    # fails the entry closed on zero or on two - and a closed entry is only a warning, so
+    # keeper still comes up green with the plugin silently absent. Both mistakes are one
+    # chmod away: git carries only two modes and records the exec bit only where
+    # core.fileMode holds (lose it -> zero), and the document copied beside the artifact
+    # is one typo from 0755 (-> two). What the resolver sees is what git recorded, so that
+    # is what this counts, right here where it can still say so out loud.
+    local mode execs
+    mode="$(git -C "${dest}" ls-files -s "dist/${bin}" | cut -d' ' -f1)"
+    if [ "${mode}" != "100755" ]; then
+        fail "git recorded dist/${bin} as ${mode:-nothing}, not 100755 (core.fileMode off under ${dest}?) — plugingit would find no executable in dist/ and community.redis would silently never arrive"
+    fi
+    execs="$(git -C "${dest}" ls-files -s dist/ | grep -c '^100755 ' || true)"
+    if [ "${execs}" != "1" ]; then
+        fail "dist/ carries ${execs} executables, not exactly 1 — plugingit cannot tell which is the artifact and community.redis would silently never arrive (is ${dest}/dist/schema.json 0755 by mistake?)"
+    fi
     git -C "${dest}" -c commit.gpgsign=false commit -q -m "community.redis plugin snapshot (dev-provision)"
     git -C "${dest}" -c tag.gpgsign=false tag -f v1.0.0 >/dev/null
-    log "community.redis plugin git repo @ ${dest} (branch main + tag v1.0.0, dist/${bin})"
+    log "community.redis plugin git repo @ ${dest} (branch main + tag v1.0.0, dist/${bin} stamped + dist/schema.json)"
 }
 provision_community_redis_plugin
 

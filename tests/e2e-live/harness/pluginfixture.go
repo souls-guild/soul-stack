@@ -8,6 +8,15 @@ package harness
 // communityRedisPluginDir - plugin sources relative to the repo root.
 const communityRedisPluginDir = "examples/module/soul-mod-community-redis"
 
+// communityRedisBuildFlags - what makes the build of that artifact reproducible.
+// plugin.go passes them here, dev/provision.sh passes them on a dev stand, and
+// devprovision_test.go holds the script to this list. A Sigil grant is keyed on the
+// artifact's sha256: two producers of "the same" plugin emitting different bytes are
+// two different plugins, so the fixture could not reproduce a stand's failure and a
+// repeat provision would invalidate a grant the operator already issued. Lives here
+// rather than in plugin.go because that file needs a stand and this guard does not.
+var communityRedisBuildFlags = []string{"-trimpath", "-ldflags", "-buildid="}
+
 // CommunityRedisPluginRef - tag under which the harness publishes the plugin
 // in the per-test git repo; ref for the catalog entry and Sigil-allow.
 const CommunityRedisPluginRef = "v1.0.0"

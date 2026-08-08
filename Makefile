@@ -1021,14 +1021,20 @@ check-soul-template:
 		fi; \
 	fi
 
-# check-dev-stand-build - keeps a dev stand falsifiable (NIM-342). Two properties:
+# check-dev-stand-build - keeps a dev stand falsifiable (NIM-342, NIM-516). Three properties:
 #
 #   1. no script in dev/ builds keeper or soul itself - both go through
 #      `make build-keeper` / `make build-soul`, so the $(VERSION) stamp cannot be
 #      dropped and the build cannot go back to being conditional on the binary
 #      being absent;
 #   2. keeper-run.sh holds the answering /healthz to the version it just built - a
-#      foreign keeper on the port is reported as such instead of as "ready".
+#      foreign keeper on the port is reported as such instead of as "ready";
+#   3. dev/stamp-artifact.go compiles. provision.sh `go run`s it to append the schema
+#      trailer to the community.redis artifact, and it sits outside the workspace
+#      modules (dev/ has no go.mod), so no other tier builds it and no other tier
+#      gofmts it. Without this, an SDK change breaks stand provisioning and the gate
+#      stays green until somebody tries to raise a stand - which is exactly the shape
+#      of NIM-516.
 #
 # A grep guard rather than a Go test: the subject is shell under dev/, which no test
 # binary loads. It catches the actual regression - a "simplification" back to a bare
@@ -1065,7 +1071,20 @@ check-dev-stand-build:
 		echo "  foreign-binary risk is per-port, not only on :8080 (NIM-342)."; \
 		exit 1; \
 	}
-	@echo "dev stand build: keeper/soul are rebuilt through the Makefile, keeper-run verifies the served version"
+	@out=$$(gofmt -l dev 2>&1); \
+	if [ -n "$$out" ]; then \
+		echo "check-dev-stand-build: gofmt: $$out"; \
+		echo "  dev/ is outside \$$(MODULES), so check-fmt does not see it. run 'gofmt -w' on the listed files."; \
+		exit 1; \
+	fi
+	@out=$$(go build -o /dev/null dev/stamp-artifact.go 2>&1) || { \
+		echo "check-dev-stand-build: dev/stamp-artifact.go does not build:"; \
+		echo "$$out"; \
+		echo "  dev/provision.sh 'go run's it to stamp the schema trailer into the community.redis"; \
+		echo "  artifact, so a broken build here means no fresh dev stand comes up (NIM-516)."; \
+		exit 1; \
+	}
+	@echo "dev stand build: keeper/soul are rebuilt through the Makefile, keeper-run verifies the served version, dev/stamp-artifact.go builds"
 
 # --- Release/packaging ---
 # These targets are additive: NOT part of `check` (require external tooling that may

@@ -1574,6 +1574,37 @@ order to act in.
 
 ### Fixed
 
+- **No fresh dev stand came up, on the release or on any branch off it.**
+  `NIM-377` deleted the plugin's hand-written `manifest.yaml` and moved a
+  module's contract into a generated canonical-JSON document stamped into the
+  artifact itself. Step 9b of `dev/provision.sh` went on requiring the deleted
+  file and calling `fail` when it was missing, so `make dev-provision` — the
+  first thing both `make dev-stand` and `make dev-smoke` run — died before it
+  reached anything else. Existing stands were untouched, which is why this stayed
+  quiet for a whole release: the step is idempotent and they already had their
+  plugin repo, so only the *first* run in a new `DEV_STAND` broke. Every session
+  that owed a live self-check hit it on its first command.
+
+  The step now builds the plugin the way the L3b fixture does, stamps the
+  published document into the artifact through `dev/stamp-artifact.go` — the
+  trailer format is defined once, in `sdk/schema`, and shell cannot append it
+  without keeping a second copy that would go on agreeing with the old model —
+  and publishes `dist/<artifact>` alongside `dist/schema.json` into the git repo
+  the `plugingit` resolver clones.
+
+  Softening that `fail` to a `warn` would have been the wrong fix, and it is why
+  this entry is long. Every way this step can go wrong ends in the same place:
+  the resolver fails one catalog entry closed, `ResolveCatalog` demotes it to a
+  warning, keeper comes up green, and the plugin is silently absent until some
+  scenario calls it — where the cause costs far more to find. An unstamped
+  artifact does that. So does a document that is canonical but invalid, a `dist/`
+  with no executable or with two, and deleting the single line that calls the
+  step. The step therefore checks what git actually recorded before it commits,
+  the stamper refuses any document keeper would refuse, and a guard in the gate
+  holds the script to each of those acts — anchored on the commands that perform
+  them, because the step's own log line names all of them and would stay green
+  while the writes it describes were gone.
+
 - **Every service declaring `modules:` was unappliable on every host.** The two
   ends of the auto-synthesis path (`ADR-065`) disagreed about what address level 1
   means, and each was internally consistent, tested, and green. `NIM-377` renamed
