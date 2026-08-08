@@ -1639,6 +1639,39 @@ order to act in.
 
 ### Fixed
 
+- **A restarted dev Vault made `dev-provision` hand you someone else's stand,
+  silently.** The dev Vault stores its secrets in RAM (`dev/docker-compose.yml`);
+  Postgres stores its data on a named volume. A container restart therefore does
+  not reset the stand, it desynchronises it — and `dev/provision.sh`, being
+  idempotent, saw a missing key as "not created yet" and minted a fresh one over
+  live registries. Nothing errored. `operators` still held its Archons while
+  every JWT ever issued to them stopped verifying (401 — the rights are intact,
+  only the signature no longer matches); `soul_seeds` still held seeds chaining
+  to a PKI root that had just been replaced, so mTLS failed and the souls had to
+  be re-onboarded; `plugin_sigils` still held grants signed by an anchor that no
+  longer existed ([ADR-026](docs/adr/0026-sigil.md)). The stand looked healthy
+  and reported ready throughout.
+
+  Provision now checks the three anchors against the registries that depend on
+  them **before it generates any anchor** (step 1b) and refuses, naming the rows
+  at stake and ranking the ways out by blast radius. `DEV_VAULT_REISSUE_ANCHORS=1`
+  takes the loss on purpose, listing what it destroys as it goes.
+
+  Three things the guard does that the symptom does not suggest. First, the KV
+  prefix is per-stand but the `pki/` engine is **one per Vault**, and every
+  lightweight stand shares one — so the seed count is taken across every
+  `keeper*` database, not just this stand's, and when a neighbour is among the
+  losers the refusal stops offering "drop your own database": that advice would
+  be false, since the root is regenerated under their souls whatever you do to
+  yours. Second, a database list that cannot be read is reported as UNKNOWN
+  rather than counted as empty — the whole PKI half of the check hangs off that
+  one query, so treating a failed `psql` as "nobody depends on the root" would
+  reproduce the silence being fixed. Third, an unreachable Postgres warns instead
+  of blocking — with no registry to ask, a first-ever stand is indistinguishable
+  from a wiped Vault, and refusing there would break every initial provision. A
+  first-ever stand with empty registries is unaffected and generates silently, as
+  before.
+
 - **No fresh dev stand came up, on the release or on any branch off it.**
   `NIM-377` deleted the plugin's hand-written `manifest.yaml` and moved a
   module's contract into a generated canonical-JSON document stamped into the

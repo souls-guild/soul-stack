@@ -135,6 +135,60 @@ Convention of field name inside KV: short (`signing_key` / `dsn`), documented
 in [docs/keeper/config.md](../keeper/config.md). Other `_ref` fields
 (`redis.password_ref`, AppRole credentials) - postponed to the next slices.
 
+### When Vault forgets and Postgres does not (`DEV_VAULT_REISSUE_ANCHORS`)
+
+The dev Vault holds its secrets in RAM; Postgres holds its data on a named
+volume. So restarting the stack does not reset the stand — it *desynchronises*
+it. The registries come back holding rows that name trust anchors which no
+longer exist, and `dev-provision` being idempotent means it would cheerfully
+mint fresh ones over them. Nothing errors out, everything reports ready, and
+the stand you get is not the one you left.
+
+What the mismatch costs, per anchor:
+
+| Anchor gone | Registry that survives | What breaks |
+|---|---|---|
+| `secret/keeper[/<slug>]/jwt-signing-key` | `operators` | Every JWT ever issued to an Archon fails signature verification — 401, including `/tmp/keeper-dev/archon-alice.jwt`. The rights in the registry are untouched; only the signature no longer matches. |
+| `pki/` root | `soul_seeds` | The seeds chain to a CA that is not there: mTLS fails and every soul has to be re-onboarded. |
+| `secret/keeper[/<slug>]/sigil-signing-key` | `plugin_sigils` | The grants were signed by an anchor that no longer exists, so no plugin they cover can be admitted ([ADR-026](../adr/0026-sigil.md)). |
+
+`dev-provision` checks this before it generates any anchor (step 1b) and
+refuses, printing exactly which rows are at stake and how to get out. (Step 1,
+the Postgres DSN, is written first, but it is an additive idempotent write and
+not an anchor.) Note the `pki/` row: the KV prefix is per-stand
+(`secret/keeper/<slug>/`, see Parallel stands), but `pki/` is **one engine per
+Vault** — every lightweight stand shares one Vault and therefore one root, so
+regenerating it breaks the neighbours' souls as well as yours. That is why the
+guard counts `soul_seeds` across every `keeper*` database and, when a neighbour
+is among the losers, stops offering the drop-your-own-database way out. (A
+stand with `DEDICATED_INFRA=1` *and* a slug runs its own Vault, so there the
+only neighbour is itself.)
+
+Ways out, narrowest blast radius first:
+
+```sh
+# 1. named stand only — drop this stand's database, nobody else is touched
+docker exec -i soul-stack-postgres psql -U keeper -d keeper \
+  -c 'DROP DATABASE "keeper_<slug>"' && DEV_STAND=<slug> make dev-provision
+
+# 2. accept the loss on purpose, keeping every database
+DEV_VAULT_REISSUE_ANCHORS=1 make dev-provision
+#    then re-mint a token (AID=archon-alice dev/mint-jwt.sh) and re-onboard the souls
+
+# 3. make dev-reset — WIPES THE SHARED POSTGRES VOLUME: every stand that shares
+#    it, not only yours. Check who else is running first.
+#    A stand with DEDICATED_INFRA=1 *and* DEV_STAND set owns its compose project,
+#    so there this is the cheapest option rather than the most expensive: `down -v`
+#    reaches its own volumes and nobody else's. DEDICATED_INFRA=1 with no slug
+#    still lands on the shared soul-stack-* containers. provision prints
+#    whichever is true for you.
+```
+
+A first-ever stand is not affected: with the registries empty there is nothing
+to lose, and provision generates the anchors silently as before. If Postgres is
+unreachable the guard cannot tell a first-ever stand from a wiped Vault, so it
+warns and generates rather than blocking a machine that has nothing on it yet.
+
 ## Parallel stands (`DEV_STAND`)
 
 By default, all dev targets work with **one** stand on fixed ports
