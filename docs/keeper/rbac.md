@@ -125,6 +125,20 @@ A **condition** filters one dimension; conditions combine with `AND` (both must 
 
 **`trait.<key>=v`.** Dot-notation (`trait.owner=dba`), exactly one pair per condition; `<key>` is lower-case `[a-z][a-z0-9_.-]*`, the value is the ordinary exact-value character class. Semantics = exact scalar-equality (like `coven=`, not a CEL predicate). Multiple owners are an OR of two conditions (`trait.owner=dba OR trait.owner=platform`); `trait.<key> in (a,b)` and AND-narrowing over several keys are a follow-up.
 
+**What counts as "the value" ([NIM-522](../adr/0047-purview.md#amendment-2026-08-08-nim-522--a-traitkeyvalue-scope-value-names-a-whole-value), amending ADR-047).** A scope value names a WHOLE stored value, and a trait may hold a scalar or a list of scalars:
+
+| stored `traits[key]` | reached by | not reached by |
+|---|---|---|
+| `"prod"` | `trait.env=prod` | — |
+| `1000000` | `trait.asn=1000000` | — |
+| `["prod", "stage"]` | `trait.env=prod`, `trait.env=stage` — **per element** | `trait.env="[\"prod\", \"stage\"]"` — a container's own text is not a value |
+| `[6379, 6380]` | `trait.ports=6379`, `trait.ports=6380` — numbers and bools count, same as strings | — |
+| `{"k": "gold"}` | nothing | `trait.tier=k` — a scope value is a value, never a **key** |
+
+The value is compared as **Postgres** spells the stored jsonb, not as the caller wrote it or as Go would print it: jsonb re-canonicalizes a number on the way in, so a trait written `1e6` is reached by `trait.asn=1000000`, and one written `1e-7` by `trait.ratio=0.0000001`. This is one rule with two implementations — the SQL pushdown and the in-Go predicate — and they are pinned against each other on a live database (`keeper/internal/api/trait_scope_matrix_integration_test.go`); the same rule also gates trait WRITES ([NIM-529](../adr/0047-purview.md), `soul.traits-assign` gate (b) below), so a pair an operator may attach is exactly a pair their scope reaches.
+
+⚠ The last two rows are a **narrowing**: before NIM-522, `trait.tier=k` reached `{"tier": {"k": "gold"}}` through the object's keys, and a container's own text was addressable. A role relying on either loses that access — audit roles whose scope names a key of an object-valued trait. The numeric/bool list row is the matching **widening**: those elements were unreachable before.
+
 The dimension applies to **both** resources, and each reads its **own** column ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)): an incarnation matches on `incarnation.traits[key]`, a host matches on `souls.traits[key]`. The same holds for `coven=` — an incarnation matches on `incarnation.covens`, a host on `souls.coven`. **Neither reaches the other.** Labelling an incarnation scopes the incarnation object (its `list`/`get`/`run`) and nothing on its hosts; labelling a host scopes exactly that VM. To scope a whole instance *including* its hosts you need both, or the `incarnation=<name>` dimension, which is a membership question answered from `incarnation_membership`. Both resolve inside the SQL pushdown, so pagination and totals stay exact.
 
 ### Least-privilege subset over a boolean scope (NIM-128)

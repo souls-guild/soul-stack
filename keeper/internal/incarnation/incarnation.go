@@ -116,6 +116,21 @@ type Incarnation struct {
 	// '{}').
 	Traits map[string]any `json:"traits"`
 
+	// TraitsRaw — the SAME column, unparsed: the exact jsonb bytes Postgres
+	// returned. Scope evaluation reads THIS, never [Incarnation.Traits] — see
+	// [rbac.TraitValues] for why (NIM-521). Decoding through `map[string]any`
+	// destroys the number token the SQL half of the same boundary compares
+	// against, and no float formatting brings it back, so the two halves of
+	// the incarnation scope answered differently for the same row.
+	//
+	// Set ONLY where an Incarnation is assembled from a query. A value built
+	// in Go (the create path) leaves it nil, and a trait condition then fails
+	// closed — correct: such a value has no traits in the registry yet.
+	//
+	// Not serialized: this is the display field's own bytes, and an API
+	// response carries `traits` once, decoded.
+	TraitsRaw []byte `json:"-"`
+
 	// ApplyingApplyID — apply_id of the currently running run (ADR-068 §A1,
 	// column applying_apply_id, ADR-027 m-S1). Non-null exactly while a run is
 	// in progress (written in lockRun, cleared on terminal); nil = no run in

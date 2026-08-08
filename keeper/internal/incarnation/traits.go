@@ -100,14 +100,22 @@ FOR UPDATE
 		return nil, fmt.Errorf("incarnation: marshal traits: %w", err)
 	}
 
+	// `RETURNING traits` and not the bytes we just sent: [Incarnation.TraitsRaw]
+	// is defined as the column exactly as POSTGRES serializes it, and jsonb
+	// re-canonicalizes on the way in (`1e6` reads back `1000000`). Assigning
+	// traitsBytes here would leave the struct holding Go's spelling under a field
+	// documented to hold Postgres', which is the NIM-521 divergence reintroduced
+	// one layer up. `inc` was scanned BEFORE the update, so leaving TraitsRaw
+	// untouched is not an option either — it would keep the OLD labels beside the
+	// new map.
 	const updateSQL = `
 UPDATE incarnation
 SET traits     = $2,
     updated_at = NOW()
 WHERE name = $1
-RETURNING updated_at
+RETURNING updated_at, traits
 `
-	if err := tx.QueryRow(ctx, updateSQL, name, traitsBytes).Scan(&inc.UpdatedAt); err != nil {
+	if err := tx.QueryRow(ctx, updateSQL, name, traitsBytes).Scan(&inc.UpdatedAt, &inc.TraitsRaw); err != nil {
 		return nil, fmt.Errorf("incarnation: update traits: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -53,8 +53,62 @@ func TestPurviewSQL_TraitIsOwnColumnOnly(t *testing.T) {
 	if strings.Contains(sql, "i.traits") || strings.Contains(sql, "incarnation_membership") {
 		t.Fatalf("trait scope reaches the host's incarnations — `owner=dba` on an incarnation would expose hosts nobody labelled:\n%s", sql)
 	}
-	if strings.Contains(sql, "EXISTS") {
-		t.Fatalf("trait predicate carries a correlated subquery; it must be a plain column comparison:\n%s", sql)
+	// The predicate DOES carry a subquery since NIM-522 (walking a list value's
+	// elements needs `jsonb_array_elements`), so "no subquery" is no longer the
+	// invariant — "no TABLE" is. Every FROM has to unnest the row's own column;
+	// a FROM naming anything else is a source of rows the operator never labelled.
+	//
+	// The count is asserted first and exactly. A loop over what fromSources finds
+	// says nothing when it finds nothing: rename the CTE, reshape the predicate,
+	// or break the parser, and every check below passes over an empty list.
+	srcs := fromSources(sql)
+	if len(srcs) != 1 {
+		t.Fatalf("found %d FROM sources in the trait predicate, want exactly 1 (the jsonb_array_elements "+
+			"over the row's own column). Zero means the checks below range over nothing and this guard "+
+			"gates nothing; more than one is a second source of rows.\nsources: %q\n%s", len(srcs), srcs, sql)
+	}
+	for _, src := range srcs {
+		if !strings.HasPrefix(src, "jsonb_array_elements(") {
+			t.Fatalf("trait predicate reads from %q — it must only unnest the row's own traits column:\n%s", src, sql)
+		}
+		if !strings.Contains(src, soulCols.Traits) {
+			t.Fatalf("trait predicate unnests %q rather than %s — that is not the row's own column:\n%s", src, soulCols.Traits, sql)
+		}
+	}
+}
+
+// fromSources returns what each FROM in sql reads, so a guard can state "no
+// table" instead of the weaker "no subquery". Nested parens are balanced so a
+// `jsonb_array_elements(CASE … END)` comes back whole rather than clipped at
+// its first `)`.
+func fromSources(sql string) []string {
+	var out []string
+	for rest := sql; ; {
+		i := strings.Index(rest, "FROM ")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len("FROM "):]
+		depth, end := 0, len(rest)
+		for j := 0; j < len(rest); j++ {
+			switch rest[j] {
+			case '(':
+				depth++
+			case ')':
+				if depth--; depth < 0 {
+					end = j
+				}
+			case ' ':
+				if depth == 0 && j > 0 {
+					end = j
+				}
+			}
+			if end != len(rest) {
+				break
+			}
+		}
+		out = append(out, rest[:end])
+		rest = rest[end:]
 	}
 }
 

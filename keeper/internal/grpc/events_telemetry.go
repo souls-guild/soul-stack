@@ -194,6 +194,7 @@ func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*i
 			if err := json.Unmarshal(traitsBytes, &inc.Traits); err != nil {
 				return nil, fmt.Errorf("telemetry: unmarshal incarnation traits %q: %w", inc.Name, err)
 			}
+			inc.TraitsRaw = traitsBytes // scope reads the raw jsonb, never the map (NIM-521)
 		}
 		incCopy := inc
 		matches = append(matches, &incCopy)

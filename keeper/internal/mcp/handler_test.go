@@ -178,7 +178,20 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 	// mutations): returns a fresh updated_at on Scan(*time.Time). Checked BEFORE
 	// the general `FROM incarnation` match (that predicate is also in this
 	// UPDATE's WHERE).
+	//
+	// UpdateTraits returns `updated_at, traits` — TWO destinations. Count them off
+	// incarnation.UpdateTraits' RETURNING list, not from memory: a staticRow one
+	// value short panics on an index rather than failing an assertion. The jsonb
+	// handed back is the one we were GIVEN, not the column's real content —
+	// Postgres re-canonicalizes on the way in and no fake re-implements jsonb, so
+	// [Incarnation.TraitsRaw]'s spelling is pinned by
+	// TestIntegration_UpdateTraits_ReturnsPostgresSpelling against a real
+	// database, never here.
 	if contains(sql, "UPDATE incarnation") && contains(sql, "RETURNING updated_at") {
+		if contains(sql, "SET traits") && len(args) >= 2 {
+			raw, _ := args[1].([]byte)
+			return staticRow{values: []any{time.Now().UTC(), raw}}
+		}
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
 	// FOR UPDATE-select on incarnation. FULL row (UpdateTraits:

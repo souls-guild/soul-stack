@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"sort"
@@ -26,13 +25,19 @@ import (
 // soul.BulkScope from PurviewResolver) — no business-logic duplication, no
 // detour through the HTTP handler.
 //
-// SECURITY. Least-privilege is held by a SINGLE gate (a) — target hosts ⊆
-// operator's coven-scope (predicate `coven && ARRAY[scope]` in
-// BulkAssignTraits/CountBulkMatched). A trait KEY is NOT an RBAC scope
-// dimension (unlike a Coven label), so there's no gate (b) on keys;
-// permission check is bare `RBAC.Check(soul, traits-assign, nil)`
-// (equivalent to REST middleware NoSelector). Without it, MCP would bypass
-// REST's protection (MCP has no chi middleware).
+// SECURITY — two gates, the same pair as REST:
+//   - gate (a): target hosts ⊆ operator's coven-scope (predicate
+//     `coven && ARRAY[scope]` in BulkAssignTraits/CountBulkMatched);
+//   - gate (b): every pair being written ⊆ the operator's own trait-scope. A
+//     trait pair IS a scope dimension since NIM-128, and a host-attached trait
+//     grants visibility permanently (NIM-281), so without it any holder of this
+//     permission could hand a host to a foreign role by stamping its pair.
+//     merge/replace only — clearing a label off a host already inside gate (a)
+//     grants nothing.
+//
+// The permission check itself is a bare `RBAC.Check(soul, traits-assign, nil)`
+// existence-gate (equivalent to REST middleware NoSelector). Without it, MCP
+// would bypass REST's protection (MCP has no chi middleware).
 
 type soulTraitsAssignArgs struct {
 	Mode     string                   `json:"mode,omitempty"`
@@ -153,10 +158,10 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	// permission in ANY scope dimension". A selector-scoped RBAC.Check(nil)
 	// doesn't work here — it would reject a coven-scoped operator (their
 	// `coven=dev` permission wouldn't match a request without coven context)
-	// even though they ARE allowed to change traits on dev hosts. A trait key
-	// isn't a scope dimension → no gate (b); least-privilege is held by the
-	// SINGLE gate (a) below (BulkScope narrows the target hosts). pv is the
-	// source of that scope.
+	// even though they ARE allowed to change traits on dev hosts. Least-privilege
+	// is held by the two gates below: (a) BulkScope narrows the target hosts, and
+	// (b) the trait dimension bounds the pairs being attached. pv is the source of
+	// the scope gate (a) uses.
 	pv := h.deps.PurviewResolver.ResolvePurview(claims.Subject, "soul", "traits-assign")
 	if !holdsTraitsAssign(pv) {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -178,9 +183,10 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	// Gate (b), NIM-281 (parity with REST): the attached pairs must lie inside
-	// the operator's own trait-scope. Checked before any DB access, including
-	// dry_run — otherwise dry_run would report a `matched` for a write that
-	// cannot happen.
+	// the operator's own trait-scope. Checked before any WRITE, including on the
+	// dry_run path — otherwise dry_run would report a `matched` for a write that
+	// cannot happen. Canonicalizing the payload reads no row and opens no
+	// transaction, so the dry-run promise stands.
 	if mode == soul.TraitMerge || mode == soul.TraitReplace {
 		tscoper, tok := h.deps.PurviewResolver.(traitScoper)
 		if !tok {
@@ -188,7 +194,12 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 			return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
 		}
 		if allowed, unres := tscoper.TraitScope(claims.Subject, "soul", "traits-assign"); !unres {
-			if key, val, ok := firstTraitPairOutOfScope(a.Traits, allowed); !ok {
+			raw, err := soul.CanonicalTraitPayload(ctx, h.deps.SoulDB, a.Traits)
+			if err != nil {
+				h.deps.Logger.Error("mcp: soul.traits-assign canonicalize trait payload", "error", err)
+				return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
+			}
+			if key, val, ok := firstTraitPairOutOfScope(rbac.TraitPairTexts(raw), allowed); !ok {
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 					"trait "+key+"="+val+" is outside operator trait-scope")
 			}
@@ -266,38 +277,32 @@ type traitScoper interface {
 	TraitScope(aid, resource, action string) (map[string][]string, bool)
 }
 
-// firstTraitPairOutOfScope reports the first (key, value) of `traits` that the
+// firstTraitPairOutOfScope reports the first (key, value) of `pairs` that the
 // operator may not attach, scanning keys in sorted order so the rejection is
-// stable. ok=true means every pair is inside scope. A list value is checked
-// element-wise — one out-of-scope element grants as much as a whole key would.
-func firstTraitPairOutOfScope(traits map[string]any, allowed map[string][]string) (key, value string, ok bool) {
-	keys := make([]string, 0, len(traits))
-	for k := range traits {
+// stable. ok=true means every pair is inside scope.
+//
+// pairs comes from [rbac.TraitPairTexts] over the payload as Postgres will store
+// it — a scalar contributes one pair, a list one per element (one out-of-scope
+// element grants as much as a whole key would). It is NOT rendered from the
+// decoded map: the scope dimension is answered by `->>` over the stored jsonb,
+// and Go printed `1e+06` for a plain `1000000`, refusing an operator the pair it
+// plainly holds (NIM-529). REST ([handlers.SoulHandler] checkTraitPairsInScope)
+// projects through the SAME two functions — one fixed copy and one forgotten copy
+// is exactly the defect that ticket names.
+func firstTraitPairOutOfScope(pairs, allowed map[string][]string) (key, value string, ok bool) {
+	keys := make([]string, 0, len(pairs))
+	for k := range pairs {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
 	for _, k := range keys {
-		for _, v := range traitValueTexts(traits[k]) {
+		for _, v := range pairs[k] {
 			if !slices.Contains(allowed[k], v) {
 				return k, v, false
 			}
 		}
 	}
 	return "", "", true
-}
-
-// traitValueTexts renders a trait value as the text forms gate (b) compares —
-// one for a scalar, one per element for a list — matching PG's `->>`.
-func traitValueTexts(v any) []string {
-	list, isList := v.([]any)
-	if !isList {
-		return []string{fmt.Sprintf("%v", v)}
-	}
-	out := make([]string, 0, len(list))
-	for _, e := range list {
-		out = append(out, fmt.Sprintf("%v", e))
-	}
-	return out
 }
 
 // buildTraitsAssignOutput builds the output, matching REST.

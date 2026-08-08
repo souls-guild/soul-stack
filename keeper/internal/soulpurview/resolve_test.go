@@ -124,29 +124,33 @@ func TestInScope_Trait(t *testing.T) {
 }
 
 // TestTraitsFromJSON verifies the raw-jsonb → ScopeInput projection against the
-// forms the SQL pushdown reaches: a scalar becomes a one-element slice, a
-// container contributes its own text plus what `?|` finds inside it, and a
+// forms the SQL pushdown reaches: a scope value names a WHOLE value (NIM-522),
+// so a scalar becomes a one-element slice, a list contributes each of its SCALAR
+// elements and NOT its own text, an object contributes nothing at all, and a
 // number keeps the TOKEN Postgres stores rather than a re-formatted float —
 // that last one is NIM-401, where `1000000` reached the souls list as `1e+06`
 // in Go and the roster hid a host the list had just shown.
 //
 // The authority for these expectations is Postgres itself; they are asserted
-// against a live one by TestIntegration_RosterAgreesWithSoulsList.
+// against a live one by TestIntegration_RosterAgreesWithSoulsList and by the
+// NIM-522 matrix in TestIntegration_TraitScopeValueMatrix.
 func TestTraitsFromJSON(t *testing.T) {
 	got := TraitsFromJSON([]byte(
 		`{"tier": "gold", "env": ["prod", "stage"], "shard": 7, "active": true,
 		  "asn": 1000000, "ratio": 0.0000001, "wide": 12345678901234567890,
-		  "ports": [6379, 6380], "nested": {"k": "v"}, "gone": null}`))
+		  "ports": [6379, 6380], "nested": {"k": "v"}, "gone": null,
+		  "mixed": ["a", 42, true, null, {"k": "v"}, ["x"]]}`))
 	want := map[string][]string{
 		"tier":   {"gold"},
-		"env":    {`["prod", "stage"]`, "prod", "stage"},
+		"env":    {"prod", "stage"}, // NOT `["prod", "stage"]` — that text is the container
 		"shard":  {"7"},
 		"active": {"true"},
 		"asn":    {"1000000"},   // NOT "1e+06"
 		"ratio":  {"0.0000001"}, // NOT "1e-07"
 		"wide":   {"12345678901234567890"},
-		"ports":  {"[6379, 6380]"},    // `?|` skips non-string elements
-		"nested": {`{"k": "v"}`, "k"}, // `?|` over an object matches KEYS
+		"ports":  {"6379", "6380"},    // a numeric element IS a value (NIM-522)
+		"mixed":  {"a", "42", "true"}, // scalars only; null and both containers are not values
+		// "nested" is absent: an object's KEYS are not values, and neither is its own text.
 		// "gone" is absent: `->>` over a JSON null is SQL NULL, equal to nothing.
 	}
 	if !reflect.DeepEqual(got, want) {

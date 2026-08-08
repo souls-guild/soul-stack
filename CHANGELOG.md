@@ -251,6 +251,53 @@ order to act in.
   other: `coven=` is a **label** test, `incarnation=` is a **membership** test and
   keeps reading `incarnation_membership`.
 
+- **A `trait.<key>=<value>` RBAC scope value now names a WHOLE value, and every
+  reader agrees on which texts that is** ([ADR-047 amendment
+  2026-08-08](docs/adr/0047-purview.md), NIM-522 / NIM-521 / NIM-529). The trait
+  arm of the scope predicate used to be two operators OR'd together, and the
+  second of them — jsonb's `?|` — is not a value test at all: it matches an
+  object's **keys** and an array's **string** elements. So `trait.tier=k` reached
+  a host whose `tier` was `{"k": "gold"}` (naming a key granted the host),
+  `trait.ports=6379` did **not** reach `{"ports": [6379, 6380]}` (a number in a
+  list was addressable by nothing), and `trait.ports="[6379, 6380]"` **did** —
+  through the container's own rendered text, which was that host's only address.
+
+  The rule is now one rule: a stored **string / number / bool** is reached by its
+  own text, an **array** by each of its **scalar** elements whatever their JSON
+  type, and an **object**, a **JSON null** and any **container's own text** by
+  nothing.
+
+  **What to re-read before upgrading.** Both directions take effect with no role
+  edited:
+
+  - **Narrowing (the security-relevant one).** A role scoped on a key whose value
+    is an object loses those hosts, and so does one written against a container's
+    text (`trait.ports="[6379, 6380]"`). Grep your roles for a scope value
+    containing `[`, `{` or a `:`-bearing word — those are the ones that were
+    addressing a container or a key.
+  - **Widening.** A role scoped `trait.<k>=<v>` now also reaches hosts whose `<k>`
+    is a **list containing `<v>` as a number or a bool**. It always reached a list
+    containing it as a string.
+
+  **The single-row read stops disagreeing with the list.** The in-Go half of the
+  same boundary projected traits from a decoded map and stringified with `fmt`,
+  so `1000000` became `1e+06` and `0.0000001` became `1e-07` — texts no scope
+  names. A host with a numeric trait therefore appeared in `GET /v1/souls` and
+  then `404`ed on `GET /v1/souls/{sid}`. The projection now reads Postgres' raw
+  jsonb and takes the texts verbatim; an unreadable one yields no traits and the
+  condition fails closed.
+
+  **The trait WRITE gate speaks the same texts**, on both of its surfaces. `POST
+  /v1/souls/traits` and `keeper.soul.traits-assign` each carried their own
+  hand-written rendering of the pair being stamped, both claiming in a comment to
+  match Postgres' `->>` and neither doing so. Stamping `{"asn": 1000000}` was
+  refused as the pair `asn=1e+06` to an operator holding `trait.asn=1000000`.
+  The same slip also ran the other way, and that direction **leaked**: an
+  operator scoped `trait.tier=1e+06` — a text Postgres stores for nothing — was
+  admitted to stamp `{"tier": 1000000}`, a pair their scope does not cover. Both
+  surfaces now render through one function over the payload's canonical jsonb, so
+  a pair an operator may attach is exactly a pair their scope reaches.
+
 - **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
   assert_failed` synchronously**, where it previously always answered `202` and
   surfaced a failed topology assert as `error_locked` plus a manual unlock. The

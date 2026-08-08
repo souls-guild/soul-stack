@@ -103,6 +103,7 @@ func scanForUpdate(row pgx.Row) (*incarnation.Incarnation, error) {
 	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
 		return nil, fmt.Errorf("scenario: unmarshal traits: %w", err)
 	}
+	inc.TraitsRaw = traitsBytes // scope reads the raw jsonb, never the map (NIM-521)
 	if len(statusDetailsBytes) > 0 {
 		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
 			return nil, fmt.Errorf("scenario: unmarshal status_details: %w", err)

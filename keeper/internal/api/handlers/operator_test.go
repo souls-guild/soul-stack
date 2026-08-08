@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -355,6 +357,26 @@ func (r staticRow) Scan(dest ...any) error {
 			}
 		}
 	}
+	return nil
+}
+
+// jsonbEchoRow answers a `SELECT $1::jsonb` round-trip by handing the argument
+// straight back. It stands in for canonicalization WITHOUT performing it — see
+// the branch in fakeSoulPool.QueryRow for why a fake cannot.
+type jsonbEchoRow struct{ raw []byte }
+
+func (r jsonbEchoRow) Scan(dest ...any) error {
+	// Count the destinations before indexing: a caller scanning none would panic
+	// inside the fake, which reads as a crash in the code under test rather than
+	// as a fake that was handed the wrong query.
+	if len(dest) != 1 {
+		return fmt.Errorf("jsonbEchoRow.Scan: got %d destinations, want 1", len(dest))
+	}
+	b, ok := dest[0].(*[]byte)
+	if !ok {
+		return errors.New("jsonbEchoRow.Scan: destination is not *[]byte")
+	}
+	*b = r.raw
 	return nil
 }
 

@@ -159,11 +159,24 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
 	// This UPDATE-with-RETURNING arrives BEFORE the generic "WHERE name = $1" match
 	// (the same predicate is here too), so it is handled by a separate branch
-	// and returns a fresh timestamp to Scan(*time.Time). UpdateTraits (SET traits)
-	// — the same RETURNING updated_at; we record its jsonb arg $2 in updateTraitsArg.
+	// and returns a fresh timestamp to Scan(*time.Time).
+	//
+	// UpdateTraits returns `updated_at, traits` — two destinations, not one. Count
+	// them off incarnation.UpdateTraits' RETURNING list rather than from memory:
+	// a staticRow one value short does not fail an assertion, it panics on an
+	// index (this branch handed back one value and did exactly that).
+	//
+	// The second value is the jsonb we were HANDED, and that is the one thing this
+	// fake cannot get right: the column's real content is that jsonb after
+	// Postgres re-canonicalizes it (`1e-7` is stored `0.0000001`), and no fake
+	// re-implements jsonb. So this branch keeps [Incarnation.TraitsRaw] scannable
+	// and nothing here pins its SPELLING — that is
+	// TestIntegration_UpdateTraits_ReturnsPostgresSpelling's job, against a real
+	// database. Do not read a passing test in this package as coverage of NIM-521.
 	if strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at") {
 		if strings.Contains(sql, "SET traits") && len(args) >= 2 {
 			f.updateTraitsArg, _ = args[1].([]byte)
+			return staticRow{values: []any{time.Now().UTC(), f.updateTraitsArg}}
 		}
 		return staticRow{values: []any{time.Now().UTC()}}
 	}

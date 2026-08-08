@@ -9,6 +9,7 @@ package incarnation
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -266,6 +267,77 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 	}
 	if _, stillThere := got.Traits["team"]; stillThere {
 		t.Errorf("persisted traits still has team - replace must overwrite the whole map: %v", got.Traits)
+	}
+}
+
+// TestIntegration_UpdateTraits_ReturnsPostgresSpelling — the struct [UpdateTraits]
+// hands back must not carry two disagreeing renderings of the same column
+// (NIM-521).
+//
+// [Incarnation.TraitsRaw] is defined as the column exactly as POSTGRES
+// serializes it, and it is what the in-Go scope half reads
+// ([handlers.IncarnationHandler.GetInScopeFor] → [rbac.TraitValues]). `inc` here
+// is scanned BEFORE the UPDATE, so there are two ways to get this wrong and this
+// test pins both:
+//
+//   - leave TraitsRaw alone → it keeps the OLD labels beside the NEW map, and a
+//     caller that gates on the returned object grants by labels that are gone;
+//   - assign the bytes we sent (`marshalJSONB`) → the field holds GO's spelling
+//     under a name documented to hold Postgres'. That is NIM-521 itself, one
+//     layer up: `1e6` would sit there where the column reads `1000000`, and the
+//     SQL half of the same boundary would disagree with it about `trait.asn=…`.
+//
+// The number below is chosen so the two spellings cannot coincide, and most
+// numbers do NOT have that property: encoding/json and jsonb both render 1e6 as
+// `1000000`, so a test using it would pass with the field filled from either
+// source and prove nothing. `1e-7` is outside the range encoding/json writes
+// positionally — Go emits `1e-7`, Postgres stores `0.0000001` — so the TOKEN,
+// not merely the whitespace, says which side the bytes came from.
+func TestIntegration_UpdateTraits_ReturnsPostgresSpelling(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	creator := "archon-alice"
+	if err := Create(ctx, integrationPool, &Incarnation{
+		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
+		Traits: map[string]any{"team": "dba"},
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	res, err := UpdateTraits(ctx, integrationPool, "redis-prod",
+		map[string]any{"ratio": 1e-7, "env": "prod"})
+	if err != nil {
+		t.Fatalf("UpdateTraits: %v", err)
+	}
+
+	// What the column actually holds, read back independently of the struct.
+	var stored string
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT traits::text FROM incarnation WHERE name = $1`, "redis-prod").Scan(&stored); err != nil {
+		t.Fatalf("read back traits: %v", err)
+	}
+	if got := string(res.Incarnation.TraitsRaw); got != stored {
+		t.Errorf("TraitsRaw = %s, but the column holds %s.\n"+
+			"The returned struct disagrees with Postgres about the very column the in-Go "+
+			"scope half reads, so an operator gated on this object is judged by labels the "+
+			"database does not have.", got, stored)
+	}
+
+	// And the consequence, stated in the terms the boundary is about: the scope
+	// projection off TraitsRaw must name the token Postgres stores.
+	texts := rbac.TraitValues(res.Incarnation.TraitsRaw)
+	if !slices.Contains(texts["ratio"], "0.0000001") {
+		t.Errorf("rbac.TraitValues(TraitsRaw)[ratio] = %q, want it to contain %q — a role scoped "+
+			"trait.ratio=0.0000001 matches this incarnation in the LIST (Postgres renders the "+
+			"column) and must not miss it in the single read.", texts["ratio"], "0.0000001")
+	}
+	if slices.Contains(texts["ratio"], "1e-7") || slices.Contains(texts["ratio"], "1e-07") {
+		t.Errorf("rbac.TraitValues(TraitsRaw)[ratio] = %q — that is Go's spelling of the number, "+
+			"which means TraitsRaw was filled from the payload we sent rather than from the "+
+			"column. No scope value an operator can write will ever match it.", texts["ratio"])
 	}
 }
 

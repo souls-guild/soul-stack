@@ -3,14 +3,15 @@ package handlers
 // End-to-end guard tests for trait-scoped incarnation visibility at the handler
 // layer (NIM-128 unified boolean scope). The e2e through the handler — List
 // (ResolveListScopeFor → rbac.PurviewSQL → SQL) and Get (GetInScopeFor →
-// traitsToScopeInput → rbac.Purview.Match) — is exercised here.
+// rbac.TraitValues → rbac.Purview.Match) — is exercised here.
 //
 // KEY invariant (BUG#1 fix — List↔Get consistency): a scope value matches BOTH a
 // scalar label and any element of a list label, IDENTICALLY in List and Get:
 //   - scalar label {env:"prod"}      + scope trait.env=prod → VISIBLE (Get 200;
 //     List `traits ->> $k = ANY($v)`);
 //   - list label {env:[prod,stage]}  + the same scope → VISIBLE (Get 200 via
-//     traitsToScopeInput element-expansion; List `traits -> $k ?| $v`).
+//     rbac.TraitValues element-expansion; List walks the array's elements with
+//     `jsonb_array_elements`).
 // The former scalar-only List↔Get divergence and the `@>` containment form are
 // removed.
 
@@ -45,7 +46,7 @@ func incTraitRow(name string, traits map[string]any) staticRow {
 	}}
 }
 
-// --- Get trait-scoped (GetInScopeFor → traitsToScopeInput → Match) ----------
+// --- Get trait-scoped (GetInScopeFor → rbac.TraitValues → Match) ------------
 
 // TestIncarnation_Get_TraitScalarMatch_200 — scalar label {env:prod} + scope
 // trait=env:prod → 200 (visible). The base trait-scope arm on the GET path.
@@ -81,7 +82,7 @@ func TestIncarnation_Get_TraitScalarMismatch_404(t *testing.T) {
 
 // TestIncarnation_Get_TraitListLabel_200 — NIM-128: list label {env:[prod,stage]}
 // + scope trait.env=prod → 200 (visible). The unified resolver matches a scope
-// value against ANY element of a list-Trait (traitsToScopeInput expands the
+// value against ANY element of a list-Trait (rbac.TraitValues expands the
 // list), so List and Get agree — resolving the former scalar-only List↔Get
 // divergence.
 func TestIncarnation_Get_TraitListLabel_200(t *testing.T) {
@@ -165,11 +166,13 @@ func listTraitSQLHandler(traitExprs []string) (*fakeIncDB, *string, *Incarnation
 }
 
 // TestIncarnation_List_TraitScope_ReachesSQL — NIM-128 unified trait resolver: the
-// trait scope reaches SQL as `traits ->> $k = ANY($v) OR traits -> $k ?| $v` — the
-// scalar arm (`->>`) matches a scalar label, the `?|` arm matches any element of a
-// list label, so List and Get agree (BUG#1 fix — the former scalar-only List↔Get
-// divergence, and the `@>` containment form, are gone). Key is a scalar bind-arg,
-// values a []string bind-arg.
+// trait scope reaches SQL with BOTH arms — the scalar one (`->>`) matches a scalar
+// label, the list one walks the array's elements — so List and Get agree (BUG#1
+// fix — the former scalar-only List↔Get divergence, and the `@>` containment form,
+// are gone). Key is a scalar bind-arg, values a []string bind-arg.
+//
+// NIM-522 replaced the list arm: `?|` matched an object's KEYS and skipped every
+// non-string element, so it is asserted ABSENT here — its return is the defect.
 func TestIncarnation_List_TraitScope_ReachesSQL(t *testing.T) {
 	db, sql, h := listTraitSQLHandler([]string{"env:prod"})
 
@@ -180,11 +183,14 @@ func TestIncarnation_List_TraitScope_ReachesSQL(t *testing.T) {
 	if !strings.Contains(*sql, "traits ->>") {
 		t.Errorf("trait-scope did not reach SQL as `traits ->>` scalar arm:\n%s", *sql)
 	}
-	if !strings.Contains(*sql, "?|") {
-		t.Errorf("trait-scope did not reach SQL as `?|` list arm:\n%s", *sql)
+	if !strings.Contains(*sql, "jsonb_array_elements") {
+		t.Errorf("trait-scope did not reach SQL as an element-walking list arm:\n%s", *sql)
+	}
+	if strings.Contains(*sql, "?|") {
+		t.Errorf("trait-scope uses `?|` again — it reaches an object's KEYS and skips numeric elements (NIM-522):\n%s", *sql)
 	}
 	if strings.Contains(*sql, "@>") {
-		t.Errorf("trait-scope must NOT use jsonb-containment @> (NIM-128 uses ->> / ?|):\n%s", *sql)
+		t.Errorf("trait-scope must NOT use jsonb-containment @> (NIM-128 uses ->> / element walk):\n%s", *sql)
 	}
 	// scope pushdown is active (not fail-closed FALSE): SelectAll is called.
 	if !db.listCalled {

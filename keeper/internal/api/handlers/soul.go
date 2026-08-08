@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1682,7 +1681,16 @@ type SoulTraitsAssignReply struct {
 // An unrestricted operator passes. Every other case resolves against
 // [rbac.Enforcer.TraitScope]; a resolver without that projection is fail-closed
 // 500, not a silently skipped gate.
-func (h *SoulHandler) checkTraitPairsInScope(claims *jwt.Claims, traits map[string]any) error {
+//
+// The pairs are read off the payload AS POSTGRES WILL STORE IT
+// ([soul.CanonicalTraitPayload] → [rbac.TraitPairTexts]), never off the decoded
+// map: the scope dimension this gate measures against is answered by `->>` over
+// the stored jsonb, and only jsonb knows the text it will yield. Rendering the
+// value in Go printed `1e+06` for a plain `1000000` and refused an operator the
+// pair it plainly holds (NIM-529). The MCP twin
+// ([mcp.Handler] soul.traits-assign) projects through the SAME two functions —
+// one fixed copy and one forgotten copy is exactly the defect that ticket names.
+func (h *SoulHandler) checkTraitPairsInScope(ctx context.Context, claims *jwt.Claims, traits map[string]any) error {
 	scoper, ok := h.scoper.(traitScoper)
 	if !ok {
 		h.logger.Error("soul.traits-assign: resolver lacks TraitScope")
@@ -1692,8 +1700,14 @@ func (h *SoulHandler) checkTraitPairsInScope(claims *jwt.Claims, traits map[stri
 	if unrestricted {
 		return nil
 	}
-	for _, key := range sortedMapKeys(traits) {
-		for _, elem := range traitValueElements(traits[key]) {
+	raw, err := soul.CanonicalTraitPayload(ctx, h.pool, traits)
+	if err != nil {
+		h.logger.Error("soul.traits-assign: canonicalize trait payload", "error", err)
+		return &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
+	}
+	pairs := rbac.TraitPairTexts(raw)
+	for _, key := range sortedMapKeys(pairs) {
+		for _, elem := range pairs[key] {
 			if !slices.Contains(allowed[key], elem) {
 				return &problemError{problem.New(problem.TypeValidationFailed, "",
 					"trait "+key+"="+elem+" is outside operator trait-scope")}
@@ -1703,24 +1717,9 @@ func (h *SoulHandler) checkTraitPairsInScope(claims *jwt.Claims, traits map[stri
 	return nil
 }
 
-// traitValueElements renders a trait value as the text forms gate (b) checks — a
-// scalar yields one, a list one per element — matching how PG's `->>` renders
-// them in the scope predicate.
-func traitValueElements(v any) []string {
-	list, ok := v.([]any)
-	if !ok {
-		return []string{fmt.Sprintf("%v", v)}
-	}
-	out := make([]string, 0, len(list))
-	for _, e := range list {
-		out = append(out, fmt.Sprintf("%v", e))
-	}
-	return out
-}
-
 // sortedMapKeys — deterministic iteration so the rejected pair reported to the
 // operator is stable across calls.
-func sortedMapKeys(m map[string]any) []string {
+func sortedMapKeys(m map[string][]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -1827,10 +1826,12 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	scope := soul.BulkScope{Covens: covens, Unrestricted: unrestricted}
 
 	// Gate (b), NIM-281: the pairs being attached must lie inside the operator's
-	// own trait-scope. Checked BEFORE any DB access (as coven-assign does for
-	// replace), so a rejected write never reports a misleading dry-run `matched`.
+	// own trait-scope. Checked BEFORE any WRITE, including on the dry-run path, so
+	// a rejected write never reports a misleading `matched`. It is not before any
+	// DB access — canonicalizing the payload is one `SELECT $1::jsonb` — but that
+	// query reads no row and opens no transaction, so the dry-run promise stands.
 	if mode == soul.TraitMerge || mode == soul.TraitReplace {
-		if err := h.checkTraitPairsInScope(claims, rawReq.Traits); err != nil {
+		if err := h.checkTraitPairsInScope(ctx, claims, rawReq.Traits); err != nil {
 			return zero, err
 		}
 	}

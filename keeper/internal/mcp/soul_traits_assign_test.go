@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
@@ -281,6 +282,61 @@ func TestSoulTraitsAssign_ScopedOperator_ScopeApplied(t *testing.T) {
 	}
 	if !foundScope {
 		t.Errorf("scope predicate [dev] not in COUNT-args: %v", pool.gotCountArgs)
+	}
+}
+
+// TestSoulTraitsAssign_CanonicalizeFails_RefusesEverything — the MCP half of the
+// fail-closed guard on gate (b) (NIM-529). REST has the identical case in
+// handlers.TestAssignTraits_CanonicalizeFails_RefusesEverything, and it is written
+// TWICE on purpose: one fixed copy and one forgotten copy is exactly the defect
+// NIM-529 names — two surfaces rendering the same boundary, drifting apart.
+//
+// The known-bad is "log the canonicalize failure and carry on": [rbac.TraitPairTexts]
+// over a nil payload yields nil, so the loop below the gate would iterate ZERO pairs
+// and approve a payload the operator may not write. The operator here holds
+// `trait.x=y` and writes `secret=leak`, so a skipped gate shows up as a WRITE.
+func TestSoulTraitsAssign_CanonicalizeFails_RefusesEverything(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args string
+	}{
+		{"merge", `{"mode":"merge","traits":{"secret":"leak"},"selector":{"all":true}}`},
+		{"replace", `{"mode":"replace","traits":{"secret":"leak"},"selector":{"all":true}}`},
+		{"merge, dry_run", `{"mode":"merge","traits":{"secret":"leak"},"selector":{"all":true},"dry_run":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &covenBulkFakePool{
+				matched: 7, changed: 7,
+				canonicalizeErr: errors.New("read tcp 127.0.0.1:5432: connection reset by peer"),
+			}
+			h, rec := newCovenAssignHandler(t, traitsAssignDevScopedCfg(), pool)
+
+			resp := callTool(t, h, "archon-dev", "keeper.soul.traits-assign", tc.args)
+
+			if pool.canonicalizeCalls != 1 {
+				t.Fatalf("canonicalizeCalls = %d, want 1 — the gate must read the payload as PG will store it, "+
+					"and this case is about what it does when that read fails", pool.canonicalizeCalls)
+			}
+			// The consequences first, so a regression reports what it COST rather
+			// than only that a status code moved.
+			if pool.gotChunkArgs != nil {
+				t.Errorf("UPDATE ran after the gate failed to canonicalize: `secret=leak` is outside the "+
+					"operator's trait-scope and was stamped onto the hosts anyway (args=%v)", pool.gotChunkArgs)
+			}
+			if pool.gotCountArgs != nil {
+				t.Errorf("COUNT ran after the gate failed — the operator was told a `matched` for a write the "+
+					"gate never approved (args=%v)", pool.gotCountArgs)
+			}
+			if len(rec.events) != 0 {
+				t.Errorf("audit recorded %d event(s) for a refused traits-assign", len(rec.events))
+			}
+			if resp.Error == nil {
+				t.Fatalf("expected an error: a gate that cannot read the payload must refuse, not pass")
+			}
+			if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeInternalError {
+				t.Errorf("code = %q, want internal-error", data.Code)
+			}
+		})
 	}
 }
 

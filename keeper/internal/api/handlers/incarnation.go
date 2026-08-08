@@ -327,6 +327,15 @@ var statePathQueryPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // Unrestricted → true; Deny/empty Purview → false; otherwise true iff ANY scope
 // predicate matches. The incarnation carries no host dimension (host conditions
 // fail closed). nil claims / nil scoper → always false (fail-closed).
+//
+// This is the in-Go half of ONE boundary: the list ([ResolveListScopeFor]) pushes
+// the same purview into SQL over [incScopeColumns]. The two must keep answering
+// alike — a single-object gate wider than the list predicate would 200 on an
+// incarnation the list never showed, and a narrower one would 404 on one it did.
+// That is why the trait dimension is projected from the RAW jsonb bytes rather
+// than from the decoded [incarnation.Incarnation.Traits] map: see
+// [rbac.TraitValues] for the rule per JSON kind and for why a decoded map cannot
+// reproduce it (NIM-521, the incarnation twin of NIM-401).
 func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) func(*incarnation.Incarnation) bool {
 	return func(inc *incarnation.Incarnation) bool {
 		if claims == nil || h.scoper == nil {
@@ -337,38 +346,9 @@ func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) fu
 			Covens:       inc.Covens,
 			Incarnations: []string{inc.Name},
 			Services:     []string{inc.Service},
-			Traits:       traitsToScopeInput(inc.Traits),
+			Traits:       rbac.TraitValues(inc.TraitsRaw),
 		})
 	}
-}
-
-// traitsToScopeInput projects an incarnation's `traits` jsonb (map[string]any)
-// into the [rbac.ScopeInput.Traits] shape (key → string values). A scalar value
-// becomes a one-element slice; a list value contributes each element's string
-// form; nested maps are skipped (not addressable by a scalar/list scope trait).
-// fmt.Sprint gives the canonical string for string/number/bool (jsonb numbers
-// arrive as float64 / json.Number).
-func traitsToScopeInput(traits map[string]any) map[string][]string {
-	if len(traits) == 0 {
-		return nil
-	}
-	out := make(map[string][]string, len(traits))
-	for k, v := range traits {
-		switch tv := v.(type) {
-		case []any:
-			vals := make([]string, 0, len(tv))
-			for _, e := range tv {
-				vals = append(vals, fmt.Sprint(e))
-			}
-			out[k] = vals
-		case map[string]any:
-			// nested object — not addressable by a scalar/list trait scope.
-			continue
-		default:
-			out[k] = []string{fmt.Sprint(v)}
-		}
-	}
-	return out
 }
 
 // ResolveListScopeFor — request-free factory of a scope resolver for FULL-TYPED

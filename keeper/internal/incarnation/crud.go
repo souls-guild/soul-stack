@@ -225,9 +225,9 @@ type ListFilter struct {
 // (from JWT, resolved by the handler via [rbac.Purview]). Both intersect with
 // AND in WHERE (filter narrows inside scope, never the other way).
 //
-// Scope dimensions (Covens + StateNames + Traits) combine with OR ("anything
-// I can access"): an incarnation is visible if it's in a scope coven, OR its
-// state satisfies a scope state-predicate, OR its traits match a scope pair.
+// Scope dimensions (Covens + StateNames) combine with OR ("anything I can
+// access"): an incarnation is visible if it's in a scope coven, OR its state
+// satisfies a scope state-predicate.
 //
 //   - Covens — `covens[] && ARRAY[Covens]`, the operator-attached tags and
 //     nothing else. The incarnation's NAME is not among them (NIM-124,
@@ -238,27 +238,28 @@ type ListFilter struct {
 //     SQL via keeper/internal/statepredicate (no duplicate CEL engine), then
 //     pushed down as `name = ANY(StateNames)` (keeps total/offset coherent,
 //     no Go post-filter drift).
-//   - Traits — `key:value` scalar-equality pairs over `incarnation.traits`
-//     (ADR-047 amendment, ADR-060 §7 slice 1); each pair is a separate OR arm
-//     `traits->>$key = $value` (scalar-only, not jsonb `@>` containment,
-//     which would match list-Traits against a scalar RHS and diverge from the
-//     GET path).
 //
-// Fail-closed semantics (ADR-047): an empty scope (Covens, StateNames, and
-// Traits all empty) with !Unrestricted yields an always-false predicate — no
-// incarnations, not the whole list. Unrestricted=true drops the scope filter
-// entirely. The handler never passes an empty scope here (it short-circuits
-// before hitting the DB), but the defensive branch below preserves fail-closed
-// regardless.
+// There is deliberately no flat TRAIT dimension. It existed (a `traits->>$key =
+// $value` arm per pair) and was removed with NIM-522: `->>` over a list value
+// yields the list's own rendered text, so that arm matched a container's text
+// and missed every element inside it — the opposite of the rule the boolean
+// scope enforces. A second rendering of one boundary is what NIM-401/NIM-521
+// were, so trait narrowing has exactly one road: [rbac.TraitScopeSQL], reached
+// through the Scope closure below.
+//
+// Fail-closed semantics (ADR-047): an empty scope (Covens and StateNames both
+// empty) with !Unrestricted yields an always-false predicate — no incarnations,
+// not the whole list. Unrestricted=true drops the scope filter entirely. The
+// handler never passes an empty scope here (it short-circuits before hitting the
+// DB), but the defensive branch below preserves fail-closed regardless.
 type ListScope struct {
 	Covens       []string
 	StateNames   []string
-	Traits       []TraitPair
 	Unrestricted bool
 
 	// Scope — NIM-128 boolean-scope predicate renderer. When non-nil it FULLY
-	// supersedes the flat Covens/StateNames/Traits dimensions: the RBAC boundary
-	// is an arbitrary AND/OR expression (rendered by the API handler via
+	// supersedes the flat Covens/StateNames dimensions: the RBAC boundary is an
+	// arbitrary AND/OR expression (rendered by the API handler via
 	// rbac.PurviewSQL) that a flat value-list can't express. Carried as a
 	// placeholder-relative closure ([ScopeSQLFunc]) so this package stays free of
 	// an rbac import. Unrestricted still short-circuits before this is consulted;
@@ -276,17 +277,6 @@ type ListScope struct {
 // wrapping [rbac.PurviewSQL], keeping the incarnation package independent of the
 // rbac package.
 type ScopeSQLFunc func(startIdx int) (sql string, args []any, next int)
-
-// TraitPair — one `key:value` scope trait pair (ADR-047 amendment, ADR-060
-// §7 slice 1). Scalar-only: matches `traits->>'<key>' = '<value>'`, aligned
-// with the GET path [traitScalarEquals]. For a list-Trait, `->>` returns the
-// array's text form ≠ the scalar value, so lists never match — unlike `@>`
-// containment, which would match an array against a scalar RHS. Key/value
-// are separate bind params, never concatenated into SQL text.
-type TraitPair struct {
-	Key   string
-	Value string
-}
 
 // Create inserts a new incarnation. status is set by the caller (handler
 // passes [StatusReady]; the scenario runner sets applying while a run is in
@@ -444,9 +434,12 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 	}
 	// traits jsonb (ADR-060 amend, R1): `{}` (NOT NULL DEFAULT) → empty map, not
 	// nil (read/projection path doesn't distinguish "no column" / "no tags").
+	// The raw bytes are kept alongside for scope evaluation (NIM-521) — the
+	// decoded map has already lost the number token the SQL half compares.
 	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: unmarshal traits: %w", err)
 	}
+	inc.TraitsRaw = traitsBytes
 	if len(statusDetailsBytes) > 0 {
 		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
 			return nil, fmt.Errorf("incarnation: unmarshal status_details: %w", err)
@@ -589,11 +582,10 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 
 // appendScopeClause adds RBAC scope predicate (`GET /v1/incarnations`,
 // ADR-047 S3b-3 + trait amendment) as single AND-clause to user filter.
-// Within scope, dimensions (covens ∪ state-names ∪ traits) combined
-// with OR — single parenthesized block to avoid leaking through neighboring
-// filter AND-clauses:
+// Within scope, dimensions (covens ∪ state-names) combined with OR — single
+// parenthesized block to avoid leaking through neighboring filter AND-clauses:
 //
-//		(covens && ARRAY[$c] OR name = ANY($s) OR traits->>$tk = $tv)
+//		(covens && ARRAY[$c] OR name = ANY($s))
 //
 //	  - covens: scope-coven matches the incarnation by covens[]-intersection
 //	    ONLY. Name equality is deliberately absent (NIM-124/NIM-281): a name is
@@ -601,14 +593,12 @@ func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
 //	    asks for it.
 //	  - state-names: pre-resolved names of incarnations whose state satisfied
 //	    state-CEL scope (StateExprs) — come as set, matched via `name = ANY`.
-//	  - traits: each scope pair (`key:value`, ADR-060 §7 slice 1) — separate
-//	    arm `traits->>$tk = $tv` (scalar-equality, scalar-only — NOT containment
-//	    `@>`, which with scalar RHS would match list-Trait, diverging from GET path
-//	    [traitScalarEquals]); key/value go as separate bind params,
-//	    not concatenated to SQL text.
+//
+// There is no trait arm here — see [ListScope]. Trait narrowing renders through
+// [rbac.TraitScopeSQL] and reaches this function only inside the Scope closure.
 //
 // Unrestricted — no restriction (scope removed). fail-closed: empty scope (no
-// coven, state-names, or traits) with !Unrestricted gives `FALSE` — zero
+// coven and no state-names) with !Unrestricted gives `FALSE` — zero
 // incarnations (not full list). Symmetric with [soul.appendScopeClause].
 func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string, []any) {
 	cond, args := ScopeCondition(args, scope)
@@ -618,8 +608,10 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 	return append(clauses, cond), args
 }
 
-// ScopeCondition — reusable SQL form of scope predicate [ListScope] over
-// incarnation table columns (covens/name/traits). Exported for embedding
+// ScopeCondition — reusable SQL form of scope predicate [ListScope]. The columns
+// it reads are whatever [ListScope.Scope] renders (rbac.PurviewSQL over the
+// incarnation row: covens, name, service, traits) plus, for the legacy state-CEL
+// adapter only, the flat Covens/StateNames fields. Exported for embedding
 // in other queries as subquery `... IN (SELECT name FROM incarnation
 // WHERE <cond>)` (global read-view of runs, applyrun) — single source of
 // scope semantics with [SelectAll]. Placeholder numbering continues from
@@ -648,22 +640,6 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 		args = append(args, scope.StateNames)
 		dims = append(dims, fmt.Sprintf("name = ANY($%d)", len(args)))
 	}
-	for _, tp := range scope.Traits {
-		// scalar-equality arm (slice 1 — scalar-only): `traits->>$key = $value`.
-		// NOT jsonb-containment `@>`: PG containment with scalar RHS MATCHES arrays
-		// (`{"env":["prod","stage"]} @> {"env":"prod"}` = TRUE — array-contains-
-		// primitive, PG §8.14.3), so list-Trait entered List but GET path
-		// ([traitScalarEquals]) doesn't see it (list → false) — List↔Get out of sync.
-		// `traits->>'<key>'` for array gives its TEXT (`["prod", "stage"]`) ≠
-		// '<value>' → list does NOT match, same as traitScalarEquals (both scalar-only,
-		// semantics aligned). Key and value are separate bind params (not
-		// concatenated to SQL text, no injection via key possible).
-		args = append(args, tp.Key)
-		keyPos := len(args)
-		args = append(args, tp.Value)
-		dims = append(dims, fmt.Sprintf("traits->>$%d = $%d", keyPos, len(args)))
-	}
-
 	if len(dims) == 0 {
 		// fail-closed: scope introduced (not Unrestricted) but empty by dimensions —
 		// zero visible incarnations. Deterministic FALSE, not "full list".

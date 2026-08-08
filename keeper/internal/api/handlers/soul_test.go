@@ -84,6 +84,14 @@ type fakeSoulPool struct {
 	updateSshTargetCalls    int
 	updateSshTargetNotFound bool
 	lastUpdateSshTargetArgs []any
+
+	// canonicalizeErr — error from the `SELECT $1::jsonb` round-trip of
+	// soul.CanonicalTraitPayload (a dropped connection, a statement timeout).
+	// Set it to drive the trait write gate's fail-closed path.
+	canonicalizeErr error
+	// canonicalizeCalls — how many times that round-trip was attempted, so a test
+	// can tell "the gate ran and refused" from "the gate never ran".
+	canonicalizeCalls int
 }
 
 // bulkChunkStep — one step of a multi-chunk plan: what the CTE chunk
@@ -194,6 +202,29 @@ func (f *fakeSoulPool) Exec(_ context.Context, sql string, args ...any) (pgconn.
 
 func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
+	// Matched EXACTLY, not by Contains: the bulk chunk CTE below also carries a
+	// `$N::jsonb` cast, and when the selector binds no argument ahead of it that
+	// N is 1 — a loose matcher would swallow the write itself.
+	case strings.TrimSpace(sql) == "SELECT $1::jsonb":
+		// soul.CanonicalTraitPayload: the write gate asks Postgres how it will
+		// spell the payload. A fake CANNOT answer that — jsonb re-canonicalizes
+		// numbers (`1e-7` → `0.0000001`) and only the server knows the result —
+		// so this echoes the argument back unchanged. That is enough for the
+		// tests here, which use payloads Go and jsonb already spell alike, and
+		// keeps them about the gate's DECISION rather than about number
+		// formatting. The canonicalization itself is the subject of
+		// soul_traits_scope_agreement_integration_test.go, against live PG.
+		f.canonicalizeCalls++
+		if f.canonicalizeErr != nil {
+			return errRow{err: f.canonicalizeErr}
+		}
+		if len(args) > 0 {
+			if b, ok := args[0].([]byte); ok {
+				return jsonbEchoRow{raw: b}
+			}
+		}
+		return errRow{err: errors.New("fakeSoulPool.QueryRow: $1::jsonb without a []byte argument")}
+
 	case strings.Contains(sql, "WITH chunk AS"):
 		// Bulk chunk CTE: returns (scanned, changed, max_sid). One chunk
 		// smaller than bulkChunkSize → BulkAssignCoven finishes the iteration. This branch

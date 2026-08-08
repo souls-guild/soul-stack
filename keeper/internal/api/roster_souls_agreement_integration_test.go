@@ -81,8 +81,16 @@ func agreementFleet() []agreementHost {
 		//   scale-1 — `1000000.0`: jsonb keeps the scale, so it must NOT match;
 		//   wide-1 / frac-1 — outside float64 entirely, which is what forbids
 		//            re-deriving the text from a decoded map;
-		//   obj-1  — a nested object, reachable by its KEY through `?|`;
-		//   arr-1  — a list of numbers, reachable by NEITHER (`?|` skips them).
+		//   obj-1  — a nested object: NIM-522 made it reachable by nothing, neither
+		//            its key nor its value nor its own text;
+		//   arr-1  — a list of numbers: NIM-522 made each ELEMENT reachable, and
+		//            the array's own text reachable by nothing;
+		//   bool-1 — a bool and a list of bools, the other half of "any scalar
+		//            element" — the old `?|` arm skipped these exactly like numbers;
+		//   mix-1  — a list mixing scalars with a nested list and a nested object:
+		//            the ONE shape where the SQL has to look at each element's own
+		//            type, and where the two halves would part ways silently if the
+		//            inner `jsonb_typeof` guard and Go's traitScalarText disagreed.
 		{sid: "num-a.example.com", covens: []string{"num"}, traits: map[string]any{"asn": 1000000}, member: true},
 		{sid: "exp-1.example.com", traits: map[string]any{"asn": json.Number("1e6")}, member: true},
 		{sid: "scale-1.example.com", traits: map[string]any{"asn": json.Number("1000000.0")}, member: true},
@@ -90,6 +98,8 @@ func agreementFleet() []agreementHost {
 		{sid: "frac-1.example.com", traits: map[string]any{"ratio": json.Number("0.0000001")}, member: true},
 		{sid: "obj-1.example.com", traits: map[string]any{"tier": map[string]any{"k": "gold"}}, member: true},
 		{sid: "arr-1.example.com", traits: map[string]any{"ports": []any{6379, 6380}}, member: true},
+		{sid: "bool-1.example.com", traits: map[string]any{"enabled": true, "flags": []any{true, false}}, member: true},
+		{sid: "mix-1.example.com", traits: map[string]any{"m": []any{"a", []any{"x"}, map[string]any{"k": "v"}, 42}}, member: true},
 
 		// Non-members. db-c wears the members' labels — visibility must not imply
 		// membership; impostor wears the incarnation's NAME as its own coven —
@@ -292,6 +302,11 @@ func agreementRBAC() *rbactest.Config {
 		role("agree-trait-frac", "archon-agree-trait-frac", "trait.ratio=0.0000001"),
 		role("agree-trait-key", "archon-agree-trait-key", "trait.tier=k"),
 		role("agree-trait-arrnum", "archon-agree-trait-arrnum", "trait.ports=6379"),
+		role("agree-trait-arrtext", "archon-agree-trait-arrtext", `trait.ports="[6379, 6380]"`),
+		role("agree-trait-bool", "archon-agree-trait-bool", "trait.enabled=true"),
+		role("agree-trait-boolarr", "archon-agree-trait-boolarr", "trait.flags=false"),
+		role("agree-trait-mixhit", "archon-agree-trait-mixhit", "trait.m=a"),
+		role("agree-trait-mixnest", "archon-agree-trait-mixnest", "trait.m=x"),
 		role("agree-glob", "archon-agree-glob", "host matches *-a.example.com"),
 		role("agree-union", "archon-agree-union", "coven=dba", "host matches bare-*"),
 		role("agree-nothing", "archon-agree-nothing", "coven=no-such-label"),
@@ -320,6 +335,7 @@ func TestIntegration_RosterAgreesWithSoulsList(t *testing.T) {
 				"bare-a.example.com", "num-a.example.com",
 				"exp-1.example.com", "scale-1.example.com", "wide-1.example.com",
 				"frac-1.example.com", "obj-1.example.com", "arr-1.example.com",
+				"bool-1.example.com", "mix-1.example.com",
 				"db-c.example.com", "impostor.example.com", "dev-a.example.com",
 			},
 		},
@@ -329,11 +345,14 @@ func TestIntegration_RosterAgreesWithSoulsList(t *testing.T) {
 			listed: []string{"db-a.example.com", "db-b.example.com", "db-c.example.com", "dev-a.example.com"},
 		},
 		{
+			// obj-1 carries `tier: {"k": "gold"}` and is deliberately NOT here: a
+			// scope value names a whole value, and an object is not one — neither
+			// through the word inside it nor through its own text (NIM-522).
 			label: "trait.tier=gold", aid: "archon-agree-trait", role: "agree-trait",
 			listed: []string{"db-a.example.com", "web-a.example.com", "db-c.example.com", "dev-a.example.com"},
 		},
 		{
-			// A trait whose value is a LIST: PG matches it element-wise (`?|`).
+			// A trait whose value is a LIST: PG matches it element-wise.
 			label: "trait.zone=eu (list-valued)", aid: "archon-agree-trait-list", role: "agree-trait-list",
 			listed: []string{"web-a.example.com"},
 		},
@@ -355,17 +374,56 @@ func TestIntegration_RosterAgreesWithSoulsList(t *testing.T) {
 			listed: []string{"frac-1.example.com"},
 		},
 		{
-			// `?|` over a nested object matches its KEYS. Odd, but it is what the
-			// list grants today, so the roster must grant exactly the same.
-			label: "trait.tier=k (object key)", aid: "archon-agree-trait-key", role: "agree-trait-key",
-			listed: []string{"obj-1.example.com"},
+			// NIM-522, the new "no": an object's KEY is not a value. The old `?|`
+			// arm matched keys, so this scope handed obj-1 to anyone who could name
+			// a key of its `tier` object, whatever that key mapped to. It now
+			// reaches nothing — and the roster must not reach further.
+			label: "trait.tier=k (object key — reaches nothing)", aid: "archon-agree-trait-key", role: "agree-trait-key",
+			listed: nil,
 		},
 		{
-			// The mirror image: `?|` does NOT reach non-string list elements, so
-			// this scope reaches nothing — and the roster must not reach further.
-			// arr-1 IS a member, so a roster that answered from its own
-			// stringification would surface it here and nowhere else.
-			label: "trait.ports=6379 (number in a list — reaches nothing)", aid: "archon-agree-trait-arrnum", role: "agree-trait-arrnum",
+			// NIM-522, the new "yes": a list element is a value whatever its JSON
+			// type. `?|` skipped numbers, so an operator granted `trait.ports=6379`
+			// was denied a host that plainly carries 6379. arr-1 IS a member, so a
+			// roster answering from its own stringification would disagree here.
+			label: "trait.ports=6379 (number in a list)", aid: "archon-agree-trait-arrnum", role: "agree-trait-arrnum",
+			listed: []string{"arr-1.example.com"},
+		},
+		{
+			// NIM-522, the other new "no": `->>` over an array yields `[6379, 6380]`,
+			// and that text is a rendering of the container, not a value in it. It
+			// was the ONLY way to address arr-1 before, and the only container text
+			// a scope can even spell — a string list's `["prod", "stage"]` carries
+			// `"`, which no scope value can hold.
+			label: `trait.ports="[6379, 6380]" (array's own text — reaches nothing)`, aid: "archon-agree-trait-arrtext", role: "agree-trait-arrtext",
+			listed: nil,
+		},
+		{
+			// A bool scalar: unchanged by NIM-522, pinned because the rule now
+			// speaks about "any scalar" and a rule is only as good as its cases.
+			label: "trait.enabled=true (bool scalar)", aid: "archon-agree-trait-bool", role: "agree-trait-bool",
+			listed: []string{"bool-1.example.com"},
+		},
+		{
+			// The other half of "any scalar element": `?|` skipped bools exactly
+			// like numbers, so this was a "no" for the same wrong reason.
+			label: "trait.flags=false (bool in a list)", aid: "archon-agree-trait-boolarr", role: "agree-trait-boolarr",
+			listed: []string{"bool-1.example.com"},
+		},
+		{
+			// The nested-container guard, positive half: mix-1's list carries "a"
+			// next to a nested list and a nested object. A scalar sibling is still
+			// a value — an implementation that gave up on the whole list the moment
+			// it met a container would hide this host from one reader only.
+			label: "trait.m=a (scalar beside nested containers)", aid: "archon-agree-trait-mixhit", role: "agree-trait-mixhit",
+			listed: []string{"mix-1.example.com"},
+		},
+		{
+			// Negative half, and the reason the SQL tests each ELEMENT's type
+			// rather than only the value's: `x` lives one level deeper than a
+			// value, so it reaches nothing. This is the only case that separates
+			// "walk the elements" from "walk everything underneath".
+			label: "trait.m=x (inside a nested list — reaches nothing)", aid: "archon-agree-trait-mixnest", role: "agree-trait-mixnest",
 			listed: nil,
 		},
 		{

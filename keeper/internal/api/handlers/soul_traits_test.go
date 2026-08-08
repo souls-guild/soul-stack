@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -324,6 +325,68 @@ func TestAssignTraits_ScopedOperator_HostOutOfScope_0Changed(t *testing.T) {
 	}
 	if pool.bulkChunkCalls != 0 {
 		t.Errorf("UPDATE executed when matched=0 (out-of-scope host)")
+	}
+}
+
+// TestAssignTraits_CanonicalizeFails_RefusesEverything — fail-closed GUARD for
+// gate (b) (NIM-529). Since the gate reads its pairs off the payload AS POSTGRES
+// WILL SPELL IT, it now has a round-trip that can fail; what it does when that
+// happens is a security decision, not an error-handling detail.
+//
+// The known-bad this catches is "log it and carry on": [rbac.TraitPairTexts] over
+// a nil payload yields nil (rbac.TestTraitProjections_FailClosed pins that), so a
+// gate that continued past the failure would iterate ZERO pairs, find nothing to
+// object to, and write a payload the operator may not write. A dropped connection
+// would then be an authorization bypass.
+//
+// The operator holds `trait.x=y` and writes `secret=leak` — plainly outside its
+// scope — so a skipped gate is visible as a WRITE, not merely as a wrong status
+// code. Every mode that reaches the gate is driven, dry_run included: the gate
+// runs before the COUNT, so a dry_run that "succeeds" here already told the
+// operator a `matched` for a write that could never happen.
+func TestAssignTraits_CanonicalizeFails_RefusesEverything(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   string
+		dryRun bool
+	}{
+		{"merge", "merge", false},
+		{"replace", "replace", false},
+		{"merge, dry_run", "merge", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &fakeSoulPool{
+				listCount: 7, bulkScanned: 7, bulkChanged: 7,
+				canonicalizeErr: errors.New("read tcp 127.0.0.1:5432: connection reset by peer"),
+			}
+			h := NewSoulHandler(pool, fakeScoper{covens: []string{"dev"}, exprs: []string{"trait.x=y"}}, nil, nil)
+
+			rec := doAssignTraits(t, h, SoulTraitsAssignInput{
+				Mode:     tc.mode,
+				Traits:   map[string]any{"secret": "leak"},
+				DryRun:   tc.dryRun,
+				Selector: SoulCovenAssignSelectorInput{All: true},
+			}, false)
+
+			if pool.canonicalizeCalls != 1 {
+				t.Fatalf("canonicalizeCalls = %d, want 1 — the gate must read the payload as PG will store it, "+
+					"and this case is about what it does when that read fails", pool.canonicalizeCalls)
+			}
+			// The consequences first, so a regression reports what it COST rather
+			// than only that a status code moved.
+			if pool.bulkChunkCalls != 0 {
+				t.Errorf("UPDATE ran %d time(s) after the gate failed to canonicalize: `secret=leak` is outside "+
+					"the operator's trait-scope and was stamped onto the hosts anyway", pool.bulkChunkCalls)
+			}
+			if pool.lastListArgs != nil {
+				t.Errorf("COUNT ran after the gate failed — the operator was told a `matched` for a write the "+
+					"gate never approved (args=%v)", pool.lastListArgs)
+			}
+			if rec.Code != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500 — a gate that cannot read the payload must refuse, not pass; "+
+					"body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

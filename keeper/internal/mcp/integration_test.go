@@ -176,6 +176,12 @@ func startMCPServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shu
 		AuditWriter:   auditpg.NewWriter(integrationPool),
 		Logger:        slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		IncarnationDB: integrationPool,
+		// SoulDB / PurviewResolver — the same two the daemon passes
+		// (daemon.go: `SoulDB: d.pool`, `PurviewResolver: d.rbacHolder`).
+		// Without them the soul.* write tools answer "not configured" and the
+		// scope gates never run, so an integration test could not reach them.
+		SoulDB:          integrationPool,
+		PurviewResolver: enforcer,
 	})
 	if err != nil {
 		t.Fatalf("mcp.NewHandler: %v", err)

@@ -190,3 +190,51 @@ Both sides read `effectiveScope`, so this holds by construction; a guard test ra
 - **A read route is not affected.** Read endpoints gate on **existence** (`RequireAction` → `HoldsAction` → `ResolvePurview` non-empty, § two-layer authorization above), which a scoped role still passes; the narrowing stays in the handler. The false-deny failure mode of `Check(…, nil)` on a read path (the reason that boundary exists, NIM-144) is therefore not re-opened — but any route that gates a scoped-capable action with `Check(…, nil)` was mis-gated before this change and now shows it as a 403. The fix for such a route is `RequireAction`, never a return to a role-blind `Check`.
 
 Recorded as a **security fix in release notes**, in the same class as the S4 command-path narrowing above: for `Unrestricted` / bare-`*` operators nothing changes; for **scoped roles** the write path stops being wider than the read path.
+
+## Amendment (2026-08-08, NIM-522 — a `trait.<key>=<value>` scope value names a WHOLE value)
+
+The trait dimension rendered as `traits ->> $k = ANY($v) OR traits -> $k ?| $v`. The second arm was jsonb's key/element-existence operator, and it is not a
+value test: `?|` matches an **object's KEYS** and an **array's STRING elements**, nothing else. Three consequences, none of them anybody's decision:
+
+- `trait.tier=k` reached `{"tier": {"k": "gold"}}` — naming a KEY granted the host, whatever the key mapped to;
+- `trait.ports=6379` did **not** reach `{"ports": [6379, 6380]}` — a non-string element was addressable by nothing, so a pair the operator plainly sees on
+  the host could not be scoped on;
+- `trait.ports="[6379, 6380]"` **did** reach it, through the first arm: `->>` over a container yields the container's rendered text. That text was the only
+  way to address that host, and it is a rendering of the container rather than a value in it. Its string sibling `["prod", "stage"]` was not even expressible
+  — a scope value cannot carry `"` — so the same trait shape was addressable or not depending on the JSON type of its elements.
+
+**Decision. A scope value matches a whole value and only a whole value.** Per JSON kind, on both halves of the boundary:
+
+| stored value | reached by |
+| --- | --- |
+| string | the string |
+| number | its token exactly as jsonb stores it (`1e6` reads back `1000000`; `1000000.0` keeps its scale) |
+| bool | `true` / `false` |
+| null | nothing — `->>` is SQL NULL, which equals no value |
+| array | each of its **scalar** elements, string/number/bool alike — and **not** the array's own text |
+| object | nothing — a key is not a value, and neither is the object's own text |
+| nested container inside an array | nothing, for the same reason as a top-level object |
+
+`?|` is gone. The predicate is a scalar arm guarded by `jsonb_typeof(…) NOT IN ('object','array')`, OR an `EXISTS` over `jsonb_array_elements` comparing
+`e #>> '{}'`; the unnest is wrapped in a `CASE` yielding `'[]'::jsonb` for a non-array, because `jsonb_array_elements` **errors** on a scalar argument rather
+than returning no rows. Both live in **one** function, [`rbac.TraitScopeSQL`](../../keeper/internal/rbac/scope_sql.go), restated in Go by
+[`rbac.TraitValues`](../../keeper/internal/rbac/scope_traits.go) — the two halves of the same boundary, so they are edited together or not at all.
+
+**This narrows and widens, in that order of importance.** Narrowing: a role scoped `trait.<k>=<v>` no longer reaches a host whose `<k>` is an object with a
+`<v>` key, nor one addressed by a container's own text. Widening: it now reaches a host whose `<k>` is a list containing `<v>` as a number or a bool. Both
+are a **release note**; the narrowing is the security-relevant one and needs no role edit to take effect.
+
+**The write gate diverges deliberately, toward refusal.** [`rbac.TraitPairTexts`](../../keeper/internal/rbac/scope_traits.go) answers the mirror question —
+"which pairs is this operator stamping?" — over an AND set rather than an OR set. A value this rule does not reach therefore contributes the container's own
+text, which no scope can carry, instead of contributing nothing: skipping it would wave the write past the gate that exists because stamping a pair GRANTS
+the host. `soul.ValidTraitValue` refuses anything but a scalar or a list of scalars on every API path, so such a payload is unreachable in practice; the
+asymmetry is what happens if one ever arrives by another road.
+
+**The in-Go half reads Postgres' bytes, not a decoded map (NIM-521).** `rbac.TraitValues` takes the RAW jsonb a `SELECT traits` returns and slices the texts
+out of it verbatim. Re-deriving them from `map[string]any` cannot work: `encoding/json` turns every JSON number into a float64, so `1000000` printed as
+`1e+06` and `0.0000001` as `1e-07` — texts no scope value names — and the single-row read then hid a host the list had just shown. An empty raw yields no
+traits and the condition fails closed, exactly as the SQL branch does over a NULL column.
+
+Guarded by agreement tests on live Postgres (`keeper/internal/api/roster_souls_agreement_integration_test.go`,
+`keeper/internal/api/incarnation_scope_agreement_integration_test.go`) that compare the two halves **against each other** over this matrix, because the
+defect class here is divergence rather than either half being wrong on its own.

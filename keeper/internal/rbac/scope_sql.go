@@ -106,15 +106,50 @@ func (b *scopeSQLBuilder) cond(c *ScopeCond) string {
 		if b.cols.Traits == "" {
 			return "FALSE"
 		}
-		// Scalar value: traits->>'k' ∈ values. List value: traits->'k' ?| values.
-		// The row's OWN column and nothing else (NIM-281): a trait pair grants
-		// only where an operator attached it.
 		vals := b.ph(append([]string(nil), c.Values...))
 		key := b.ph(c.Key)
-		return fmt.Sprintf("(%s ->> %s = ANY(%s) OR %s -> %s ?| %s)",
-			b.cols.Traits, key, vals, b.cols.Traits, key, vals)
+		return TraitScopeSQL(b.cols.Traits, key, vals)
 	}
 	return "FALSE"
+}
+
+// TraitScopeSQL renders the trait-dimension predicate: the row's `traits` jsonb
+// carries, under key keyPlaceholder, one of the VALUES bound to valuesPlaceholder
+// (ONE placeholder holding a text[]).
+//
+// `trait.<key>=<value>` reaches a WHOLE value and only a whole value (NIM-522):
+//
+//	scalar    → its text, exactly as `->>` yields it
+//	array     → the text of any ONE of its SCALAR elements — string, number or
+//	            bool alike (`{"ports": [6379, 6380]}` is reached by
+//	            `trait.ports=6379`)
+//	object    → nothing. A scope value is a value, never a key, so
+//	            `{"tier": {"k": "gold"}}` is NOT reached by `trait.tier=k`.
+//	container → its OWN text is not a value either: `->>` over an array yields
+//	            `["prod", "stage"]`, and naming that string grants nothing.
+//
+// The jsonb_typeof guards are what enforce the last two lines, and the CASE is
+// what keeps `jsonb_array_elements` off a scalar (it errors there rather than
+// returning no rows). `e #>> '{}'` is the element's text in Postgres' own
+// rendering — the same text `->>` would give were the element stored alone,
+// which is what lets [TraitValues] reproduce this arm byte-for-byte in Go.
+//
+// It matches the row's OWN traits column and nothing else (NIM-281): a trait
+// pair grants only where an operator attached it, and belonging to an
+// incarnation attaches nothing.
+//
+// Exported for the same reason as [CovenScopeSQL]: this predicate is one rule,
+// and every surface that narrows by trait renders THIS function rather than its
+// own copy of the expression.
+func TraitScopeSQL(traitsCol, keyPlaceholder, valuesPlaceholder string) string {
+	elems := fmt.Sprintf("CASE WHEN jsonb_typeof(%[1]s -> %[2]s) = 'array' THEN %[1]s -> %[2]s ELSE '[]'::jsonb END",
+		traitsCol, keyPlaceholder)
+	return fmt.Sprintf(
+		"((jsonb_typeof(%[1]s -> %[2]s) NOT IN ('object', 'array') AND %[1]s ->> %[2]s = ANY(%[3]s))"+
+			" OR EXISTS (SELECT 1 FROM jsonb_array_elements(%[4]s) AS _trait_elem"+
+			" WHERE jsonb_typeof(_trait_elem) NOT IN ('object', 'array')"+
+			" AND _trait_elem #>> '{}' = ANY(%[3]s)))",
+		traitsCol, keyPlaceholder, valuesPlaceholder, elems)
 }
 
 // CovenScopeSQL renders the coven-dimension predicate: the row carries ANY of

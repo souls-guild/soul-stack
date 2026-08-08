@@ -654,50 +654,56 @@ func TestSelectAll_ScopeWithUserFilter_AND(t *testing.T) {
 	}
 }
 
-// --- SelectAll: LEGACY flat ScopeCondition trait-scope SQL form -----------
+// --- SelectAll: LEGACY flat ScopeCondition scope SQL form ------------------
 //
-// These cover the flat ListScope.{Covens,StateNames,Traits} rendering of
+// These cover the flat ListScope.{Covens,StateNames} rendering of
 // ScopeCondition. In NIM-128 the incarnation List/Get handler no longer feeds
 // this path — it renders the boolean scope via rbac.PurviewSQL (a ListScope.Scope
 // closure). The flat path is retained only for legacy consumers (applyrun
 // runs-view, state_lister), so these tests pin its exact (pre-NIM-128) SQL shape.
 
-// TestSelectAll_ScopeTrait_ScalarEquality — the flat trait arm renders as scalar
-// equality `traits->>$1 = $2` (key+value as separate bind parameters), values
-// never leaking into the SQL text. (Legacy flat path; the production handler uses
-// rbac.PurviewSQL's `traits ->> = ANY / ?|` form instead.)
-func TestSelectAll_ScopeTrait_ScalarEquality(t *testing.T) {
-	f := newCountQueryFakeDB()
-	_, _, err := SelectAll(context.Background(), f, ListFilter{},
-		ListScope{Traits: []TraitPair{{Key: "env", Value: "prod"}}}, 0, 50)
-	if err != nil {
-		t.Fatalf("SelectAll: %v", err)
-	}
-	if !strings.Contains(f.querySQL, "traits->>$1 = $2") {
-		t.Errorf("trait arm must be scalar `traits->>$1 = $2`, got: %q", f.querySQL)
-	}
-	// Regression guard: the old containment form must not return (that's exactly BUG #1).
-	if strings.Contains(f.querySQL, "@>") {
-		t.Errorf("trait arm uses containment @> (BUG #1 — matches list): %q", f.querySQL)
-	}
-	// Key and value are separate bind parameters (not concatenated into SQL text).
-	if len(f.queryArgs) < 2 || f.queryArgs[0] != "env" || f.queryArgs[1] != "prod" {
-		t.Errorf("trait bind-args = %v, want [env prod] separately", f.queryArgs)
-	}
-	if strings.Contains(f.querySQL, "env") || strings.Contains(f.querySQL, "prod") {
-		t.Errorf("key/value leaked into SQL text (must be bind params): %q", f.querySQL)
-	}
-	// Same predicate in COUNT (otherwise total would diverge from items).
-	if !strings.Contains(f.queryRowSQL, "traits->>$1 = $2") {
-		t.Errorf("trait arm is missing from COUNT: %q", f.queryRowSQL)
+// TestScopeCondition_HasNoTraitArm — the flat path renders NO trait predicate,
+// under any combination of the dimensions it still carries.
+//
+// It used to render one, `traits->>$k = $v`, and that arm was a SECOND rendering
+// of the trait boundary: `->>` over a list yields the list's own text, so it
+// matched `{"env": ["prod", "stage"]}` by the string `["prod", "stage"]` and
+// missed `prod` — the exact inverse of what rbac.TraitScopeSQL answers since
+// NIM-522. NIM-401/NIM-521 are what two renderings of one boundary cost, so the
+// arm was deleted rather than repaired, leaving trait narrowing exactly one road
+// (the Scope closure).
+//
+// This guard is what stops it growing back: adding a flat trait dimension here
+// again reintroduces the divergence silently — the SQL is valid, the list is
+// merely wrong — and nothing else in this package would notice.
+func TestScopeCondition_HasNoTraitArm(t *testing.T) {
+	for _, sc := range []struct {
+		name  string
+		scope ListScope
+	}{
+		{"covens", ListScope{Covens: []string{"prod"}}},
+		{"state names", ListScope{StateNames: []string{"redis-a"}}},
+		{"both", ListScope{Covens: []string{"prod"}, StateNames: []string{"redis-a"}}},
+		{"empty, fail-closed", ListScope{}},
+		{"unrestricted", ListScope{Unrestricted: true}},
+	} {
+		t.Run(sc.name, func(t *testing.T) {
+			cond, args := ScopeCondition(nil, sc.scope)
+			if strings.Contains(cond, "traits") {
+				t.Errorf("the flat scope renders a trait predicate again: %q (args %v)\n"+
+					"Trait narrowing has one renderer, rbac.TraitScopeSQL, reached through "+
+					"ListScope.Scope. A second one here answers differently about list values "+
+					"and nothing downstream compares the two.", cond, args)
+			}
+		})
 	}
 }
 
 // TestAppendScopeClause_Table — table-driven overview of the scope-predicate
-// shape across different ListScope dimension combos: trait-arm content,
-// parenthesized OR union, fail-closed FALSE on an empty non-Unrestricted
-// scope, no clause on Unrestricted. Checks the SQL via SelectAll (the only
-// public path to appendScopeClause), comparing f.querySQL.
+// shape across different ListScope dimension combos: parenthesized OR union,
+// fail-closed FALSE on an empty non-Unrestricted scope, no clause on
+// Unrestricted. Checks the SQL via SelectAll (the only public path to
+// appendScopeClause), comparing f.querySQL.
 func TestAppendScopeClause_Table(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -706,29 +712,16 @@ func TestAppendScopeClause_Table(t *testing.T) {
 		denySubstr []string // substrings that must be ABSENT
 	}{
 		{
-			name:       "one trait -> scalar arm without OR",
-			scope:      ListScope{Traits: []TraitPair{{Key: "owner", Value: "alice"}}},
-			wantSubstr: []string{"traits->>$1 = $2"},
-			denySubstr: []string{"@>", " OR ", "FALSE"},
+			name:       "one coven -> single arm without OR",
+			scope:      ListScope{Covens: []string{"prod"}},
+			wantSubstr: []string{"covens && $1"},
+			denySubstr: []string{"@>", "traits->>", " OR ", "FALSE", "name = ANY"},
 		},
 		{
-			name: "two traits -> OR between arms inside common parens",
-			scope: ListScope{Traits: []TraitPair{
-				{Key: "owner", Value: "alice"},
-				{Key: "team", Value: "dba"},
-			}},
-			wantSubstr: []string{"(traits->>$1 = $2 OR traits->>$3 = $4)"},
-			denySubstr: []string{"@>", "FALSE"},
-		},
-		{
-			name: "coven ∪ trait -> dimension OR, trait arm after the coven bind",
-			scope: ListScope{
-				Covens: []string{"prod"},
-				Traits: []TraitPair{{Key: "owner", Value: "alice"}},
-			},
-			// coven takes $1, trait — $2(key)/$3(value).
-			wantSubstr: []string{"(covens && $1 OR traits->>$2 = $3)"},
-			denySubstr: []string{"@>", "FALSE", "name = ANY"},
+			name:       "coven ∪ state-names -> dimension OR inside common parens",
+			scope:      ListScope{Covens: []string{"prod"}, StateNames: []string{"redis-a"}},
+			wantSubstr: []string{"(covens && $1 OR name = ANY($2))"},
+			denySubstr: []string{"@>", "traits->>", "FALSE"},
 		},
 		{
 			name:  "empty scope, not Unrestricted -> fail-closed FALSE",

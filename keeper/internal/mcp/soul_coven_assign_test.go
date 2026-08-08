@@ -32,6 +32,14 @@ type covenBulkFakePool struct {
 	countErr error // COUNT error (before any writes).
 	chunkErr error // chunk-UPDATE error.
 
+	// canonicalizeErr — error from the `SELECT $1::jsonb` round-trip of
+	// soul.CanonicalTraitPayload (a dropped connection, a statement timeout).
+	// Set it to drive the trait write gate's fail-closed path.
+	canonicalizeErr error
+	// canonicalizeCalls — how many times that round-trip was attempted, so a test
+	// can tell "the gate ran and refused" from "the gate never ran".
+	canonicalizeCalls int
+
 	// gotCountWhere / gotChunkSQL — recorded SQL for checking the scope predicate.
 	gotCountArgs []any
 	gotChunkArgs []any
@@ -43,6 +51,28 @@ func (p *covenBulkFakePool) Exec(_ context.Context, sql string, _ ...any) (pgcon
 
 func (p *covenBulkFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
+	// Matched EXACTLY, not by Contains: the bulk chunk CTE below also carries a
+	// `$N::jsonb` cast, and when the selector binds no argument ahead of it that
+	// N is 1 — a loose matcher would swallow the write itself.
+	case strings.TrimSpace(sql) == "SELECT $1::jsonb":
+		// soul.CanonicalTraitPayload: the trait write gate asks Postgres how it
+		// will spell the payload. A fake CANNOT answer that — jsonb
+		// re-canonicalizes numbers (`1e-7` → `0.0000001`) and only the server
+		// knows the result — so this echoes the argument back unchanged, which
+		// suffices for payloads Go and jsonb already spell alike. The
+		// canonicalization is covered against live PG in the api package's
+		// soul_traits_scope_agreement_integration_test.go, which drives BOTH
+		// this surface and REST.
+		p.canonicalizeCalls++
+		if p.canonicalizeErr != nil {
+			return errRow{err: p.canonicalizeErr}
+		}
+		if len(args) > 0 {
+			if b, ok := args[0].([]byte); ok {
+				return jsonbEchoRow{raw: b}
+			}
+		}
+		return errRow{err: errFakeUnexpected{sql: sql}}
 	case strings.Contains(sql, "SELECT COUNT(*) FROM souls"):
 		p.gotCountArgs = args
 		if p.countErr != nil {
@@ -101,6 +131,26 @@ type covenCountRow struct{ n int }
 
 func (r covenCountRow) Scan(dest ...any) error {
 	*dest[0].(*int) = r.n
+	return nil
+}
+
+// jsonbEchoRow answers a `SELECT $1::jsonb` round-trip by handing the argument
+// straight back — standing in for canonicalization WITHOUT performing it (see
+// the branch in covenBulkFakePool.QueryRow).
+type jsonbEchoRow struct{ raw []byte }
+
+func (r jsonbEchoRow) Scan(dest ...any) error {
+	// Count the destinations before indexing: a caller scanning none would panic
+	// inside the fake, which reads as a crash in the code under test rather than
+	// as a fake that was handed the wrong query.
+	if len(dest) != 1 {
+		return errFakeUnexpected{sql: "jsonbEchoRow.Scan: wrong destination count"}
+	}
+	b, ok := dest[0].(*[]byte)
+	if !ok {
+		return errFakeUnexpected{sql: "jsonbEchoRow.Scan: destination is not *[]byte"}
+	}
+	*b = r.raw
 	return nil
 }
 

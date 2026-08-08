@@ -12,12 +12,22 @@ import (
 // jsonb column `souls.traits` in bulk over selector ∩ scope. Symmetric to bulk
 // coven-assign ([BulkAssignCoven]/[BulkReplaceCoven] in crud.go): the same skeleton
 // (keyset chunking by PK + commit per chunk + partial semantics without rollback +
-// scope-intersection), differs only in the set expression (jsonb operators instead of
-// array_append/remove) and in that gate (b) is NOT applied to trait keys —
-// a trait key is not an RBAC scope dimension (unlike a Coven label),
-// so least-privilege rests on a single gate (a): target hosts ⊆ the operator's
-// coven-scope (the same [BulkScope]). Gate (a) must not be relaxed — without it bulk =
-// privilege escalation.
+// scope-intersection), differing only in the set expression (jsonb operators instead
+// of array_append/remove).
+//
+// BOTH gates apply here, and both must stay. Gate (a): target hosts ⊆ the operator's
+// scope (the same [BulkScope]) — without it bulk is privilege escalation. Gate (b):
+// every `<key>=<value>` pair being written is one the operator's own trait-scope
+// reaches, applied by the callers (`SoulHandler.checkTraitPairsInScope` on
+// `POST /v1/souls/traits`, its twin in `mcp.soul_traits_assign`) rather than in this
+// package, because the gate needs Postgres' canonicalization of the payload.
+//
+// A trait key is NOT merely a label: `trait.<key>=<value>` IS an RBAC scope dimension,
+// so stamping a pair is granting whoever holds that scope access to this host. That is
+// NIM-281, and the reason gate (b) exists at all; an earlier version of this comment
+// claimed the opposite and it was wrong. Removing gate (b) hands any holder of
+// `soul.traits-assign` the power to attach a foreign role's trait to any host they can
+// already see.
 
 // BulkAssignTraits applies mode=merge (set/overwrite the given keys,
 // keep the rest) or mode=remove (delete the given keys) to hosts under
@@ -223,4 +233,30 @@ func marshalTraitPayload(m map[string]any) ([]byte, error) {
 		return nil, fmt.Errorf("soul: marshal trait payload: %w", err)
 	}
 	return b, nil
+}
+
+// CanonicalTraitPayload returns the trait payload as Postgres will spell it: the
+// same bytes [marshalTraitPayload] hands to the write, put through `$1::jsonb`
+// and read back. That is the payload's serialization AFTER jsonb has had its say,
+// which is what a scope gate over the pairs being written has to reason about —
+// jsonb re-canonicalizes numbers (`1e-7` → `0.0000001`, `1e+21` →
+// `1000000000000000000000`), and the merge/replace write stores exactly this.
+//
+// Round-tripping through the server instead of reimplementing it in Go is the
+// point: the alternative is a second, hand-written copy of Postgres' numeric
+// formatting, which is the defect this exists to avoid (NIM-529). It is a
+// read-only query — it touches no row and starts no transaction — so it is safe
+// on the dry-run path, where the gate must still run.
+//
+// See [rbac.TraitPairTexts] for what is projected out of the returned bytes.
+func CanonicalTraitPayload(ctx context.Context, db ExecQueryRower, traits map[string]any) ([]byte, error) {
+	payload, err := marshalTraitPayload(traits)
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	if err := db.QueryRow(ctx, `SELECT $1::jsonb`, payload).Scan(&out); err != nil {
+		return nil, fmt.Errorf("soul: canonicalize trait payload: %w", err)
+	}
+	return out, nil
 }

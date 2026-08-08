@@ -240,11 +240,18 @@ func anyIn(want map[string]struct{}, have []string) bool {
 	return false
 }
 
-// traitHolds reports whether traits carries key=value, matching the RBAC trait
-// dimension exactly (rbac.scopeSQLBuilder.cond, dimTrait): a scalar compares by
-// its text rendering, a list matches on membership. Keeping the two in step
-// matters — an operator who writes `trait.owner=dba` in a role scope and in a
-// subject must not get two different answers about one host.
+// traitHolds reports whether traits carries key=value: a scalar compares by its
+// text rendering, a list matches on membership.
+//
+// It is the in-Go twin of [MatchSQL]'s trait arm, and the two agree with each
+// other because both take their text from [scalarText]. They do NOT agree with
+// the RBAC trait dimension, which since NIM-521 reads the text Postgres itself
+// yields (rbac.TraitValues over the raw jsonb) rather than re-rendering a decoded
+// value. The shapes where the two answers part are numeric — `1e-7`, `1000000.0`,
+// anything past float64 — so an operator who writes the SAME `trait.ratio=…` text
+// in a role scope and in a subject can get two different sets of hosts. That is a
+// wrong addressee list rather than a hole in a permission (NIM-280: a subject
+// only addresses), which is why it is not fixed here; it is NIM-586.
 func traitHolds(traits map[string]any, key, value string) bool {
 	v, ok := traits[key]
 	if !ok {
@@ -261,9 +268,16 @@ func traitHolds(traits map[string]any, key, value string) bool {
 	return scalarText(v) == value
 }
 
-// scalarText renders a JSON scalar the way Postgres `->>` does, so the Go
-// matcher and the SQL prefilter agree on one host. json.Unmarshal decodes every
-// JSON number into float64, so an integral value must not come back as "3e+00".
+// scalarText renders a JSON scalar for a subject match. json.Unmarshal decodes
+// every JSON number into float64, so an integral value must not come back as
+// "3e+00".
+//
+// This is subject's OWN rendering, used by both of its halves ([traitHolds] and
+// [collectTraitPairs], so the two agree), and it is NOT what Postgres `->>`
+// yields: the float64 round-trip loses a number's stored token, and `%f` then
+// renders `1e-7` as "0" and `1000000.0` as "1000000". Do not describe it as
+// matching `->>` — that claim was here and was false. NIM-586 replaces it with
+// the raw-jsonb rendering RBAC uses.
 func scalarText(v any) string {
 	switch t := v.(type) {
 	case string:

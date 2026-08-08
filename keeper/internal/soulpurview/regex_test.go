@@ -45,15 +45,23 @@ func TestWhereSQL_HostGlob(t *testing.T) {
 }
 
 // TestWhereSQL_Trait verifies the trait dimension pushes down over the jsonb
-// `traits` column with BOTH the scalar (`->>`) and list (`?|`) arms, so a trait
-// stored as a scalar OR a list matches.
+// `traits` column with BOTH arms of the NIM-522 rule: the scalar one (`->>`,
+// guarded so a container's own text is not a value) and the list one, which
+// walks the array's SCALAR elements. `?|` is gone — it matched an object's KEYS
+// and skipped every non-string element, which is the asymmetry NIM-522 removed.
 func TestWhereSQL_Trait(t *testing.T) {
 	sql, args, next := Resolve(rbac.Purview{
 		Exprs: []*rbac.ScopeExpr{mustExpr(t, "trait.tier=gold")},
 	}).WhereSQL(Columns, 1)
 
-	if !strings.Contains(sql, "traits ->>") || !strings.Contains(sql, "traits ->") || !strings.Contains(sql, "?|") {
-		t.Fatalf("trait WhereSQL = %q; want both the ->> (scalar) and ?| (list) arms over traits", sql)
+	if !strings.Contains(sql, "traits ->>") || !strings.Contains(sql, "jsonb_array_elements") {
+		t.Fatalf("trait WhereSQL = %q; want both the ->> (scalar) and jsonb_array_elements (list) arms over traits", sql)
+	}
+	if strings.Contains(sql, "?|") {
+		t.Fatalf("trait WhereSQL = %q; `?|` is back — it reaches an object's KEYS and skips numeric list elements (NIM-522)", sql)
+	}
+	if !strings.Contains(sql, "jsonb_typeof") {
+		t.Fatalf("trait WhereSQL = %q; want the jsonb_typeof guards — without them a container's own text is a value again", sql)
 	}
 	if len(args) != 2 || next != 3 {
 		t.Fatalf("trait args=%v next=%d; want 2 args (values,key) and next=3", args, next)
