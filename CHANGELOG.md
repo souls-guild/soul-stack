@@ -58,11 +58,14 @@ order to act in.
     enumerates actions instead of the wildcard. Narrow the grant with `host=`,
     **not** `coven=`: the route puts only `host` into the RBAC context, a missing
     dimension fails closed, so a coven-narrowed `soul.forget` denies every call
-    rather than restricting it to that coven. `soul.issue-token` and
-    `soul.ssh-target-update` — the other two routes on the same selector —
-    behave the same way; `soul.console` does **not** (its scope is applied
-    inside the handler, so a coven there narrows as written). NIM-588 tracks
-    making `coven=` narrow rather than deny on the three.
+    rather than restricting it to that coven. Both ways of attaching a coven
+    deny: the `on coven=…` suffix, and a bare `soul.forget` in a role whose
+    `default_scope` is a coven (a role's `default_scope` is inherited by its
+    bare permissions). `soul.issue-token` and `soul.ssh-target-update` — the
+    other two routes on the same selector — behave the same way; `soul.console`
+    does **not** (its scope is applied inside the handler, so a coven there
+    narrows as written). NIM-588 tracks making `coven=` narrow rather than deny
+    on the three.
   - **An unrestricted `role.*` now grants `role.create-root`** — minting a role
     that tracks no parent, i.e. privilege that outlives whatever its author
     held — **and `role.list-all`**, which returns the whole role catalog: every

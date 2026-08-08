@@ -45,8 +45,22 @@ const soulForgetGateAID = "archon-forget-gate"
 // soulForgetGateRBAC — an enforcer granting the named AID exactly `perms`.
 func soulForgetGateRBAC(t *testing.T, perms []string) RBACProvider {
 	t.Helper()
+	return soulForgetGateRBACScoped(t, perms, "")
+}
+
+// soulForgetGateRBACScoped — the same, with the role carrying a
+// `default_scope` (ADR-047 S1). Empty defaultScope = the column is NULL, i.e.
+// the key is absent from RoleScopes, which is what an unscoped role looks like
+// coming out of [rbac.LoadSnapshot].
+func soulForgetGateRBACScoped(t *testing.T, perms []string, defaultScope string) RBACProvider {
+	t.Helper()
+	scopes := map[string]string{}
+	if defaultScope != "" {
+		scopes["cluster-admin"] = defaultScope
+	}
 	enf, err := rbac.NewEnforcerFromSnapshot(&rbac.Snapshot{
 		Roles:      map[string][]string{"cluster-admin": perms},
+		RoleScopes: scopes,
 		Membership: map[string][]string{soulForgetGateAID: {"cluster-admin"}},
 		Revoked:    map[string]time.Time{},
 	})
@@ -81,12 +95,17 @@ func catalogExcept(t *testing.T, omit string) []string {
 // kind: it cannot be told apart from a handler that failed for its own reasons.
 func forgetGateRouter(t *testing.T, perms []string) (http.Handler, *fgPool, *fgTeardown, *auditCaptureWriter) {
 	t.Helper()
+	return forgetGateRouterScoped(t, perms, "")
+}
+
+func forgetGateRouterScoped(t *testing.T, perms []string, defaultScope string) (http.Handler, *fgPool, *fgTeardown, *auditCaptureWriter) {
+	t.Helper()
 	installHumaErrorOverride()
 	pool := &fgPool{status: "disconnected", seeds: 1, tokens: 0, members: 0, voices: 0}
 	td := &fgTeardown{}
 	auditCap := &auditCaptureWriter{}
 	soulH := handlers.NewSoulHandlerWithTeardown(pool, hSoulScoper{unrestricted: true}, nil, td, nil)
-	return revokedGateRouterWith(t, soulForgetGateRBAC(t, perms), soulH, auditCap), pool, td, auditCap
+	return revokedGateRouterWith(t, soulForgetGateRBACScoped(t, perms, defaultScope), soulH, auditCap), pool, td, auditCap
 }
 
 func forgetGateDelete(t *testing.T, h http.Handler, sid string) (*httptest.ResponseRecorder, bool) {
@@ -186,6 +205,40 @@ func TestSoulForgetRoute_CovenNarrowedGrantDeniesEverything(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("DELETE /v1/souls/{sid} = %d for a `soul.forget on coven=web` holder, want 403 — if this now "+
 			"admits, coven-narrowing has started to work and the docs saying it denies are stale; body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if pool.deleted() {
+		t.Error("the host was DELETED despite the 403")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a refused forget wrote %d audit event(s)", len(auditCap.Events()))
+	}
+}
+
+// TestSoulForgetRoute_CovenRoleDefaultScopeDeniesEverything covers the SECOND
+// way a coven reaches this permission, and the likelier one: the role carries
+// `default_scope = coven=<label>` (ADR-047 S1) and the permission itself is
+// bare. [rbac.NewEnforcerFromSnapshot] gives such a permission the role's
+// scope (enforcer.go, `role.DefaultScope`), so it arrives at the gate
+// coven-narrowed exactly like the `on coven=` suffix form — and fails closed
+// for exactly the same reason.
+//
+// Worth its own case because the two forms come from different places and one
+// does not imply the other: the suffix is typed by whoever writes the
+// permission string, the default_scope by whoever creates the role. An
+// operator who reads "don't narrow with coven=" as advice about the suffix
+// still walks into this by scoping the role. If NIM-588 fixes only one of the
+// two, this test says which.
+func TestSoulForgetRoute_CovenRoleDefaultScopeDeniesEverything(t *testing.T) {
+	h, pool, _, auditCap := forgetGateRouterScoped(t, []string{"soul.forget"}, "coven=web")
+
+	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+	if panicked {
+		t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for a bare `soul.forget` in a role scoped `coven=web`, want 403 — "+
+			"if this now admits, role default_scope has stopped reaching the gate, and the docs are stale; body=%s",
 			rec.Code, rec.Body.String())
 	}
 	if pool.deleted() {
