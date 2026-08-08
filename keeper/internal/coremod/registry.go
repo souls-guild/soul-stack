@@ -125,6 +125,11 @@ type Deps struct {
 	// registration (see gate in Default).
 	BootstrapTransport string
 
+	// BootstrapIssuer is the transactional ready-made-VM onboarding backend for
+	// `core.bootstrap.issued`. It needs only Keeper Postgres and is independent
+	// of CloudDriver and delivery transport. nil disables the issued state.
+	BootstrapIssuer bootstrap.Issuer
+
 	// BootstrapProviders / BootstrapHostCAs / BootstrapDial are dependencies
 	// for keeper-side core module `core.bootstrap.delivered` (ADR-063, per-VM
 	// bootstrap-token delivery over SSH).
@@ -205,16 +210,18 @@ func Default(d Deps) *Registry {
 		m.CSRGen, m.PKIMount = d.CertCSRGen, d.CertPKIMount
 		mods[cert.Name] = m
 	}
-	// `core.bootstrap.delivered` (ADR-063) registered when required dependency
-	// set present; set depends on transport (ADR-063 amendment):
+	// `core.bootstrap` is registered when either the transactional issuer is
+	// available (`issued`) or the required delivery dependency set is present.
+	// The delivery set depends on transport (ADR-063 amendment):
 	//   - teleport: BootstrapDial alone suffices (Teleport-Dialer); providers/host-CA
 	//     not needed (Authorize/Sign not called, host-verify via Teleport);
 	//   - direct (default): providers + host-CA + dialer (full SSH set).
 	// Any gap means build without push access: step with that
 	// address fails with "unknown keeper-side module" (like any unconfigured one).
 	// Symmetric to conditional `core.choir` registration.
-	if bootstrapModuleConfigured(d) {
+	if d.BootstrapIssuer != nil || bootstrapDeliveryConfigured(d) {
 		mods[bootstrap.Name] = &bootstrap.Module{
+			Issuer:    d.BootstrapIssuer,
 			Transport: d.BootstrapTransport,
 			Providers: d.BootstrapProviders,
 			HostCAs:   d.BootstrapHostCAs,
@@ -226,10 +233,12 @@ func Default(d Deps) *Registry {
 	return NewRegistry(mods)
 }
 
-// bootstrapModuleConfigured decides whether to register `core.bootstrap.delivered`
+// bootstrapDeliveryConfigured decides whether `core.bootstrap.delivered` has
+// its transport dependencies. The base module may still register with only an
+// Issuer, in which case delivered fails explicitly if invoked.
 // (ADR-063 + amendment). teleport mode requires only dialer; direct requires
 // full SSH set (providers + host-CA + dialer).
-func bootstrapModuleConfigured(d Deps) bool {
+func bootstrapDeliveryConfigured(d Deps) bool {
 	if d.BootstrapDial == nil {
 		return false
 	}

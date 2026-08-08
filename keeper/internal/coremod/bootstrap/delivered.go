@@ -1,6 +1,6 @@
-// Package bootstrap implements the keeper-side core module `core.bootstrap.delivered`
-// (ADR-063, docs/keeper/modules.md) — thin delivery of the per-VM bootstrap token
-// over SSH to freshly-created cloud-init VMs.
+// Package bootstrap implements the keeper-side core module `core.bootstrap`:
+// `issued` prepares bootstrap tokens for ready-made VMs and `delivered` sends
+// them over SSH (ADR-063, docs/keeper/modules.md).
 //
 // Closes BUG#2 cloud-provision: previously the scenario carried the placeholder
 // address `keeper.push.applied`, which keeper-dispatch rejected as an unknown
@@ -71,13 +71,16 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name is the base module name without state suffix (Registry key). Author form
-// of task address is `core.bootstrap.delivered` (base + state `delivered`); state
-// arrives in pluginv1.ApplyRequest.state and is validated in Apply.
+// Name is the base module name without state suffix (Registry key). Author forms
+// are `core.bootstrap.issued` and `core.bootstrap.delivered`; state arrives in
+// pluginv1.ApplyRequest.state and is validated in Apply.
 const Name = "core.bootstrap"
 
-// StateDelivered is the only state of this module.
-const StateDelivered = "delivered"
+// Module states.
+const (
+	StateIssued    = "issued"
+	StateDelivered = "delivered"
+)
 
 // Default values for optional parameters.
 const (
@@ -180,6 +183,11 @@ type InstallResolver interface {
 //
 // Audit is optional (nil → write skipped).
 type Module struct {
+	// Issuer atomically prepares pending agent Souls and their one-time tokens
+	// for `core.bootstrap.issued`. nil means issued-state is not configured;
+	// delivered remains usable when its own transport dependencies exist.
+	Issuer Issuer
+
 	// Transport is the delivery mode: TransportDirect (default if "") or
 	// TransportTeleport. Source: keeper.yml::push.transport (daemon wire-up),
 	// NOT scenario-param: mode is property of keeper installation, not individual task.
@@ -264,9 +272,12 @@ func (h hostInput) connectTarget(teleport bool) string {
 // name goes ONLY into audit-payload `bootstrap.delivered`. Changing required-status
 // per transport is post-MVP optional.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
+	if req.State == StateIssued {
+		return validateIssued(req), nil
+	}
 	var errs []string
 	if req.State != StateDelivered {
-		errs = append(errs, fmt.Sprintf("unknown state %q (want %q)", req.State, StateDelivered))
+		errs = append(errs, fmt.Sprintf("unknown state %q (want %q/%q)", req.State, StateIssued, StateDelivered))
 		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
 	}
 	if _, err := util.StringParam(req.Params, "ssh_provider"); err != nil {
@@ -310,10 +321,14 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 }
 
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	if req.State != StateDelivered {
+	switch req.State {
+	case StateIssued:
+		return m.applyIssued(req, stream)
+	case StateDelivered:
+		return m.applyDelivered(req, stream)
+	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
-	return m.applyDelivered(req, stream)
 }
 
 // applyDelivered implements state=delivered. See package doc-comment.
@@ -324,7 +339,7 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	hosts, err := parseHosts(req.Params)
+	hosts, err := parseHosts(req.Params, !m.teleport())
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
@@ -658,7 +673,7 @@ func (m *Module) providerNames() []string {
 // `hosts`. In practice arrives as CEL expression `${ register.<provision>.hosts }`
 // (output of core.cloud.created). Empty list / missing required fields is
 // error (nothing to deliver / nowhere / nothing to write).
-func parseHosts(params *structpb.Struct) ([]hostInput, error) {
+func parseHosts(params *structpb.Struct, requirePrimaryIP bool) ([]hostInput, error) {
 	lv, err := util.ListParam(params, "hosts")
 	if err != nil {
 		return nil, err
@@ -672,7 +687,7 @@ func parseHosts(params *structpb.Struct) ([]hostInput, error) {
 		if !ok {
 			return nil, fmt.Errorf("param %q[%d]: expected object, got %T", "hosts", i, item.Kind)
 		}
-		h, herr := hostFromStruct(sv.StructValue, i)
+		h, herr := hostFromStruct(sv.StructValue, i, requirePrimaryIP)
 		if herr != nil {
 			return nil, herr
 		}
@@ -721,14 +736,17 @@ func parseJoinWait(params *structpb.Struct) (time.Duration, bool, error) {
 	}
 }
 
-func hostFromStruct(s *structpb.Struct, idx int) (hostInput, error) {
+func hostFromStruct(s *structpb.Struct, idx int, requirePrimaryIP bool) (hostInput, error) {
 	sid, err := util.StringParam(s, "sid")
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
 	}
-	ip, err := util.StringParam(s, "primary_ip")
+	ip, err := util.OptStringParam(s, "primary_ip")
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
+	}
+	if requirePrimaryIP && ip == "" {
+		return hostInput{}, fmt.Errorf("param %q[%d].primary_ip: missing (required for direct transport)", "hosts", idx)
 	}
 	// `onboarded: true` (NIM-189) is the ONLY case where a host legitimately
 	// carries no token: it was already up when provisioning ran. Everywhere else

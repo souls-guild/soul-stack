@@ -781,6 +781,53 @@ func TestApply_Teleport_DialsBySID(t *testing.T) {
 	}
 }
 
+// TestApply_Teleport_PrimaryIPOptional is the ready-made VM addressing guard:
+// Teleport dials by SID/node-name, so requiring an IP that the caller neither
+// uses nor necessarily knows would make issued -> delivered incompatible.
+func TestApply_Teleport_PrimaryIPOptional(t *testing.T) {
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	m := newTeleportModule(dialer.dial, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "teleport",
+		"hosts": []any{map[string]any{
+			"sid":             "vm1.example.com",
+			"bootstrap_token": "tok-aaa",
+		}},
+		"start_soul": false,
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if last := stream.Last(); last == nil || last.GetFailed() {
+		t.Fatalf("Teleport delivery without primary_ip failed: %+v", last)
+	}
+	if dialer.lastCfg.Host != "vm1.example.com" {
+		t.Fatalf("Teleport host = %q, want SID", dialer.lastCfg.Host)
+	}
+}
+
+func TestApply_Direct_PrimaryIPStillRequired(t *testing.T) {
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	m := newModule(t, &fakeProvider{allow: true}, dialer.dial, &fakeAudit{})
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts": []any{map[string]any{
+			"sid":             "vm1.example.com",
+			"bootstrap_token": "tok-aaa",
+		}},
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || !last.GetFailed() || !strings.Contains(last.GetMessage(), "primary_ip") {
+		t.Fatalf("direct delivery without primary_ip = %+v, want failed", last)
+	}
+	if dialer.dialCnt != 0 {
+		t.Fatalf("direct dial attempted without primary_ip")
+	}
+}
+
 // TestApply_Direct_DialsByIPAndAuthorizes is guard #2 (transport-selection,
 // direct-half): direct mode addresses by primary_ip, calls Authorize/Sign and
 // passes host-CA. (teleport-half covered by TestApply_Teleport_DialsBySID.)

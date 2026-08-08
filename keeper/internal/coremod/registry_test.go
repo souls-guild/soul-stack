@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"testing"
+	"time"
 
 	keeperchoir "github.com/souls-guild/soul-stack/keeper/internal/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
@@ -61,6 +62,20 @@ func (noopCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*boo
 }
 func (noopCloudTokens) DeleteByTokenID(_ context.Context, _ string) error    { return nil }
 func (noopCloudTokens) ExpireActiveForSID(_ context.Context, _ string) error { return nil }
+
+type noopBootstrapIssuer struct{}
+
+func (noopBootstrapIssuer) IssueBatch(_ context.Context, sids []string) ([]coremodbootstrap.IssuedHost, error) {
+	out := make([]coremodbootstrap.IssuedHost, 0, len(sids))
+	for _, sid := range sids {
+		tok, err := bootstraptoken.Generate()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, coremodbootstrap.IssuedHost{SID: sid, Token: tok, ExpiresAt: time.Now().Add(time.Hour)})
+	}
+	return out, nil
+}
 
 type noopVault struct{}
 
@@ -181,6 +196,17 @@ func TestDefault_Bootstrap_TeleportRegistersWithEmptyHostCAs(t *testing.T) {
 	r := coremod.Default(d)
 	if _, ok := r.Lookup(coremodbootstrap.Name); !ok {
 		t.Fatalf("Lookup(%q): teleport-mode must register with empty Providers/HostCAs", coremodbootstrap.Name)
+	}
+}
+
+// TestDefault_Bootstrap_IssuedRegistersWithoutDelivery is the ready-made VM
+// guard: token issuance depends only on Postgres and must not disappear when
+// no SSH/Teleport dialer is configured.
+func TestDefault_Bootstrap_IssuedRegistersWithoutDelivery(t *testing.T) {
+	d := baseDeps()
+	d.BootstrapIssuer = noopBootstrapIssuer{}
+	if _, ok := coremod.Default(d).Lookup(coremodbootstrap.Name); !ok {
+		t.Fatalf("Lookup(%q): issued-state must register without delivery dependencies", coremodbootstrap.Name)
 	}
 }
 

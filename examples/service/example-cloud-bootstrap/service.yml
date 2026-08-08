@@ -18,6 +18,11 @@ description: >-
   plaintext metadata (security floor). See ADR-017(h) amendment and
   docs/keeper/cloud.md → "Cloud-init bootstrap (MVP)".
 
+  The sibling `existing-vm` scenario demonstrates the CloudDriver-independent
+  chain for ready-made hosts: core.bootstrap.issued →
+  core.bootstrap.delivered(install=true, Teleport) →
+  core.soul.registered(await_online).
+
 state_schema:
   type: object
   required: [provider, count]

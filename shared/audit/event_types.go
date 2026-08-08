@@ -400,6 +400,13 @@ const (
 	// of its outputs; it does not reach here).
 	EventBootstrapDelivered EventType = "bootstrap.delivered"
 
+	// EventBootstrapIssued — the keeper-side core module
+	// `core.bootstrap.issued` atomically prepared pending agent Souls and fresh
+	// one-time tokens for a batch of ready-made VMs. `source:
+	// keeper_internal`, `archon_aid: NULL`. Payload: `{action: "issued",
+	// count, created, reissued, sids}` — WITHOUT plaintext tokens or hashes.
+	EventBootstrapIssued EventType = "bootstrap.issued"
+
 	// EventApplyDispatched — Keeper sent an `ApplyRequest` to a Soul over the
 	// EventStream (M2.5, outbound direction). `source: soul_grpc`,
 	// `archon_aid: NULL`, `correlation_id = apply_id`. Payload:

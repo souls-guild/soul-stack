@@ -45,10 +45,11 @@ import (
 // Listed here only so test messages can tag such modules, not to skip them: the
 // check is identical for both sides.
 var keeperSideModules = map[string]bool{
-	"core.soul":  true,
-	"core.cloud": true,
-	"core.vault": true,
-	"core.choir": true,
+	"core.soul":      true,
+	"core.cloud":     true,
+	"core.bootstrap": true,
+	"core.vault":     true,
+	"core.choir":     true,
 }
 
 // allRegisteredModules — deterministic list of all registered core modules. Taken

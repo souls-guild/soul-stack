@@ -300,6 +300,13 @@ const SystemKIDForceReissue = "system-force-reissue"
 // re-provision from an operator's manual reissue.
 const SystemKIDCloudReprovision = "system-cloud-reprovision"
 
+// SystemKIDBootstrapIssuedReissue marks an unused token invalidated by a
+// repeated `core.bootstrap.issued` step. The ready-made VM has not onboarded;
+// the previous plaintext may have been lost in an interrupted delivery, so the
+// whole batch receives fresh one-time tokens. A distinct marker keeps this
+// scenario retry separate from cloud reprovision and manual API force-reissue.
+const SystemKIDBootstrapIssuedReissue = "system-bootstrap-issued-reissue"
+
 // SystemKIDSoulForget is the special `used_by_kid` value for a token burned
 // because its host was forgotten by an operator (`soul.forget`, NIM-386).
 // Distinct from [SystemKIDCloudDestroy]: the cloud cascade means "the VM is

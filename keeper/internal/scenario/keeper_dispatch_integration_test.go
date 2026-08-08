@@ -3,12 +3,14 @@ package scenario
 import (
 	"context"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
 	keeperchoir "github.com/souls-guild/soul-stack/keeper/internal/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
+	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -88,6 +90,22 @@ func (fakeCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*boo
 func (fakeCloudTokens) DeleteByTokenID(_ context.Context, _ string) error    { return nil }
 func (fakeCloudTokens) ExpireActiveForSID(_ context.Context, _ string) error { return nil }
 
+type fakeBootstrapIssuer struct{}
+
+func (fakeBootstrapIssuer) IssueBatch(_ context.Context, sids []string) ([]coremodbootstrap.IssuedHost, error) {
+	out := make([]coremodbootstrap.IssuedHost, 0, len(sids))
+	for _, sid := range sids {
+		tok, err := bootstraptoken.Generate()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, coremodbootstrap.IssuedHost{
+			SID: sid, Token: tok, ExpiresAt: time.Now().Add(time.Hour), Created: true,
+		})
+	}
+	return out, nil
+}
+
 // --- fake choir-Store ---------------------------------------------------------
 
 type fakeChoirStore struct{}
@@ -100,13 +118,40 @@ func (fakeChoirStore) IncarnationExists(_ context.Context, _ string) (bool, erro
 
 func realKeeperRegistry() *coremod.Registry {
 	return coremod.Default(coremod.Deps{
-		SoulStore:     fakeSoulStore{},
-		PluginHost:    fakeHost{},
-		CloudResolver: fakeResolver{},
-		CloudSouls:    fakeCloudSouls{},
-		CloudTokens:   fakeCloudTokens{},
-		ChoirStore:    fakeChoirStore{},
+		SoulStore:       fakeSoulStore{},
+		PluginHost:      fakeHost{},
+		CloudResolver:   fakeResolver{},
+		CloudSouls:      fakeCloudSouls{},
+		CloudTokens:     fakeCloudTokens{},
+		BootstrapIssuer: fakeBootstrapIssuer{},
+		ChoirStore:      fakeChoirStore{},
 	})
+}
+
+// TestApplyKeeperTask_RealBootstrap_IssuedResolves is the L0 contract guard
+// for the public address. It traverses the real author-address split and the
+// real core registry, and proves core.bootstrap.issued is independent of
+// core.cloud.created and of any delivery dialer.
+func TestApplyKeeperTask_RealBootstrap_IssuedResolves(t *testing.T) {
+	r := &Runner{keeperModules: realKeeperRegistry()}
+	rt := &render.RenderedTask{
+		Index:  0,
+		Module: "core.bootstrap.issued",
+		Params: mustStructI(t, map[string]any{
+			"sids": []any{"vm1.example.com", "vm2.example.com"},
+		}),
+	}
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
+	if failed {
+		t.Fatalf("core.bootstrap.issued failed: %q", msg)
+	}
+	if !changed || output["action"] != coremodbootstrap.StateIssued {
+		t.Fatalf("changed=%v output=%v, want issued success", changed, output)
+	}
+	hosts, _ := output["hosts"].([]any)
+	if len(hosts) != 2 {
+		t.Fatalf("output hosts=%v, want one delivery record per SID", output["hosts"])
+	}
 }
 
 func mustStructI(t *testing.T, m map[string]any) *structpb.Struct {

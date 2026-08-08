@@ -42,6 +42,66 @@
       }
     },
     {
+      "name": "bootstrap",
+      "states": {
+        "delivered": {
+          "description": "Keeper-side (on:keeper). Install/deliver and redeem per-host bootstrap tokens over direct SSH or Teleport (ADR-063).",
+          "input": {
+            "hosts": {
+              "description": "Per-host issued-token objects. primary_ip is required only for direct transport; Teleport addresses hosts by sid.",
+              "items": {
+                "type": "map"
+              },
+              "required": true,
+              "type": "list"
+            },
+            "install": {
+              "description": "Install the full Soul setup before token delivery (Teleport only).",
+              "type": "bool"
+            },
+            "join_wait_timeout": {
+              "description": "Teleport join wait as a duration string (integer seconds is also accepted at runtime).",
+              "type": "string"
+            },
+            "ssh_port": {
+              "description": "SSH port (default 22).",
+              "type": "int"
+            },
+            "ssh_provider": {
+              "description": "SshProvider name; retained as audit metadata in Teleport mode.",
+              "required": true,
+              "type": "string"
+            },
+            "ssh_user": {
+              "description": "SSH user (default root).",
+              "type": "string"
+            },
+            "start_soul": {
+              "description": "Activate soul.service after redeem (default true).",
+              "type": "bool"
+            },
+            "token_path": {
+              "description": "Remote token path (default /etc/soul/token).",
+              "type": "string"
+            }
+          }
+        },
+        "issued": {
+          "description": "Keeper-side (on:keeper). Atomically issue per-host bootstrap tokens for ready-made VM SIDs, independent of core.cloud.created.",
+          "input": {
+            "sids": {
+              "description": "Non-empty unique list of ready-made VM FQDN/SIDs.",
+              "items": {
+                "type": "string"
+              },
+              "required": true,
+              "type": "list"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "choir",
       "states": {
         "absent": {

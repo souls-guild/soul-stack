@@ -139,6 +139,11 @@ var coreModuleDocs = []coreModuleDoc{
 	// Name — base name without the state suffix (like Soul-side core); the full
 	// author address = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
 	{
+		Name:        "core.bootstrap",
+		Description: "Issue one-time tokens for ready-made VM SIDs and deliver/redeem them over SSH or Teleport (keeper-side, on: keeper).",
+		States:      []string{"issued", "delivered"},
+	},
+	{
 		Name:        "core.choir",
 		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side, on: keeper).",
 		States:      []string{"present", "absent"},

@@ -38,6 +38,7 @@ import (
 	keeperldap "github.com/souls-guild/soul-stack/keeper/internal/auth/ldap"
 	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
+	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
 	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
@@ -46,6 +47,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/consolepg"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
+	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
@@ -1163,6 +1165,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		// set (providers/host-CA) is not filled in here, the module does not
 		// register.
 		BootstrapTransport: bootstrapTransport,
+		BootstrapIssuer:    coremodbootstrap.NewIssuerPG(d.pool, bootstraptoken.DefaultTokenTTL),
 		BootstrapDial:      bootstrapDial,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

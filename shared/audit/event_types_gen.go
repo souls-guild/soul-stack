@@ -12,6 +12,7 @@ var allEventTypes = []EventType{
 	"augur.access_denied",                       // EventAugurAccessDenied
 	"augur.fetch_brokered",                      // EventAugurFetchBrokered
 	"bootstrap.delivered",                       // EventBootstrapDelivered
+	"bootstrap.issued",                          // EventBootstrapIssued
 	"cadence.created",                           // EventCadenceCreated
 	"cadence.deleted",                           // EventCadenceDeleted
 	"cadence.skipped_forbidden",                 // EventCadenceSkippedForbidden

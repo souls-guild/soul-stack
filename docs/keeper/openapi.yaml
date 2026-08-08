@@ -30,6 +30,7 @@ components:
             - augur.access_denied
             - augur.fetch_brokered
             - bootstrap.delivered
+            - bootstrap.issued
             - cadence.created
             - cadence.deleted
             - cadence.skipped_forbidden

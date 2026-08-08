@@ -1,6 +1,6 @@
-# ADR-063. core.bootstrap.delivered — keeper-side bootstrap-token delivery over SSH
+# ADR-063. core.bootstrap.issued / delivered — keeper-side bootstrap tokens and delivery
 
-> **Status: active.** architect's design (A1 "thin delivery"), name `core.bootstrap.delivered` via propose-and-wait (confirmed by the user). The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
+> **Status: active.** architect's design (A1 "thin delivery"), public names `core.bootstrap.delivered` and `core.bootstrap.issued` confirmed by the user. The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
 >
 > **Implementation progress.** Pilot slice implemented: module + conditional registration + Deps + scenario-swap (`keeper.push.applied` stub → `core.bootstrap.delivered`) + unit tests. **C1 (cloud-init CA-signed host-key) and live-e2e — the next slice, NOT this one** (see §MVP Boundaries). Before C1 a live run of direct mode will break: `push.Dial` rejects the host-cert of a fresh VM whose cloud-init installed a bare (not CA-signed) host-key.
 >
@@ -9,6 +9,8 @@
 > **Amendment (full-install mode for platforms without cloud-init userdata) — Slice 1/3 implemented.** `core.bootstrap.delivered` gains a second operating mode — **full-install** over Teleport SSH (installs the ENTIRE setup, not just the token) for platforms without cloud-init userdata (e.g. a namespace with `ci_user_data` disabled). The install-blueprint is extracted into the shared package [keeper/internal/soulinstall](../../keeper/internal/soulinstall) — the single source of truth (canonical `Blueprint`), reused by both onboarding paths. Slice 1 (blueprint extraction: `Blueprint`/`RenderCloudInitYAML`/`RenderInstallScript`/`InstallStep` + switching the `cloudinit` package to shared + tests) is **done**; Slice 2 (install mode in the delivered module itself) and Slice 3 (scenario `generate_userdata:false`+`install:true`+live) are next. See §Amendment (full-install mode) below.
 >
 > **Amendment (init phase + unit activation + `event_stream_port`) — implemented, proven by live workarounds.** A live run of the push-install-flow hit two walls: (5) the token was delivered but nobody redeemed it — no soul-side "pickup" of the token file exists, the seed is created ONLY by `soul init`, and soul run kept crashing in a restart loop "SoulSeed not found"; (6) the blueprint derived BOTH soul.yml ports from a single `bootstrap_endpoint` — soul dialed EventStream on the Bootstrap port ("Unimplemented: method EventStream"). Plus a hole: push-install did only `systemctl start` without `daemon-reload`/`enable` — after a VM reboot the unit did not come up. See §Amendment (init phase) below.
+>
+> **Amendment (`core.bootstrap.issued`, NIM-596) — implemented.** Transactional batch issuance for ready-made VM SIDs, explicit reissue/expiry and identity-takeover refusal, separate audit event, plus optional `primary_ip` in Teleport delivery. See the 2026-08-08 amendment below.
 
 **Context.** [ADR-061](0061-onboarding-await-and-midrun-reresolve.md) introduced a unified create run provision→onboarding→role: `core.cloud.created` creates N VMs, the register-output carries their `sid` + plain bootstrap tokens, then `core.soul.registered` with `await_online` blockingly waits for onboarding. Between "VM created" and "`soul` agent online" the VM must receive its bootstrap token — without it CSR onboarding ([docs/soul/onboarding.md](../soul/onboarding.md)) does not start.
 
@@ -163,3 +165,59 @@ Without a matching rule here the delivery step would die on them: `hosts[i].boot
 - **The flag is the only exemption.** A host with neither a token nor `onboarded: true` is still a hard error, exactly as before. Skipping it silently would leave the incarnation short of a member with nothing in the output to show for it.
 - **Output gains `skipped`** — how many hosts needed no delivery (`0` on a clean run). `count` keeps its meaning: the total number of hosts in the list. B1-strict is untouched for every host that IS delivered to.
 - Audit `bootstrap.delivered` still carries `{action, ssh_provider, count, sids}` with skipped hosts included in `sids` — they are part of the roster this step accounted for.
+
+## Amendment 2026-08-08 — `core.bootstrap.issued` for ready-made VM onboarding (NIM-596)
+
+**Problem.** The delivery contract was coupled by its producer shape to
+`core.cloud.created`: it could deliver a token, but there was no keeper-side DSL
+operation that produced tokens for VMs which already existed outside the
+CloudDriver lifecycle. A service accepting a list of ready-made Teleport nodes
+therefore had to leave the scenario DSL, call the operator API per host, and
+manually reconstruct `hosts[]`. Besides being operationally awkward, a failure
+halfway through that loop left a usable partial group with no run-level outcome.
+
+**Decision: add the public state `core.bootstrap.issued`.** Input `sids` is a
+required non-empty unique list of canonical FQDN/SIDs. In one Postgres
+transaction Keeper creates a missing Soul as `pending`, `transport=agent`, or
+locks and checks an existing not-yet-onboarded agent Soul, invalidates any
+previous unused token, and inserts a fresh standard-TTL token. The output is
+`hosts[]={sid,bootstrap_token,expires_at,created,reissued}` plus aggregate
+counts. This shape is directly consumable by `core.bootstrap.delivered` and is
+deliberately independent of `core.cloud.created`.
+
+**Identity boundary.** Only `pending` and `expired` agent records are eligible.
+`expired` means onboarding never completed and is re-armed to `pending` with a
+fresh `requested_at`. `connected` and `disconnected` both already own a
+SoulSeed, so issuing another bootstrap capability would create an identity
+takeover path; both are refused fail-closed. `revoked`, `destroyed`, and
+`transport=ssh` are refused as well. The Soul row is locked during issuance,
+closing the race with Bootstrap redeem: the transaction either observes the
+onboarded status and refuses, or invalidates the preceding token before the new
+one is committed.
+
+**Repeat and expiry semantics.** Every successful repeat over an eligible batch
+returns fresh plaintext and invalidates each previous unused token, whether or
+not its `expires_at` has passed. A repeat is therefore the explicit recovery
+operation after an interrupted or expired delivery. The special marker
+`system-bootstrap-issued-reissue` distinguishes this from operator
+`force=true` and cloud reprovision. The whole list is a single transaction: an
+error names its SID and rolls back all earlier hosts in the batch, so no partial
+set remains usable without output.
+
+**Secret boundary and audit.** Plaintext is never persisted in the Souls/token
+registries; only SHA-256 is stored. It is revealed exactly once in the current
+run register under `bootstrap_token`, so a following delivery step can address
+each host. That key is covered by the common secret masker and is excluded from
+incarnation state, task/audit payloads, OTel, SSE and logs. New audit event
+`bootstrap.issued` carries only `{action,count,created,reissued,sids}`. Delivery
+keeps its separate `bootstrap.delivered` event, also without tokens.
+
+**Teleport addressing correction.** `core.bootstrap.delivered` in Teleport mode
+dials `hosts[].sid` and never reads the IP. `primary_ip` is therefore optional in
+that path, making `issued → delivered(install=true)` a real contract rather than
+one that requires invented data. Direct transport continues to require a
+non-empty `primary_ip` and fails before dialing without it.
+
+The canonical ready-made VM flow is:
+
+`core.bootstrap.issued → core.bootstrap.delivered(install=true, teleport) → core.soul.registered(await_online)`.

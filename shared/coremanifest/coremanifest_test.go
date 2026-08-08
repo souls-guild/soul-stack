@@ -32,6 +32,7 @@ var expectedModules = map[string][]string{
 	"core.module":    {"installed"},                       // SoulModule plugin delivery (ADR-065)
 	"core.soul":      {"registered"},                      // keeper-side (on: keeper)
 	"core.cloud":     {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — VM auto-expansion)
+	"core.bootstrap": {"issued", "delivered"},             // keeper-side ready-made VM onboarding + delivery
 	"core.vault":     {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
 	"core.choir":     {"present", "absent"},               // keeper-side (ADR-044)
 }
