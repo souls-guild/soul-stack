@@ -2,9 +2,9 @@
 
 Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.soul.*` (host registration, bootstrap tokens, bulk assignment of Coven tags, one-shot command execution). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth in semantics is [operator-api.md → Soul](../operator-api/souls.md).
 
-### Soul (6)
+### Soul (8)
 
-`keeper.soul.list` remains the transport of the future M2 registry (in `manifest.go` it is marked stub); the others are Implemented. The `manifest.go` directory contains six Soul-tools (`create` / `issue-token` / `coven-assign` / `list` / `ssh-target.update` / `run-command`). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - **REST-only** (there are no MCP tools, covered by permission `soul.list`).
+`keeper.soul.list` remains the transport of the future M2 registry (in `manifest.go` it is marked stub); the others are Implemented. The `manifest.go` directory contains eight Soul-tools (`create` / `issue-token` / `coven-assign` / `traits-assign` / `list` / `ssh-target.update` / `run-command` / `forget`). A ninth declaration, `keeper.soul.errand.run`, carries the `keeper.soul.` prefix but belongs to the Errand family and is documented in [mcp-tools/errands.md](errands.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - **REST-only** (there are no MCP tools, covered by permission `soul.list`).
 
 `keeper.soul.run-command` is the one Soul-tool NOT paired with a `soul.<action>` permission and the one with no REST twin: it is the non-interactive console ([ADR-0074](../../adr/0074-interactive-console-pty.md) amendment, NIM-147) and is gated by `soul.console`.
 

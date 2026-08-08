@@ -55,7 +55,12 @@ order to act in.
     irreversible action on the resource and it is not gated on the host's
     status, so a wildcard holder who could previously only read and relabel a
     running host can now remove it. A role that must not be able to do that
-    enumerates actions instead of the wildcard.
+    enumerates actions instead of the wildcard. Narrow the grant with `host=`,
+    **not** `coven=`: the route puts only `host` into the RBAC context, a missing
+    dimension fails closed, so a coven-narrowed `soul.forget` denies every call
+    rather than restricting it to that coven. `soul.console` and
+    `soul.issue-token` behave the same way; NIM-586 tracks making `coven=`
+    narrow rather than deny.
   - **An unrestricted `role.*` now grants `role.create-root`** — minting a role
     that tracks no parent, i.e. privilege that outlives whatever its author
     held — **and `role.list-all`**, which returns the whole role catalog: every

@@ -303,7 +303,7 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 
 `GET /v1/runs` (operationId `listRuns`) - page of runs, newest on top (`started_at DESC`); query filters `status` (aggregate `applying`/`success`/`failed`/`cancelled`; invalid → `422`) and `incarnation` (owner incarnation name; invalid → `422`) + pagination `offset`/`limit` - **cap `limit` = 100** (not common 1000: global folding is more expensive than flat list; excess → `400`). Element - per-incarnation form `RunSummaryEntry` + field `incarnation` (run owner). `GET /v1/runs/stats` (operationId `getRunsStats`) - counters by aggregate status (`total`/`applying`/`success`/`failed`/`cancelled`) in two baskets: `all` (for all time) and `last_24h` (runs started during last 24 hours), within the same Purview-scope.
 
-### Soul (8) - host registry
+### Soul (9) - host registry
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -315,10 +315,15 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 | `GET` | `/v1/souls/{sid}/history` | `soul.list` | — (UI timeline) |
 | `POST` | `/v1/souls/{sid}/issue-token` | `soul.issue-token` | `keeper.soul.issue-token` |
 | `PUT` | `/v1/souls/{sid}/ssh-target` | `soul.ssh-target-update` | `keeper.soul.ssh-target.update` |
+| `DELETE` | `/v1/souls/{sid}` | `soul.forget` | `keeper.soul.forget` |
 
 Permission `soul.list` covers reading the registry and its details: `GET /v1/souls` (list), `GET /v1/souls/{sid}` (single-soul detail), `GET /v1/souls/{sid}/soulprint` (last typed-Soulprint, [ADR-018](../adr/0018-soulprint-typed.md)), `GET /v1/souls/{sid}/history` (per-host operation timeline - scenario `apply_runs` + ad-hoc errands). Separate `soul.get` deliberately deferred ([rbac.md §Souls](rbac.md)); read endpoints use existence-gate (`RequireAction`) + handler-side InScope filter (host visibility by Purview, [ADR-047](../adr/0047-purview.md)). Read-only - no audit.
 
 `PUT /v1/souls/{sid}/ssh-target` (`soul.ssh-target-update`, selector `host=<sid>`) updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../adr/0032-push-orchestrator.md) amendment S7-1). 3-segment MCP-tool `keeper.soul.ssh-target.update` ↔ 2-segment permission `soul.ssh-target-update` (permission grammar is exactly `<resource>.<action>`). Audited (`soul.ssh_target_updated`).
+
+`DELETE /v1/souls/{sid}` (`soul.forget`, selector `host=<sid>` only - see the note below) erases the host from the registry and releases what it held; legal in every status, including `connected` ([operator-api/souls.md § Forget](operator-api/souls.md), NIM-386). The only destructive call in this domain, and the only one that removes rows the operator did not name: `incarnation_membership` and `incarnation_choir_voices` go with the host through `ON DELETE CASCADE`, so the 200 body carries all four counts rather than a bare 204. If the cluster-wide teardown notice cannot be published the call answers `503` `teardown-unavailable` having deleted **nothing** - retry it. The other failure shape is not a retry: a `200` whose `warnings[]` is non-empty means the host **is** forgotten and something it held was not released, so a second `DELETE` answers `404` and re-releases nothing - the named resource has to be dealt with by hand. An empty `warnings[]` is the only shape that means fully released ([souls.md § Forget](operator-api/souls.md)). Audited (`soul.forgotten`) - and that event is the only durable record, since every row it describes is already gone. Unlike the read routes, the gate is a scope-aware `RequirePermission`, not an existence-gate.
+
+> **Selector reality check.** Routes whose selector is written `host=<sid>` put **only** `host` into the RBAC context (`SoulSIDSelector`). A missing dimension fails closed ([rbac.md](rbac.md)), so a grant of `soul.forget` (or `soul.console`, or `soul.issue-token`) narrowed by `coven=<label>` denies **every** call rather than narrowing it. Narrow those grants by `host=`; coven-narrowing of per-host routes is NIM-586.
 
 `POST /v1/souls/{sid}/exec` (ad-hoc Errand, permission `errand.run`) included in section Errand (4), not duplicated here.
 

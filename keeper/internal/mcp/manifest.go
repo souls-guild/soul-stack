@@ -375,7 +375,8 @@ var catalogManifest = []toolEntry{
 				"memberships_severed / choir_voices_removed before calling this on a host you did not verify. Legal in any state, including connected " +
 				"(the call tears the stream down) and a host this cluster has never heard from. A forgotten host CANNOT reconnect: seed auth is an allowlist " +
 				"and its allowlist entry is gone; re-adding it means onboarding it again from scratch. Permission: soul.forget. There is no force flag. " +
-				"Fails with code=internal-error and NOTHING deleted if the cluster-wide teardown notice cannot be sent. A non-empty warnings[] means the " +
+				"Fails with code=teardown-unavailable and NOTHING deleted if the cluster-wide teardown notice cannot be sent - that outcome is RETRYABLE " +
+				"and changed nothing, unlike internal-error. A non-empty warnings[] means the " +
 				"host was erased but something it held could not be released - report it, do not treat it as success.",
 			InputSchema:  schemaSoulForgetInput,
 			OutputSchema: schemaSoulForgetOutput,

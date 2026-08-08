@@ -59,7 +59,7 @@ func TestSoulTeardown_IsWiredIntoBothOperatorSurfaces(t *testing.T) {
 			t.Fatalf("method (*daemon).%s not found in daemon.go — this guard now guards nothing", fnName)
 		}
 
-		var wired bool
+		var wiredTo string
 		ast.Inspect(fn, func(n ast.Node) bool {
 			kv, ok := n.(*ast.KeyValueExpr)
 			if !ok {
@@ -74,17 +74,68 @@ func TestSoulTeardown_IsWiredIntoBothOperatorSurfaces(t *testing.T) {
 					"registry row and release none of what it holds", fnName, fset.Position(kv.Pos()))
 				return true
 			}
-			wired = true
+			wiredTo = teardownValueName(kv.Value)
 			return true
 		})
 
-		if !wired {
+		switch wiredTo {
+		case "":
 			t.Errorf("%s builds its deps without SoulTeardown — `DELETE /v1/souls/{sid}` and "+
 				"`keeper.soul.forget` would delete the row while the host's EventStream stays "+
 				"open here and `soul:<sid>:hb` is left behind with no TTL, and the reply would "+
 				"say so only by omission: no warnings, everything released reported as false/0",
 				fnName)
+		case soulTeardownTypeName:
+			// The production adapter, whose behaviour the rest of this file
+			// exercises over miniredis. Pinning the NAME is what joins the two
+			// halves: without it this guard proves the field is populated, and
+			// the miniredis tests prove soulTeardown works, and nothing at all
+			// proves the populated value IS soulTeardown.
+		default:
+			t.Errorf("%s wires SoulTeardown to %s, not %s — non-nil is not the invariant. A type "+
+				"that satisfies the interface and releases nothing (`return true, nil` from "+
+				"Broadcast, `return 0, nil` from PurgeCache) passes a non-nil check and hands the "+
+				"operator a 200 for a host whose stream is still open here",
+				fnName, wiredTo, soulTeardownTypeName)
 		}
+	}
+}
+
+// soulTeardownTypeName — the production soulforget.Teardown adapter in this
+// package. If it is renamed, this guard fails and points at itself; update the
+// constant, do not relax the check.
+const soulTeardownTypeName = "soulTeardown"
+
+// teardownValueName reduces the expression assigned to SoulTeardown to the name
+// a reader would call it by: the type of a composite literal, or the function of
+// a constructor call. Returns "" for a shape it cannot name, which the caller
+// reports as "not wired" — an unreadable wiring is not a wiring this guard can
+// vouch for.
+func teardownValueName(expr ast.Expr) string {
+	switch v := expr.(type) {
+	case *ast.CompositeLit:
+		return exprName(v.Type)
+	case *ast.UnaryExpr: // &soulTeardown{…}
+		return teardownValueName(v.X)
+	case *ast.CallExpr:
+		return exprName(v.Fun)
+	case *ast.Ident:
+		return v.Name
+	default:
+		return ""
+	}
+}
+
+func exprName(expr ast.Expr) string {
+	switch v := expr.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprName(v.X) + "." + v.Sel.Name
+	case *ast.StarExpr:
+		return exprName(v.X)
+	default:
+		return ""
 	}
 }
 

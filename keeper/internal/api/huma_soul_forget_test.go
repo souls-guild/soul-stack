@@ -199,8 +199,12 @@ func forgetDelete(t *testing.T, r *chi.Mux, sid string) *httptest.ResponseRecord
 // only trace of the host and everything that cascaded with it is lost with it.
 func TestHumaAudit_SoulForget_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
-	pool := &fgPool{status: "disconnected", seeds: 2, tokens: 1, members: 3, voices: 1}
-	td := &fgTeardown{streamPresent: true, purged: 3}
+	// Every count is a DIFFERENT number, deliberately. Five fields carried from
+	// the transaction through the reply into the audit payload is five chances
+	// to wire one to another's value, and a fixture that says `tokens: 1,
+	// voices: 1` cannot tell those two apart — the swapped version passes.
+	pool := &fgPool{status: "disconnected", seeds: 2, tokens: 5, members: 3, voices: 7}
+	td := &fgTeardown{streamPresent: true, purged: 11}
 	h := handlers.NewSoulHandlerWithTeardown(pool, hSoulScoper{unrestricted: true}, nil, td, nil)
 
 	rec := forgetDelete(t, forgetRouter(t, hSoulEnforcer{allow: true}, auditCap, h), "host-1.example.com")
@@ -212,12 +216,12 @@ func TestHumaAudit_SoulForget_RecordsOnSuccess(t *testing.T) {
 		"sid":                  "host-1.example.com",
 		"status_before":        "disconnected",
 		"seeds_revoked":        int64(2),
-		"bootstraps_burned":    int64(1),
+		"bootstraps_burned":    int64(5),
 		"memberships_severed":  int64(3),
-		"choir_voices_removed": int64(1),
+		"choir_voices_removed": int64(7),
 		"local_stream_closed":  true,
 		"broadcast":            true,
-		"cache_keys_purged":    int64(3),
+		"cache_keys_purged":    int64(11),
 	})
 
 	// The counts must be the MEASURED ones, not zeros: an audit trail that

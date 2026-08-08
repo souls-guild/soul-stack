@@ -34,6 +34,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 const (
@@ -94,6 +95,18 @@ func revokedGateToken(t *testing.T, aid string) string {
 // of them and panics — which this test reports as the failure it is.
 func revokedGateRouter(t *testing.T, enforcer RBACProvider) http.Handler {
 	t.Helper()
+	return revokedGateRouterWith(t, enforcer, handlers.NewSoulHandler(nil, nil, nil, nil), nil)
+}
+
+// revokedGateRouterWith is [revokedGateRouter] with the two dependencies a
+// caller may need ALIVE rather than stubbed: the Soul handler and the audit
+// writer. The route-permission guard (NIM-386) needs both — its positive
+// control has to reach the handler and get a real answer, because a stub that
+// panics on contact cannot tell "the gate let the request through" from "the
+// route is not mounted at all", and those are the two outcomes the guard exists
+// to separate.
+func revokedGateRouterWith(t *testing.T, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer) http.Handler {
+	t.Helper()
 	verifier, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -103,7 +116,7 @@ func revokedGateRouter(t *testing.T, enforcer RBACProvider) http.Handler {
 		health.NewHandler(health.Deps{}),
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil),
-		handlers.NewSoulHandler(nil, nil, nil, nil),
+		soulH,
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t),
 		stubSynodHandler(t),
@@ -137,7 +150,7 @@ func revokedGateRouter(t *testing.T, enforcer RBACProvider) http.Handler {
 		handlers.NewHeraldTypeCatalogHandler(nil),  // /v1/herald-types — ditto
 		handlers.NewMyPermissionsHandler(nil, nil), // /v1/me/permissions — ditto
 		enforcer,
-		nil,                                  // auditWriter
+		auditW,                               // auditWriter
 		nil,                                  // metricsHTTP
 		nil,                                  // tollDegraded
 		nil,                                  // tempoLimiter

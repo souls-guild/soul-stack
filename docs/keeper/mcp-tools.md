@@ -160,13 +160,14 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `provider-has-profiles` | The removal of the Provider is blocked - it is referenced by the Profile (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
 | `errand-not-cancellable` | Errand is already in terminal status - there is nothing to cancel (`keeper.errand.cancel`, ADR-033 slice E5). |
 | `soul-capability-unsupported` | The target Soul is connected, but its announced capability set does not cover the request (REST `409`, [ADR-0076(i)](../adr/0076-engine-compat-window.md)). Sole user: `dry_run` on `keeper.soul.errand.run`, refused before dispatch because a binary that ignores the flag applies for real. Also covers "support could not be confirmed"; the message says which. |
+| `teardown-unavailable` | `keeper.soul.forget` stopped BEFORE deleting anything because the cluster-wide teardown notice could not be published (REST `503`, `TypeTeardownUnavailable`). Its own code rather than `internal-error` precisely because the two demand opposite reactions: this one is **retryable and changed nothing**, `internal-error` is a defect the caller cannot act on. Retry once Redis is reachable. |
 | `internal-error` | Unplanned error; full diagnostics - in OTel-trace. |
 
 > Unknown-but-valid scenario in `keeper.incarnation.run` - **not** call error: tool returns `_apply_id` (async-accepted), run then goes to `error_locked` (`scenario_load_failed`), status is polled via `keeper.incarnation.get`. Symmetrically [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md).
 
 Extending the code list - only-add symmetrically Operator API.
 
-## Catalog 93 MCP-tool
+## Catalog 97 MCP-tool
 
 1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
@@ -188,9 +189,11 @@ Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.syn
 
 Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` - ten tools with MCP pairing to REST routes [operator-api.md → Incarnation (17)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
-### Soul (6)
+### Soul (8)
 
-Moved to a domain file - [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`, `keeper.soul.run-command`. The source of truth for semantics is [operator-api/souls.md](operator-api/souls.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - REST-only (no MCP tools).
+Moved to a domain file - [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.traits-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`, `keeper.soul.run-command`, `keeper.soul.forget`. The source of truth for semantics is [operator-api/souls.md](operator-api/souls.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - REST-only (no MCP tools). `keeper.soul.errand.run` is declared in this family too but documented under [Errand](#errand-4), where its semantics live.
+
+`keeper.soul.forget` is the only destructive tool in the family: it erases the host and releases what it held, and on `teardown-unavailable` it deletes **nothing** (see the code table above).
 
 `keeper.soul.run-command` is the exception in this family: it has no REST twin and is gated by `soul.console`, not by a `soul.<action>` permission - it is the non-interactive console ([ADR-0074](../adr/0074-interactive-console-pty.md) amendment, NIM-147).
 

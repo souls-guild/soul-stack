@@ -244,8 +244,11 @@ func TestCatalog_SoulForgetIsPresentByName(t *testing.T) {
 // this call every row the payload names is gone, so `soul.forgotten` is the only
 // durable record that the host existed at all.
 func TestSoulForget_Success_WritesAuditAndReleases(t *testing.T) {
-	pool := &mcpForgetPool{status: "disconnected", seeds: 2, tokens: 1, members: 3, voices: 1}
-	td := &mcpForgetTeardown{streamOpen: true, purged: 3}
+	// Pairwise-distinct counts on purpose: with `tokens: 1, voices: 1` a reply
+	// that reported the Voice count as the bootstrap count would pass, and the
+	// two travel side by side all the way from the transaction to the audit row.
+	pool := &mcpForgetPool{status: "disconnected", seeds: 2, tokens: 5, members: 3, voices: 7}
+	td := &mcpForgetTeardown{streamOpen: true, purged: 11}
 	h, rec := newForgetHandler(t, forgetterRBAC(), pool, td)
 
 	resp := callTool(t, h, "archon-alice", "keeper.soul.forget", `{"sid":"host-1.example.com"}`)
@@ -261,11 +264,11 @@ func TestSoulForget_Success_WritesAuditAndReleases(t *testing.T) {
 	if out.SID != "host-1.example.com" || out.StatusBefore != "disconnected" {
 		t.Errorf("out = %+v, want the SID and the pre-delete status", out)
 	}
-	if out.SeedsRevoked != 2 || out.BootstrapsBurned != 1 || out.MembershipsSevered != 3 || out.ChoirVoicesRemoved != 1 {
-		t.Errorf("counts = %+v, want the measured cascade (2/1/3/1) — an agent told '0 memberships "+
+	if out.SeedsRevoked != 2 || out.BootstrapsBurned != 5 || out.MembershipsSevered != 3 || out.ChoirVoicesRemoved != 7 {
+		t.Errorf("counts = %+v, want the measured cascade (2/5/3/7) — an agent told '0 memberships "+
 			"severed' for a host on 3 rosters will report a clean removal that emptied three of them", out)
 	}
-	if !out.LocalStreamClosed || !out.Broadcast || out.CacheKeysPurged != 3 {
+	if !out.LocalStreamClosed || !out.Broadcast || out.CacheKeysPurged != 11 {
 		t.Errorf("release = closed:%v broadcast:%v purged:%d, want the real teardown outcome",
 			out.LocalStreamClosed, out.Broadcast, out.CacheKeysPurged)
 	}
@@ -288,8 +291,8 @@ func TestSoulForget_Success_WritesAuditAndReleases(t *testing.T) {
 	if ev.Payload["sid"] != "host-1.example.com" || ev.Payload["status_before"] != "disconnected" {
 		t.Errorf("payload = %+v, want the SID and the pre-delete status", ev.Payload)
 	}
-	if ev.Payload["memberships_severed"] != int64(3) || ev.Payload["choir_voices_removed"] != int64(1) {
-		t.Errorf("payload cascade counts = %+v, want 3 memberships and 1 Voice", ev.Payload)
+	if ev.Payload["memberships_severed"] != int64(3) || ev.Payload["choir_voices_removed"] != int64(7) {
+		t.Errorf("payload cascade counts = %+v, want 3 memberships and 7 Voices", ev.Payload)
 	}
 }
 
