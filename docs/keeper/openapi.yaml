@@ -136,6 +136,7 @@ components:
             - soul.bootstrapped
             - soul.coven-changed
             - soul.created
+            - soul.forgotten
             - soul.seed-issued
             - soul.seed-rotated
             - soul.ssh-target.imported_from_config
@@ -4098,6 +4099,51 @@ components:
       required:
         - sid
         - transport
+      type: object
+    SoulForgetReply:
+      additionalProperties: false
+      properties:
+        bootstraps_burned:
+          format: int64
+          type: integer
+        broadcast:
+          type: boolean
+        cache_keys_purged:
+          format: int64
+          type: integer
+        choir_voices_removed:
+          format: int64
+          type: integer
+        local_stream_closed:
+          type: boolean
+        memberships_severed:
+          format: int64
+          type: integer
+        seeds_revoked:
+          format: int64
+          type: integer
+        sid:
+          pattern: ^[a-z0-9][a-z0-9.-]{0,253}$
+          type: string
+        status_before:
+          type: string
+        warnings:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - broadcast
+        - cache_keys_purged
+        - choir_voices_removed
+        - local_stream_closed
+        - memberships_severed
+        - seeds_revoked
+        - sid
+        - status_before
+        - bootstraps_burned
+        - warnings
       type: object
     SoulHistoryItem:
       additionalProperties: false
@@ -12579,6 +12625,57 @@ paths:
       tags:
         - soul
   /v1/souls/{sid}:
+    delete:
+      description: "Erase a host from the registry and release what it held: revoke its seeds, burn its unused bootstrap tokens, close its EventStream across the cluster and purge its Redis keys. The souls row goes, and with it — through ON DELETE CASCADE — its seeds, its unburnt bootstrap tokens, its incarnation memberships and its Choir Voices; all four counts are in the reply. IRREVERSIBLE, and legal in any state (including connected). A forgotten host cannot reconnect: seed auth is an allowlist and its allowlist entry is gone. Permission soul.forget. 503 - the cluster-wide teardown notice could not be sent and NOTHING was deleted."
+      operationId: forgetSoul
+      parameters:
+        - description: SID (FQDN) of Soul
+          in: path
+          name: sid
+          required: true
+          schema:
+            description: SID (FQDN) of Soul
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SoulForgetReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Service Unavailable
+      summary: Forget a host
+      tags:
+        - soul
     get:
       description: One registry row of souls for the detail page (ADR-047 scoped). Permission soul.list. Outside scope -> 404. Read-only, no audit.
       operationId: getSoul

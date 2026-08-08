@@ -13,13 +13,13 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 109 names (sum of the categories below):
+// §Catalog of permissions. 110 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
 //   - incarnation (13): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
-//   - soul (7): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074);
+//   - soul (8): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074) / forget (NIM-386);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
 //   - service (4): register / update / list / deregister;
@@ -212,6 +212,20 @@ var AllowedPermissions = map[string]struct{}{
 	// all — refusal is 403 before a socket exists) and `host=<sid>` per `open`
 	// frame, because the target SID arrives in the frame rather than the URL.
 	"soul.console": {},
+	// soul.forget — erases a host from the registry (`DELETE /v1/souls/{sid}`,
+	// NIM-386): the `souls` row goes, and with it — through the four
+	// ON DELETE CASCADE edges — its seeds, its unburnt bootstrap tokens, its
+	// incarnation memberships and its Choir Voices. Since seed auth is an
+	// ALLOWLIST over `soul_seeds.fingerprint`, losing the row is what makes
+	// the host unable to reconnect; the revoke is done first so the count the
+	// operator is shown is the number of credentials that were actually live.
+	// Selector `host=<sid>` from the path, like soul.issue-token /
+	// soul.ssh-target-update — the SID is known before the handler.
+	// NOT gated on status: a host may be forgotten in any state, including one
+	// with a live stream (which the call tears down) and one this cluster has
+	// never heard from. There is no `force` flag on purpose — a single verb
+	// cannot quietly degrade from "release the host" to "drop its row".
+	"soul.forget": {},
 
 	// plugin.* — management of Sigil's plugin-integrity allow-list
 	// (ADR-026, rbac.md → §Catalog of permissions → Plugin Sigil).

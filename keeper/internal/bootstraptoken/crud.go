@@ -300,6 +300,14 @@ const SystemKIDForceReissue = "system-force-reissue"
 // re-provision from an operator's manual reissue.
 const SystemKIDCloudReprovision = "system-cloud-reprovision"
 
+// SystemKIDSoulForget is the special `used_by_kid` value for a token burned
+// because its host was forgotten by an operator (`soul.forget`, NIM-386).
+// Distinct from [SystemKIDCloudDestroy]: the cloud cascade means "the VM is
+// gone", this one means "the Keeper is done with this host" and says nothing
+// about whether the machine is still running. Same non-KID format, so it
+// cannot collide with a real `keeper-XXX`.
+const SystemKIDSoulForget = "system-soul-forget"
+
 // expireActiveBySIDSQL invalidates a SID's still-active token on
 // force-reissue. Sets `used_at = NOW()`, which both (1) makes the token
 // ineligible for Burn (the WHERE `used_at IS NULL` no longer matches) and

@@ -208,6 +208,22 @@ const (
 	// standalone.
 	EventSoulSeedIssued EventType = "soul.seed-issued"
 
+	// EventSoulForgotten — an operator erased a host from the registry
+	// (`DELETE /v1/souls/{sid}` / `keeper.soul.forget`, permission
+	// `soul.forget`, NIM-386). `source: api` or `mcp`, `archon_aid` is the
+	// initiator. Payload: `{sid, status_before, seeds_revoked, bootstraps_burned,
+	// memberships_severed, choir_voices_removed, local_stream_closed,
+	// broadcast, cache_keys_purged, warnings}`.
+	//
+	// This event is the ONLY durable record of the act. Four foreign keys onto
+	// `souls(sid)` are ON DELETE CASCADE, so the row, its seeds, its unburnt
+	// tokens, its incarnation memberships and its Choir Voices all go at once
+	// and none of them can be consulted afterwards — the counters here are
+	// what a later reader has instead. `warnings` is non-empty when the
+	// teardown could not release something (a stream on another instance, the
+	// Redis cache keys); an empty array means fully released.
+	EventSoulForgotten EventType = "soul.forgotten"
+
 	// EventTaskExecuted — an apply-run task finished. A single name for all
 	// terminal statuses (`ok`/`changed`/`failed`/`timed_out`/`skipped`) —
 	// status is carried in `payload.status` so that filtering in

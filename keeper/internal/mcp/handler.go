@@ -25,6 +25,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -138,6 +139,18 @@ type HandlerDeps struct {
 	// return internal-error "soul DB is not configured" (mirrors REST, where
 	// SoulHandler without a pool isn't mounted).
 	SoulDB handlers.SoulPool
+
+	// SoulTeardown — release side of keeper.soul.forget (NIM-386), the same
+	// adapter REST gets as api.Deps.SoulTeardown: close the EventStream this
+	// instance holds for the host, tell the cluster to close theirs, purge the
+	// per-SID Redis keys.
+	//
+	// nil is legal (single-instance dev / unit tests: no second instance, and
+	// the stream dies with the process) and makes forget do the PG half alone.
+	// Production wires it, because a nil here would mean the tool erases
+	// registry rows while leaving live streams and the TTL-less
+	// `soul:<sid>:hb` key behind — deleted, not released.
+	SoulTeardown soulforget.Teardown
 
 	// PurviewResolver — read surface of the operator's scope boundary for
 	// bulk keeper.soul.coven-assign (scope-intersection of selector and
@@ -526,6 +539,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callSoulCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.issue-token":
 		return h.callSoulIssueToken(ctx, claims, req, p.Arguments), false
+	case "keeper.soul.forget":
+		return h.callSoulForget(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.coven-assign":
 		return h.callSoulCovenAssign(ctx, claims, req, p.Arguments), false
 	case "keeper.soul.traits-assign":

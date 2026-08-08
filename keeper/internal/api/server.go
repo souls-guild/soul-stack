@@ -36,6 +36,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -244,6 +245,19 @@ type Deps struct {
 	// the PG snapshot is served. The production wire-up in `keeper run` passes a wrapper over
 	// the same Redis client as the topology resolver (keeperredis.SoulsStreamAlive).
 	SoulPresence handlers.SoulPresence
+
+	// SoulTeardown — the release side of `DELETE /v1/souls/{sid}` (NIM-386):
+	// close the EventStream THIS instance holds for the host, tell the other
+	// instances to close theirs, purge its per-SID Redis keys.
+	//
+	// Optional in the sense that the type allows nil (single-instance dev / unit
+	// tests without Redis: there is no second instance to notify and the stream
+	// dies with the process), but `keeper run` always wires it. A nil here in
+	// production would mean the endpoint erases registry rows while leaving live
+	// streams open and the TTL-less `soul:<sid>:hb` key behind forever — deleted,
+	// not released. The production wire-up passes a wrapper over the StreamManager
+	// and the same Redis client as SoulPresence.
+	SoulTeardown soulforget.Teardown
 
 	// UtilizationReader — Redis layer of host-vitals for the telemetry endpoints
 	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry and
@@ -683,7 +697,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	if deps.VaultClient != nil {
 		incH.SetVaultReader(deps.VaultClient)
 	}
-	soulH := handlers.NewSoulHandler(deps.SoulDB, deps.RBAC, deps.SoulPresence, logger)
+	soulH := handlers.NewSoulHandlerWithTeardown(deps.SoulDB, deps.RBAC, deps.SoulPresence, deps.SoulTeardown, logger)
 
 	// telemetryH — host-vitals read endpoints (NIM-86). Reuses soulH
 	// (scope gate + coven listing); reader nil (dev/unit without Redis) -> no-op.

@@ -35,7 +35,7 @@ order to act in.
   the capability check sees for a host that was never connected, so the refusal is
   cross-checked against the lease rather than blaming that host's binary.
 
-- **Six new permissions land inside `<resource>.*` grants you already issued.**
+- **Seven new permissions land inside `<resource>.*` grants you already issued.**
   The catalog is closed and a wildcard in the action position expands to every
   known action of that resource, so a role written before this release grants
   more after it. Same mechanism as `incarnation.*` when `incarnation.view-secrets`
@@ -48,6 +48,14 @@ order to act in.
     and playback of **anyone's** recorded sessions over
     `GET /v1/console/recordings…`. It is strictly stronger than `errand.run` and
     independent of it in both directions.
+  - **`soul.*` now also grants `soul.forget`** — erasing a host from the
+    registry, and with it more than the row named: every foreign key on
+    `souls(sid)` cascades, so the host's SoulSeeds, bootstrap tokens,
+    incarnation memberships and Choir Voices go with it. It is the only
+    irreversible action on the resource and it is not gated on the host's
+    status, so a wildcard holder who could previously only read and relabel a
+    running host can now remove it. A role that must not be able to do that
+    enumerates actions instead of the wildcard.
   - **An unrestricted `role.*` now grants `role.create-root`** — minting a role
     that tracks no parent, i.e. privilege that outlives whatever its author
     held — **and `role.list-all`**, which returns the whole role catalog: every
@@ -75,7 +83,7 @@ order to act in.
   A role that must not gain these enumerates actions instead of the wildcard.
   The full `soul.*` expansion as of this release is `soul.list`, `soul.create`,
   `soul.issue-token`, `soul.coven-assign`, `soul.traits-assign`,
-  `soul.ssh-target-update`, `soul.console`. That list, and the `role.*`,
+  `soul.ssh-target-update`, `soul.console`, `soul.forget`. That list, and the `role.*`,
   `synod.*` and `incarnation.*` ones, are pinned against
   [the catalog](keeper/internal/rbac/catalog.go) by
   `TestCatalog_WildcardRostersPinnedForReleaseNotes`, so an action added later

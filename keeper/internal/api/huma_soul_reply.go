@@ -64,6 +64,31 @@ type SoulIssueTokenReply struct {
 	SID            string    `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern
 }
 
+// SoulForgetReply — the native 200 body of DELETE /v1/souls/{sid} (NIM-386).
+// Shape 1:1 with handlers.SoulForgetView; every field required.
+//
+// Two groups of fields, and the split is the point. The counts say what the
+// delete TOOK — including the two cascades that reach objects the operator did
+// not name (`memberships_severed`, `choir_voices_removed`). The release fields
+// say what was RELEASED — the live stream, the cluster notice, the per-SID Redis
+// keys. `warnings` is non-nullable and names, in words an operator can act on,
+// every resource the release could not free; an empty array is the only shape
+// that means "fully released". A client that renders the counts and ignores
+// `warnings` will show a host as forgotten while something still holds it, which
+// is the exact failure this body exists to make impossible to miss.
+type SoulForgetReply struct {
+	Broadcast          bool     `json:"broadcast"`
+	CacheKeysPurged    int64    `json:"cache_keys_purged"`
+	ChoirVoicesRemoved int64    `json:"choir_voices_removed"`
+	LocalStreamClosed  bool     `json:"local_stream_closed"`
+	MembershipsSevered int64    `json:"memberships_severed"`
+	SeedsRevoked       int64    `json:"seeds_revoked"`
+	SID                string   `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern
+	StatusBefore       string   `json:"status_before"`
+	BootstrapsBurned   int64    `json:"bootstraps_burned"`
+	Warnings           []string `json:"warnings"`
+}
+
 // SoulSshTargetReply — the native 200 body of PUT /v1/souls/{sid}/ssh-target (CLASS A, reuse). Shape
 // 1:1 with SoulSSHTargetReply (the reference :6399): sid + ssh_target (a snapshot of the saved
 // target), both required. ssh_target — REUSES the existing native SoulSshTarget (the same type as the
@@ -149,6 +174,24 @@ func newSoulIssueTokenReply(v handlers.SoulIssueTokenView) SoulIssueTokenReply {
 		BootstrapToken: v.BootstrapToken,
 		ExpiresAt:      v.ExpiresAt,
 		SID:            v.SID,
+	}
+}
+
+// newSoulForgetReply projects the domain handlers.SoulForgetView into native.
+// warnings is passed through as-is — the domain already coalesces nil to `[]`
+// (soulForgetView), and re-coalescing here would hide a regression there.
+func newSoulForgetReply(v handlers.SoulForgetView) SoulForgetReply {
+	return SoulForgetReply{
+		Broadcast:          v.Broadcast,
+		CacheKeysPurged:    v.CacheKeysPurged,
+		ChoirVoicesRemoved: v.ChoirVoicesRemoved,
+		LocalStreamClosed:  v.LocalStreamClosed,
+		MembershipsSevered: v.MembershipsSevered,
+		SeedsRevoked:       v.SeedsRevoked,
+		SID:                v.SID,
+		StatusBefore:       v.StatusBefore,
+		BootstrapsBurned:   v.BootstrapsBurned,
+		Warnings:           v.Warnings,
 	}
 }
 

@@ -101,6 +101,20 @@ const (
 	// temporarily blocked (503 Service Unavailable + Retry-After). The read API, RBAC,
 	// destroy, and Errand remain available (recovery actions).
 	TypeClusterDegraded = "https://soul-stack.com/errors/cluster-degraded"
+	// TypeTeardownUnavailable — `DELETE /v1/souls/{sid}` stopped before it deleted
+	// anything because the cluster-wide teardown notice could not be published
+	// (NIM-386, [soulforget.ErrTeardownUnavailable]). Nothing was destroyed and the
+	// host is still registered: 503 + retry once Redis is reachable.
+	//
+	// A separate URN and code from [TypeClusterDegraded], on the same reasoning
+	// [TypeTempoExceeded] records: cluster-degraded is Toll's flag with its own
+	// audit events, its own `keeper_cluster_degraded` metric and its own
+	// middleware. Reusing it here would tell every client and dashboard branching
+	// on the type that mass Soul churn tripped the cluster, and would send whoever
+	// investigated looking for a Toll event that was never written. Same status
+	// code, different fact: one is "the cluster is unwell", this one is "this one
+	// call could not reach Redis and therefore did nothing".
+	TypeTeardownUnavailable = "https://soul-stack.com/errors/teardown-unavailable"
 	// TypePushProviderExists — a UNIQUE violation on push_providers.name (409,
 	// ADR-032 amendment 2026-05-26, S7-2). Symmetric with TypeServiceExists /
 	// TypeOperatorExists.
@@ -230,6 +244,7 @@ var titles = map[string]string{
 	TypeSigilKeyConcurrentChange:   "Concurrent primary-key change; retry",
 	TypeSoulprintNotReceived:       "Soulprint not yet received",
 	TypeClusterDegraded:            "Cluster is in degraded mode",
+	TypeTeardownUnavailable:        "Cluster teardown notice unavailable",
 	TypePushProviderExists:         "Push provider already exists",
 	TypeProviderExists:             "Cloud provider already exists",
 	TypeProfileExists:              "Cloud profile already exists",
@@ -324,6 +339,7 @@ var statuses = map[string]int{
 	TypeSigilKeyConcurrentChange:   http.StatusConflict,
 	TypeSoulprintNotReceived:       http.StatusGone,
 	TypeClusterDegraded:            http.StatusServiceUnavailable,
+	TypeTeardownUnavailable:        http.StatusServiceUnavailable,
 	TypePushProviderExists:         http.StatusConflict,
 	TypeProviderExists:             http.StatusConflict,
 	TypeProfileExists:              http.StatusConflict,

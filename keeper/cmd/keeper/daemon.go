@@ -3038,6 +3038,21 @@ func (d *daemon) setupServiceRegistryInvalidation(ctx context.Context) error {
 	return nil
 }
 
+// setupSoulForgetWatcher subscribes this instance to cluster-wide "this host has
+// been forgotten" notices (NIM-386) and closes the EventStream it holds for such
+// a host.
+//
+// Guarded on Redis only: without it the cluster is a single instance, which
+// closes its own streams synchronously inside the forget handler and has no one
+// to hear from. It runs AFTER setupGRPCEventStream so the StreamManager exists,
+// though the watcher re-reads the field per notice and tolerates a nil.
+func (d *daemon) setupSoulForgetWatcher(ctx context.Context) error {
+	if d.redisClient != nil {
+		go d.watchSoulForget(ctx)
+	}
+	return nil
+}
+
 // setupGRPCEventStream — gRPC EventStream listener (M2.2 + M2.5): StreamManager,
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
@@ -4545,6 +4560,12 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		SoulPresence: soulPresence,
+		// SoulTeardown — the release half of `DELETE /v1/souls/{sid}` (NIM-386).
+		// Value adapter, wired UNCONDITIONALLY: even without Redis it still
+		// closes the local EventStream, which is the resource a forgotten host
+		// most conspicuously keeps holding. Leaving it nil would turn the
+		// endpoint into a bare row delete.
+		SoulTeardown: soulTeardown{d: d},
 		// UtilizationReader — host-vitals from Redis for the telemetry endpoints
 		// (NIM-86). Value adapter (not a typed-nil interface): with nil-Redis
 		// (single-Keeper dev), the internal nil-guard returns stale/empty.
@@ -5016,6 +5037,9 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// SQL-presence.
+			// Same adapter REST gets (NIM-386): forgetting a host through MCP
+			// must release exactly what forgetting it through REST releases.
+			SoulTeardown:          soulTeardown{d: d},
 			VoyageCommandResolver: handlers.NewVoyageCommandPGResolverWithPresence(d.pool, mcpSoulPresence(d)),
 			VoyageMaxScope:        cfg.Voyage.ResolvedMaxScope(),
 			VoyageMaxBatchSize:    cfg.Voyage.ResolvedMaxBatchSize(),
@@ -5301,6 +5325,166 @@ func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (
 		return nil, errors.New("presence unavailable: Redis not configured (await_online barrier requires SID-lease)")
 	}
 	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
+}
+
+// soulTeardown is the release side of `DELETE /v1/souls/{sid}` (NIM-386): the
+// part of forgetting a host that Postgres cannot reach.
+//
+// Lazy over *daemon, like lazySoulPresence: setupGRPCEventStream builds the
+// StreamManager before setupAPIServer assembles api.Deps, so reading the field
+// at call time rather than capturing it keeps the two wiring steps independent.
+//
+// Redis is optional here and its absence is NOT a failure: a Keeper without
+// Redis is single-instance by construction (Redis is the coordination layer,
+// ADR-006), so there is no second instance to notify and no per-SID cache to
+// purge. What still runs in that mode is CloseLocal — the local stream exists
+// whether or not Redis does, and it is the resource an operator most needs
+// released.
+type soulTeardown struct{ d *daemon }
+
+// CloseLocal cancels the EventStream this instance holds for the SID. Returns
+// false when there is none — including when the gRPC listener is not up at all
+// (a Keeper serving the API without the stream plane), which must not be
+// reported as "closed a stream".
+func (t soulTeardown) CloseLocal(sid string) bool {
+	if t.d.streamManager == nil {
+		return false
+	}
+	return t.d.streamManager.Close(sid)
+}
+
+// Broadcast publishes the forget notice so the other instances close their own
+// streams for the SID. nil Redis → (false, nil): nothing to tell, and saying
+// otherwise would record a notice that was never sent.
+func (t soulTeardown) Broadcast(ctx context.Context, sid string) (bool, error) {
+	if t.d.redisClient == nil {
+		return false, nil
+	}
+	if _, err := keeperredis.PublishSoulForget(ctx, t.d.redisClient, sid, t.d.cfg.KID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// PurgeCache removes the forgotten host's per-SID Redis keys. The heartbeat hash
+// carries no TTL by design, so skipping this leaks a key forever.
+func (t soulTeardown) PurgeCache(ctx context.Context, sid string) (int64, error) {
+	if t.d.redisClient == nil {
+		return 0, nil
+	}
+	return keeperredis.PurgeSoulKeys(ctx, t.d.redisClient, sid)
+}
+
+// watchSoulForget closes this instance's EventStream for every host forgotten
+// ELSEWHERE in the cluster. It is the receiving half of soulTeardown.Broadcast;
+// the origin instance closes its own stream synchronously and filters its own
+// echo out (NIM-421 — the node that acted must not learn about its own action
+// from the wire).
+//
+// Without this loop the forget guarantee has a hole exactly where it matters:
+// the operator's request lands on instance A while the host's stream is held by
+// instance B, and B keeps serving a host that no longer exists in the registry.
+//
+// The subscription dying is NOT the end of the watcher. It re-subscribes,
+// because this channel has no TTL-poll behind it (unlike `rbac:invalidate`,
+// whose shape it copies — see [keeperredis.SoulForgetChannel]): an undelivered
+// notice is not repaired later, it is lost. Giving up on the first transport
+// error would not degrade the guarantee, it would end it — from that moment
+// every host forgotten elsewhere keeps a live stream HERE for the life of the
+// process, while the operator who forgot it was shown `broadcast: true` and no
+// warning. Redis flapping is routine in this daemon (the Toll middleware calls
+// it "a common phenomenon" and fails open on it), so this is the ordinary
+// failure, not an exotic one.
+//
+// What re-subscribing cannot do is recover the gap: pub/sub has no replay, so
+// notices published while the subscription was down are gone for good. That is
+// why the recovery line says so out loud instead of reading as an all-clear —
+// it is the operator's only hint that a specific host may still be streaming
+// here despite having been forgotten.
+func (d *daemon) watchSoulForget(ctx context.Context) {
+	// interrupted keeps the log honest across retries: the first failure says
+	// delivery stopped, the next success says it resumed AND that the gap was
+	// not replayed. Without it a flapping Redis writes one identical line per
+	// retry, and the one line that matters drowns in them.
+	interrupted := false
+	for ctx.Err() == nil {
+		d.consumeSoulForget(ctx, &interrupted)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(soulForgetResubscribeDelay):
+		}
+	}
+}
+
+// soulForgetResubscribeDelay paces the re-subscribe attempts of
+// [daemon.watchSoulForget]. Deliberately short: while it is waiting, a forget
+// performed elsewhere is silently lost, and unlike a cache refresh there is
+// nothing that will notice later. Cheap to retry this often — one SUBSCRIBE
+// against a Redis that is already the daemon's coordination layer, and the dial
+// timeout dominates the interval whenever Redis is actually down.
+const soulForgetResubscribeDelay = time.Second
+
+// consumeSoulForget subscribes once and drains notices until the subscription
+// dies or ctx is cancelled. It reports nothing back: the caller's only correct
+// response to any outcome is to try again, so an error return would be a value
+// with no decision behind it. interrupted carries the "delivery is currently
+// broken" state across calls so the logs describe the outage rather than each
+// attempt at it.
+func (d *daemon) consumeSoulForget(ctx context.Context, interrupted *bool) {
+	fail := func(msg string, args ...any) {
+		if *interrupted {
+			return
+		}
+		*interrupted = true
+		d.logger.Error(msg, args...)
+	}
+
+	sub, err := keeperredis.SubscribeSoulForget(ctx, d.redisClient, d.cfg.KID, d.logger)
+	if err != nil {
+		fail("soul.forget: cannot subscribe to teardown notices; until this recovers, a host forgotten on another Keeper instance keeps its stream here",
+			slog.Any("error", err))
+		return
+	}
+	defer sub.Close()
+
+	// Ready is the acknowledged SUBSCRIBE, not the handle: SubscribeSoulForget
+	// returns before the first Receive, so without this a dead Redis would look
+	// like a successful re-subscribe for exactly as long as it takes the
+	// forwarder goroutine to give up.
+	if err := sub.Ready(ctx); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		fail("soul.forget: teardown notice subscription never became ready; until it does, a host forgotten on another Keeper instance keeps its stream here",
+			slog.Any("error", err))
+		return
+	}
+
+	if *interrupted {
+		*interrupted = false
+		d.logger.Warn("soul.forget: teardown notice subscription re-established; notices published while it was down are NOT replayed, so a host forgotten during the outage may still hold a stream on this instance")
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-sub.Channel():
+			if !ok {
+				fail("soul.forget: teardown notice subscription closed; until it is re-established, a host forgotten on another Keeper instance keeps its stream here")
+				return
+			}
+			if d.streamManager == nil {
+				continue
+			}
+			if d.streamManager.Close(ev.SID) {
+				d.logger.Info("soul.forget: closed the stream of a host forgotten elsewhere in the cluster",
+					slog.String("sid", ev.SID),
+					slog.String("origin_kid", ev.OriginKID))
+			}
+		}
+	}
 }
 
 // lazyCertPolicy — the cert-rotation policy resolver for `core.cert.issued`,

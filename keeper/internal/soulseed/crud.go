@@ -306,6 +306,43 @@ func Revoke(ctx context.Context, db ExecQueryRower, seedID, reason string) (int6
 	return tag.RowsAffected(), nil
 }
 
+// revokeAllBySIDSQL revokes every still-usable seed of one SID. Same status
+// window as [revokeSQL] (`active` + `superseded`) — expired/revoked rows are
+// already terminal and must not be rewritten, so the affected-row count stays
+// a truthful "how many credentials were live".
+const revokeAllBySIDSQL = `
+UPDATE soul_seeds
+SET status = 'revoked', revocation_reason = $2
+WHERE sid = $1 AND status IN ('active', 'superseded')
+`
+
+// RevokeAllBySID revokes every still-usable seed of one SID, by SID rather
+// than by seed_id ([Revoke]), and returns how many rows it actually flipped.
+//
+// It is the credential half of "forget this host" (NIM-386): the `souls` row
+// is about to go and its seeds with it (FK ON DELETE CASCADE, migration 009),
+// so the revoke is not what makes the host unable to reconnect — seed auth is
+// an ALLOWLIST over `soul_seeds.fingerprint`, and an absent row already fails
+// closed. What the revoke buys is a truthful number: the count is measured on
+// the UPDATE, so it names the credentials that were live at the moment of
+// forgetting rather than however many history rows happened to be lying
+// around. Do not "optimise" it into a COUNT(*) before the DELETE — that
+// counts expired and already-revoked seeds too and reports a host as having
+// held credentials it no longer held.
+//
+// 0 rows is normal and not an error: a push (`transport: ssh`) host never had
+// a seed, and a host revoked earlier has no live one left.
+func RevokeAllBySID(ctx context.Context, db ExecQueryRower, sid, reason string) (int64, error) {
+	if sid == "" {
+		return 0, fmt.Errorf("soulseed: sid is empty")
+	}
+	tag, err := db.Exec(ctx, revokeAllBySIDSQL, sid, reason)
+	if err != nil {
+		return 0, fmt.Errorf("soulseed: revoke all by sid: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ListFilter is filter for [SelectAll].
 type ListFilter struct {
 	SID    string

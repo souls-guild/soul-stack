@@ -951,6 +951,29 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaSoulIssueToken(newHumaSoulAPI(r, auditWriter, audit.EventSoulTokenIssued, logger), soulH)
 			})
 
+			// DELETE /v1/souls/{sid} — forget a host (NIM-386). Permission
+			// `soul.forget`, selector SoulSIDSelector — `host=<sid>`, the same
+			// shape as issue-token / ssh-target-update: the SID is in the path,
+			// so the scope context is known before the handler runs. Audit
+			// EventSoulForgotten; payload — huma variant B (SetHumaAuditPayload).
+			//
+			// A SEPARATE permission from `soul.create`, deliberately: the
+			// operator who onboards hosts is not automatically the one allowed
+			// to erase them, and this is the only call in the souls surface that
+			// destroys rows an operator never named — memberships and Choir
+			// Voices go with the host through ON DELETE CASCADE.
+			//
+			// Its own mount group rather than joining the soul-detail read group
+			// above: that one is a bare RequireAction existence-gate for
+			// `soul.list` (a read whose scope narrowing happens in the handler),
+			// while this is a scope-aware RequirePermission. Sharing the group
+			// would let `soul.list` mount a destructive route.
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "soul", "forget", handlers.SoulSIDSelector),
+			).Group(func(r chi.Router) {
+				registerHumaSoulForget(newHumaSoulAPI(r, auditWriter, audit.EventSoulForgotten, logger), soulH)
+			})
+
 			// PUT /v1/souls/{sid}/ssh-target — update per-host SSH credentials for the push-flow
 			// (ADR-032 amendment 2026-05-26, S7-1). Permission `soul.ssh-target-update`
 			// (action — hyphenated). Selector SoulSIDSelector — `host=<sid>`. Audit

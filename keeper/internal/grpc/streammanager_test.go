@@ -166,3 +166,87 @@ func TestStreamManager_CloseAll_Idempotent(t *testing.T) {
 		t.Fatal("stream ctx not cancelled")
 	}
 }
+
+// The guards below cover [StreamManager.Close] — the only thing that can reach
+// the goroutine serving a forgotten host (NIM-386). Erasing the registry row
+// stops the host RECONNECTING, but a stream it already holds authenticated at
+// open and survives the delete; if Close reports "closed" without cancelling,
+// the operator is told a live host was released.
+
+// TestStreamManager_Close_CancelsOnlyTheNamedStream — the release itself, and
+// the blast radius. A forget names one host; cancelling a neighbour's ctx would
+// drop a Soul that was never mentioned.
+func TestStreamManager_Close_CancelsOnlyTheNamedStream(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+
+	victimCtx, cancelVictim := context.WithCancel(context.Background())
+	bystanderCtx, cancelBystander := context.WithCancel(context.Background())
+	defer cancelVictim()
+	defer cancelBystander()
+	m.RegisterStream("victim.example.com", cancelVictim)
+	m.RegisterStream("bystander.example.com", cancelBystander)
+
+	if !m.Close("victim.example.com") {
+		t.Fatal("Close reported no stream for a SID that has one")
+	}
+	select {
+	case <-victimCtx.Done():
+	default:
+		t.Fatal("Close returned true but the stream ctx was never cancelled — " +
+			"the forgotten host keeps talking to a Keeper that has no record of it, " +
+			"and the operator was told the stream was released")
+	}
+	select {
+	case <-bystanderCtx.Done():
+		t.Error("forgetting one host cancelled another host's stream")
+	default:
+	}
+}
+
+// TestStreamManager_Close_UnknownSIDIsNotReportedAsClosed — the false half.
+// "No stream here" is the normal answer on every instance but the one holding
+// it, and a forget of a host that was never connected is legal (NIM-386 has no
+// state gate). Returning true would put a release in the operator's record that
+// never happened.
+func TestStreamManager_Close_UnknownSIDIsNotReportedAsClosed(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	if m.Close("never-connected.example.com") {
+		t.Error("Close reported closing a stream that does not exist")
+	}
+}
+
+// TestStreamManager_Close_StreamWithoutCancelIsNotReportedAsClosed — a stream
+// registered through the older [StreamManager.Register] path has no cancel, so
+// nothing can force it down. Reporting "closed" for a stream still running is
+// the one answer an operator must never be given.
+func TestStreamManager_Close_StreamWithoutCancelIsNotReportedAsClosed(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	_ = m.Register("no-cancel.example.com")
+
+	if m.Close("no-cancel.example.com") {
+		t.Error("Close reported closing a stream it cannot cancel")
+	}
+}
+
+// TestStreamManager_Close_IsIdempotent — the forget path can reach the same SID
+// twice: the instance closes its own stream synchronously AND the notice it
+// broadcast can come back through another route. A second call must be a no-op,
+// not a panic.
+func TestStreamManager_Close_IsIdempotent(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.RegisterStream("sid.example.com", cancel)
+
+	if !m.Close("sid.example.com") {
+		t.Fatal("first Close = false")
+	}
+	if !m.Close("sid.example.com") {
+		t.Error("second Close = false; the entry is still present until the handler's own Unregister")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("stream ctx not cancelled")
+	}
+}
