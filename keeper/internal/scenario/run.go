@@ -783,7 +783,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// the row): teardown itself succeeded. Detached ctx: the original ctx
 		// may have been cancelled (Shutdown/timeout), but the row still needs
 		// dropping after a successful teardown.
-		res, derr := incarnation.DeleteAfterTeardown(dctx, r.deps.DB, r.deps.Audit, spec.IncarnationName, destroyForce(inc), log)
+		res, derr := incarnation.DeleteAfterTeardown(dctx, r.deps.DB, r.deps.Audit, spec.IncarnationName, destroyForce(inc),
+			incarnation.StateSchemaSecrets(art), log)
 		if derr != nil {
 			// DELETE/archive failed after a successful host teardown: hosts are
 			// gone but the row wasn't removed. This error exit does NOT move to

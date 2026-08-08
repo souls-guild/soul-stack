@@ -318,12 +318,22 @@ type DeleteResult struct {
 // [ErrIncarnationNotFound] is NOT used as a return: the absence of a
 // destroying row is a legitimate no-op (Deleted=false), not an error
 // (S-D3 idempotency).
+//
+// secrets is the declarative secret layer for this incarnation's `state`
+// ([StateSchemaSecrets] over the service artifact the caller already holds) and
+// is used by the force-path capture below. It is a POSITIONAL parameter rather
+// than a field on some options struct on purpose: every call site holds the
+// artifact, and a site that forgets to pass one is a compile error instead of a
+// destroy that quietly ships a declared secret into `status_details` (NIM-531 —
+// there were three sites and the capture reached all of them). nil is legal and
+// means "artifact unreadable" — the capture degrades to vault+regex, never fails.
 func DeleteAfterTeardown(
 	ctx context.Context,
 	pool TxBeginner,
 	w audit.Writer,
 	name string,
 	force bool,
+	secrets audit.SecretSchema,
 	logger *slog.Logger,
 ) (*DeleteResult, error) {
 	if !ValidName(name) {
@@ -345,7 +355,7 @@ func DeleteAfterTeardown(
 	detailsPatch := []byte(`{}`)
 	if force {
 		archiveStatus = ArchiveStatusForceDestroyed
-		u, cerr := collectUnreleased(ctx, tx, name)
+		u, cerr := collectUnreleased(ctx, tx, name, secrets)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -457,10 +467,17 @@ WHERE name = $1 AND status = 'destroying'
 // service-authored, and every other surface that shows it masks it (the
 // incarnation view, the history view, the run-event stream); reading two keys
 // straight out of it would be the one path that does not.
-// [audit.MaskSecrets] is the vault+regex layer;
-// the schema layer needs the service artifact, which this function has no reader
-// for — so a key a service declares `secret: true` is masked by
-// `GET /v1/incarnations/{name}` and NOT here. Tracked as NIM-531.
+//
+// All four masking layers run, not two ([ADR-010] §7.4). secrets carries the
+// declarative layer, built by the caller from the service artifact it already
+// holds; [audit.MaskSecretsWithSchema] adds vault-origin and regex-last-resort on
+// top. Until NIM-531 this function had no reader for the artifact and used the
+// vault+regex pair alone, so a key a service declared `secret: true` — and that
+// neither looked like a vault ref nor was named anything the regex knows — was
+// masked by `GET /v1/incarnations/{name}` and printed here. The same value, two
+// answers, decided by which endpoint the operator happened to call. A nil secrets
+// still degrades to exactly that older pair: an unreadable artifact costs the
+// declarative layer, never the destroy.
 //
 // Masking here protects the reply, the MCP result, the WARN line and
 // `status_details`. It does NOT protect `incarnation_archive.state`, which the
@@ -490,7 +507,7 @@ WHERE name = $1 AND status = 'destroying'
 // touch its row — so no lock taken here would serialize them, and a bind landing
 // between this read and the DELETE is cascaded away without ever appearing in
 // the record. That belongs on those endpoints; tracked as NIM-541.
-func collectUnreleased(ctx context.Context, tx pgx.Tx, name string) (*UnreleasedResources, error) {
+func collectUnreleased(ctx context.Context, tx pgx.Tx, name string, secrets audit.SecretSchema) (*UnreleasedResources, error) {
 	u := &UnreleasedResources{}
 
 	const selectStateSQL = `
@@ -508,7 +525,7 @@ WHERE name = $1 AND status = 'destroying'
 
 	var state map[string]any
 	if len(stateBytes) > 0 && json.Unmarshal(stateBytes, &state) == nil {
-		masked := audit.MaskSecrets(state)
+		masked := audit.MaskSecretsWithSchema(state, secrets)
 		u.Provider, _ = masked[stateKeyProvisionedProvider].(string)
 		u.VMIDs = jsonStringSlice(masked[stateKeyProvisionedVMIDs])
 	}

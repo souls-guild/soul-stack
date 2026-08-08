@@ -439,6 +439,11 @@ func checkAuthOIDC(root *ast.MappingNode, o *KeeperAuthOIDC) []diag.Diagnostic {
 	return out
 }
 
+// checkVaultRef is the semantic-validate half of the vault-ref check (nine
+// fields: postgres/redis×2/jwt/cloud_init/ldap×2/oidc×2). val is read only by the
+// regex — the message comes from [vaultRefMessage], which cannot see it, so the
+// rejected value never leaves this function. See vault_ref_diag.go for why
+// (NIM-505: it used to reach durable `audit_log`).
 func checkVaultRef(root *ast.MappingNode, yamlPath, val string) []diag.Diagnostic {
 	if reVaultRef.MatchString(val) {
 		return nil
@@ -446,7 +451,7 @@ func checkVaultRef(root *ast.MappingNode, yamlPath, val string) []diag.Diagnosti
 	return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:    "vault_ref_invalid_format",
-		Message: fmt.Sprintf("vault-ref %q must match vault:<path>[#<field>]", val),
+		Message: vaultRefMessage(fieldFromYAMLPath(yamlPath), vaultRefFormPath),
 	})}
 }
 

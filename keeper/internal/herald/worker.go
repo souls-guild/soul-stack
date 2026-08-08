@@ -525,7 +525,7 @@ func maskErr(err error) string {
 	if s, ok := masked["e"].(string); ok {
 		return s
 	}
-	return "<masked>"
+	return audit.MaskedValue
 }
 
 // sleepCtx waits for d or ctx.Done. false means ctx ended first.

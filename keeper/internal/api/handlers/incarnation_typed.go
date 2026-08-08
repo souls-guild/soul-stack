@@ -886,7 +886,8 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 	if effectiveForce {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		res, err := incarnation.DeleteAfterTeardown(dctx, h.db, h.auditW, name, effectiveForce, h.logger)
+		res, err := incarnation.DeleteAfterTeardown(dctx, h.db, h.auditW, name, effectiveForce,
+			incarnation.StateSchemaSecrets(art), h.logger)
 		if err != nil {
 			h.logger.Error("incarnation.destroy: force delete failed",
 				slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))

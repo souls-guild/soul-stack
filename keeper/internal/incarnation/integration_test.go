@@ -669,7 +669,7 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	ctx := context.Background()
 	aw := &fakeAuditWriter{}
 
-	res, err := DeleteAfterTeardown(ctx, integrationPool, aw, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(ctx, integrationPool, aw, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -795,7 +795,7 @@ func TestIntegration_DeleteAfterTeardown_ForceRecordsAbandonedResources(t *testi
 	seedMembership(t, "redis-prod", "vm-1.example.com", "vm-2.example.com")
 
 	aw := &fakeAuditWriter{}
-	res, err := DeleteAfterTeardown(ctx, integrationPool, aw, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(ctx, integrationPool, aw, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -901,7 +901,7 @@ func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 	seedDestroyable(t, "redis-prod")
 	ctx := context.Background()
 
-	res1, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil)
+	res1, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("first DeleteAfterTeardown: %v", err)
 	}
@@ -910,7 +910,7 @@ func TestIntegration_DeleteAfterTeardown_SingleWinner(t *testing.T) {
 	}
 
 	// Second call: row no longer in destroying → no-op, not error.
-	res2, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil)
+	res2, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("second DeleteAfterTeardown: %v", err)
 	}
@@ -945,7 +945,7 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	res, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(ctx, integrationPool, &fakeAuditWriter{}, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown on ready: %v", err)
 	}

@@ -41,7 +41,7 @@ func TestDeleteAfterTeardown_HappyWinner(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestDeleteAfterTeardown_NoOpLoser(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown no-op must not error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestDeleteAfterTeardown_AuditCompleted(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil); err != nil {
+	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil); err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
 	if len(aw.events) != 1 {
@@ -144,7 +144,7 @@ func TestDeleteAfterTeardown_AuditFailureDoesNotFail(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{writeErr: errors.New("audit down")}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("must not fail on audit error: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestDeleteAfterTeardown_NilAuditWriter(t *testing.T) {
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, nil, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, nil, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown with nil writer: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestDeleteAfterTeardown_NilAuditWriter(t *testing.T) {
 // the round trip (no transaction at all).
 func TestDeleteAfterTeardown_RejectsBadName(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{deleteTx(pgconn.NewCommandTag("DELETE 1"))}}
-	_, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "BAD_NAME", false, nil)
+	_, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "BAD_NAME", false, nil, nil)
 	if err == nil {
 		t.Fatal("invalid name returned nil err")
 	}
@@ -195,7 +195,7 @@ func TestDeleteAfterTeardown_ArchiveErrorAborts(t *testing.T) {
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	_, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", false, nil)
+	_, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", false, nil, nil)
 	if err == nil {
 		t.Fatal("archive failure returned nil err")
 	}
@@ -272,7 +272,7 @@ func TestDeleteAfterTeardown_ForceStampsTerminalArchiveStatus(t *testing.T) {
 	tx := forceDeleteTx()
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestDeleteAfterTeardown_TeardownStampsDestroyedArchiveStatus(t *testing.T) 
 	tx := deleteTx(pgconn.NewCommandTag("DELETE 1"))
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", false, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", false, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestDeleteAfterTeardown_ForceRecordsUnreleasedResources(t *testing.T) {
 	tx := forceDeleteTx()
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestDeleteAfterTeardown_ForceCapturesBeforeAnyMutation(t *testing.T) {
 	tx := forceDeleteTx()
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	if _, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil); err != nil {
+	if _, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil, nil); err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func TestDeleteAfterTeardown_ForceAuditCarriesUnreleased(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil); err != nil {
+	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil); err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
 	if len(aw.events) != 1 {
@@ -512,7 +512,7 @@ func TestDeleteAfterTeardown_ForceWithNothingProvisioned(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	w := &fakeAuditWriter{}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, w, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, w, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -606,7 +606,7 @@ func TestDeleteAfterTeardown_ForceRecordsEachDimensionAlone(t *testing.T) {
 			pool := &fakePool{txs: []*fakeTx{tx}}
 			aw := &fakeAuditWriter{}
 
-			res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil)
+			res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil)
 			if err != nil {
 				t.Fatalf("DeleteAfterTeardown: %v", err)
 			}
@@ -666,7 +666,7 @@ func TestDeleteAfterTeardown_ForceMasksStateDerivedValues(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
@@ -717,7 +717,7 @@ func TestDeleteAfterTeardown_ForceAuditPayloadOmitsEmptyDimensions(t *testing.T)
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil); err != nil {
+	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil); err != nil {
 		t.Fatalf("DeleteAfterTeardown: %v", err)
 	}
 	if len(aw.events) != 1 {
@@ -758,7 +758,7 @@ func TestDeleteAfterTeardown_ForceRosterErrorRefusesToDelete(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 	aw := &fakeAuditWriter{}
 
-	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil); err == nil {
+	if _, err := DeleteAfterTeardown(context.Background(), pool, aw, "redis-prod", true, nil, nil); err == nil {
 		t.Fatal("roster unreadable and the destroy still succeeded — the record is gone and " +
 			"nothing says which hosts it held")
 	}
@@ -784,7 +784,7 @@ func TestDeleteAfterTeardown_ForceStateRowGoneDegrades(t *testing.T) {
 	tx.selectRow = scriptedRow{err: pgx.ErrNoRows}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil)
+	res, err := DeleteAfterTeardown(context.Background(), pool, &fakeAuditWriter{}, "redis-prod", true, nil, nil)
 	if err != nil {
 		t.Fatalf("a vanished row must not fail the destroy: %v", err)
 	}

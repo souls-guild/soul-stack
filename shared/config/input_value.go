@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // ResolveInputValues builds the effective input from the schema and passed
@@ -353,21 +355,18 @@ func validateInputValue(name string, s *InputSchema, v any) error {
 	return validateValueAt("$."+name, s, v)
 }
 
-// maskedSecretLiteral is the placeholder for a secret field's raw value in a
-// validation error message. The architecture (ADR-010, secret masking) requires
-// never showing secrets in any output channel; a validation error lands in
-// incarnation.StatusDetails / audit, so masking is needed here, at the source.
-const maskedSecretLiteral = "<masked>"
-
 // literalFor returns the value string for an error diagnostic: the raw literal for
 // a normal field (the diagnostic matters), the placeholder for a secret field. The
 // type isn't disclosed separately — the field format is known from the schema/path
-// itself.
+// itself. A validation error lands in incarnation.StatusDetails / audit, so the
+// masking has to happen here, at the source, not at the display end.
+//
+// The decision and the placeholder come from [audit.MaskDeclared] — one rule for
+// every surface that prints something about a declared-secret value. This used to
+// spell it `<masked>` locally while the payload maskers wrote `***MASKED***`; two
+// spellings of one rule is how the rule drifts (NIM-505).
 func literalFor(s *InputSchema, v any) string {
-	if s != nil && s.Secret {
-		return maskedSecretLiteral
-	}
-	return formatLiteral(v)
+	return audit.MaskDeclared(s != nil && s.Secret, formatLiteral(v))
 }
 
 // validateValueAt recursively validates a passed value against the schema at any
@@ -418,7 +417,7 @@ func validateValueAt(path string, s *InputSchema, v any) error {
 			// list of allowed values is itself a secret (e.g. a fixed password
 			// set).
 			if s.Secret {
-				return fmt.Errorf("input %s = %s is not in enum", path, maskedSecretLiteral)
+				return fmt.Errorf("input %s = %s is not in enum", path, audit.MaskDeclared(true, formatLiteral(v)))
 			}
 			return fmt.Errorf("input %s = %s is not in enum %s", path, formatLiteral(v), formatEnum(s.Enum))
 		}

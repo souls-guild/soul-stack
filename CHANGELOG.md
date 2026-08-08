@@ -1107,6 +1107,57 @@ order to act in.
 
 ### Security
 
+- **A password pasted into a `*_ref` field was quoted back into `audit_log`.** Every
+  field that must hold a vault-ref rejected a plaintext value by naming it —
+  `vault-ref "hunter2" must match vault:<path>[#<field>]`. A keeper-config
+  diagnostic does not stop at the operator's terminal: `Store.Reload` hands it to
+  `audit.FormatDiagnostics`, which puts it in the `config.reload_failed` payload,
+  which is a row in `audit_log` — append-only, retained 365 days, readable by
+  everyone who can read the audit trail. The value most likely to be typed there
+  by mistake is the credential the field exists to keep out of the config, and it
+  outlived the incident that produced it. The same message reaches a second
+  surface: the settings API re-validates the merged config and returns the first
+  error to the HTTP caller.
+
+  Thirteen fields across two validators did this, not the five the ticket listed:
+  nine in the semantic phase (`postgres.dsn_ref`, `redis.password_ref`,
+  `redis.sentinel_password_ref`, `auth.jwt.signing_key_ref`,
+  `cloud_init.tls_ca_ref`, `auth.ldap.bind_password_ref`, `auth.ldap.tls.ca_ref`,
+  `auth.oidc.client_secret_ref`, `auth.oidc.tls.ca_ref`) and four in the schema
+  phase (`metrics.auth.basic.password_ref`, `push.host_ca_ref`,
+  `push.host_ca_refs[].ref`, `sigil.signing_key_ref`).
+
+  The message is now rendered by one function that **does not take the value as a
+  parameter**, so no call site is able to interpolate one whether it remembers to
+  or not: `postgres.dsn_ref must be a vault-ref (vault:<path>[#<field>]), got
+  ***MASKED***`. The placeholder is `audit.MaskedValue`, the same token the
+  payload maskers write — the previously divergent `<masked>` spelling in the
+  input-validation and herald paths is retired, so one grep finds every surface.
+  The field is still named and the expected form still shown: masking must not
+  cost the operator what they need to fix it.
+
+  Diagnostics already written to `audit_log` are not rewritten; they age out with
+  the existing 365-day retention.
+
+- **A state field a service declared `secret: true` was published in the clear by a
+  force destroy.** Destroying an incarnation with `allow_destroy=true` skips
+  teardown and reports what it abandoned, so an operator can clean up the cloud
+  resources by hand. That record was masked by the vault-origin and
+  key-name-regex layers only — the declarative layer was not consulted, because
+  the delete transaction had no access to the service manifest. A secret whose
+  key is not named like one (`provisioned_provider`) and whose value is not a
+  vault-ref passed straight through, into the API reply, the MCP tool result, the
+  WARN line, the `destroy_completed` audit event, and the `status_details` patch
+  that lands in `incarnation_archive` — the archive being the copy that outlives
+  the incarnation itself.
+
+  All four ADR-010 §7.4 layers now run on that record. The schema is collected
+  from the artifact by `incarnation.StateSchemaSecrets` and passed to
+  `DeleteAfterTeardown` as a **positional** argument, so a wiring site that
+  forgets it is a compile error rather than a destroy that quietly ships a
+  declared secret. A caller with no readable artifact passes `nil` and degrades to
+  the previous pair of layers.
+
 - **A DSN the Keeper could not parse printed its password to stderr.** `keeper run`
   opens the Postgres pool and then applies migrations; both steps reported a bad
   DSN by handing the parser's own error to the log. Under Kubernetes that line is

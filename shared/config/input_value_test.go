@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -508,8 +509,8 @@ func TestResolveInputValues_SecretValueMaskedOnType(t *testing.T) {
 	if strings.Contains(err.Error(), "12345") {
 		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
-	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
+	if !strings.Contains(err.Error(), audit.MaskedValue) {
+		t.Errorf("error doesn't contain the mask %q: %v", audit.MaskedValue, err)
 	}
 }
 
@@ -529,8 +530,8 @@ func TestResolveInputValues_SecretValueMaskedOnPattern(t *testing.T) {
 	if strings.Contains(err.Error(), secretFieldRaw) {
 		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
-	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
+	if !strings.Contains(err.Error(), audit.MaskedValue) {
+		t.Errorf("error doesn't contain the mask %q: %v", audit.MaskedValue, err)
 	}
 }
 
@@ -552,8 +553,8 @@ func TestResolveInputValues_SecretValueMaskedOnEnum(t *testing.T) {
 	if strings.Contains(err.Error(), "enum-secret-a") {
 		t.Errorf("enum literals of a secret field leaked into the error: %v", err)
 	}
-	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
+	if !strings.Contains(err.Error(), audit.MaskedValue) {
+		t.Errorf("error doesn't contain the mask %q: %v", audit.MaskedValue, err)
 	}
 }
 
@@ -571,7 +572,7 @@ func TestResolveInputValues_NonSecretValueShown(t *testing.T) {
 	if !strings.Contains(err.Error(), "BadRegion1") {
 		t.Errorf("a non-secret field's value should appear in the error for diagnostics: %v", err)
 	}
-	if strings.Contains(err.Error(), maskedSecretLiteral) {
+	if strings.Contains(err.Error(), audit.MaskedValue) {
 		t.Errorf("a non-secret field must not be masked: %v", err)
 	}
 }
@@ -600,8 +601,8 @@ func TestResolveInputValues_NestedSecretFieldMasked(t *testing.T) {
 	if strings.Contains(err.Error(), secretFieldRaw) {
 		t.Errorf("raw value of a nested secret field leaked into the error: %v", err)
 	}
-	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
+	if !strings.Contains(err.Error(), audit.MaskedValue) {
+		t.Errorf("error doesn't contain the mask %q: %v", audit.MaskedValue, err)
 	}
 	if !strings.Contains(err.Error(), "users[0].token") {
 		t.Errorf("error doesn't contain the nested field's path: %v", err)
@@ -697,8 +698,8 @@ func TestResolveInputValues_MinLengthSecretMasked(t *testing.T) {
 	if strings.Contains(err.Error(), secretFieldRaw[:5]) {
 		t.Errorf("raw value of a secret field leaked into the error: %v", err)
 	}
-	if !strings.Contains(err.Error(), maskedSecretLiteral) {
-		t.Errorf("error doesn't contain the mask %q: %v", maskedSecretLiteral, err)
+	if !strings.Contains(err.Error(), audit.MaskedValue) {
+		t.Errorf("error doesn't contain the mask %q: %v", audit.MaskedValue, err)
 	}
 }
 

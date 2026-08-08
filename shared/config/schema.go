@@ -669,7 +669,7 @@ func validateMetricsBasicAuth(root *ast.MappingNode, b *KeeperMetricsBasicAuth) 
 		out = append(out, atPath(root, "$.metrics.auth.basic.password_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "vault_ref_invalid",
-			Message: fmt.Sprintf("metrics.auth.basic.password_ref must be a vault-ref (vault:<mount>/<path>), got %q", b.PasswordRef),
+			Message: vaultRefMessage("metrics.auth.basic.password_ref", vaultRefFormMount),
 			Hint:    "plaintext passwords are not allowed; use vault:secret/keeper/metrics-password",
 		}))
 	}
@@ -746,7 +746,7 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 		out = append(out, atPath(root, "$.push.host_ca_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "vault_ref_invalid",
-			Message: fmt.Sprintf("push.host_ca_ref must be a vault-ref (vault:<mount>/<path>), got %q", p.HostCARef),
+			Message: vaultRefMessage("push.host_ca_ref", vaultRefFormMount),
 			Hint:    "host-CA public key lives in Vault; use e.g. vault:secret/keeper/ssh-host-ca",
 		}))
 	}
@@ -898,7 +898,7 @@ func validatePushHostCARefs(root *ast.MappingNode, refs []KeeperPushCARef) []dia
 			out = append(out, atPath(root, yp+".ref", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "vault_ref_invalid",
-				Message: fmt.Sprintf("push.host_ca_refs[%d].ref must be a vault-ref (vault:<mount>/<path>), got %q", i, r.Ref),
+				Message: vaultRefMessage(fmt.Sprintf("push.host_ca_refs[%d].ref", i), vaultRefFormMount),
 				Hint:    "host-CA public key lives in Vault; use e.g. vault:secret/keeper/ssh-host-ca-prod",
 			}))
 		}
@@ -945,7 +945,7 @@ func validateSigil(root *ast.MappingNode, s *KeeperSigil) []diag.Diagnostic {
 		out = append(out, atPath(root, "$.sigil.signing_key_ref", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "vault_ref_invalid",
-			Message: fmt.Sprintf("sigil.signing_key_ref must be a vault-ref (vault:<mount>/<path>), got %q", s.SigningKeyRef),
+			Message: vaultRefMessage("sigil.signing_key_ref", vaultRefFormMount),
 			Hint:    "the sigil signing key lives in Vault; use e.g. vault:secret/keeper/sigil-signing-key",
 		}))
 	}
