@@ -16,10 +16,15 @@ package redis
 // The structure is a Hash `soul:<sid>:hb` with fields `at`
 // (RFC3339Nano, UTC) and `kid`. A Hash rather than two separate keys
 // so both fields update atomically in one command and read in one
-// HGETALL on flush. No TTL is set: the record lives until an explicit
-// DEL (Reaper rules `purge_souls` / `mark_disconnected`); a full
-// Redis restart loses the data, and the flush snapshot from PG serves
-// as a fallback until the next new message.
+// HGETALL on flush. No TTL is set, and — corrected 2026-08-07,
+// NIM-386 — nothing collects it on a timer either. This block used to
+// name the Reaper rules `purge_souls` / `mark_disconnected` as the
+// explicit DEL behind it; both are SQL-only (`mark_disconnected` in
+// its lease-aware form READS a Redis lease, it deletes nothing), so
+// the key in fact outlived every host that ever connected. The one
+// deleter is [PurgeSoulKeys], on the operator forgetting the host. A
+// full Redis restart loses the data, and the flush snapshot from PG
+// serves as a fallback until the next new message.
 
 import (
 	"context"

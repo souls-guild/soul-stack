@@ -179,3 +179,49 @@ Every filter is ANDed with the caller's `soul.list` scope and can only narrow it
 ```
 
 Item fields (`SoulListEntry`) - registry projection `souls` from Postgres ([storage.md](../storage.md), [`../soul/identity.md`](../../soul/identity.md)).
+
+#### `DELETE /v1/souls/{sid}` — forget a host
+
+Permission: `soul.forget`. MCP-tool: `keeper.soul.forget`. **Irreversible, and it removes more than the row it names.**
+
+Until [NIM-386](../rbac.md) the registry had no operator path out: a host that had burnt down, been reinstalled under a new SID or handed back to a cloud provider stayed in `souls` forever, kept answering `GET /v1/souls`, and kept its seeds valid. This is that path.
+
+**Body:** empty. There is **no `force` flag and no state gate** — any host in any status can be forgotten, including one that is `connected` right now. A dead host cannot be asked to consent to its own removal, so a gate on status would only make the operation unusable in exactly the case it exists for.
+
+**Response `200 SoulForgetReply`:**
+
+```json
+{
+  "sid": "redis-prod-01.example.com",
+  "status_before": "disconnected",
+  "seeds_revoked": 2,
+  "bootstraps_burned": 1,
+  "memberships_severed": 3,
+  "choir_voices_removed": 1,
+  "local_stream_closed": true,
+  "broadcast": true,
+  "cache_keys_purged": 3,
+  "warnings": []
+}
+```
+
+The counts are the point of the reply, not decoration: every foreign key on `souls(sid)` is `ON DELETE CASCADE`, so the delete reaches rows the operator never named — the host's SoulSeeds (migration 009), its bootstrap tokens (008), its Choir Voices (060) and its incarnation memberships (099). `memberships_severed` and `choir_voices_removed` say how much of a running fleet's topology just changed; an incarnation that had three hosts and now has two learns it here.
+
+`status_before` is read under the row lock inside the same transaction, so it is the status the host actually had when it went, not one re-read afterwards.
+
+**Why a forgotten host cannot come back.** Seed authentication is an **allowlist**: [`grpc.SeedAuthenticator`](../../adr/0012-keeper-soul-grpc.md) looks the presented certificate's fingerprint up in `soul_seeds` and fails closed with `Unauthenticated` when there is no row. The cascade removes those rows, so a reconnect is refused structurally rather than by a rule someone has to remember to add. `seeds_revoked` is therefore not what stops the host — it is the count of credentials that were still **live** at the moment of the forget (`active` + `superseded`), which is what an operator needs to know when the same certificate might exist on a disk somewhere else.
+
+**Release, not just delete.** Deleting the row is the easy half; what the host held has to be let go too, and the reply says whether that happened:
+
+| Field | What it reports |
+|---|---|
+| `local_stream_closed` | This Keeper instance held the host's `EventStream` and closed it. `false` simply means the stream lived elsewhere (or nowhere). |
+| `broadcast` | The cluster-wide teardown notice went out over Redis pub/sub to the other instances, so whichever one holds the stream drops it. `false` means it did not go out — never inferred from "we tried". |
+| `cache_keys_purged` | Per-SID Redis keys removed (`soul:<sid>:hb`, `:util`, `:util:win`). The heartbeat hash has **no TTL** by design — its lifetime is an explicit delete by the Reaper, whose rules key off `souls` rows — so a key left behind after the row is gone is a permanent leak, not a stale entry that expires. The SID lease (`soul:<sid>:lock`) is deliberately **not** purged: it belongs to the instance holding the stream and is released by closing it. |
+| `warnings[]` | Everything above that failed **after** the row was already gone. Non-empty means the record was deleted and something was not released — the operator has to see that, not read a bare `200`. |
+
+The ordering exists for the same reason. The teardown notice is sent **before** anything is deleted, and a publish that cannot go out at all aborts the operation with `503 teardown-unavailable` and **nothing deleted** — a host erased from the database while a stream on an unreachable instance stays open is worse than a failed request, and the operator can retry. Failures after the delete cannot un-delete, so they surface as `warnings[]` instead.
+
+**Errors:** `403 forbidden`, `404 not-found` (SID is not in the registry), `503 teardown-unavailable` (the teardown notice could not be sent — nothing was deleted, safe to retry). A separate type from `cluster-degraded`, which is [Toll](../../adr/0038-toll.md)'s cluster-health flag: same status code, different fact, and a client branching on the type must not read one as the other.
+
+**Audit:** `soul.forgotten`, carrying the full count set. It is the only audit record that is the **last surviving copy** of what it describes — the host row and everything cascading off it are gone by the time it is written.

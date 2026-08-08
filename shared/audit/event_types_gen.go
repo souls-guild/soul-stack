@@ -118,6 +118,7 @@ var allEventTypes = []EventType{
 	"soul.bootstrapped",                         // EventSoulBootstrapped
 	"soul.coven-changed",                        // EventSoulCovenChanged
 	"soul.created",                              // EventSoulCreated
+	"soul.forgotten",                            // EventSoulForgotten
 	"soul.seed-issued",                          // EventSoulSeedIssued
 	"soul.seed-rotated",                         // EventSoulSeedRotated
 	"soul.ssh-target.imported_from_config",      // EventSoulSshTargetImportedFromConfig

@@ -31,6 +31,14 @@ const (
 	mcpCodeWouldLockOutCluster = "would-lock-out-cluster"
 	mcpCodeInternalError       = "internal-error"
 	mcpCodeNotImplemented      = "not-implemented"
+	// mcpCodeTeardownUnavailable mirrors REST TypeTeardownUnavailable:
+	// keeper.soul.forget stopped before deleting anything because the
+	// cluster-wide teardown notice could not be published. Its own code rather
+	// than internal-error, which is the point of the distinction: this outcome
+	// is retryable and changed nothing, while internal-error means a defect the
+	// caller cannot act on. An agent that cannot tell them apart either retries
+	// a real bug or gives up on a host it could have forgotten a second later.
+	mcpCodeTeardownUnavailable = "teardown-unavailable"
 
 	// Incarnation codes from docs/keeper/mcp-tools.md § Errors (stable URN
 	// suffixes). incarnation-locked covers resource state conflicts

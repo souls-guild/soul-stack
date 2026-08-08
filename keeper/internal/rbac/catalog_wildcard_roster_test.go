@@ -25,13 +25,17 @@ import (
 // a catalog snapshot.
 func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 	want := map[string][]string{
-		// soul.console is the R5 addition: an interactive PTY as the Soul
-		// daemon's user (typically root), the MCP one-shot command, and
-		// playback of anyone's recorded session.
+		// soul.console and soul.forget are the R5 additions. The first is an
+		// interactive PTY as the Soul daemon's user (typically root), the MCP
+		// one-shot command, and playback of anyone's recorded session. The
+		// second is the only irreversible action on the resource: it erases the
+		// host and cascades into its seeds, tokens, incarnation memberships and
+		// Choir Voices — rows the operator never named in the request.
 		"soul": {
 			"soul.console",
 			"soul.coven-assign",
 			"soul.create",
+			"soul.forget",
 			"soul.issue-token",
 			"soul.list",
 			"soul.ssh-target-update",

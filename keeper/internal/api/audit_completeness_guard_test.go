@@ -115,8 +115,12 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/souls/coven"}:             {events: []audit.EventType{audit.EventSoulCovenChanged}},
 	{http.MethodPost, "/v1/souls/traits"}:            {events: []audit.EventType{audit.EventSoulTraitsChanged}},
 	{http.MethodPost, "/v1/souls/{sid}/issue-token"}: {events: []audit.EventType{audit.EventSoulTokenIssued}},
-	{http.MethodPut, "/v1/souls/{sid}/ssh-target"}:   {events: []audit.EventType{audit.EventSoulSshTargetUpdated}},
-	{http.MethodPost, "/v1/souls/{sid}/exec"}:        {events: []audit.EventType{audit.EventTypeErrandInvoked}},
+	// The only route whose audit record is the LAST copy of what it describes:
+	// the host row and everything cascading off it are gone by the time the
+	// event is written, so soul.forgotten carries the full count set.
+	{http.MethodDelete, "/v1/souls/{sid}"}:         {events: []audit.EventType{audit.EventSoulForgotten}},
+	{http.MethodPut, "/v1/souls/{sid}/ssh-target"}: {events: []audit.EventType{audit.EventSoulSshTargetUpdated}},
+	{http.MethodPost, "/v1/souls/{sid}/exec"}:      {events: []audit.EventType{audit.EventTypeErrandInvoked}},
 
 	// plugins/sigils (middleware-audit).
 	{http.MethodPost, "/v1/plugins/sigils"}:           {events: []audit.EventType{audit.EventPluginAllowed}},

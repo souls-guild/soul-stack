@@ -170,6 +170,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaSoulList(api, stub)
 			registerHumaSoulStats(api, stub, nil)
 			registerHumaSoulGet(api, stub)
+			registerHumaSoulForget(api, stub)
 			registerHumaSoulSoulprint(api, stub)
 			registerHumaSoulHistory(api, stub)
 			registerHumaSoulTelemetry(api, handlers.TelemetrySpecStub())

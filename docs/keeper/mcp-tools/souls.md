@@ -111,6 +111,41 @@ Souls Enumeration. Permission: `soul.list`. Endpoint: [`GET /v1/souls`](../opera
 | `items` | `array<SoulListEntry>` | Items - `{sid, transport, status, covens, last_seen_at, last_seen_by_kid, registered_at}`. |
 | `offset`, `limit`, `total` | `integer` | Pagination. |
 
+#### `keeper.soul.forget`
+
+**Irreversibly** erases a host from the registry and releases what it held. Permission: **`soul.forget`**; selector `host=<sid>`. Endpoint: [`DELETE /v1/souls/{sid}`](../operator-api/souls.md). Async: no.
+
+This is the only destructive action on the resource, and the only one an agent can take that no later call can undo — worth reading the [endpoint section](../operator-api/souls.md) before wiring it into anything that decides on its own. It is legal in **any** status, including `connected` (the call tears the stream down) and a SID this cluster has never heard from, because a dead host cannot consent to its own removal. There is **no `force` flag** and no dry-run.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sid` | `string` (regex SID) | yes | FQDN of the host to forget. The only argument; an unknown one is a `malformed-request`. |
+
+**Output:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `sid` | `string` | Mirror input. |
+| `status_before` | `string` | The status the host had when it went, read under the row lock inside the deleting transaction. |
+| `seeds_revoked` | `integer` | SoulSeeds that were still **live** (`active` + `superseded`) — credentials that may exist on a disk somewhere. Terminal rows (`expired`/`revoked`) are not counted. |
+| `bootstraps_burned` | `integer` | Unredeemed bootstrap tokens invalidated. |
+| `memberships_severed` | `integer` | Incarnation memberships that went with the host. |
+| `choir_voices_removed` | `integer` | Choir Voices that went with the host. |
+| `local_stream_closed` | `boolean` | This instance held the `EventStream` and closed it. `false` only means the stream lived elsewhere. |
+| `broadcast` | `boolean` | The cluster-wide teardown notice went out. Never inferred from "we tried". |
+| `cache_keys_purged` | `integer` | Per-SID Redis keys removed (`soul:<sid>:hb`, `:util`, `:util:win`). |
+| `warnings` | `array<string>` | Resources that could **not** be released after the row was already gone. |
+
+**Check the counts before reporting success.** The delete reaches rows nobody named: every foreign key on `souls(sid)` is `ON DELETE CASCADE`, so `memberships_severed` and `choir_voices_removed` are how much of a running fleet's topology just changed. A host that looked idle can still be the third member of an incarnation.
+
+**`warnings[]` is not decoration.** A non-empty list means the host was erased **and something it held was not released** — the record is gone and the resource is still there. `soul:<sid>:hb` has no TTL and the Reaper keys off `souls` rows, so an unpurged key after the row is gone leaks permanently. Report the warnings; do not fold a `200` with warnings into "done".
+
+**Errors:** `forbidden` (no `soul.forget`, or not on this host), `not-found` (SID is not in the registry), `validation-failed` (missing or malformed `sid`), `malformed-request` (unknown argument), `teardown-unavailable`, `internal-error`. `teardown-unavailable` is the retryable one and it is machine-readable, not just readable in the message: the cluster-wide teardown notice could not be sent, so **nothing was deleted** — the host is still registered and the call is safe to repeat once Redis is reachable. Erasing it while a stream on an unreachable instance stayed open would be worse than failing. `internal-error` means the opposite: a defect, with no promise about what was or was not written.
+
+**Audit.** `soul.forgotten`, carrying the full count set — the only audit record that is the **last surviving copy** of what it describes, since every row it names is gone by the time it is written.
+
 #### `keeper.soul.ssh-target.update`
 
 Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../../adr/0032-push-orchestrator.md) amendment 2026-05-26, S7-1). Source-of-truth for `PGFallbackTargetResolver`; `keeper.yml::push.targets[]` - legacy fallback under the `push.allow_legacy_push_targets` flag. Permission: `soul.ssh-target-update`; selector `host=<sid>`. Endpoint: [`PUT /v1/souls/{sid}/ssh-target`](../operator-api/souls.md). Async: no.

@@ -212,6 +212,59 @@ func soulIssueTokenOperation() huma.Operation {
 	}
 }
 
+// === DELETE /v1/souls/{sid} (forget) — WRITE+AUDIT soul.forgotten (200+body) ===
+
+// soulForgetInput — huma input DELETE /v1/souls/{sid}. SID — path. No Body, no
+// query: there is deliberately no `force` (NIM-386). A single verb must not be
+// able to degrade from "release the host" to "drop its row" — if the release
+// cannot happen the call fails with 503 having deleted nothing.
+type soulForgetInput struct {
+	SID string `path:"sid" doc:"SID (FQDN) of Soul"`
+}
+
+// soulForgetOutput — huma output DELETE /v1/souls/{sid} (FULL-TYPED). Status=200
+// WITH BODY, not the 204 a DELETE usually answers: the operation fires four ON
+// DELETE CASCADE edges and two of them reach objects other operators own
+// (incarnation rosters, Choir Voices), so the counts have to be on screen. The
+// release outcome rides along — a host erased but not released is not a plain
+// success.
+type soulForgetOutput struct {
+	Status int `json:"-"`
+	Body   SoulForgetReply
+}
+
+// soulForgetOperation — metadata of DELETE /v1/souls/{sid}. DefaultStatus=200.
+// Permission soul.forget + audit soul.forgotten. Errors: 403 RBAC, INCLUDING a
+// host outside the operator's scope (this is a scope-aware RequirePermission
+// with SoulSIDSelector, so the selector is resolved from the path before the
+// handler runs — out-of-scope is answered 403 and never reaches the 404 branch,
+// unlike the read routes where narrowing happens in the handler); 404 no soul;
+// 422 invalid sid; 503 the cluster could not be told (NOTHING was deleted —
+// retryable, problem type `teardown-unavailable`); 500.
+//
+// No state precondition and therefore no 409: a host may be forgotten in any
+// state, including `connected` (the call tears the stream down) and one this
+// cluster has never heard from. What keeps a forgotten host gone is not a state
+// check but the allowlist — seed auth resolves `soul_seeds.fingerprint`, and the
+// seeds cascade away with the row.
+func soulForgetOperation() huma.Operation {
+	return huma.Operation{
+		OperationID: "forgetSoul",
+		Method:      http.MethodDelete,
+		Path:        "/{sid}",
+		Summary:     "Forget a host",
+		Description: "Erase a host from the registry and release what it held: revoke its seeds, burn its unused bootstrap tokens, " +
+			"close its EventStream across the cluster and purge its Redis keys. The souls row goes, and with it — through ON DELETE CASCADE — " +
+			"its seeds, its unburnt bootstrap tokens, its incarnation memberships and its Choir Voices; all four counts are in the reply. " +
+			"IRREVERSIBLE, and legal in any state (including connected). A forgotten host cannot reconnect: seed auth is an allowlist and its " +
+			"allowlist entry is gone. Permission soul.forget. 503 - the cluster-wide teardown notice could not be sent and NOTHING was deleted.",
+		Tags:          []string{"soul"},
+		DefaultStatus: http.StatusOK,
+		Errors: []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity,
+			http.StatusInternalServerError, http.StatusServiceUnavailable},
+	}
+}
+
 // === PUT /v1/souls/{sid}/ssh-target (ssh-target) — WRITE+AUDIT soul.ssh-target.updated (200+body) ===
 
 // soulSshTargetInput — huma input PUT /v1/souls/{sid}/ssh-target. SID — path; Body — typed body.

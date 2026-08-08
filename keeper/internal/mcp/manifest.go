@@ -368,6 +368,22 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name: "keeper.soul.forget",
+			Description: "IRREVERSIBLY erases a host from the registry and releases what it held: revokes its seeds, burns its unused bootstrap tokens, " +
+				"closes its EventStream across the cluster and purges its Redis keys. The souls row goes, and with it - through ON DELETE CASCADE - its seeds, " +
+				"its unburnt bootstrap tokens, its incarnation memberships and its Choir Voices; all four counts are in the output, so check " +
+				"memberships_severed / choir_voices_removed before calling this on a host you did not verify. Legal in any state, including connected " +
+				"(the call tears the stream down) and a host this cluster has never heard from. A forgotten host CANNOT reconnect: seed auth is an allowlist " +
+				"and its allowlist entry is gone; re-adding it means onboarding it again from scratch. Permission: soul.forget. There is no force flag. " +
+				"Fails with code=internal-error and NOTHING deleted if the cluster-wide teardown notice cannot be sent. A non-empty warnings[] means the " +
+				"host was erased but something it held could not be released - report it, do not treat it as success.",
+			InputSchema:  schemaSoulForgetInput,
+			OutputSchema: schemaSoulForgetOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.soul.coven-assign",
 			Description:  "Bulk adds (mode=append) / removes (mode=remove) ONE Coven label, or REPLACES (mode=replace) the set of Coven labels on hosts under the selector (all/sids/coven/incarnation/status) ∩ operator coven-scope. append/remove requires a 'label' field, replace requires 'labels[]' (may be empty = remove all). Coven is a cold PG label. Permission: soul.coven-assign. dry_run=true returns matched without UPDATE. Fails with code=validation-failed on an empty selector or on a label/any label of the set outside the operator's coven-scope.",
 			InputSchema:  schemaSoulCovenAssignInput,
@@ -1630,6 +1646,35 @@ var (
 "sid":{"type":"string"},
 "bootstrap_token":{"type":"string","description":"Issued once; the client must save it."},
 "expires_at":{"type":"string","format":"date-time"}}}`)
+
+	// forget has no `force`: a single verb must not be able to degrade from
+	// "release the host" to "drop its row" (NIM-386). Every output field is
+	// required — an agent must not be able to read a partial release as a
+	// success because a field it did not receive defaulted to zero.
+	schemaSoulForgetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["sid"],
+"properties":{
+"sid":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$","description":"SID (FQDN) of the host to forget. IRREVERSIBLE."}}}`)
+
+	schemaSoulForgetOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["sid","status_before","seeds_revoked","bootstraps_burned","memberships_severed","choir_voices_removed","local_stream_closed","broadcast","cache_keys_purged","warnings"],
+"properties":{
+"sid":{"type":"string"},
+"status_before":{"type":"string","description":"souls.status the host carried at the moment of the delete."},
+"seeds_revoked":{"type":"integer","description":"Still-usable seeds (active + superseded) revoked before the row was erased."},
+"bootstraps_burned":{"type":"integer","description":"Unused bootstrap tokens burned; a host forgotten before it onboarded had one outstanding."},
+"memberships_severed":{"type":"integer","description":"incarnation_membership rows the cascade removed - that many incarnation rosters just lost this host."},
+"choir_voices_removed":{"type":"integer","description":"incarnation_choir_voices rows the cascade removed; a Voice carries the host's declared role."},
+"local_stream_closed":{"type":"boolean","description":"This Keeper instance held a live EventStream for the host and closed it."},
+"broadcast":{"type":"boolean","description":"The post-delete teardown notice went out to the cluster. false on a single-instance Keeper without Redis - there is no one to tell."},
+"cache_keys_purged":{"type":"integer","description":"Per-SID Redis keys removed. soul:<sid>:hb carries no TTL, so a host forgotten without this leaks a key forever."},
+"warnings":{"type":"array","items":{"type":"string"},"description":"Resources that could NOT be released, in operator-readable words. Empty = fully released. Non-empty means the host is erased but something still holds on."}}}`)
 
 	// selector is a subset of the soul.* targeting vocabulary (all/sids/coven/
 	// incarnation/status), mirroring REST POST /v1/souls/coven. A free-form

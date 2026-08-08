@@ -24,6 +24,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
@@ -105,6 +106,7 @@ type SoulHandler struct {
 	pool     SoulPool
 	scoper   PurviewResolver
 	presence SoulPresence
+	teardown soulforget.Teardown
 	logger   *slog.Logger
 }
 
@@ -120,10 +122,29 @@ type SoulHandler struct {
 // SID lease rather than returned as a stale PG snapshot (see [SoulPresence]). nil →
 // the overlay is off (single-instance dev / unit tests), the PG snapshot is returned.
 func NewSoulHandler(pool SoulPool, scoper PurviewResolver, presence SoulPresence, logger *slog.Logger) *SoulHandler {
+	return NewSoulHandlerWithTeardown(pool, scoper, presence, nil, logger)
+}
+
+// NewSoulHandlerWithTeardown is [NewSoulHandler] plus the one dependency only
+// `DELETE /v1/souls/{sid}` needs (NIM-386): the release side of forgetting a
+// host — closing the EventStream this instance holds for it, telling the other
+// instances to close theirs, and purging its per-SID Redis keys.
+//
+// A separate constructor rather than a fifth parameter on [NewSoulHandler]:
+// that one has ~150 call sites, and none of them forget hosts. The daemon uses
+// this one; everything else keeps the short form.
+//
+// teardown nil = single-instance dev / unit tests: there is no second instance
+// to notify and the stream dies with the process, so [soulforget.Erase] does
+// the PG half alone. In the daemon it is always non-nil — a nil there would
+// mean the endpoint deletes rows while leaving live streams and a TTL-less
+// heartbeat key behind, which is exactly the failure this dependency exists to
+// prevent.
+func NewSoulHandlerWithTeardown(pool SoulPool, scoper PurviewResolver, presence SoulPresence, teardown soulforget.Teardown, logger *slog.Logger) *SoulHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &SoulHandler{pool: pool, scoper: scoper, presence: presence, logger: logger}
+	return &SoulHandler{pool: pool, scoper: scoper, presence: presence, teardown: teardown, logger: logger}
 }
 
 // SoulSpecStub — a non-empty *SoulHandler stub for generating the huma OpenAPI fragment
@@ -420,6 +441,174 @@ func (h *SoulHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, s
 		ExpiredPrevious: expiredPrevious,
 		ExpiresAtRFC:    rec.ExpiresAt.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+// SoulForgetView — the FLAT domain projection of the 200 body of
+// DELETE /v1/souls/{sid} (handler-native T5d). Package api projects it into the
+// native schema SoulForgetReply.
+//
+// The endpoint deliberately does NOT answer 204. Forgetting a host fires four
+// ON DELETE CASCADE edges, and two of them reach other operators' objects —
+// incarnation rosters and Choir Voices. An empty body would let a host be
+// erased out of three rosters with nothing on screen to say so. Every field
+// here is measured inside the delete transaction, never inferred.
+//
+// The release half is reported next to the counts, not folded into them: a
+// forgotten host that could not be released is NOT a plain success, and
+// `warnings` is where that shows up.
+type SoulForgetView struct {
+	SID                string
+	StatusBefore       string
+	SeedsRevoked       int64
+	BootstrapsBurned   int64
+	MembershipsSevered int64
+	ChoirVoicesRemoved int64
+	LocalStreamClosed  bool
+	Broadcast          bool
+	CacheKeysPurged    int64
+	Warnings           []string
+}
+
+// soulForgetView builds the domain projection [SoulForgetView]. warnings nil →
+// `[]`: the field is non-nullable on the wire, and "no warnings" must read as
+// an empty list rather than as a missing field a client may skip.
+func soulForgetView(sid string, res soulforget.Result) SoulForgetView {
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return SoulForgetView{
+		SID:                sid,
+		StatusBefore:       res.StatusBefore,
+		SeedsRevoked:       res.SeedsRevoked,
+		BootstrapsBurned:   res.BootstrapsBurned,
+		MembershipsSevered: res.MembershipsSevered,
+		ChoirVoicesRemoved: res.ChoirVoicesRemoved,
+		LocalStreamClosed:  res.LocalStreamClosed,
+		Broadcast:          res.Broadcast,
+		CacheKeysPurged:    res.CacheKeysPurged,
+		Warnings:           warnings,
+	}
+}
+
+// SoulForgetReply — the result of [SoulHandler.ForgetTyped] (handler-native):
+// the domain projection of the 200 body + the audit fields.
+type SoulForgetReply struct {
+	Body SoulForgetView
+}
+
+// AuditPayload — audit fields of the 200 Forget.
+//
+// This payload matters more than most: the rows it describes are gone by the
+// time it is written, so `soul.forgotten` is the ONLY durable record that the
+// host, its seeds, its memberships and its Voices ever existed. It therefore
+// carries the full count set and the release outcome, including `warnings` —
+// an operator reading the audit trail must be able to tell "forgotten and
+// released" from "forgotten, and something was left holding on".
+func (r SoulForgetReply) AuditPayload() middleware.AuditPayload {
+	return middleware.AuditPayload{
+		"sid":                  r.Body.SID,
+		"status_before":        r.Body.StatusBefore,
+		"seeds_revoked":        r.Body.SeedsRevoked,
+		"bootstraps_burned":    r.Body.BootstrapsBurned,
+		"memberships_severed":  r.Body.MembershipsSevered,
+		"choir_voices_removed": r.Body.ChoirVoicesRemoved,
+		"local_stream_closed":  r.Body.LocalStreamClosed,
+		"broadcast":            r.Body.Broadcast,
+		"cache_keys_purged":    r.Body.CacheKeysPurged,
+		"warnings":             r.Body.Warnings,
+	}
+}
+
+// forgetReason names the operator in `soul_seeds.revocation_reason`. The reason
+// is written inside the same transaction that deletes the seed rows, so this
+// string and the audit event are the only places the act survives — a later
+// "who revoked this fingerprint" has nothing else to read.
+//
+// The nil fallback is unreachable through the endpoint (nil claims fail the
+// scope gate above with 404) and exists so a caller can never reach
+// [soulforget.Forget]'s empty-reason rejection, which would surface as an
+// opaque 500 on an operation that had already been authorized.
+func forgetReason(claims *jwt.Claims) string {
+	if claims == nil || claims.Subject == "" {
+		return "forgotten by an unidentified operator"
+	}
+	return "forgotten by " + claims.Subject
+}
+
+// ForgetTyped — the extracted domain function of DELETE /v1/souls/{sid}
+// (FULL-TYPED, NIM-386): erase a host from the registry and release what it
+// held, without the http boundary.
+//
+// Authorization is the route's `RequirePermission(soul, forget,
+// SoulSIDSelector)` and nothing else — the same shape as issue-token and
+// ssh-target-update, whose scope context is likewise the SID in the path. It
+// deliberately does NOT also apply the read path's [SoulHandler.inScope] gate:
+// that one resolves the Purview of `soul.list`, so reusing it would make
+// `soul.forget` silently unusable for any operator whose list-scope happens not
+// to cover the host — a cross-permission dependency nothing in the catalog
+// declares. There is no existence leak in leaving it out: an operator without
+// `soul.forget` on this host is stopped by the route with 403 before the
+// handler runs, and one who has it is entitled to learn whether the host
+// exists.
+//
+// The state of the host is NOT a gate. A host may be forgotten while
+// `connected` (the call tears its stream down), while `pending` (its unburnt
+// bootstrap token is burned), or in a state this cluster has never observed.
+// The safety property is not "only dead hosts may be erased" — it is that a
+// forgotten host cannot come back: seed auth is an allowlist over
+// `soul_seeds.fingerprint` and the seeds cascade away with the row.
+//
+// There is no `force`. A single verb cannot quietly degrade from "release the
+// host" to "drop its row": if the release cannot happen, the caller gets 503
+// with nothing deleted ([soulforget.ErrTeardownUnavailable]), and if it only
+// partly happened the reply says which resource is still held.
+//
+// Errors — *problemError (422 invalid sid; 404 no soul / out of scope; 503 the
+// cluster could not be told, nothing deleted; 500 PG failure); success —
+// [SoulForgetReply] (200 body + audit fields).
+func (h *SoulHandler) ForgetTyped(ctx context.Context, claims *jwt.Claims, sid string) (SoulForgetReply, error) {
+	var zero SoulForgetReply
+	if !soul.ValidSID(sid) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'sid' must match "+soul.SIDPattern)}
+	}
+
+	// No pre-fetch of the row: [soulforget.Forget] locks and reads it inside the
+	// transaction that deletes it, so a separate existence check would only add
+	// a window in which the answer could change.
+	res, err := soulforget.Erase(ctx, h.pool, h.teardown, sid, forgetReason(claims))
+	if err != nil {
+		switch {
+		case errors.Is(err, soul.ErrSoulNotFound):
+			return zero, &problemError{problem.New(problem.TypeNotFound, "", "soul "+sid+" not found")}
+		case errors.Is(err, soulforget.ErrTeardownUnavailable):
+			h.logger.Error("soul.forget: cluster teardown notice failed, nothing deleted",
+				slog.String("sid", sid), slog.Any("error", err))
+			return zero, &problemError{problem.New(problem.TypeTeardownUnavailable, "",
+				"soul "+sid+" was NOT forgotten: the cluster-wide teardown notice could not be sent, "+
+					"so a stream on another Keeper instance could not be closed; nothing was deleted, retry once Redis is reachable")}
+		default:
+			h.logger.Error("soul.forget: erase failed", slog.String("sid", sid), slog.Any("error", err))
+			return zero, &problemError{problem.New(problem.TypeInternalError, "", "forget soul failed")}
+		}
+	}
+
+	// Two log lines, not one, and both at Info: forgetting is irreversible, and
+	// the cascade counts are the part an operator goes looking for afterwards.
+	h.logger.Info("soul.forget: host forgotten",
+		slog.String("sid", sid),
+		slog.String("status_before", res.StatusBefore),
+		slog.Int64("seeds_revoked", res.SeedsRevoked),
+		slog.Int64("bootstraps_burned", res.BootstrapsBurned),
+		slog.Int64("memberships_severed", res.MembershipsSevered),
+		slog.Int64("choir_voices_removed", res.ChoirVoicesRemoved),
+		slog.Bool("local_stream_closed", res.LocalStreamClosed),
+		slog.Int64("cache_keys_purged", res.CacheKeysPurged))
+	for _, w := range res.Warnings {
+		h.logger.Warn("soul.forget: resource not released", slog.String("sid", sid), slog.String("warning", w))
+	}
+
+	return SoulForgetReply{Body: soulForgetView(sid, res)}, nil
 }
 
 // SoulListView — the FLAT domain projection of one `souls` registry row (handler-native

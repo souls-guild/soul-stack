@@ -265,6 +265,46 @@ func (m *StreamManager) CloseAll() int {
 	return len(cancels)
 }
 
+// Close force-closes the local stream of ONE Soul and reports whether there
+// was one to close. It is the local half of "this host has been forgotten"
+// (`soul.forget`, NIM-386) and of the forget notice arriving from another
+// instance over [keeperredis.SoulForgetChannel].
+//
+// It exists because the seed check is a stream-open event, not a per-message
+// one: erasing a host's registry row stops it RECONNECTING (its allowlist
+// entry cascades away with the row) but leaves a stream it already holds
+// running against a Keeper that has no record of it. Postgres has no way to
+// reach that goroutine; this does.
+//
+// Mechanism is [StreamManager.CloseAll] narrowed to one SID, with the same
+// division of labour: cancelling the per-stream ctx wakes the handler's
+// receive loop and the handler runs its OWN teardown (Unregister → console
+// kill → lease Release). Close does not touch the map or the channel itself,
+// so it cannot race that defer chain, and calling it repeatedly — or for a SID
+// with no stream — is safe and does nothing.
+//
+// A stream registered WITHOUT a cancel (the older [StreamManager.Register]
+// path, used by tests) cannot be force-closed; that returns false, since
+// reporting "closed" for a stream still running is the one answer an operator
+// must never be given.
+func (m *StreamManager) Close(sid string) bool {
+	m.mu.RLock()
+	entry := m.entries[sid]
+	var cancel context.CancelFunc
+	if entry != nil {
+		cancel = entry.cancel
+	}
+	m.mu.RUnlock()
+
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	m.logger.Info("streammanager: stream force-closed for a forgotten host",
+		slog.String("sid", sid))
+	return true
+}
+
 // close — idempotent channel close. Guarded by closeMu so a repeated
 // Unregister/eviction doesn't panic on a double close.
 func (e *streamEntry) close() {

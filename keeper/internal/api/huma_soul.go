@@ -114,6 +114,33 @@ func registerHumaSoulIssueToken(humaAPI huma.API, soulH *handlers.SoulHandler) {
 	})
 }
 
+// registerHumaSoulForget mounts DELETE /v1/souls/{sid} via huma (WRITE+AUDIT
+// variant B — event soul.forgotten). soulH nil → no-op. Handler: claims →
+// ForgetTyped → audit-payload → 200 WITH BODY (the cascade counts + what the
+// teardown released).
+//
+// The audit payload is set only on success, as everywhere else — but it matters
+// more here than on other routes: after this call the rows it describes no
+// longer exist, so `soul.forgotten` is the only durable record that the host,
+// its seeds, its memberships and its Voices were ever there.
+func registerHumaSoulForget(humaAPI huma.API, soulH *handlers.SoulHandler) {
+	if soulH == nil {
+		return
+	}
+	huma.Register(humaAPI, soulForgetOperation(), func(ctx context.Context, in *soulForgetInput) (*soulForgetOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, soulMissingClaims()
+		}
+		reply, err := soulH.ForgetTyped(ctx, claims, in.SID)
+		if err != nil {
+			return nil, soulProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &soulForgetOutput{Status: 200, Body: newSoulForgetReply(reply.Body)}, nil
+	})
+}
+
 // registerHumaSoulSshTarget mounts PUT /v1/souls/{sid}/ssh-target via huma (WRITE+AUDIT
 // variant B — event soul.ssh-target.updated). soulH nil → no-op. Handler: convert typed-body →
 // UpdateSshTargetTyped → audit-payload → 200 WITH BODY (snapshot).
@@ -430,6 +457,7 @@ func HumaSoulSpecYAML() (string, error) {
 		registerHumaSoulList(api, stub)
 		registerHumaSoulStats(api, stub, nil)
 		registerHumaSoulGet(api, stub)
+		registerHumaSoulForget(api, stub)
 		registerHumaSoulSoulprint(api, stub)
 		registerHumaSoulHistory(api, stub)
 		registerHumaSoulTelemetry(api, handlers.TelemetrySpecStub())
