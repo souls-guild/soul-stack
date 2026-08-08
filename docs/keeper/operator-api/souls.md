@@ -6,7 +6,7 @@ Domain section [Operator API](../operator-api.md): endpoints `/v1/souls*` (host 
 
 ### Soul endpoints
 
-Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes: create / coven-assign / list + read routes `{sid}` / `{sid}/soulprint` / `{sid}/history` under `soul.list` + issue-token + `{sid}/ssh-target`; note about deferred `soul.get`) - in the root [operator-api.md → Soul (8)](../operator-api.md).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 9 routes: create / coven-assign / list + read routes `{sid}` / `{sid}/soulprint` / `{sid}/history` under `soul.list` + issue-token + `{sid}/ssh-target` + forget (`DELETE {sid}`, `soul.forget`); note about deferred `soul.get`) - in the root [operator-api.md → Soul (9)](../operator-api.md).
 
 #### `POST /v1/souls/coven` — bulk assignment of Coven tags
 
