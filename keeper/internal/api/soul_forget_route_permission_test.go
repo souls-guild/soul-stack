@@ -158,3 +158,40 @@ func TestSoulForgetRoute_AdmitsSoulForgetAlone(t *testing.T) {
 		t.Errorf("audit event type = %q, want %q", got, audit.EventSoulForgotten)
 	}
 }
+
+// TestSoulForgetRoute_CovenNarrowedGrantDeniesEverything pins the trap the docs
+// now warn about, because a warning nothing checks is a sentence that survives
+// the behaviour changing under it.
+//
+// [handlers.SoulSIDSelector] puts ONLY `host` into the RBAC context. A dimension
+// absent from the context fails closed, so `soul.forget on coven=<label>` is not
+// "forget hosts in that coven" — it is a grant that refuses every call,
+// including one aimed at a host that really is in the coven. The operator sees a
+// 403 naming a permission they demonstrably hold.
+//
+// This asserts today's behaviour, not the desirable one. Making `coven=` narrow
+// rather than deny on these routes is NIM-588; when it lands, this test is the
+// thing that has to change on purpose, and the docs go with it. The same shape
+// applies to `soul.issue-token` and `soul.ssh-target-update` — the other two
+// routes wired to SoulSIDSelector. `soul.console` is NOT among them: it is
+// mounted behind RequireAction with the scope applied inside the handler, so a
+// coven there narrows as written.
+func TestSoulForgetRoute_CovenNarrowedGrantDeniesEverything(t *testing.T) {
+	h, pool, _, auditCap := forgetGateRouter(t, []string{"soul.forget on coven=web"})
+
+	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+	if panicked {
+		t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for a `soul.forget on coven=web` holder, want 403 — if this now "+
+			"admits, coven-narrowing has started to work and the docs saying it denies are stale; body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if pool.deleted() {
+		t.Error("the host was DELETED despite the 403")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a refused forget wrote %d audit event(s)", len(auditCap.Events()))
+	}
+}

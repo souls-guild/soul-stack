@@ -37,7 +37,7 @@ import (
 // docs/keeper/mcp-tools.md § Errors does not describe. All nine predate NIM-386,
 // which found them while documenting its own code and deliberately did not widen
 // its scope to write nine error descriptions it had not researched. Tracked in
-// NIM-587; the correct fix is to document them and delete them from here, one at
+// NIM-589; the correct fix is to document them and delete them from here, one at
 // a time.
 var undocumentedMCPCodesDebt = map[string]string{
 	"decree-already-exists":        "decree create, UNIQUE violation",
