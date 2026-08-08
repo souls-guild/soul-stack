@@ -112,7 +112,23 @@ const standCount = 3
 // The extra minute covers the work between the waits that shares this ctx and is
 // not a wait strategy at all: image bookkeeping, ConnectionString, the TLS
 // material, writing keeper.yml.
-const standBringUpTimeout = standCount*standReadyTimeout + time.Minute
+//
+// standBringUpAttempts is in the product for the same reason standCount is. A
+// stand may be started twice when the daemon — not the container — was what
+// failed (daemonhealth.go), and a bound that did not know that would let the
+// first stand's retry eat the third stand's budget, which is the precise defect
+// this constant exists to prevent. It is a cap, not a cost: nothing waits longer
+// than the property takes, and the retry is not spent unless the daemon probe
+// says the machine is the reason.
+//
+// Worth stating because it is the one uncomfortable number here: at the cap, one
+// test can consume 13 of the suite's 30 minutes, and the tests after it are
+// reported NOT-RUN. That is the correct outcome and not a regression in it — a
+// box where three stands each need two full minutes twice is a box whose run
+// certifies nothing, and the honest result is one loud failure that names the
+// machine plus an explicit NOT-RUN for the rest, rather than forty tests sharing
+// a starved budget and failing in a scatter nobody can attribute.
+const standBringUpTimeout = standCount*standBringUpAttempts*standReadyTimeout + time.Minute
 
 // postgresWaitStrategy waits for the log line AND for docker to serve the port.
 //

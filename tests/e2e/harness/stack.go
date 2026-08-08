@@ -114,6 +114,18 @@ type Stack struct {
 
 	containers []testcontainers.Container
 
+	// standContainers — the dependency containers by stand name, kept so a
+	// FAILED bring-up can still be interrogated (state, exit code, logs) rather
+	// than described only by the library's error string. See daemonhealth.go.
+	standContainers map[string]testcontainers.Container
+
+	// standRetriedAway — stands whose failed attempt this harness terminated
+	// itself. Kept because the termination removes the container from
+	// standContainers, and an absent entry otherwise reads as "never created" —
+	// a claim about a container that did run, and whose logs the retry deleted.
+	// See terminateStandAttempt and describeStandFailure in daemonhealth.go.
+	standRetriedAway map[string]bool
+
 	// Cleanup-shutdown order: LIFO via cleanups (like defers); NewStack
 	// accumulates teardown handlers as dependencies come up, Cleanup runs
 	// them in reverse order.
@@ -126,21 +138,37 @@ type Stack struct {
 // spawn.
 //
 // Pre-flight: the harness requires a keeper binary (env `KEEPER_BIN` or the
-// default `make build` output); without it the test is Skipped BEFORE
-// spawning testcontainers (otherwise a developer without a build gets a
-// 5-minute timeout). Symmetrically — without docker, testcontainers returns
-// a spawn error and the test fails explicitly: the developer explicitly
-// requested E2E, so missing docker is a fail, not a skip.
+// default `make build` output) and fails without one, BEFORE spawning
+// testcontainers — the same answer missing docker already gets, and for the
+// same reason: building with `-tags=e2e` is an explicit request for this tier,
+// so a missing input is the harness failing, not a reason to report a pass.
+//
+// It skipped until NIM-533, and that skip was the tier's one way to certify
+// work it never did. `go test` without `-v` prints `ok <pkg> 0.1s` for a
+// package whose tests all skipped — byte-identical to one where they all
+// passed — so a run that located no binary exited 0, satisfied every gate above
+// it, and never reached scripts/classify-l3a-failure.py, which only runs on a
+// non-zero status. The skip cost a developer without a build 0 seconds instead
+// of a 5-minute timeout; a Fatalf here costs the same 0 seconds and says which
+// input is missing. See TestMissingKeeperBinaryFailsTheTierInsteadOfSkipping.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
 	if cfg.Souls <= 0 {
 		cfg.Souls = 1
 	}
 
-	// Pre-flight: keeper binary. Skip effectively means "E2E is impossible
-	// in this environment".
+	// Registered above the pre-flight, not below it: a stand that cannot be
+	// built is a fact about the machine whichever line notices it first, and a
+	// missing keeper binary is as much bring-up as a container that never
+	// answers. Inside the region its refusal carries the STAND-SETUP marker;
+	// one line higher it would arrive as a bare `--- FAIL: TestX` on all forty
+	// tests at once — the single most misreadable shape this tier can produce.
+	// Where the region ENDS is the load-bearing part; see setupdecl.go.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
+
 	if _, err := locateKeeperBinary(); err != nil {
-		t.Skipf("L3a: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
+		t.Fatalf("L3a: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
 
 	s := &Stack{
@@ -149,12 +177,30 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
-	// Everything from here to `infraUp = true` is docker, Vault and the
-	// filesystem; a failure in it is a fact about the machine, not a finding
-	// about the code, and it says so instead of arriving as a bare
+	// Teardown belongs to the stand from the moment the stand exists, not from
+	// the moment the constructor manages to return one.
+	//
+	// The caller's `defer stack.Cleanup()` cannot cover this function: it is
+	// registered on the value NewStack returns, and a t.Fatalf in here never
+	// returns one. Everything below — IssueKeeperServerCert, RegisterSoulPreAuth,
+	// InitVaultTestSecrets, runKeeperInit — is fatal-on-error and runs AFTER the
+	// containers and, past `infraUp`, after the keeper subprocess. Each of those
+	// paths leaked the whole stand, and on this tier a leaked stand is not merely
+	// untidy: it is three containers and a process that the next thirty-nine
+	// tests then share a daemon with. That is the mechanism behind "green alone,
+	// red in company" (NIM-533).
+	//
+	// t.Cleanup rather than another s.runCleanups() at each fatal, because the
+	// property has to hold for the fatal someone adds next year. It runs on
+	// Goexit, so it covers every t.Fatalf in the dynamic extent — including the
+	// ones in helpers this file does not know about — and Cleanup is idempotent,
+	// so it costs nothing where an explicit teardown already ran.
+	t.Cleanup(s.Cleanup)
+
+	// Everything from the pre-flight to `infraUp = true` is docker, Vault and
+	// the filesystem; a failure in it is a fact about the machine, not a
+	// finding about the code, and it says so instead of arriving as a bare
 	// `--- FAIL: TestX`. See setupdecl.go for why the region ends where it does.
-	infraUp := false
-	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
 	// Derived from the per-container budgets, never its own number: the stands
 	// come up in sequence on this one ctx, so a flat literal here would cap them
@@ -162,17 +208,21 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	ctx, cancel := context.WithTimeout(context.Background(), standBringUpTimeout)
 	defer cancel()
 
-	if err := s.startPostgres(ctx); err != nil {
+	// Through bringUpStand, not called directly: it is what makes a failed
+	// bring-up say whether the daemon or the container was the thing that failed,
+	// instead of surfacing testcontainers' `get state: … context deadline
+	// exceeded` for a reader to interpret (NIM-533, daemonhealth.go).
+	if err := s.bringUpStand(ctx, "postgres", s.startPostgres); err != nil {
 		s.runCleanups()
-		t.Fatalf("NewStack: postgres: %v", err)
+		t.Fatalf("NewStack: %v", err)
 	}
-	if err := s.startRedis(ctx); err != nil {
+	if err := s.bringUpStand(ctx, "redis", s.startRedis); err != nil {
 		s.runCleanups()
-		t.Fatalf("NewStack: redis: %v", err)
+		t.Fatalf("NewStack: %v", err)
 	}
-	if err := s.startVault(ctx); err != nil {
+	if err := s.bringUpStand(ctx, "vault", s.startVault); err != nil {
 		s.runCleanups()
-		t.Fatalf("NewStack: vault: %v", err)
+		t.Fatalf("NewStack: %v", err)
 	}
 
 	// Vault test-secrets: PKI + JWT signing-key. Mirrors provision.sh.
@@ -329,13 +379,20 @@ func (s *Stack) startPostgres(ctx context.Context) error {
 		// re-wrap the strategy and discard the deadline the constructor set.
 		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, postgresWaitStrategy()),
 	)
+	// Adopt BEFORE looking at the error, not after. testcontainers returns a
+	// live container alongside a failed wait strategy and says so in as many
+	// words (generic.go: "At this point `c` might not be nil. Give the caller an
+	// opportunity to call Destroy on the container."). Checking the error first
+	// and returning is what leaked one container per failed stand, on exactly
+	// the failure NIM-533 is about. The nil check is on the concrete pointer:
+	// a nil *PostgresContainer forwarded into the interface parameter would be a
+	// non-nil interface holding nil.
+	if pgC != nil {
+		s.adoptContainer("postgres", pgC)
+	}
 	if err != nil {
 		return fmt.Errorf("postgres container: %w", err)
 	}
-	s.containers = append(s.containers, pgC)
-	s.cleanups = append(s.cleanups, func() {
-		s.terminateContainer("postgres", pgC)
-	})
 
 	dsn, err := pgC.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
@@ -353,13 +410,14 @@ func (s *Stack) startRedis(ctx context.Context) error {
 		// make docker-daemon round-trips.
 		testcontainers.WithWaitStrategyAndDeadline(standReadyTimeout, redisWaitStrategy()),
 	)
+	// Adopted before the error check, for the reason spelled out in
+	// startPostgres: a failed wait still leaves a container running.
+	if rC != nil {
+		s.adoptContainer("redis", rC)
+	}
 	if err != nil {
 		return fmt.Errorf("redis container: %w", err)
 	}
-	s.containers = append(s.containers, rC)
-	s.cleanups = append(s.cleanups, func() {
-		s.terminateContainer("redis", rC)
-	})
 
 	addr, err := rC.ConnectionString(ctx)
 	if err != nil {
@@ -391,13 +449,14 @@ func (s *Stack) startVault(ctx context.Context) error {
 		ContainerRequest: req,
 		Started:          true,
 	})
+	// Adopted before the error check, for the reason spelled out in
+	// startPostgres: a failed wait still leaves a container running.
+	if vc != nil {
+		s.adoptContainer("vault", vc)
+	}
 	if err != nil {
 		return fmt.Errorf("vault container: %w", err)
 	}
-	s.containers = append(s.containers, vc)
-	s.cleanups = append(s.cleanups, func() {
-		s.terminateContainer("vault", vc)
-	})
 
 	host, err := vc.Host(ctx)
 	if err != nil {
@@ -499,7 +558,7 @@ func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 }
 
 // keeperBinaryPath — path to the keeper binary for exec calls. Fatal-fails
-// if missing (pre-flight in NewStack already Skipped earlier).
+// if missing (the pre-flight in NewStack has already fatalled on it).
 func keeperBinaryPath(t *testing.T) string {
 	t.Helper()
 	path, err := locateKeeperBinary()

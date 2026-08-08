@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/moby/moby/client v0.4.0
 	github.com/souls-guild/soul-stack/proto v0.0.0
 	github.com/souls-guild/soul-stack/shared v0.0.0
 	github.com/testcontainers/testcontainers-go v0.43.0
@@ -49,7 +50,6 @@ require (
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
 	github.com/moby/moby/api v1.54.2 // indirect
-	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/user v0.4.0 // indirect

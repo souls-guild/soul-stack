@@ -253,6 +253,64 @@ def check_l1_compatibility(marker: str) -> str:
     )
 
 
+def check_marker_came_from_the_source(marker: str) -> str:
+    """The returned marker really is the constant in setupdecl.go. "" if it is.
+
+    NIM-550. read_marker() raises SystemExit when the file will not read or the
+    declaration will not match — but both of those sit AFTER the point an early
+    `return` would leave from, and nothing compared the RESULT against the file.
+    A mutant returned a literal, skipped MARKER_DECL entirely, and reworded the
+    Go constant in the same move: check_l1_compatibility saw a literal that still
+    matched L1's shape, the fixtures filled @@MARKER@@ from the same literal and
+    agreed with themselves, and the tool went green while the constant it claims
+    to read had moved. "Nothing here is inferred from someone else's wording" is
+    this tool's central claim, and it was the one claim not being checked.
+
+    Deliberately NOT via MARKER_DECL: re-running the same regex would only prove
+    the regex is deterministic. This scans lines and splits on quotes, so the two
+    readings share nothing but the file.
+
+    It also insists the file is the one that PRINTS the marker. `MARKER_SOURCE`
+    pointed at a path constant, and a path constant can be moved to a file that
+    happens to carry a similar declaration; requiring declareStandSetupFailure in
+    the same file ties the constant to its emitter rather than to a name.
+    """
+    try:
+        lines = MARKER_SOURCE.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return f"cannot read {MARKER_SOURCE}: {exc}"
+
+    found = [
+        ln.split('"')[1]
+        for ln in lines
+        if ln.split()[:2] == ["const", "standSetupMarker"] and ln.count('"') >= 2
+    ]
+    if len(found) != 1:
+        return (
+            f"expected exactly one `const standSetupMarker = \"…\"` in "
+            f"{MARKER_SOURCE.name}, found {len(found)}.\n"
+            "     Read by a plain line scan, not by MARKER_DECL — the two must agree,\n"
+            "     and if there is no single declaration they cannot."
+        )
+    if found[0] != marker:
+        return (
+            f"read_marker() returned {marker!r}, but {MARKER_SOURCE.name} declares "
+            f"{found[0]!r}.\n"
+            "     The marker is supposed to come OUT of the product, not out of this\n"
+            "     file. Whatever is returning that string, it is not reading the constant,\n"
+            "     and every verdict this tool prints now rests on a copy that agrees with\n"
+            "     itself."
+        )
+    if not any("func declareStandSetupFailure" in ln for ln in lines):
+        return (
+            f"{MARKER_SOURCE.name} declares the marker but does not define\n"
+            "     declareStandSetupFailure. MARKER_SOURCE has been pointed at a file that\n"
+            "     merely carries a similar constant; the string that reaches the log comes\n"
+            "     from somewhere else and is no longer being read at all."
+        )
+    return ""
+
+
 def partition(lines: list[str]) -> list[tuple[str, str, str]]:
     """(test name, result, its output) for each top-level test in the log.
 
@@ -464,18 +522,49 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         "--- FAIL: TestVoyageReclaim_AfterCrash (44.90s)\n",
     ),
     (
-        "subtest output belongs to its parent, and its FAIL line does not close it",
+        "subtest output belongs to its parent -> the name is the parent's",
         # TOP_SWITCH matches `Test\S+`, so subtest lines reach the switch branch;
         # reporting `TestX/sub` as its own test would invent a name and leave the
-        # parent's block empty. Splitting on `/` prevents that. The indented
-        # `--- FAIL: TestX/sub` is the second half: attributed to the parent, but
-        # NOT allowed to set the parent's result, or the marker printed after it
-        # would land outside the block.
+        # parent's block empty. Splitting on `/` prevents that.
+        #
+        # NIM-550: this fixture used to be NAMED for the second half of the
+        # invariant — "and its FAIL line does not close it" — and did not check
+        # it. A mutant removed `if top == res.group(2)` from partition() and this
+        # stayed green, because nothing here distinguishes the two behaviours.
+        # That is worse than a gap: the next reader takes the name for coverage.
+        # The half it does hold is above; the half it did not is below.
         [("TestRedisCluster_Day2", "STAND-SETUP", None)],
         "=== RUN   TestRedisCluster_Day2\n"
         "=== RUN   TestRedisCluster_Day2/add_user\n"
         "=== CONT  TestRedisCluster_Day2/add_user\n"
         "    --- FAIL: TestRedisCluster_Day2/add_user (0.51s)\n"
+        "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
+        "--- FAIL: TestRedisCluster_Day2 (3.94s)\n",
+    ),
+    (
+        "a subtest's FAIL line does not close its parent's block",
+        # NIM-550, and the layout the fixture above was named for. A subtest fails
+        # EARLY, the parent keeps running, and the parent's own declaration is
+        # printed afterwards.
+        #
+        # The load-bearing line is the unindented testcontainers one in the
+        # middle. `--- FAIL: TestX/sub` must leave attribution alone; if it takes
+        # it — setting the parent as the current test AND arming the
+        # trailing-output mode — then the very next column-0 line reads as "the
+        # buffered output is over", the block is cut short there, and the marker
+        # after it lands in nobody's block. The verdict flips to TEST-FAILURE:
+        # a bring-up failure presented as a defect in the code, which is the one
+        # direction this tool must never be wrong in.
+        #
+        # testcontainers logs to stderr at column 0 in every L3a run, so this is
+        # the ordinary shape of a test that tears a container down mid-run, not a
+        # constructed one.
+        [("TestRedisCluster_Day2", "STAND-SETUP", None)],
+        "=== RUN   TestRedisCluster_Day2\n"
+        "=== RUN   TestRedisCluster_Day2/add_user\n"
+        "    --- FAIL: TestRedisCluster_Day2/add_user (0.51s)\n"
+        "        redis_day2_test.go:88: apply: rpc error: code = Unavailable\n"
+        "2026/08/07 12:04:11 🐳 Terminating container: 4f1c9ab0c2de\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
         "--- FAIL: TestRedisCluster_Day2 (3.94s)\n",
     ),
@@ -515,6 +604,51 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         "panic: test timed out after 10m0s\n"
         "\trunning tests:\n"
         "\t\tTestStagedFailover_Promote (2m14s)\n",
+    ),
+    (
+        "marker AND timeout in one block -> TIMEOUT wins, the declaration does not",
+        # NIM-550. classify() checks TIMEOUT_PANIC before the marker and the
+        # comment there explains why, but until this fixture no case combined the
+        # two — a mutant swapped the branches and all eighteen fixtures stayed
+        # green, because each of them had only one of the two signals. An argument
+        # that lives only in prose is not a guard.
+        #
+        # The combination is not contrived; it is NIM-533's own signature. The
+        # stand fails, the deferred declaration prints, and then teardown WEDGES
+        # against a daemon that has stopped answering `docker inspect` — so the
+        # test never returns and the watchdog takes the process down with the
+        # marker already in the block.
+        #
+        # TIMEOUT is the right verdict because of what each label tells the reader
+        # to do next. STAND-SETUP says "a fact about the machine, rerun this test
+        # alone"; the bigger fact here is that every test after this one never ran
+        # at all, and the run certifies nothing. Reading the marker first would
+        # hide a truncated suite behind a per-test infrastructure note.
+        [("TestRedisCluster_Day2", "TIMEOUT", None)],
+        "=== RUN   TestRedisCluster_Day2\n"
+        "    stack.go:166: NewStack: redis: redis container: "
+        "context deadline exceeded\n"
+        "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
+        "    stack.go:298: [teardown] postgres container did not terminate: "
+        "context deadline exceeded\n"
+        "panic: test timed out after 30m0s\n"
+        "\trunning tests:\n"
+        "\t\tTestRedisCluster_Day2 (29m58s)\n",
+    ),
+    (
+        "the same block WITHOUT the timeout -> STAND-SETUP (the control for the pair above)",
+        # Same declaration, same wedged teardown, no watchdog. Its only job is to
+        # make the fixture above about the ORDER of the two checks rather than
+        # about the marker being ignored: if the marker branch were dead, this one
+        # goes red and that one does not.
+        [("TestRedisCluster_Day2", "STAND-SETUP", None)],
+        "=== RUN   TestRedisCluster_Day2\n"
+        "    stack.go:166: NewStack: redis: redis container: "
+        "context deadline exceeded\n"
+        "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
+        "    stack.go:298: [teardown] postgres container did not terminate: "
+        "context deadline exceeded\n"
+        "--- FAIL: TestRedisCluster_Day2 (124.03s)\n",
     ),
     (
         "log-after-test panic mid-test -> the open test is the bystander, the panic names the culprit",
@@ -621,6 +755,17 @@ def self_test() -> int:
     marker = read_marker()
     print(f"classify-l3a-failure: marker read from {MARKER_SOURCE.name}: {marker!r}")
     bad = 0
+
+    # First, because everything below trusts this string. The fixtures fill
+    # @@MARKER@@ from the same read, so they agree with a literal just as
+    # happily as with the constant; check_l1_compatibility only compares it
+    # against L1's pattern, which a stale literal can still satisfy.
+    if why := check_marker_came_from_the_source(marker):
+        print(f"classify-l3a-failure: FAIL marker-provenance: {why}")
+        bad += 1
+    else:
+        print("classify-l3a-failure: ok   marker-provenance "
+              "(the string really is setupdecl.go's constant, read twice, two ways)")
 
     # Before the fixtures, because they cannot see this: they fill @@MARKER@@
     # from the same read and so agree with any wording at all.

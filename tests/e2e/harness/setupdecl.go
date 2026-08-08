@@ -49,8 +49,7 @@ const standSetupMarker = "e2e integration: stand setup failed"
 // subtest marks its parent failed immediately — and L3a calls NewStack from
 // tests that have already asserted things. Without the entry snapshot the
 // condition would read "this test is red by now" rather than "this region turned
-// it red", and any second stand, or one whose pre-flight hits the
-// binary-missing t.Skipf, would stamp STAND-SETUP over a finding that was
+// it red", and any second stand would stamp STAND-SETUP over a finding that was
 // already recorded. That is the one direction this mechanism must never be
 // wrong in.
 func shouldDeclare(infraUp, failedBefore, failedNow bool) bool {
@@ -77,8 +76,11 @@ func shouldDeclare(infraUp, failedBefore, failedNow bool) bool {
 //
 // A t.Skipf leaves the region early too and must NOT be declared — a skip
 // asserted nothing but also failed nothing — which is why the condition is
-// t.Failed() and not "did we reach the end". NewStack's keeper-binary
-// pre-flight is exactly that case.
+// t.Failed() and not "did we reach the end". No harness entry point skips any
+// more (NIM-533 made the keeper-binary pre-flight fatal, because a tier that
+// skips everything reports `ok` and is read as a pass), but a test parked with
+// t.Skip while its rewrite lands still unwinds through here, and it must leave
+// no marker behind.
 //
 // Call it as `defer declareStandSetupFailure(t, t.Failed(), &infraUp)`. The
 // t.Failed() argument is evaluated when the defer is REGISTERED, which is

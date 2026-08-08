@@ -2366,6 +2366,102 @@ order to act in.
   and the expected subset, and has since the beta. Follow-ups: NIM-532 (ryuk's
   unreachable timeout), NIM-533 (the daemon stalls and the residual red).
 
+- **L3a's red was unreadable and its green was unearned** (NIM-533 / NIM-547 /
+  NIM-548 / NIM-549 / NIM-550 / NIM-532). The tier above labels its failures
+  since NIM-469; this closes the two ways it could still hand a reader a result
+  that means nothing.
+
+  **A wedged docker daemon produced no verdict at all.** With the socket
+  accepting connections and no reply ever coming, the run sat in its first
+  docker call for the whole test timeout and died as `panic: test timed out`,
+  naming no layer — NIM-533's headline symptom, reproduced by the harness meant
+  to report it. The cause is upstream and worth stating: testcontainers resolves
+  the docker host inside a `sync.Once` that `NewDockerProvider` enters with
+  `context.Background()`, so the first docker call in a process is unbounded and
+  every later one waits on that `Once`. No caller's deadline could have bounded
+  it. The probe now races that call against a timer on its own goroutine — the
+  only thing in the process able to end it — and `bringUpStand` asks **before**
+  it raises anything, because a post-mortem probe cannot explain a call that
+  never returned. It refuses on silence only; a slow daemon still gets its
+  stand, which is what the retry is for. The latch that spares the remaining
+  tests the same wait is set only by the unbounded lookup, since the `Ping`
+  after it does honour a deadline — and it retracts when a late lookup finishes,
+  because what it asserted has stopped being true.
+
+  **The probe was built on a call the library memoises**, and that is the defect
+  none of the process caught. `DockerProvider.Health` is `client.Info`, cached
+  in package variables after its first success, so on a healthy box the first
+  stand warmed the cache and every later probe reported a microsecond ping and
+  no error regardless of what the daemon was doing: the contention check could
+  never fire and a saturated daemon was reported as the *container* — naming the
+  wrong layer confidently, which is worse than the raw library error it
+  replaced. It is invisible against a daemon wedged from the start, because the
+  cache never gets its one success, and that is the only state this tier has
+  been runnable in here — which is why three identical runs and a full mutation
+  battery agreed it was fine. The probe uses `Ping`, a pass-through that hits
+  `/_ping` every call, and the ban on the cached one is a guard rather than a
+  comment.
+
+  **A failure below the daemon now names the layer that owns it.**
+  testcontainers raises its ryuk reaper before our container and waits on a
+  strategy it builds itself, with a hard-coded 60 s and no way in from a
+  `GenericContainer` option; the failure still surfaced through our
+  constructor, so it was described as ours, and by the time the probe ran a
+  minute later the daemon was idle again and the verdict read "the image or its
+  configuration did not become ready" — a layer that was never involved. The
+  60 s stays upstream's: moving it means leaking containers on every killed run
+  or bumping the dependency, and neither is this batch's call. What changed is
+  that the red says which thing failed. A daemon that *answered* with an error
+  no longer borrows the prose written for one that said nothing, which had
+  promised a 15 s wait that never happened and offered a WSL remedy for what is
+  usually a `DOCKER_HOST` typo.
+
+  **Stands stopped leaking.** testcontainers returns a live container alongside
+  its error by design; the harness dropped that handle, so every failed bring-up
+  left a container behind for the rest of the run. It is adopted before the
+  error is read. `t.Cleanup(s.Cleanup)` is now registered inside both
+  constructors, because a caller's `defer` cannot cover a constructor that
+  fatals before it returns.
+
+  **A tier that ran nothing must not report a pass.** The keeper-binary
+  pre-flight *skipped*, and `go test` without `-v` prints `ok <pkg> 0.1s` for a
+  package whose tests all skipped — byte-for-byte what it prints when they all
+  passed. A run that located no binary exited 0, satisfied `make e2e` and every
+  gate above it, and never reached `scripts/classify-l3a-failure.py`, which the
+  Makefile invokes only on a non-zero status: that tool's `NOT-RUN` verdict was
+  unreachable from its only caller. Both entry points now fail — the answer
+  missing docker already got — with the bring-up declaration registered *above*
+  the pre-flight, so the refusal carries the STAND-SETUP marker instead of
+  arriving as a bare `--- FAIL: TestX` on all forty tests at once.
+
+  **The guards derive their subject instead of listing it.** The hand-written
+  map of product entry points had the exact failure it was written against: one
+  name in it was called only from `_test.go` files, which the source walk
+  excludes, so that entry gated zero while reading as coverage. The set now
+  comes from three doors — the built binary, the operator API, the schema
+  `keeper init` migrated — so a helper written later is covered on the day it is
+  written, with the old list demoted to a floor that catches a door narrowing.
+  The declared bring-up region likewise no longer ends at the *earliest*
+  `infraUp = true`: a second assignment in a branch would silently lift the
+  boundary above `runKeeperInit` while the guard reported success, and which
+  assignment closes the region depends on the branch taken, so more than one is
+  now the finding. Three defects in the classifier's own self-test were found
+  the same way, by mutation: an unpinned check order, a fixture named for an
+  invariant it did not exercise, and a marker literal nothing compared against
+  the Go source.
+
+  **What this does not claim.** The acceptance bar for this batch was three L3a
+  runs on an unchanged slice agreeing with each other, and **that has not been
+  met — there is no green live run behind these changes.** The docker daemon on
+  the development machine has been wedged for the duration (the failure mode the
+  first item describes), which the work makes legible but cannot repair: it is
+  the host's, not the harness's. Every claim here was instead demonstrated by
+  known-bad mutation — 54 defects introduced in the shape of real code, each
+  caught by the guard whose statement it breaks, plus one control that stays
+  green — and the residual red NIM-533 reported has not been observed since,
+  because the tier has not been observed at all. CI runs `make build` before
+  `make e2e`, so the new pre-flight is satisfied there by construction.
+
 - **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
   is written for a feature branch, where only the newest commit matters. A release
   branch is the opposite case: it *is* the integration target, every squash-merge

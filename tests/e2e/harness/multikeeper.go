@@ -82,8 +82,18 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		cfg.ReconcileOrphanStaleAfter = 3 * time.Second
 	}
 
+	// Same bring-up declaration as NewStack (setupdecl.go): shared PG/Redis/
+	// Vault and the TLS material are the machine, the keeper subprocesses below
+	// them are the product. Registered above the pre-flight for the reason
+	// NewStack states — a missing binary is bring-up, and it must not reach the
+	// reader as a bare `--- FAIL: TestX`.
+	infraUp := false
+	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
+
+	// Fatal, not skip: see NewStack. A skip here reported a pass for a tier
+	// that ran nothing.
 	if _, err := locateKeeperBinary(); err != nil {
-		t.Skipf("multi-keeper: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
+		t.Fatalf("multi-keeper: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
 
 	s := &Stack{
@@ -92,11 +102,10 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
-	// Same bring-up declaration as NewStack (setupdecl.go): shared PG/Redis/
-	// Vault and the TLS material are the machine, the keeper subprocesses below
-	// them are the product.
-	infraUp := false
-	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
+	// Same reason as NewStack: the caller's `defer stack.Cleanup()` cannot cover
+	// a constructor that fatals instead of returning, and this one leaks more
+	// than NewStack does — N keeper subprocesses on top of the three containers.
+	t.Cleanup(s.Cleanup)
 
 	// Same derived bound as NewStack (waitstrategy.go), for the same reason: the
 	// three stands come up in sequence on this one ctx, so a flat literal here
@@ -105,18 +114,19 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	ctx, cancel := context.WithTimeout(context.Background(), standBringUpTimeout)
 	defer cancel()
 
-	// Shared infra (as in NewStack).
-	if err := s.startPostgres(ctx); err != nil {
+	// Shared infra (as in NewStack), and through bringUpStand for the same
+	// reason: a failed stand has to name its own layer (daemonhealth.go).
+	if err := s.bringUpStand(ctx, "postgres", s.startPostgres); err != nil {
 		s.runCleanups()
-		t.Fatalf("multi-keeper: postgres: %v", err)
+		t.Fatalf("multi-keeper: %v", err)
 	}
-	if err := s.startRedis(ctx); err != nil {
+	if err := s.bringUpStand(ctx, "redis", s.startRedis); err != nil {
 		s.runCleanups()
-		t.Fatalf("multi-keeper: redis: %v", err)
+		t.Fatalf("multi-keeper: %v", err)
 	}
-	if err := s.startVault(ctx); err != nil {
+	if err := s.bringUpStand(ctx, "vault", s.startVault); err != nil {
 		s.runCleanups()
-		t.Fatalf("multi-keeper: vault: %v", err)
+		t.Fatalf("multi-keeper: %v", err)
 	}
 	InitVaultTestSecrets(t, s)
 
