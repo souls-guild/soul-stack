@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -149,23 +149,37 @@ gen-openapi: gen-audit-catalog
 # executables. Modules without go packages (e.g. `proto/plugin/` before
 # its first .proto appears) are skipped via `go list ./...`, otherwise
 # `go build ./...` fails with "matched no packages".
+#
+# The library sweep and the binaries are ONE recipe line with a shared rc. The
+# tempting story is that the chain is safe because the binaries LINK the four
+# library modules, so one broken library fails them all for the same reason —
+# and the go.mod files say otherwise. `soulctl` requires NONE of the four and
+# `soul-lint` requires only `shared`, so a broken `sdk` used to abandon the
+# target and leave `soulctl` unbuilt with nothing naming it, while `soul` is
+# isolated from `keeper` by ADR-011 and a keeper compile error says nothing
+# whatever about it. That is this ticket's defect one step past the modules.
+#
+# One consequence, measured and accepted: a recipe line containing $(MAKE) runs
+# even under `-n`, so `make -n build` now BUILDS instead of printing. Nothing in
+# scripts/, dev/, .github/ or this file passes -n/--dry-run/--just-print, so this
+# costs nobody anything today — but a reader who reaches for it should not be
+# surprised.
 build:
-	@for m in proto proto/plugin shared sdk; do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go build ./... in $$m"; \
-		(cd $$m && go build ./...) || exit 1; \
-	done
-	@$(MAKE) build-keeper
-	@echo "go build -o keeper/$(BIN_DIR)/soul-trial ./cmd/soul-trial in keeper"
-	@cd keeper && go build -o $(BIN_DIR)/soul-trial ./cmd/soul-trial
-	@$(MAKE) build-soul
-	@echo "go build -o soul-lint/$(BIN_DIR)/soul-lint ./cmd/soul-lint in soul-lint"
-	@cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint
-	@$(MAKE) build-soulctl
-	@$(MAKE) build-soul-legion
+	@rc=0; \
+	MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh build 'proto proto/plugin shared sdk' 'go build ./...' || rc=1; \
+	$(MAKE) build-keeper || { echo "build: FAILED keeper"; rc=1; }; \
+	echo "go build -o keeper/$(BIN_DIR)/soul-trial ./cmd/soul-trial in keeper"; \
+	(cd keeper && go build -o $(BIN_DIR)/soul-trial ./cmd/soul-trial) || { echo "build: FAILED soul-trial"; rc=1; }; \
+	$(MAKE) build-soul || { echo "build: FAILED soul"; rc=1; }; \
+	echo "go build -o soul-lint/$(BIN_DIR)/soul-lint ./cmd/soul-lint in soul-lint"; \
+	(cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint) || { echo "build: FAILED soul-lint"; rc=1; }; \
+	$(MAKE) build-soulctl || { echo "build: FAILED soulctl"; rc=1; }; \
+	$(MAKE) build-soul-legion || { echo "build: FAILED soul-legion"; rc=1; }; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "build: at least one module or binary failed — every FAILED line above is its own"; \
+	fi; \
+	exit $$rc
 
 # Single-binary targets, split out of `build` so the dev stand can rebuild ONE
 # binary without paying for the whole set. `dev/keeper-run.sh` and
@@ -203,8 +217,21 @@ build-soulctl:
 	@echo "go build -o soulctl/$(BIN_DIR)/soulctl ./cmd/soulctl in soulctl (VERSION=$(VERSION))"
 	@cd soulctl && go build -ldflags '$(SOULCTL_LDFLAGS)' -o $(BIN_DIR)/soulctl ./cmd/soulctl
 
+# Runs through scripts/modules-run.sh, which is where the per-module loop and
+# its report now live (NIM-494). Two things change from the loop that was here:
+# a failing module no longer ends the sweep, and the run finishes with a line
+# per module saying PASS / FAIL / SKIPPED / NOT RUN. `|| exit 1` meant a failure
+# in `shared` — the third of eight — left `sdk`, `keeper`, `soul`, `soul-lint`
+# and `soulctl` untested with nothing in the output to say so, and `gate.sh`
+# then reported one failed tier and zero not run, which is true of tiers and
+# false of modules.
+#
 # Modules without go packages are skipped via `go list ./...` - same rule
-# as in `build`. At this stage `proto/plugin/` falls under the filter.
+# as in `build`. At this stage `proto/plugin/` falls under the filter. A `go
+# list` that FAILS is no longer folded into that skip: the old
+# `[ -z "$$(go list ./... 2>/dev/null)" ]` could not tell "no packages here"
+# from "this module could not be enumerated at all", and the second one was
+# silently passing.
 #
 # `-count=1` disables the go-test cache. CRITICAL for the gate, not an optimization: go caches
 # a package's result by the hash of its `.go` sources (+ declared inputs), but NOT by
@@ -215,14 +242,8 @@ build-soulctl:
 # slipped through in f40da00: a conf_dir/data_dir wave changed the .tmpl without touching the .go test).
 # The same trick is already in place in test-plugins / test-integration / gen-openapi.
 test:
-	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go test -count=1 ./... in $$m"; \
-		(cd $$m && go test -count=1 ./...) || exit 1; \
-	done
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh test "$(MODULES)" 'go test -count=1 ./...'
 
 # Tests for community plugins examples/module/* - each is a SEPARATE go.mod OUTSIDE go.work
 # (ADR-016: community plugins pull the core as a regular dependency, not a workspace member).
@@ -239,17 +260,21 @@ test:
 # its regressions are caught by the gate. Merge() tests are NOT here: they live in shared/cel
 # (workspace, covered by `make test`), no need to duplicate.
 # `-count=1` - no cache (the plugin may depend on external fake state).
+#
+# `MODULES_PROBE_FAIL=skip` is what makes the skip above legal HERE and nowhere
+# else: for $(MODULES) a probe that cannot run is a failure, because a core
+# module nobody could enumerate is not a module with nothing in it. The empty
+# glob is no longer a quiet pass either — a plugin corpus that matched zero
+# directories used to print the green line below, and modules-run.sh refuses a
+# sweep over nothing (NIM-392's shape).
 test-plugins:
-	@for d in examples/module/*/go.mod; do \
-		[ -e "$$d" ] || continue; \
-		m=$$(dirname "$$d"); \
-		if ! (cd "$$m" && GOWORK=off go list ./... >/dev/null 2>&1); then \
-			echo "skip $$m (standalone-offline doesn't resolve - GOWORK=off go list failed; cloud/ssh plugin or go.mod drift)"; \
-			continue; \
-		fi; \
-		echo "GOWORK=off go test -count=1 ./... in $$m"; \
-		(cd "$$m" && GOWORK=off go test -count=1 ./...) || exit 1; \
-	done
+	@MODULES_PROBE='GOWORK=off go list ./...' \
+	MODULES_PROBE_FAIL=skip \
+	MODULES_PROBE_SKIP_NOTE="standalone-offline doesn't resolve (GOWORK=off go list failed; cloud/ssh plugin or go.mod drift)" \
+	MODULES_SKIP_NOTE='no Go packages in this plugin' \
+		scripts/modules-run.sh test-plugins \
+		"$(sort $(patsubst %/go.mod,%,$(wildcard examples/module/*/go.mod)))" \
+		'GOWORK=off go test -count=1 ./...'
 	@echo "test-plugins: community plugins (resolvable offline) green"
 
 # Runs tests with the race detector - a separate target so the plain `make test`
@@ -267,14 +292,8 @@ test-plugins:
 # That is the NIM-238 shape once more — a check that did not happen, printing the
 # words of one that passed.
 test-race:
-	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go test -race -count=1 ./... in $$m"; \
-		(cd $$m && go test -race -count=1 ./...) || exit 1; \
-	done
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh test-race "$(MODULES)" 'go test -race -count=1 ./...'
 
 # Integration tests under the `integration` build tag (testcontainers-go).
 # A separate target - `make test` doesn't need docker and stays fast.
@@ -651,14 +670,8 @@ check-e2e-cloud:
 # `go mod tidy` on a module with no go files prints "no Go files" and fails,
 # so modules with an empty `go list ./...` are skipped here too.
 tidy:
-	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go mod tidy in $$m"; \
-		(cd $$m && go mod tidy) || exit 1; \
-	done
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh tidy "$(MODULES)" 'go mod tidy'
 
 # Local dev stack (docker-compose). See `docs/dev/local-setup.md`.
 # `dev/docker-compose.yml` brings up the full required stack: Postgres, Redis,
@@ -1201,7 +1214,8 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
 	check-approle-template \
-	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status
+	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
+	check-modules-run
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 check:
@@ -1342,6 +1356,23 @@ check-gate:
 check-ci-status:
 	@scripts/ci-status-test.sh
 
+# check-modules-run — the guard on the per-module sweep (NIM-494). Third of the
+# same kind, one level down from check-gate: gate.sh reports on tiers,
+# modules-run.sh reports on the eight modules INSIDE a tier, and until this
+# ticket that inner loop was `|| exit 1` — a failure in `shared` left `sdk`,
+# `keeper`, `soul`, `soul-lint` and `soulctl` untested with nothing in the output
+# naming them, while the tier above printed one honest `FAIL test`.
+#
+# It has to be guarded for the reason the other two are: the regression is
+# invisible in the direction that matters. A restored early exit does not crash
+# or print an error — the sweep just ends sooner and still prints a summary, and
+# a summary is the most complete-looking thing in the log. So the guard runs
+# modules-run.sh over throwaway directories and asserts which module markers
+# reached the output, not merely what the exit code was. Go-free and
+# docker-free, about two seconds.
+check-modules-run:
+	@scripts/modules-run-test.sh
+
 check-all:
 	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
 	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
@@ -1370,14 +1401,8 @@ check-fmt:
 # `test`/`build` (`go list ./...` empty -> a module with no go packages, skip),
 # otherwise `go vet ./...` fails with "matched no packages".
 vet:
-	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go vet ./... in $$m"; \
-		(cd $$m && go vet ./...) || exit 1; \
-	done
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh vet "$(MODULES)" 'go vet ./...'
 
 # `go vet` under the build tags a plain `go vet ./...` never builds. Tag-guarded
 # files sit outside the default build, so a signature change on the other side of
@@ -1392,20 +1417,32 @@ vet:
 # `check` (unlike `test-integration` / `e2e`, which need containers and are
 # opt-in). One tag per pass: tags are not mutually compatible, and a combined
 # `-tags=a,b` would build files that were never meant to coexist.
+# The tagged directories are not $(MODULES) and each carries its own tag, so
+# they stay a loop here rather than going through modules-run.sh — the tag
+# mapping lives in TAGGED_DIRS and duplicating it into a command string would
+# give it a second home to drift from.
+#
+# Both halves are ONE recipe line, joined by a shared rc, and that is the whole
+# point: make runs each recipe line in its own shell and abandons the target on
+# the first nonzero exit. Split across two lines, a red module in the sweep above
+# meant the four tagged directories were never vetted and were never named —
+# this ticket's own defect surviving inside its fix, with `gate.sh` showing one
+# honest `FAIL vet-tags` over it. "Which of the tagged sets is broken" is the
+# question this target answers, and it cannot answer it from a shell make
+# already walked away from.
 vet-tags:
-	@for m in $(MODULES); do \
-		if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-			echo "skip $$m (no Go packages)"; \
-			continue; \
-		fi; \
-		echo "go vet -tags=integration ./... in $$m"; \
-		(cd $$m && go vet -tags=integration ./...) || exit 1; \
-	done
-	@for spec in $(TAGGED_DIRS); do \
+	@rc=0; \
+	MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh vet-tags "$(MODULES)" 'go vet -tags=integration ./...' || rc=1; \
+	for spec in $(TAGGED_DIRS); do \
 		d=$${spec%%:*}; tag=$${spec##*:}; \
 		echo "go vet -tags=$$tag ./... in $$d"; \
-		(cd $$d && go vet -tags=$$tag ./...) || exit 1; \
-	done
+		(cd $$d && go vet -tags=$$tag ./...) || { echo "vet-tags: FAILED in $$d (-tags=$$tag)"; rc=1; }; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "vet-tags: at least one module or tagged directory failed — every FAILED line above is its own"; \
+	fi; \
+	exit $$rc
 
 # Checks protogen idempotency (gen-drift): runs `make gen` and
 # checks whether the committed generated Go changed. Scopes the diff to exactly the two
@@ -1464,14 +1501,8 @@ check-vuln:
 			echo "govulncheck not found - go install @$(GOVULNCHECK_VERSION)"; \
 			go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) || exit 1; \
 		fi; \
-		for m in $(MODULES); do \
-			if [ -z "$$(cd $$m && go list ./... 2>/dev/null)" ]; then \
-				echo "skip $$m (no Go packages)"; \
-				continue; \
-			fi; \
-			echo "govulncheck ./... in $$m"; \
-			(cd $$m && $(GOVULNCHECK) ./...) || exit 1; \
-		done; \
+		MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+			scripts/modules-run.sh check-vuln "$(MODULES)" '$(GOVULNCHECK) ./...' || exit 1; \
 		echo "check-vuln: govulncheck is clean across all modules"; \
 	fi
 

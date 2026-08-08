@@ -1703,6 +1703,122 @@ order to act in.
   them, because the step's own log line names all of them and would stay green
   while the writes it describes were gone.
 
+- **A red module ended the sweep, and the five modules behind it left no trace.**
+  Every per-module loop in the `Makefile` — `test`, `test-race`, `vet`, `tidy`,
+  `build`, `check-vuln`, `vet-tags`, `test-plugins` — was written
+  `for m in $(MODULES); do (cd $$m && …) || exit 1; done`. `MODULES` is eight
+  entries in a fixed order, so a failure in `shared`, the third, meant `sdk`,
+  `keeper`, `soul`, `soul-lint` and `soulctl` were never tested and nothing in
+  the output said so. The tier above printed one honest `FAIL test`, and
+  `gate.sh` reported exactly what it was told: one failed tier, zero not run.
+  True about tiers, false about modules.
+
+  That is the `NIM-373` defect one level down, and its cost lands where
+  `NIM-380`'s did — at release acceptance, on a red run read in a hurry. "That's
+  `shared`, we know about that" is a reasonable thing to think, and it is
+  compatible with the run having said nothing whatsoever about `keeper`. An
+  unperformed check is indistinguishable from a passed one unless something
+  names it.
+
+  `scripts/modules-run.sh` now runs the command across every module and reports
+  four states rather than two. `PASS` and `FAIL` are the module's own verdict.
+  `SKIPPED` means the probe found nothing to run there, and the reason is
+  printed beside it. `NOT RUN` means nobody asked — fail-fast was requested
+  (`MODULES_FAIL_FAST`, opt-in and off by default) or the run was interrupted —
+  and it is never folded into a pass: the summary names those modules and says
+  in words that the sweep is silent about them. An interrupted sweep still
+  prints the table, which is exactly when "how far did it get?" is worth most.
+
+  Several conflations went with it, all of the same shape — a refusal is only
+  worth anything if it gives the right reason:
+
+  - **A broken probe read as an empty module.** The old test,
+    `[ -z "$(cd $$m && go list ./... 2>/dev/null)" ]`, is empty both when a
+    module has no Go packages and when `go list` could not run at all — a broken
+    `go.mod`, an unresolvable import, a missing directory — so a module nobody
+    could even enumerate was reported as "no Go packages", skipped, and left the
+    sweep green. A probe that breaks is now a failure by default with its own
+    stderr quoted; a caller that genuinely wants to skip on it says so
+    (`MODULES_PROBE_FAIL=skip`) and gets a **different** sentence in the report,
+    because "there is nothing here" and "we could not find out what is here" are
+    different answers.
+  - **A sweep over zero modules printed a success line.** `test-plugins` did
+    exactly that over an empty plugin glob. It is now a refusal that names the
+    empty corpus rather than the calling convention, which was fine — sent to
+    check the invocation, nobody goes looking for the missing plugins. A blank
+    command is refused for the same reason: it satisfies an emptiness test, runs
+    as a no-op in every module, and reports a green sweep over work nobody did.
+  - **A module that is not on disk read as an empty one.** It has its own verdict
+    now — `no such module directory`, decided before any probe runs, so nothing
+    about it is ever explained in a probe's words. A directory that exists but
+    cannot be entered is a failure too, and that one matters most under
+    `MODULES_PROBE_FAIL=skip`, where it used to read as "does not resolve
+    offline", report `SKIPPED`, exit 0, and never print the `permission denied` —
+    a skip quotes nothing.
+  - **One scratch file carries the probe's stderr for the whole sweep**, so a
+    probe that fails without writing a word — `exit 1` on a precondition is the
+    ordinary shape — could be quoted the previous module's complaint under its
+    own name. What prevents it is that the redirect truncates on open, which is
+    one character away from not doing so; the guard has the case and the `2>>`
+    known-bad is measured beside it.
+  - **A module list carrying a newline swept its first line only.** `read -r -a`
+    takes one line, so the table would have covered part of the corpus while
+    reading as all of it. Nothing calls it that way today; the script refuses a
+    sweep over nothing, and quietly sweeping over half is the same claim.
+
+  The scope here is the eight targets listed above. `test-integration` still
+  tests its modules with the old `go list` idiom and is left alone in this
+  change.
+
+  `vet-tags` and `build` needed one more thing, and it is this ticket's own
+  defect surviving inside its fix: `make` runs each recipe line in its own shell
+  and abandons the target on the first nonzero exit, so a module sweep that
+  reported every module and then returned 1 still meant the four tagged
+  directories — and every binary — were never reached and never named. Both are
+  now a single recipe line with an accumulated `rc`. For `build` the comforting
+  story was that the chain is safe because the binaries link the library modules
+  above them, and the `go.mod` files say otherwise: `soulctl` requires none of
+  the four, `soul-lint` only `shared`, and `soul` is isolated from `keeper` by
+  ADR-011.
+
+  A sweep in which every module skipped now says the command ran nowhere. It
+  stays exit 0 — `test-plugins` offline skips every cloud and ssh plugin, and
+  that is a real answer — but `0 passed, 0 failed, 3 skipped` with nothing else
+  on the line reads as a pass over work that happened in no module at all, one
+  state along from the `NOT RUN` that already had a sentence.
+
+  `check-modules-run` guards the reporter, for the reason `check-gate` and
+  `check-ci-status` guard theirs: a restored early exit does not crash or print
+  an error, it just ends the sweep sooner and still prints a summary, which is
+  the most complete-looking thing in the log.
+
+- **A console test failed about once in fifty, and the defect was in the test.**
+  `TestConsoleWS_WriteFailureIsReportedAtWarn` waited for `hub.Count() == 0` and
+  then read the log in one shot. But `Count()` drops at `unregister`, the
+  **first** step of `Hub.Close`: the close dispatch to the soul, the recording
+  close and the audit write all happen after it, and the `sessions reaped` line
+  the test asserts on is written after all of those. So the test was reading the
+  log during a window it had explicitly waited to be past, and whether it won
+  depended on the scheduler. The reap itself was never late — nothing was wrong
+  with the subject — but a run that goes red for a reason unrelated to the
+  change under test costs the same as a real finding at release acceptance, and
+  gets believed less the next time.
+
+  Both assertions now poll to a deadline, and the fake soul stalls its close
+  dispatch by a fixed 250 ms so the teardown tail is observably long on every
+  run. That is the part worth keeping: the delay stays in the test permanently,
+  so restoring the one-shot read is red every time rather than one run in fifty.
+
+  The sibling case that asserts a clean disconnect logs **no** failure had the
+  same vantage-point problem and a worse version of it, because absence is the
+  whole claim: it asserts that *nothing* was logged at WARN, over teardown steps
+  that all come after the count it waited on and any of which can warn. It now
+  waits for `keeper_console_sockets_active` to reach zero — the final statement
+  of the socket handler, after the pumps are joined, the sessions reaped and the
+  reap line written — which is the only observation that means "finished" rather
+  than "got somewhere". Made an ordinary close report as a failure, the test is
+  red from there and green five times out of five from the old vantage point.
+
 - **Every service declaring `modules:` was unappliable on every host.** The two
   ends of the auto-synthesis path (`ADR-065`) disagreed about what address level 1
   means, and each was internally consistent, tested, and green. `NIM-377` renamed

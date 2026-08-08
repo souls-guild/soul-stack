@@ -70,6 +70,32 @@ type fakeSoul struct {
 	openErr error
 	// stdinErr makes keystroke dispatch fail (a congested outbound queue).
 	stdinErr error
+	// closeDelay stalls the close dispatch, which is how a test can make the
+	// teardown tail take an observable amount of time on purpose.
+	//
+	// [console.Hub.Close] unregisters the session — the thing hub.Count()
+	// observes — and only then dispatches the close, closes the recording and
+	// writes the audit entry. So the count reaching zero is the START of the
+	// teardown tail, not the end of it, and this delay lands squarely inside
+	// that window. On a loaded machine the scheduler supplies the same delay
+	// for free, which is what NIM-523/NIM-537 were.
+	closeDelay time.Duration
+}
+
+// setCloseDelay arms the stall. Under the lock, like every other field of this
+// fake — and the lock is the whole reason to note it, because today it buys
+// nothing. Both callers arm the delay BEFORE s.dial, and the goroutine that
+// reads it is the one running consoleConn.run -> Hub.Close -> SendConsoleClose,
+// which does not exist until the upgrade: establishing the connection is the
+// ordering edge, and a plain write would be correct. It is written this way for
+// the test that arms or re-arms the delay on a live socket, where the edge is
+// gone and the plain write is a data race — one that -race would report inside
+// the guard for a race, which is not a place to spend a session. Do not take
+// the lock back out on the strength of the current call sites.
+func (f *fakeSoul) setCloseDelay(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeDelay = d
 }
 
 func (f *fakeSoul) SendConsoleOpen(ctx context.Context, sid string, msg *keeperv1.ConsoleOpen) error {
@@ -119,6 +145,15 @@ func (f *fakeSoul) SendConsoleResize(_ context.Context, _ string, msg *keeperv1.
 }
 
 func (f *fakeSoul) SendConsoleClose(_ context.Context, _ string, msg *keeperv1.ConsoleClose) error {
+	f.mu.Lock()
+	delay := f.closeDelay
+	f.mu.Unlock()
+	// Outside the lock, like autoOpen's reply: a stall that also froze
+	// closedIDs() would be testing the fake rather than the socket.
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closes = append(f.closes, msg)
@@ -226,6 +261,36 @@ type consoleTestServer struct {
 	soul *fakeSoul
 	hub  *console.Hub
 	tok  string
+	// reg holds the console collectors, so a test can observe the LAST step of
+	// socket teardown rather than an early one (see socketsActive).
+	reg *obs.Registry
+}
+
+// socketsActive reads keeper_console_sockets_active off the registry.
+//
+// DecSocketsActive is the final statement of consoleConn.run — after the pumps
+// are joined, after every session is reaped and after the reap line is logged,
+// and the handler does nothing after calling it (console_ws.go) — so
+// this reaching zero is the only observation that means "the socket handler is
+// finished" rather than "the socket handler got somewhere". A test asserting
+// that something was NOT logged needs exactly that: any earlier vantage point
+// makes the absence a statement about the scheduler.
+func (s *consoleTestServer) socketsActive(t *testing.T) float64 {
+	t.Helper()
+	families, err := s.reg.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("gather console metrics: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() != "keeper_console_sockets_active" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			return m.GetGauge().GetValue()
+		}
+	}
+	t.Fatalf("keeper_console_sockets_active is not registered — this server was built without console metrics")
+	return 0
 }
 
 // consoleRBAC is what the console plane actually needs from RBAC: the
@@ -256,6 +321,10 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 	t.Helper()
 
 	soul := &fakeSoul{autoOpen: true}
+	// Real collectors, not the nil-safe no-op: the socket gauge is the only
+	// handle a test has on the END of teardown (see socketsActive).
+	reg := obs.NewRegistry()
+	metrics := console.RegisterMetrics(reg)
 	// The REAL recorder over an in-memory store: recording is mandatory
 	// (ADR-0074(g)), so a socket test that skipped it would be testing a Keeper
 	// that cannot exist. The size cap is off here — the backpressure test floods
@@ -270,6 +339,7 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 		Dispatcher: soul,
 		Recorder:   recorder,
 		Limits:     console.StaticLimits(limits),
+		Metrics:    metrics,
 		Logger:     logger,
 	})
 	if err != nil {
@@ -292,7 +362,7 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 
 	// The production chain: HTTP metrics recorder (which wraps the
 	// ResponseWriter) + JWT + the socket-level permission gate.
-	httpMetrics := obs.RegisterHTTPMetrics(obs.NewRegistry())
+	httpMetrics := obs.RegisterHTTPMetrics(reg)
 	r := chi.NewRouter()
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(httpMetrics.MiddlewareForPath(func(*http.Request) string { return "/v1/console" }))
@@ -303,13 +373,14 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 			Group(func(r chi.Router) {
 				registerConsoleWS(r, &consoleWSDeps{
 					Hub: hub, Enforcer: rbac, Logger: logger, WriteWait: writeWait,
+					Metrics: metrics,
 				})
 			})
 	})
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	return &consoleTestServer{srv: srv, soul: soul, hub: hub, tok: tok}
+	return &consoleTestServer{srv: srv, soul: soul, hub: hub, tok: tok, reg: reg}
 }
 
 // dial opens an operator socket the way the browser client does.
@@ -380,6 +451,37 @@ func readFrameOfType(t *testing.T, ws *websocket.Conn, want string) map[string]a
 	}
 	t.Fatalf("no %q frame within 50 frames", want)
 	return nil
+}
+
+// waitForRecord polls until a WARN+ record whose message contains sub is
+// captured, and returns it.
+//
+// Separate from waitFor because a line that never arrives is diagnosed by what
+// DID arrive, and waitFor's timeout cannot carry that: its description is built
+// before the wait starts. A test that fails with "timed out waiting for the
+// reap log" sends the reader to the source; one that fails with the four lines
+// the socket actually logged usually does not.
+//
+// Every assertion that a line WAS logged belongs behind this rather than behind
+// a bare find() — the negative case cannot use it and does not (a line that is
+// never expected is never waited for; it settles on a later vantage point
+// instead, see socketsActive). The two lines this file cares about are written
+// in different goroutines and strictly ordered, and hub.Count() — the thing
+// tests used to wait on — drops at the FIRST step of teardown, with the close
+// dispatch, the recording close and the audit write still to come (NIM-523,
+// NIM-537).
+func waitForRecord(t *testing.T, logs *warnCapture, sub, complaint string) slog.Record {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if rec, ok := logs.find(sub); ok {
+			return rec
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("%s; logged:\n%s", complaint, logs.dump())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // waitFor polls until cond holds or the deadline passes.
@@ -1284,9 +1386,14 @@ type warnCapture struct {
 
 func (h *warnCapture) Enabled(_ context.Context, lvl slog.Level) bool { return lvl >= slog.LevelWarn }
 
+// Handle keeps the record, which is exactly the case slog says to Clone for: a
+// Record shares the backing array of its attributes with the caller, and the
+// caller is free to reuse it once Handle returns. Without the clone the attrs a
+// test reads back are whatever the logger last wrote there — and `aid` and
+// `reason` are read back below.
 func (h *warnCapture) Handle(_ context.Context, r slog.Record) error {
 	h.mu.Lock()
-	h.records = append(h.records, r)
+	h.records = append(h.records, r.Clone())
 	h.mu.Unlock()
 	return nil
 }
@@ -1304,6 +1411,16 @@ func (h *warnCapture) find(sub string) (slog.Record, bool) {
 		}
 	}
 	return slog.Record{}, false
+}
+
+// count returns how many records were captured. Under the lock, like find and
+// dump: the pumps write into this handler from their own goroutines, so reading
+// the slice header directly is a race — and one that only shows up in the case
+// the caller cares about, a WARN arriving late enough to be worth catching.
+func (h *warnCapture) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.records)
 }
 
 // dump renders everything captured, for a failure message that says what WAS
@@ -1355,6 +1472,16 @@ func TestConsoleWS_WriteFailureIsReportedAtWarn(t *testing.T) {
 	// gives up, and the production value is too generous to sit and wait for.
 	s := newConsoleTestServerLogging(t, allowAllRBAC{}, console.Limits{},
 		300*time.Millisecond, slog.New(logs))
+	// A teardown tail that takes a visible amount of time, on purpose. Waiting
+	// for hub.Count() to reach zero and then reading the reap log is asserting
+	// that the socket finished tearing down within the same instant its first
+	// step completed — a claim about the scheduler, not about the socket. It
+	// held on an idle machine and failed on a loaded one, which cost NIM-523
+	// and NIM-537 and one red release gate; the flake reproduced nowhere it
+	// could be looked at, because reproducing it meant reproducing the load.
+	// With this it is not a flake at all: the wait below is either there or the
+	// test is red every single time.
+	s.soul.setCloseDelay(250 * time.Millisecond)
 	ws := s.dial(t)
 
 	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
@@ -1370,24 +1497,24 @@ func TestConsoleWS_WriteFailureIsReportedAtWarn(t *testing.T) {
 
 	waitFor(t, "the sessions to be reaped once the writer gave up",
 		func() bool { return s.hub.Count() == 0 })
-	// The reap log is written after the pumps join, which the count does not
-	// wait for.
-	waitFor(t, "the socket to report why it died", func() bool {
-		_, ok := logs.find("write failed")
-		return ok
-	})
 
-	rec, _ := logs.find("write failed")
+	// The whole message, not "write failed": the keepalive path logs "operator
+	// socket KEEPALIVE write failed", which contains that substring and is a
+	// different event with a different close reason. A test that accepts either
+	// one passes on the wrong failure the day the ping beats the queue.
+	rec := waitForRecord(t, logs, "console: operator socket write failed",
+		"a socket that died on a failed write never said why")
 	if aid, ok := recordAttr(rec, "aid"); !ok || aid != consoleTestAID {
 		t.Errorf("write failure logged without the operator: aid=%q ok=%v", aid, ok)
 	}
 
 	// And the reap itself must name the cause, because that line is the one
-	// carrying how many ptys went with it.
-	reap, ok := logs.find("sessions reaped")
-	if !ok {
-		t.Fatalf("a socket that lost every session to a failed write reaped them quietly; logged:\n%s", logs.dump())
-	}
+	// carrying how many ptys went with it. Waited for, not read: the count above
+	// went to zero at unregister, which is the first step of Hub.Close and
+	// several before this line — the close dispatch (stalled on purpose above),
+	// the recording close and the audit write all sit in between.
+	reap := waitForRecord(t, logs, "sessions reaped",
+		"a socket that lost every session to a failed write reaped them quietly")
 	if reason, _ := recordAttr(reap, "reason"); reason != string(console.CloseSocketWriteFailed) {
 		t.Errorf("reap reason = %q, want %q — an operator cannot tell a stalled socket from a closed tab",
 			reason, console.CloseSocketWriteFailed)
@@ -1407,6 +1534,15 @@ func TestConsoleWS_WriteFailureIsReportedAtWarn(t *testing.T) {
 func TestConsoleWS_OrdinaryDisconnectReportsNoFailure(t *testing.T) {
 	logs := &warnCapture{}
 	s := newConsoleTestServerLogging(t, allowAllRBAC{}, console.Limits{}, 0, slog.New(logs))
+	// Armed here for the same reason as in the test above, and it is what makes
+	// the wait below load-bearing rather than decorative. settle() alone spans
+	// 200ms; without a teardown tail longer than that, settling on the session
+	// count would happen to cover the rest of teardown anyway on an idle machine
+	// and the vantage point would be untestable — green either way here, red in
+	// CI under load, which is precisely NIM-537. With the stall, a WARN written
+	// anywhere after the close dispatch is caught or missed depending on where
+	// the test looks from, and that is a difference a mutation can show.
+	s.soul.setCloseDelay(250 * time.Millisecond)
 	ws := s.dial(t)
 
 	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
@@ -1430,12 +1566,32 @@ func TestConsoleWS_OrdinaryDisconnectReportsNoFailure(t *testing.T) {
 	}
 
 	waitFor(t, "the sessions to be reaped", func() bool { return s.hub.Count() == 0 })
+	// The count drops at Hub.Close's FIRST step, and the socket is far from
+	// done there: the close dispatch, the recording close, the audit write, the
+	// reap line and the gauge all come after it, and the audit and recording
+	// paths warn when they fail. `count() == 0` below is an absence claim over
+	// all of them, so it has to be made from a vantage point later than all of
+	// them — settling on the session count settles in the middle of teardown,
+	// and reads a WARN written a moment afterwards as silence (NIM-523).
+	//
+	// The named line is not what forces this: `write failed` comes from the
+	// writer pump, which consoleConn.run joins before it reaps anything, so
+	// even the session count already outlives it. It is the blanket assertion
+	// that needs the room, and only the gauge gives it — see socketsActive.
+	//
+	// Known-bad for this wait, run on a copy: make socketDiedBadly treat an
+	// ordinary close as a failure, so the reap line goes out at WARN. From here
+	// the test is red; from the session count plus settle() it is green 5 times
+	// out of 5, reporting silence over a warning that had already been written.
+	waitFor(t, "the socket handler to finish", func() bool { return s.socketsActive(t) == 0 })
 	settle(t)
 
+	// The bare substring on purpose here, unlike the positive test: it also
+	// catches the keepalive variant, and neither belongs on a closed tab.
 	if _, ok := logs.find("write failed"); ok {
 		t.Errorf("closing a tab mid-stream reported a write failure — every ordinary disconnect would; logged:\n%s", logs.dump())
 	}
-	if n := len(logs.records); n != 0 {
+	if n := logs.count(); n != 0 {
 		t.Errorf("an ordinary disconnect logged %d WARN+ records:\n%s", n, logs.dump())
 	}
 	_ = ws.Close()
