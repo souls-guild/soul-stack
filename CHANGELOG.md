@@ -1672,6 +1672,30 @@ order to act in.
 
 ### Fixed
 
+- **`make dev-stop` stopped nothing, and took `make dev-down` with it.** `NIM-615`.
+  The recipe quoted an inner `grep` pattern with `'...'` inside its own `'...'`
+  string, which does not nest — it closes. With `SHELL := /bin/sh` the target was
+  therefore never one command: it was the pipeline `bash -c '<truncated script>' |
+  node | npm '<the rest>'`. `bash` got a script cut off mid-statement and refused
+  it as a syntax error, so not one process was signalled, and make then exited 127
+  on the missing `node`. `dev-down` declares `dev-stop` as its prerequisite and
+  died there, before ever reaching `docker compose down`.
+
+  The failure mode is the one the target exists to prevent: an orphan `keeper run`
+  holding 8080/8081/9090/9442/9443, with the next bring-up failing on `bind:
+  address already in use` and the operator told only `Error 127`. Broken since
+  2026-07-22 and invisible for two and a half weeks, because a Makefile recipe is
+  the one kind of code in this repo that nothing compiles, lints or executes.
+
+  Fixed by quoting the pattern with `"..."`, and gated by the new
+  `check-makefile-recipes` tier, which is two layers because one does not cover
+  it. It **scans** every `bash -c` in the Makefile for an argument that is one
+  fully quoted string — breadth, and safe on recipes that redirect to absolute
+  paths — and then **runs** `dev-stop` for real against a throwaway stand, which
+  is the only way a defect in what the script does, rather than in how it is
+  quoted, can be caught. The run needs no docker and takes no stand slot
+  (`DEV_STAND_SLOT` short-circuits allocation ahead of the registry).
+
 - **A restarted dev Vault made `dev-provision` hand you someone else's stand,
   silently.** The dev Vault stores its secrets in RAM (`dev/docker-compose.yml`);
   Postgres stores its data on a named volume. A container restart therefore does

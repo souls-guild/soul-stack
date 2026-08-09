@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -700,7 +700,7 @@ dev-down: dev-stop
 # ${STAND_DEV_DIR}/). Empty DEV_STAND = default stand only; neighboring stands are NOT
 # touched (previously: a broad pkill by name that killed every stand). NIM-25.
 dev-stop:
-	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE 'vite|node|npm' "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: stand $${STAND_SLUG:-<default>} stopped (keeper/web by pidfile, souls by stand-pattern)"'
+	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE "vite|node|npm" "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: stand $${STAND_SLUG:-<default>} stopped (keeper/web by pidfile, souls by stand-pattern)"'
 
 dev-reset:
 	@bash -c '. dev/stand-env.sh && stand_summary'
@@ -1213,7 +1213,7 @@ sign:
 GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
-	check-approle-template \
+	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
 	check-modules-run
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
@@ -1475,6 +1475,26 @@ check-doc-links:
 # of the docs. Rationale in full: scripts/check-approle-template.sh.
 check-approle-template:
 	@scripts/check-approle-template.sh
+
+# check-makefile-recipes - every `bash -c` recipe in THIS file must pass one intact,
+# fully quoted script (NIM-615). `dev-stop` closed its outer string on an inner `'...'`
+# pattern and silently became a `bash | node | npm` pipeline: it killed nothing, took
+# `dev-down` with it, and survived two and a half weeks because a Makefile recipe is the
+# one kind of code here that no gate compiles, lints or runs. Rationale and the limits of
+# what a scanner can see: scripts/check-makefile-recipes.py.
+#
+# Two layers, because they fail differently. The scanner covers every `bash -c`
+# recipe but only their quoting; the second line RUNS the one that broke, which is
+# the only way to catch a recipe that parses and then dies at runtime. It stays
+# docker-free (stand-env.sh only computes paths and ports), and it is safe to run
+# from the gate: `DEV_STAND_SLOT` short-circuits slot allocation before the
+# registry lock, so no shared slot is taken, and a throwaway slug points every path
+# in the recipe (pidfiles, the `pkill` pattern) at a stand directory that does not
+# exist. It signals nothing, removes nothing, and cannot touch another stand.
+check-makefile-recipes:
+	@python3 scripts/check-makefile-recipes.py
+	@DEV_STAND=check-recipes DEV_STAND_SLOT=1 $(MAKE) --no-print-directory dev-stop
+	@echo "check-makefile-recipes: dev-stop ran to completion on an empty stand"
 
 # govulncheck - the supply-chain CI gate across all go.work modules (security audit, pre-beta).
 # Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
@@ -1752,6 +1772,7 @@ help:
 	@echo "  check-gen         protogen idempotency (gen-drift in proto/gen/go)"
 	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
 	@echo "  check-approle-template  shipped Vault AppRole role template issues a periodic token"
+	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
