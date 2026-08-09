@@ -514,8 +514,13 @@ func (h *ErrandHandler) authorizeShell(aid, sid, module string) error {
 // path parameter `/v1/souls/{sid}/exec` for the permission check
 // (rbac.md §Errand → selectors `host=<sid>`).
 //
-// Symmetric to SoulSIDSelector — a separate helper so router.go does not
-// depend on the errand package internals.
+// A separate helper so router.go does not depend on the errand package
+// internals. This one is still host-ONLY: unlike the three per-host Soul
+// mutations, which NIM-588 moved to [SoulSIDScopeSelector], `errand.run on
+// coven=<label>` therefore denies every call rather than narrowing to that
+// coven, and `soul.console` has the same shape one layer deeper in
+// authorizeShell. Fixing those needs both layers moved together and a reader
+// threaded through NewErrandHandler — tracked separately.
 func ErrandSIDSelector(r *http.Request) map[string]string {
 	sid := chi.URLParam(r, "sid")
 	if sid == "" {

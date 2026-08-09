@@ -59,9 +59,10 @@ func (h *Handler) callSoulIssueToken(ctx context.Context, claims *jwt.Claims, re
 			"field 'sid' must match "+soul.SIDPattern)
 	}
 
-	// RBAC check — `soul.issue-token` with selector `host=<sid>` (REST:
-	// SoulSIDSelector). RBAC can restrict re-issuance to a specific host.
-	if err := h.deps.RBAC.Check(claims.Subject, "soul", "issue-token", map[string]string{"host": a.SID}); err != nil {
+	// RBAC check — `soul.issue-token` over the host's scope, `host=<sid>` plus
+	// its Coven labels (REST: SoulSIDScopeSelector, NIM-588). RBAC can restrict
+	// re-issuance to a specific host or to a coven.
+	if err := h.checkSoulHostScope(ctx, claims, "issue-token", a.SID); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.issue-token")
 	}

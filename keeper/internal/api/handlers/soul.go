@@ -539,9 +539,10 @@ func forgetReason(claims *jwt.Claims) string {
 // (FULL-TYPED, NIM-386): erase a host from the registry and release what it
 // held, without the http boundary.
 //
-// Authorization is the route's `RequirePermission(soul, forget,
-// SoulSIDSelector)` and nothing else — the same shape as issue-token and
-// ssh-target-update, whose scope context is likewise the SID in the path. It
+// Authorization is the route's `RequirePermissionMulti(soul, forget,
+// SoulSIDScopeSelector)` and nothing else — the same shape as issue-token and
+// ssh-target-update, whose scope context is likewise the host in the path
+// (with its coven labels since NIM-588). It
 // deliberately does NOT also apply the read path's [SoulHandler.inScope] gate:
 // that one resolves the Purview of `soul.list`, so reusing it would make
 // `soul.forget` silently unusable for any operator whose list-scope happens not
@@ -1882,15 +1883,102 @@ func affectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []string
 	return out
 }
 
-// SoulSIDSelector — a middleware helper for RBAC: extracts the SID from the path param
-// for the permission check. Uses the selector key `host` (rbac.md §
-// Selector grammar — `host` for per-Soul targeting).
-func SoulSIDSelector(r *http.Request) map[string]string {
-	sid := chi.URLParam(r, "sid")
+// SoulHostContextReader — read surface for the RBAC extractor of the per-host
+// Soul routes: "return the Coven labels of the host with this SID"
+// ([soul.CovenBySID]). Implemented by [SoulPool]; the extractor holds it in a
+// closure, exactly as [IncarnationContextReader] does for incarnation routes.
+type SoulHostContextReader interface {
+	soul.ExecQueryRower
+}
+
+// ContextReader exposes the handler's pool as the read surface for
+// [SoulSIDScopeSelector]. nil when the pool is (stub construction in the drift
+// test — the extractor is not called there).
+func (h *SoulHandler) ContextReader() SoulHostContextReader {
+	if h.pool == nil {
+		return nil
+	}
+	return h.pool
+}
+
+// SoulHostCovenContexts expands a host's scope into the per-candidate RBAC
+// context set for an OR-check ([middleware.RequirePermissionMulti] over REST,
+// the same loop in MCP).
+//
+// `host` is in EVERY context: the SID comes from the path and is known whether
+// or not the row could be read. Each Coven label of the host adds a context
+// `{host, coven=<label>}` — a host may carry several, and a single flat context
+// can hold only one value per dimension ([rbac.Permission.Matches]), so the OR
+// over the set is what makes `on coven=<one of them>` match.
+//
+// No labels → the single `{host}` context, which is the honest answer in both
+// cases that produce it: the host really carries no coven, or the row could not
+// be read at all. A `coven=` condition then fails closed (a dimension absent
+// from the context does not satisfy a condition on it), and `host=`/bare/`*`
+// grants keep working — which is the pre-NIM-588 behaviour of every call, now
+// confined to the case where the coven genuinely is unknown.
+//
+// Note the deliberate difference from [incarnationCovenContexts], which returns
+// nil for a row it could not read: there BOTH scope dimensions (service,
+// incarnation) come from the row, so without it the gate knows nothing about the
+// request. Here the host dimension survives, and dropping it would turn a
+// working `soul.forget on host=web-1` into a denial the moment Postgres hiccups.
+func SoulHostCovenContexts(sid string, covens []string) []map[string]string {
 	if sid == "" {
 		return nil
 	}
-	return map[string]string{"host": sid}
+	if len(covens) == 0 {
+		return []map[string]string{{"host": sid}}
+	}
+	out := make([]map[string]string, 0, len(covens))
+	for _, c := range covens {
+		out = append(out, map[string]string{"host": sid, "coven": c})
+	}
+	return out
+}
+
+// SoulSIDScopeSelector builds a [middleware.MultiSelectorExtractor] for the
+// per-host Soul routes (forget / issue-token / ssh-target-update): SID from the
+// path plus the host's Coven labels read through reader, landed into the RBAC
+// context as `host=<sid>` and multi-value `coven=` (NIM-588).
+//
+// It replaces the former host-only SoulSIDSelector, under which
+// `soul.forget on coven=web` was not "forget hosts in coven web" but a grant
+// that refused EVERY call — including one aimed at a host that really was in the
+// coven — because a dimension missing from the context fails closed. Both ways a
+// coven reaches the permission are fixed by this one change and not by two:
+// the `on coven=` suffix and a bare permission under a role whose
+// `default_scope` is `coven=…` are the same *ScopeExpr by the time
+// [rbac.Enforcer.Check] evaluates it (rbac/permission.go, effectiveScope), so
+// the context is the only place the two could ever have differed.
+//
+// The read is one extra round-trip on a cold, non-bulk, per-host route — the
+// same trade [IncarnationScopeSelector] makes, and for the same reason: the
+// request names exactly one entity, so resolving its scope in the extractor is
+// cleaner than moving the check into three separate handlers (and cheaper than
+// changing when the operator is refused, which the in-handler form does: 403
+// before anything happens becomes 404/empty after the handler has looked).
+//
+// A nil reader (stub construction) or an unreadable row yields the `{host}`
+// context alone — see [SoulHostCovenContexts] for why that, and not nil.
+func SoulSIDScopeSelector(reader SoulHostContextReader) middleware.MultiSelectorExtractor {
+	return func(r *http.Request) []map[string]string {
+		sid := chi.URLParam(r, "sid")
+		if sid == "" {
+			return nil
+		}
+		if reader == nil {
+			return SoulHostCovenContexts(sid, nil)
+		}
+		covens, err := soul.CovenBySID(r.Context(), reader, sid)
+		if err != nil {
+			// Not found / DB error → the coven stays unknown, so only the host
+			// dimension is asserted. Scoped-by-coven grants fail closed; the
+			// handler still answers 404 for a host that is not there.
+			return SoulHostCovenContexts(sid, nil)
+		}
+		return SoulHostCovenContexts(sid, covens)
+	}
 }
 
 // SoulSshTargetInput — the NATIVE request shape of PUT /v1/souls/{sid}/ssh-target (handler-native

@@ -235,10 +235,11 @@ type soulForgetOutput struct {
 
 // soulForgetOperation — metadata of DELETE /v1/souls/{sid}. DefaultStatus=200.
 // Permission soul.forget + audit soul.forgotten. Errors: 403 RBAC, INCLUDING a
-// host outside the operator's scope (this is a scope-aware RequirePermission
-// with SoulSIDSelector, so the selector is resolved from the path before the
-// handler runs — out-of-scope is answered 403 and never reaches the 404 branch,
-// unlike the read routes where narrowing happens in the handler); 404 no soul;
+// host outside the operator's scope (this is a scope-aware
+// RequirePermissionMulti with SoulSIDScopeSelector, so the host and its covens
+// are resolved before the handler runs — out-of-scope is answered 403 and never
+// reaches the 404 branch, unlike the read routes where narrowing happens in the
+// handler); 404 no soul;
 // 422 invalid sid; 503 the cluster could not be told (NOTHING was deleted —
 // retryable, problem type `teardown-unavailable`); 500.
 //

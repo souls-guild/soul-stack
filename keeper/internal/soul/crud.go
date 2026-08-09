@@ -150,6 +150,14 @@ FROM souls
 WHERE sid = $1
 `
 
+// selectCovenBySIDSQL — the one column the per-host RBAC gate needs
+// (see [CovenBySID]).
+const selectCovenBySIDSQL = `
+SELECT coven
+FROM souls
+WHERE sid = $1
+`
+
 const deleteBySIDSQL = `
 DELETE FROM souls
 WHERE sid = $1
@@ -472,6 +480,29 @@ func mapInsertError(err error) error {
 func SelectBySID(ctx context.Context, db ExecQueryRower, sid string) (*Soul, error) {
 	row := db.QueryRow(ctx, selectBySIDSQL, sid)
 	return scanSoul(row)
+}
+
+// CovenBySID reads the host's own Coven labels alone. Returns [ErrSoulNotFound]
+// on pgx.ErrNoRows.
+//
+// A narrow read rather than [SelectBySID] because the caller is the RBAC gate of
+// the per-host routes (NIM-588): it runs BEFORE the handler on every call and
+// needs exactly one column. Scanning the other ten would make the cold gate path
+// carry the row twice for nothing.
+//
+// The labels are the host's OWN (`souls.coven`, NIM-281 — a coven is never
+// inherited), which is the same column the scoped souls list pushes down on
+// ([soulpurview.Columns]). The gate and the list must agree on what "this host is
+// in coven X" means, and the only way to guarantee that is to read the same place.
+func CovenBySID(ctx context.Context, db ExecQueryRower, sid string) ([]string, error) {
+	var coven []string
+	if err := db.QueryRow(ctx, selectCovenBySIDSQL, sid).Scan(&coven); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSoulNotFound
+		}
+		return nil, fmt.Errorf("soul: select coven by sid: %w", err)
+	}
+	return coven, nil
 }
 
 // SoulprintRecord — last received SoulprintReport for one host

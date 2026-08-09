@@ -855,8 +855,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		//     cutting them off from their own list BEFORE the handler. RequireAction
 		//     only asks whether `soul.list` EXISTS; the scope narrowing is done by the handler
 		//     after fetching the rows (resolveListScope / readScope + soulpurview).
-		//   - issue-token — [handlers.SoulSIDSelector] (`host=<sid>`), RBAC
-		//     can restrict re-issuance to a specific host.
+		//   - issue-token / forget / ssh-target-update — [handlers.SoulSIDScopeSelector]
+		//     (`host=<sid>` plus the host's `coven=` labels) through the OR-ing
+		//     [RequirePermissionMulti], so RBAC can restrict them to a specific host
+		//     OR to a coven. Before NIM-588 the selector carried `host` alone and a
+		//     coven-scoped grant on these three denied every call instead of
+		//     narrowing, because a dimension missing from the context fails closed.
 		//
 		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2e of the soul domain over the role/operator +
 		// audit-endpoint references): create/coven-assign/issue-token/ssh-target/exec — WRITE+AUDIT
@@ -867,6 +871,11 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// directly (bypassing the handler). POST /souls/{sid}/exec — now huma (errand.invoked,
 		// dual-status 200/202 + Location, handler *handlers.ErrandHandler.ExecTyped).
 		r.Route("/souls", func(r chi.Router) {
+			// Shared by the three per-host write routes below: one closure over the
+			// souls read surface, so all three resolve the host's coven the same way
+			// (NIM-588). Symmetric to incScope for incarnation routes.
+			soulHostScope := handlers.SoulSIDScopeSelector(soulH.ContextReader())
+
 			r.With(
 				apimiddleware.RequirePermission(enforcer, "soul", "create", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
@@ -946,15 +955,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "soul", "issue-token", handlers.SoulSIDSelector),
+				apimiddleware.RequirePermissionMulti(enforcer, "soul", "issue-token", soulHostScope),
 			).Group(func(r chi.Router) {
 				registerHumaSoulIssueToken(newHumaSoulAPI(r, auditWriter, audit.EventSoulTokenIssued, logger), soulH)
 			})
 
 			// DELETE /v1/souls/{sid} — forget a host (NIM-386). Permission
-			// `soul.forget`, selector SoulSIDSelector — `host=<sid>`, the same
-			// shape as issue-token / ssh-target-update: the SID is in the path,
-			// so the scope context is known before the handler runs. Audit
+			// `soul.forget`, selector soulHostScope — `host=<sid>` plus the
+			// host's `coven=` labels, the same shape as issue-token /
+			// ssh-target-update: the SID is in the path, so the scope context is
+			// known before the handler runs. Audit
 			// EventSoulForgotten; payload — huma variant B (SetHumaAuditPayload).
 			//
 			// A SEPARATE permission from `soul.create`, deliberately: the
@@ -966,20 +976,20 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// Its own mount group rather than joining the soul-detail read group
 			// above: that one is a bare RequireAction existence-gate for
 			// `soul.list` (a read whose scope narrowing happens in the handler),
-			// while this is a scope-aware RequirePermission. Sharing the group
+			// while this is a scope-aware RequirePermissionMulti. Sharing the group
 			// would let `soul.list` mount a destructive route.
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "soul", "forget", handlers.SoulSIDSelector),
+				apimiddleware.RequirePermissionMulti(enforcer, "soul", "forget", soulHostScope),
 			).Group(func(r chi.Router) {
 				registerHumaSoulForget(newHumaSoulAPI(r, auditWriter, audit.EventSoulForgotten, logger), soulH)
 			})
 
 			// PUT /v1/souls/{sid}/ssh-target — update per-host SSH credentials for the push-flow
 			// (ADR-032 amendment 2026-05-26, S7-1). Permission `soul.ssh-target-update`
-			// (action — hyphenated). Selector SoulSIDSelector — `host=<sid>`. Audit
+			// (action — hyphenated). Selector soulHostScope — `host=<sid>` + covens. Audit
 			// EventSoulSshTargetUpdated; payload — huma variant B (SetHumaAuditPayload).
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "soul", "ssh-target-update", handlers.SoulSIDSelector),
+				apimiddleware.RequirePermissionMulti(enforcer, "soul", "ssh-target-update", soulHostScope),
 			).Group(func(r chi.Router) {
 				registerHumaSoulSshTarget(newHumaSoulAPI(r, auditWriter, audit.EventSoulSshTargetUpdated, logger), soulH)
 			})

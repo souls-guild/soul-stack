@@ -81,9 +81,10 @@ func (h *Handler) callSoulSshTargetUpdate(ctx context.Context, claims *jwt.Claim
 			"field 'ssh_provider' must match "+pushprovider.NamePattern)
 	}
 
-	// RBAC check — `soul.ssh-target-update` with selector `host=<sid>` (REST:
-	// SoulSIDSelector). Mirrors keeper.soul.issue-token.
-	if err := h.deps.RBAC.Check(claims.Subject, "soul", "ssh-target-update", map[string]string{"host": a.SID}); err != nil {
+	// RBAC check — `soul.ssh-target-update` over the host's scope, `host=<sid>`
+	// plus its Coven labels (REST: SoulSIDScopeSelector, NIM-588). Mirrors
+	// keeper.soul.issue-token.
+	if err := h.checkSoulHostScope(ctx, claims, "ssh-target-update", a.SID); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.ssh-target-update")
 	}

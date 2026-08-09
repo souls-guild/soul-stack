@@ -9,8 +9,8 @@ package api
 //	permission in the catalog does not.
 //
 // Why a test of its own. The permission lives in exactly one place — the
-// `RequirePermission(enforcer, "soul", "forget", handlers.SoulSIDSelector)`
-// wrapper in router.go — and nothing else in the tree refers to it. Delete that
+// `RequirePermissionMulti(enforcer, "soul", "forget", soulHostScope)` wrapper
+// in router.go — and nothing else in the tree refers to it. Delete that
 // wrapper and every other test in this package still passes: the handler tests
 // mount their own chain (`forgetRouter`), so they keep asserting a gate that
 // production no longer has, and the revoked sweep only ever asks about 401. The
@@ -28,6 +28,7 @@ package api
 // the test file is a copy of the answer rather than a check of it.
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,13 +101,27 @@ func forgetGateRouter(t *testing.T, perms []string) (http.Handler, *fgPool, *fgT
 
 func forgetGateRouterScoped(t *testing.T, perms []string, defaultScope string) (http.Handler, *fgPool, *fgTeardown, *auditCaptureWriter) {
 	t.Helper()
+	return forgetGateRouterWith(t, perms, defaultScope,
+		&fgPool{status: "disconnected", seeds: 1, tokens: 0, members: 0, voices: 0})
+}
+
+// forgetGateRouterWith — the full form, where the caller supplies the host row.
+// Every coven case below goes through it, because the gate's answer is a
+// function of BOTH halves — the grant and the row it is judged against — and a
+// helper that fixed the row would only ever be able to ask half the question.
+func forgetGateRouterWith(t *testing.T, perms []string, defaultScope string, pool *fgPool) (http.Handler, *fgPool, *fgTeardown, *auditCaptureWriter) {
+	t.Helper()
 	installHumaErrorOverride()
-	pool := &fgPool{status: "disconnected", seeds: 1, tokens: 0, members: 0, voices: 0}
 	td := &fgTeardown{}
 	auditCap := &auditCaptureWriter{}
 	soulH := handlers.NewSoulHandlerWithTeardown(pool, hSoulScoper{unrestricted: true}, nil, td, nil)
 	return revokedGateRouterWith(t, soulForgetGateRBACScoped(t, perms, defaultScope), soulH, auditCap), pool, td, auditCap
 }
+
+// forgetGateHost — the SID every case in this file forgets. Named because the
+// coven cases below grant `on host=` against it, and a literal that drifted
+// apart from the request path would turn those into vacuous denials.
+const forgetGateHost = "host-1.example.com"
 
 func forgetGateDelete(t *testing.T, h http.Handler, sid string) (*httptest.ResponseRecorder, bool) {
 	t.Helper()
@@ -119,7 +134,7 @@ func forgetGateDelete(t *testing.T, h http.Handler, sid string) (*httptest.Respo
 func TestSoulForgetRoute_RefusesEveryPermissionButSoulForget(t *testing.T) {
 	h, pool, _, auditCap := forgetGateRouter(t, catalogExcept(t, "soul.forget"))
 
-	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
 	if panicked {
 		t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
 	}
@@ -156,7 +171,7 @@ func TestSoulForgetRoute_RefusesEveryPermissionButSoulForget(t *testing.T) {
 func TestSoulForgetRoute_AdmitsSoulForgetAlone(t *testing.T) {
 	h, pool, td, auditCap := forgetGateRouter(t, []string{"soul.forget"})
 
-	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
 	if panicked {
 		t.Fatal("DELETE /v1/souls/{sid} panicked for an operator holding soul.forget")
 	}
@@ -178,73 +193,198 @@ func TestSoulForgetRoute_AdmitsSoulForgetAlone(t *testing.T) {
 	}
 }
 
-// TestSoulForgetRoute_CovenNarrowedGrantDeniesEverything pins the trap the docs
-// now warn about, because a warning nothing checks is a sentence that survives
-// the behaviour changing under it.
+// --- coven narrowing (NIM-588) ---
 //
-// [handlers.SoulSIDSelector] puts ONLY `host` into the RBAC context. A dimension
-// absent from the context fails closed, so `soul.forget on coven=<label>` is not
-// "forget hosts in that coven" — it is a grant that refuses every call,
-// including one aimed at a host that really is in the coven. The operator sees a
-// 403 naming a permission they demonstrably hold.
+// Until NIM-588 the selector put ONLY `host` into the RBAC context, and a
+// dimension absent from the context fails closed. So `soul.forget on
+// coven=<label>` was not "forget hosts in that coven" — it refused every call,
+// including one aimed at a host that really was in the coven, with a 403 naming
+// a permission the operator demonstrably held. The tests here used to assert
+// that denial; they now assert the narrowing, and they are the reason the
+// change cannot quietly regress.
 //
-// This asserts today's behaviour, not the desirable one. Making `coven=` narrow
-// rather than deny on these routes is NIM-588; when it lands, this test is the
-// thing that has to change on purpose, and the docs go with it. The same shape
-// applies to `soul.issue-token` and `soul.ssh-target-update` — the other two
-// routes wired to SoulSIDSelector. `soul.console` is NOT among them: it is
-// mounted behind RequireAction with the scope applied inside the handler, so a
-// coven there narrows as written.
-func TestSoulForgetRoute_CovenNarrowedGrantDeniesEverything(t *testing.T) {
-	h, pool, _, auditCap := forgetGateRouter(t, []string{"soul.forget on coven=web"})
+// Two cases per direction, because a coven reaches this permission by two
+// independent routes — the `on coven=` suffix on the permission string, and
+// `default_scope` on the role (ADR-047 S1) — written by different people at
+// different times. Both arrive at [rbac.Enforcer.Check] as the same
+// `*ScopeExpr` (`effectiveScope`, permission.go), so one fix closes both; the
+// pair exists so that a fix which closed only one goes red on the other rather
+// than looking finished.
+//
+// The same shape applies to `soul.issue-token` and `soul.ssh-target-update`,
+// the other two routes on [handlers.SoulSIDScopeSelector], and to all three on
+// the MCP surface (ADR-004 makes OpenAPI and MCP equally primary — a permission
+// that narrows over one and denies over the other is still broken for whoever
+// uses the other). `soul.console` is NOT among them: it is mounted behind
+// RequireAction with the scope applied inside the handler.
 
-	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+// TestSoulForgetRoute_CovenGrantAdmitsHostInThatCoven — the case NIM-588
+// exists for. Stop resolving the host's covens in the selector and this 200
+// becomes the old 403.
+func TestSoulForgetRoute_CovenGrantAdmitsHostInThatCoven(t *testing.T) {
+	h, pool, td, auditCap := forgetGateRouterWith(t, []string{"soul.forget on coven=web"}, "",
+		&fgPool{status: "disconnected", coven: []string{"web"}, seeds: 1})
+
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
+	if panicked {
+		t.Fatal("DELETE /v1/souls/{sid} panicked for a `soul.forget on coven=web` holder")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for `soul.forget on coven=web` against a host IN coven web, "+
+			"want 200 — the grant is being read as a denial again; body=%s", rec.Code, rec.Body.String())
+	}
+	if !pool.deleted() {
+		t.Error("200 without a DELETE FROM souls — the route answered success without forgetting anything")
+	}
+	if !td.closed {
+		t.Error("the host was forgotten without the teardown running — the row went, the resources stayed")
+	}
+	if len(auditCap.Events()) != 1 {
+		t.Fatalf("a successful forget wrote %d audit events, want exactly 1", len(auditCap.Events()))
+	}
+}
+
+// TestSoulForgetRoute_CovenGrantRefusesHostInAnotherCoven — the other half, and
+// the one that makes the case above mean something. Narrowing that admitted
+// every host would satisfy the positive test just as well; this is what says
+// the coven is being compared rather than merely fetched.
+func TestSoulForgetRoute_CovenGrantRefusesHostInAnotherCoven(t *testing.T) {
+	h, pool, _, auditCap := forgetGateRouterWith(t, []string{"soul.forget on coven=web"}, "",
+		&fgPool{status: "disconnected", coven: []string{"prod"}, seeds: 1})
+
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
 	if panicked {
 		t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
 	}
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("DELETE /v1/souls/{sid} = %d for a `soul.forget on coven=web` holder, want 403 — if this now "+
-			"admits, coven-narrowing has started to work and the docs saying it denies are stale; body=%s",
-			rec.Code, rec.Body.String())
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for `soul.forget on coven=web` against a host in coven prod, "+
+			"want 403 — the coven grant is admitting hosts outside it; body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.deleted() {
-		t.Error("the host was DELETED despite the 403")
+		t.Error("the host was DELETED despite the 403 — a host outside the granted coven was erased")
 	}
 	if len(auditCap.Events()) != 0 {
 		t.Errorf("a refused forget wrote %d audit event(s)", len(auditCap.Events()))
 	}
 }
 
-// TestSoulForgetRoute_CovenRoleDefaultScopeDeniesEverything covers the SECOND
-// way a coven reaches this permission, and the likelier one: the role carries
-// `default_scope = coven=<label>` (ADR-047 S1) and the permission itself is
-// bare. [rbac.NewEnforcerFromSnapshot] gives such a permission the role's
-// scope (enforcer.go, `role.DefaultScope`), so it arrives at the gate
-// coven-narrowed exactly like the `on coven=` suffix form — and fails closed
-// for exactly the same reason.
-//
-// Worth its own case because the two forms come from different places and one
-// does not imply the other: the suffix is typed by whoever writes the
-// permission string, the default_scope by whoever creates the role. An
-// operator who reads "don't narrow with coven=" as advice about the suffix
-// still walks into this by scoping the role. If NIM-588 fixes only one of the
-// two, this test says which.
-func TestSoulForgetRoute_CovenRoleDefaultScopeDeniesEverything(t *testing.T) {
-	h, pool, _, auditCap := forgetGateRouterScoped(t, []string{"soul.forget"}, "coven=web")
+// TestSoulForgetRoute_CovenGrantAdmitsHostInAnyOfItsCovens — a host carries a
+// LIST of covens (ADR-008), and the grant has to match any of them, not the
+// first one Postgres happens to return. A selector that emitted a single
+// context from `covens[0]` passes both tests above and fails this one.
+func TestSoulForgetRoute_CovenGrantAdmitsHostInAnyOfItsCovens(t *testing.T) {
+	h, pool, _, _ := forgetGateRouterWith(t, []string{"soul.forget on coven=web"}, "",
+		&fgPool{status: "disconnected", coven: []string{"prod", "web"}, seeds: 1})
 
-	rec, panicked := forgetGateDelete(t, h, "host-1.example.com")
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
+	if panicked {
+		t.Fatal("DELETE /v1/souls/{sid} panicked for a `soul.forget on coven=web` holder")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for `soul.forget on coven=web` against a host in [prod web], "+
+			"want 200 — only the first coven of the list is reaching the gate; body=%s", rec.Code, rec.Body.String())
+	}
+	if !pool.deleted() {
+		t.Error("200 without a DELETE FROM souls")
+	}
+}
+
+// TestSoulForgetRoute_CovenRoleDefaultScopeAdmitsHostInThatCoven covers the
+// SECOND way a coven reaches this permission, and the likelier one: the role
+// carries `default_scope = coven=<label>` (ADR-047 S1) and the permission
+// itself is bare. [rbac.NewEnforcerFromSnapshot] gives such a permission the
+// role's scope (enforcer.go, `role.DefaultScope`), so it arrives at the gate
+// coven-narrowed exactly like the suffix form.
+func TestSoulForgetRoute_CovenRoleDefaultScopeAdmitsHostInThatCoven(t *testing.T) {
+	h, pool, _, _ := forgetGateRouterWith(t, []string{"soul.forget"}, "coven=web",
+		&fgPool{status: "disconnected", coven: []string{"web"}, seeds: 1})
+
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
+	if panicked {
+		t.Fatal("DELETE /v1/souls/{sid} panicked for a bare `soul.forget` in a role scoped coven=web")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for a bare `soul.forget` in a role scoped `coven=web`, against a "+
+			"host IN coven web, want 200 — the suffix form narrows but the role default_scope still denies; body=%s",
+			rec.Code, rec.Body.String())
+	}
+	if !pool.deleted() {
+		t.Error("200 without a DELETE FROM souls")
+	}
+}
+
+// TestSoulForgetRoute_CovenRoleDefaultScopeRefusesHostInAnotherCoven — the
+// negative control for the role-scope form.
+func TestSoulForgetRoute_CovenRoleDefaultScopeRefusesHostInAnotherCoven(t *testing.T) {
+	h, pool, _, auditCap := forgetGateRouterWith(t, []string{"soul.forget"}, "coven=web",
+		&fgPool{status: "disconnected", coven: []string{"prod"}, seeds: 1})
+
+	rec, panicked := forgetGateDelete(t, h, forgetGateHost)
 	if panicked {
 		t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
 	}
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("DELETE /v1/souls/{sid} = %d for a bare `soul.forget` in a role scoped `coven=web`, want 403 — "+
-			"if this now admits, role default_scope has stopped reaching the gate, and the docs are stale; body=%s",
-			rec.Code, rec.Body.String())
+		t.Fatalf("DELETE /v1/souls/{sid} = %d for a role scoped `coven=web` against a host in coven prod, "+
+			"want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if pool.deleted() {
-		t.Error("the host was DELETED despite the 403")
+		t.Error("the host was DELETED despite the 403 — a host outside the role's coven was erased")
 	}
 	if len(auditCap.Events()) != 0 {
 		t.Errorf("a refused forget wrote %d audit event(s)", len(auditCap.Events()))
 	}
+}
+
+// TestSoulForgetRoute_CovenUnreadableKeepsHostDimension pins the fallback in
+// [handlers.SoulSIDScopeSelector], which is the one place the fix could have
+// made things WORSE than before it.
+//
+// The selector reads a row to learn the host's covens. When that read fails —
+// Postgres down, host unknown — it keeps asserting `host=<sid>` and drops only
+// the coven. Returning nothing instead would be the tidy-looking choice and it
+// would break `soul.forget on host=web-1`, a grant that worked before NIM-588
+// and has nothing to do with covens, every time the database hiccups.
+//
+// Both halves are asserted together: the host grant still admits (so the
+// fallback is not a blanket denial) AND the coven grant still refuses (so the
+// fallback is not a blanket admission that treats an unreadable row as "in
+// every coven"). Either one alone is satisfied by a broken selector.
+func TestSoulForgetRoute_CovenUnreadableKeepsHostDimension(t *testing.T) {
+	dbDown := func() *fgPool {
+		return &fgPool{status: "disconnected", covenErr: errors.New("pool closed"), seeds: 1}
+	}
+
+	t.Run("host grant survives", func(t *testing.T) {
+		h, pool, _, _ := forgetGateRouterWith(t, []string{"soul.forget on host=" + forgetGateHost}, "", dbDown())
+
+		rec, panicked := forgetGateDelete(t, h, forgetGateHost)
+		if panicked {
+			t.Fatal("DELETE /v1/souls/{sid} panicked for a `soul.forget on host=` holder")
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("DELETE /v1/souls/{sid} = %d for `soul.forget on host=%s` while the coven read fails, "+
+				"want 200 — a database hiccup has started revoking host-scoped grants; body=%s",
+				rec.Code, forgetGateHost, rec.Body.String())
+		}
+		if !pool.deleted() {
+			t.Error("200 without a DELETE FROM souls")
+		}
+	})
+
+	t.Run("coven grant fails closed", func(t *testing.T) {
+		h, pool, _, _ := forgetGateRouterWith(t, []string{"soul.forget on coven=web"}, "", dbDown())
+
+		rec, panicked := forgetGateDelete(t, h, forgetGateHost)
+		if panicked {
+			t.Fatal("DELETE /v1/souls/{sid} reached the handler and panicked — the permission gate did not fire")
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("DELETE /v1/souls/{sid} = %d for `soul.forget on coven=web` while the coven read fails, "+
+				"want 403 — an unreadable row is being treated as membership in every coven; body=%s",
+				rec.Code, rec.Body.String())
+		}
+		if pool.deleted() {
+			t.Error("a host was erased under a coven grant whose coven could not be read")
+		}
+	})
 }

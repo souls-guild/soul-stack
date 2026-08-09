@@ -75,6 +75,15 @@ func (p *hSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return hSoulStaticRow{vals: []any{hSoulAt, hSoulAt}}
 	case strings.Contains(sql, "INSERT INTO bootstrap_tokens"):
 		return hSoulStaticRow{vals: []any{"token-uuid", hSoulAt}}
+	case strings.Contains(sql, "SELECT coven") && strings.Contains(sql, "FROM souls"):
+		// soul.CovenBySID — the one-column read the per-host RBAC gate does
+		// before the handler runs (NIM-588). Must stay above the full-row case:
+		// `SELECT coven … WHERE sid = $1` matches both, and the ten-value row
+		// would land a SID string in the coven slice.
+		if p.existing == nil {
+			return hSoulErrRow{err: pgx.ErrNoRows}
+		}
+		return hSoulStaticRow{vals: []any{p.existing.Coven}}
 	case strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid = $1"):
 		if p.existing == nil {
 			return hSoulErrRow{err: pgx.ErrNoRows}
@@ -286,10 +295,10 @@ func humaSoulRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, s
 				registerHumaSoulSoulprint(api, soulH)
 				registerHumaSoulHistory(api, soulH)
 			})
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "soul", "issue-token", handlers.SoulSIDSelector)).Group(func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "soul", "issue-token", handlers.SoulSIDScopeSelector(soulH.ContextReader()))).Group(func(r chi.Router) {
 				registerHumaSoulIssueToken(newHumaSoulAPI(r, auditW, audit.EventSoulTokenIssued, nil), soulH)
 			})
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "soul", "ssh-target-update", handlers.SoulSIDSelector)).Group(func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "soul", "ssh-target-update", handlers.SoulSIDScopeSelector(soulH.ContextReader()))).Group(func(r chi.Router) {
 				registerHumaSoulSshTarget(newHumaSoulAPI(r, auditW, audit.EventSoulSshTargetUpdated, nil), soulH)
 			})
 		})

@@ -167,6 +167,23 @@ order to act in.
   action with a context-less check was mis-gated before and now says so. Read
   routes are unaffected — they gate on existence and narrow in the handler.
 
+- **A `coven=`-scoped `soul.forget` / `soul.issue-token` / `soul.ssh-target-update`
+  now reaches hosts, where it used to reach none.** These three mutations put only
+  the path SID into the RBAC context, and a dimension the context does not carry
+  fails closed — so a grant narrowed by `coven=<label>` refused **every** call,
+  including one aimed at a host that really was in that coven, and the 403 named a
+  permission the operator demonstrably held. The gate now reads the host's own
+  `souls.coven` list first and asks the enforcer once per label, admitting on any
+  of them, so the grant means what it reads as. **This widens what an existing
+  role can do** without a role edit: review any role that carries one of the three
+  narrowed by a coven — it was inert and is now live over that coven's hosts, and
+  in the case of `soul.forget` that is a destructive right. Both forms of coven are
+  covered, the `on coven=…` suffix and a bare permission under a role whose
+  `default_scope` is a coven. Grants written `on host=` are unchanged, and a host
+  whose row cannot be read (unknown SID, database unreachable) still asserts only
+  the host, so nothing widens when Postgres is down. `errand.run` and the live
+  `soul.console` keep the old shape — a `coven=` on either still denies.
+
 - **`GET /v1/roles` and `keeper.role.list` no longer return the whole catalog.**
   A caller sees a role exactly when the caller could grant what that role grants.
   A reader who must see roles they hold nothing of — an auditor, a security
@@ -1695,6 +1712,26 @@ order to act in.
   bench cluster, never production.
 
 ### Fixed
+
+- **A `coven=` scope on the three per-host Soul mutations denied every call
+  instead of narrowing them.** `NIM-588`. `soul.forget`, `soul.issue-token` and
+  `soul.ssh-target-update` were gated by a selector that put only `host=<sid>`
+  from the path into the RBAC context. A condition over a dimension the context
+  does not carry fails closed, so `soul.forget on coven=web` was not "forget hosts
+  in `web`" — it refused the whole permission, and the 403 named a right the
+  operator held. Both ways a coven attaches were affected, the `on coven=…` suffix
+  and a bare permission inheriting a role's `default_scope`; they meet at the same
+  scope expression before the check, so neither was a special case of the other's
+  bug. The gate now resolves the host's `souls.coven` list first and offers the
+  enforcer one context per label — a host holds several ([ADR-008](docs/adr/0008-coven-stable-tags.md)),
+  so a single context could only ever have asked about one — admitting if any
+  passes. MCP resolves the identical contexts before the tool body runs, since
+  both surfaces are primary ([ADR-004](docs/adr/0004-binaries.md)) and a fix on
+  one of them leaves the operator with the same 403 one surface over. A host whose
+  row cannot be read still asserts the host alone: coven-scoped grants fail closed,
+  `on host=` grants keep working, and a database outage widens nothing. Note the
+  scope of the fix — `errand.run` and the live `soul.console` still build a
+  host-only context, so a `coven=` on either continues to deny.
 
 - **`make dev-stop` stopped nothing, and took `make dev-down` with it.** `NIM-615`.
   The recipe quoted an inner `grep` pattern with `'...'` inside its own `'...'`

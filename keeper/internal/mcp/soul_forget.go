@@ -67,11 +67,12 @@ func (h *Handler) callSoulForget(ctx context.Context, claims *jwt.Claims, req js
 			"field 'sid' must match "+soul.SIDPattern)
 	}
 
-	// RBAC — `soul.forget` with selector `host=<sid>` (REST: SoulSIDSelector).
+	// RBAC — `soul.forget` over the host's scope, `host=<sid>` plus its Coven
+	// labels (REST: SoulSIDScopeSelector, NIM-588).
 	// Its own permission, not `soul.create`: onboarding a host and erasing one
 	// are different grants, and this is the only soul tool that destroys rows
 	// the operator never named (memberships and Choir Voices cascade with it).
-	if err := h.deps.RBAC.Check(claims.Subject, "soul", "forget", map[string]string{"host": a.SID}); err != nil {
+	if err := h.checkSoulHostScope(ctx, claims, "forget", a.SID); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.forget")
 	}

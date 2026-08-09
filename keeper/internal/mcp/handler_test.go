@@ -640,6 +640,14 @@ func (r staticRow) Scan(dest ...any) error {
 			}
 		case *[]byte:
 			*d = r.values[i].([]byte)
+		case *[]string:
+			*d = r.values[i].([]string)
+		default:
+			// A dest type this fake does not know used to be scanned into
+			// nothing at all, which reads exactly like a column that came back
+			// empty. Every caller then agrees with the fake and the test is
+			// green about a value it never received.
+			return fmt.Errorf("staticRow.Scan: unhandled dest type %T at index %d", d, i)
 		}
 	}
 	return nil
