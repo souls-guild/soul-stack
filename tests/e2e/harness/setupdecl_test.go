@@ -171,6 +171,20 @@ var knownProductCalls = map[string]string{
 	"RegisterService":     "POST /v1/services over examples/ (NIM-211: examples are the subject, not scenery)",
 }
 
+// assertKeeperBinaryMatchesTree (NIM-490) is deliberately NOT here, and the
+// omission is a claim rather than an oversight.
+//
+// It execs the keeper, which looks like door one, and it goes through none of
+// them: it is handed a path rather than calling keeperBinaryPath. Left as is,
+// that reads exactly like the silent shrink TestProductDoorsStayOpen exists to
+// catch — so the reason is written down instead. `keeper version` reads the
+// artifact's nameplate. It drives no behaviour this tier tests, and no
+// regression in this repo can make it fail; what makes it fail is the binary
+// being from another tree, which is a fact about the machine, which is what
+// bring-up means. Listing it here would assert the opposite and force it below
+// `infraUp`, where its refusal would reach the reader as forty unlabelled
+// FAIL lines. See NewStack for the placement argument.
+
 // TestDeclaredRegionsEndBeforeTheProductRuns — the bring-up declaration covers
 // infrastructure only.
 //

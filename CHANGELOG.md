@@ -1757,6 +1757,94 @@ order to act in.
   quoted, can be caught. The run needs no docker and takes no stand slot
   (`DEV_STAND_SLOT` short-circuits allocation ahead of the registry).
 
+- **Every E2E tier could report on code that was not in the tree.** L3a and L3b
+  spawn `keeper/bin/keeper` — whatever the last build left there — and L3c
+  deploys the `keeper:e2e-k8s` image the local daemon happens to hold. None of
+  the three compiled anything, and `make e2e` did not depend on `build`, so the
+  verdict was about an artifact rather than about the source. The failure is
+  symmetric and both halves are expensive: deleted wiring stayed green until
+  someone ran `make build`, and a test "reproduced" a defect the tree had
+  already fixed. Absence was loud (the harness skipped when the binary was
+  missing) and staleness was silent.
+
+  Two changes, because either alone leaves a way in. The Makefile targets now
+  build what they test (`e2e: build`; `e2e-live` gained `build` alongside
+  `build-linux` — those produce *different* keepers, and the tier ran the one
+  that was not being rebuilt). And each harness now refuses outright: before any
+  stand comes up it asks the artifact for its version and compares it with the
+  tree's, so a hand-run `go test -tags=e2e` cannot go green on yesterday's
+  binary either. Refuses, not skips — a skipped pre-flight is the defect again,
+  one level up.
+
+  Two axes, because one cannot cover both cases. The version catches another
+  commit; file timestamps catch an uncommitted edit made after the build, which
+  no version can see. `-dirty` is stripped before comparing (it is repo-wide, and
+  reddening a byte-correct binary over a README edit is how a gate gets turned
+  off), and the timestamp axis looks only at uncommitted files under
+  `keeper`/`shared`/`sdk`/`proto`. Each message names the command that fixes it,
+  and the L3c one says which command does *not*: `make build` produces the host
+  binary, while the cluster runs an image.
+
+  In L3a and L3b the refusal happens inside the declared bring-up region, so it
+  reaches a reader as STAND-SETUP — correct, in that nothing was asserted, but
+  STAND-SETUP's standing advice is "rerun this one alone", and rerunning a stale
+  binary reproduces it forever. Both classifiers —
+  `scripts/classify-l3a-failure.py` and `scripts/classify-e2e-live-failure.py` —
+  now recognise the refusal and say `make build` first. They key on a string in
+  the harness's message, so a self-test asserts both of the harness's stale paths
+  still carry it; an unchecked copy is the same silent drift one level up. That
+  count reads Go string literals only: over raw source, a comment quoting a
+  message the harness no longer prints keeps the check green — which is exactly
+  what rewording the message leaves behind.
+
+  In both scripts the advice is a pure function, and in both the *join* is
+  pinned separately, because a branch and its caller fail differently: a correct
+  function reached with the wrong argument still returns confidently. Each
+  script's self-test now runs a real stale-binary log through its own entry
+  point, as a subprocess, and requires the rebuild advice in the rendered
+  report. A fixture that calls the renderer directly cannot do this — it picks
+  its own argument, so it cannot tell the real one from an empty string. L3a
+  keeps an AST check beside the rendered one: that pins the *shape* (`main`
+  hands `next_step` the family it classified) where the log pins the *value*.
+  The advice line the rendered check looks for is asked of `next_step` rather
+  than spelled out, so rewording a headline does not redden it while the
+  headline never reaching the page does — `make build` appears in the paragraph
+  above the advice too, and on its own it does not tell the two apart.
+
+  Two things a stamp comparison quietly misses, both closed here. An
+  **uncommitted deletion** is invisible to both axes — `-dirty` is stripped, and
+  a file that is gone has no mtime — and `tests/e2e` has no `replace` for keeper,
+  so deleting keeper source does not even break the tier's build. The mtime axis
+  now falls back to the nearest surviving parent directory, which `unlink`
+  refreshes. And on L3c, `.Created` is **frozen by BuildKit** across rebuilds: the
+  image ID changes, the timestamp does not, so a rebuilt image read as
+  hours-old. The provenance check now prefers `.Metadata.LastTagTime` and falls
+  back to `.Created` (the tag stamp is zero for a pulled image), with both
+  Docker's timestamp renderings parsed.
+
+  The guards derive their subject rather than listing it: "every function that
+  resolves the keeper binary" comes out of the AST, minus a named exemption list
+  that carries the reason for each entry. A hardcoded list of who-must-check goes
+  stale in the silent direction — add a spawner, forget the list, and the guard
+  reports green about something it never looked at, which is this ticket's own
+  shape. An exemption list goes stale loudly. The L3c deployment manifest is tied
+  to the image constant the same way, since committed YAML cannot reference a Go
+  const. The rule caught one of this change's own lists: the four directories the
+  timestamp axis watches were hardcoded, and copied into three tiers that are
+  separate Go modules and cannot share them. They are correct today and would
+  have gone quiet the day keeper links a fifth module, so they are now derived by
+  walking keeper's first-party import closure and compared against all three
+  copies — in both directions, since a missing root is a false green and a
+  surplus one is a false red. The copies themselves are found by glob over
+  `tests/*/harness/provenance.go` with a floor of three, so a fourth tier joins
+  the comparison the day it appears, not the day someone remembers to list it.
+
+  Found on the way: `.dockerignore` excluded `*/bin/`, which is exactly where
+  the L3c image Dockerfiles (`tests/e2e-k8s/dockerfiles/`) COPY from — the
+  `deploy/docker/` images of the same names build inside a builder stage and
+  are unaffected — so `make docker-build-keeper` had been failing since the
+  beta, which is the commit that introduced both halves.
+
 - **A restarted dev Vault made `dev-provision` hand you someone else's stand,
   silently.** The dev Vault stores its secrets in RAM (`dev/docker-compose.yml`);
   Postgres stores its data on a named volume. A container restart therefore does

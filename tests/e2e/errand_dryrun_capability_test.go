@@ -27,12 +27,14 @@
 // assertion here is about the GATE rather than about Plan-vs-Apply. Whether a
 // real Soul honours the flag is an L3b question.
 //
-// ⚠ The harness runs a PREBUILT `keeper/bin/keeper` (locateKeeperBinary), not the
-// source in the working tree — so this case only says something about the code you
-// are editing after a `make build`. Verified: with the checker deliberately left
-// nil in the daemon wire-up, a stale binary still passes here and a rebuilt one
-// fails with 409. `make check-all` builds before running the tier; a hand-run
-// `go test -tags=e2e` does not.
+// The harness runs a PREBUILT `keeper/bin/keeper` (locateKeeperBinary), not the
+// source in the working tree, and this case is where that first bit: with the
+// checker deliberately left nil in the daemon wire-up, a stale binary passed
+// here and a rebuilt one failed with 409. The warning that used to stand at this
+// spot — "so this only says something about the code you are editing after a
+// `make build`" — is obsolete as of NIM-490: the harness now asks the binary
+// which commit it carries and refuses to run on a mismatch, so this case cannot
+// report on yesterday's build however it is started.
 //
 // Since NIM-489 there is a SECOND refusal on this path, ahead of the gate: keeper
 // answers 400 for `dry_run` on a verb-shell module, from the request alone. The two

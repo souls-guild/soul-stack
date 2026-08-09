@@ -403,8 +403,18 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 #             and a keeper process; overlapping packages double that and put two
 #             independent binaries in the same ephemeral port range.
 # bash + pipefail so `| tee` cannot swallow a non-zero status.
+#
+# Depends on `build` (NIM-490). The harness does not compile keeper - it runs
+# keeper/bin/keeper, whatever the last build left there - so without this the
+# tier's verdict was about an artifact rather than about the tree. On NIM-456
+# that cost a session twice: deleted wiring stayed GREEN until `make build`, and
+# a test "reproduced" a defect the source had already fixed. The dependency is
+# only half the fix, because `go test -tags=e2e` by hand skips the Makefile
+# entirely; the other half refuses to run at all on a mismatch (provenance.go).
+# KEEPER_EXPECTED_VERSION hands that check the version this build STAMPED, so
+# `make e2e VERSION=v1.2.3` keeps one definition of the version instead of two.
 e2e: SHELL := /bin/bash
-e2e:
+e2e: build
 	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./...)" ]; then \
 		echo "tests/e2e: the e2e package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -416,7 +426,7 @@ e2e:
 		log="$$(mktemp -t soul-stack-l3a-XXXXXX.log)"; rc=0; \
 		trap 'rm -f "$$log"' EXIT; \
 		echo "go test -tags=e2e -count=1 -p 1 ./... in tests/e2e"; \
-		(cd tests/e2e && go test -tags=e2e -count=1 -p 1 -timeout=30m ./... 2>&1 | tee "$$log") || rc=1; \
+		(cd tests/e2e && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e -count=1 -p 1 -timeout=30m ./... 2>&1 | tee "$$log") || rc=1; \
 		if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l3a-failure.py "$$log" || true; fi; \
 		exit "$$rc"; \
 	fi
@@ -457,12 +467,20 @@ build-linux: bin-keeper bin-soul
 # `-p 1` - serial (RAM-heavy: privileged containers with systemd + apt-install
 # running concurrently would kill a developer's laptop). Architect recommendation.
 #
-# e2e-live-artifacts first for the same reason the gate does it: the tarball cache
+# `build` as well as `build-linux` (NIM-490). The two produce DIFFERENT keepers:
+# build-linux cross-compiles keeper-linux-amd64 for the soul container, while
+# the harness runs the NATIVE keeper/bin/keeper on the host (locateKeeperBinary)
+# - so this target used to rebuild everything except the binary under test. That
+# is the same false green `e2e` had, one artifact over. e2e-live-gate already
+# depended on both; it did so for its own reasons and the reasoning never
+# reached here.
+#
+# e2e-live-artifacts for the same reason the gate does it: the tarball cache
 # is filled once, up front and named, instead of at the first `create` twenty
 # minutes in. The nightly run needs the network anyway (TestL3bRedisLiveUpstream_*
 # fetches from real github on purpose), so this costs nothing there and makes a
 # fetch failure legible.
-e2e-live: build-linux e2e-live-artifacts
+e2e-live: build build-linux e2e-live-artifacts
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -471,7 +489,7 @@ e2e-live: build-linux e2e-live-artifacts
 		exit 1; \
 	else \
 		echo "go test -tags=e2e_live ./... in tests/e2e-live"; \
-		(cd tests/e2e-live && go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
+		(cd tests/e2e-live && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
 	fi
 
 # e2e-live-gate - the MANDATORY local live gate before a batch-commit of a large
@@ -579,7 +597,7 @@ e2e-live-gate: build build-linux
 		echo "e2e-live-gate: transcript -> $$log"; \
 		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
 		set -o pipefail; \
-		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
+		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
 		rc=$$?; \
 		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
 			echo "e2e-live-gate: FALSE-GREEN - '(cached)' in summary (cache not disabled, -count=1 lost)" >&2; exit 1; \
@@ -676,7 +694,7 @@ e2e-k8s: docker-build-keeper docker-build-soul
 		exit 1; \
 	else \
 		echo "go test -tags=e2e_k8s ./... in tests/e2e-k8s"; \
-		(cd tests/e2e-k8s && go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
+		(cd tests/e2e-k8s && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
 	fi
 
 # --- Cloud live-E2E orchestrator (NIM-31) ---
@@ -1361,6 +1379,8 @@ check-e2e-set:
 	@scripts/classify-l3a-failure.py --self-test
 	@echo "go test -tags=e2e -count=1 ./harness/... in tests/e2e (docker-free stand-readiness guards)"
 	@(cd tests/e2e && go test -tags=e2e -count=1 ./harness/...)
+	@echo "go test -count=1 ./harness/ in tests/e2e-k8s (docker-free image-provenance guards, NIM-490)"
+	@(cd tests/e2e-k8s && go test -count=1 ./harness/)
 
 # check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
 # decides whether a tier ran and what it said, so a regression there misreports

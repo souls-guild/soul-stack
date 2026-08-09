@@ -12,3 +12,15 @@ examples
 *.md
 .dockerignore
 deploy
+
+# ...except the two cross-compiled artifacts the L3c images are made of.
+# deploy/docker/keeper.Dockerfile compiles inside the builder stage and needs
+# nothing from bin/; tests/e2e-k8s/dockerfiles/*.Dockerfile COPY the output of
+# `make build-linux` directly, and share this file because they share the root
+# build context. Without these two lines `make docker-build-keeper` fails on
+# "keeper/bin/keeper-linux-amd64: not found" and L3c cannot be built at all -
+# which is where it has been since the beta (NIM-490 found it while wiring the
+# image provenance check; the tier is loudly broken rather than falsely green,
+# but a pre-flight for an image nobody can build guards nothing).
+!keeper/bin/keeper-linux-amd64
+!soul/bin/soul-linux-amd64

@@ -46,12 +46,7 @@ type Cluster struct {
 func NewCluster(t *testing.T) *Cluster {
 	t.Helper()
 
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("L3c: docker not found in PATH: %v", err)
-	}
-	if _, err := exec.LookPath("kind"); err != nil {
-		t.Skipf("L3c: kind CLI not found in PATH (needed for load-image): %v", err)
-	}
+	requireClusterTooling(t)
 
 	name := fmt.Sprintf("soul-stack-e2e-%s-%d", sanitizeTestName(t.Name()), time.Now().UnixNano())
 	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig-"+name)
@@ -79,6 +74,22 @@ func NewCluster(t *testing.T) *Cluster {
 	})
 
 	return c
+}
+
+// requireClusterTooling - the environment probe, split out of NewCluster so
+// NewStack can run it FIRST (NIM-490). Order matters and the two outcomes are
+// deliberately different: a machine without docker cannot run L3c at all and is
+// skipped, while a machine that has docker and a stale image is failed. Placing
+// the image pre-flight above this probe would turn every docker-free run from a
+// skip into a failure, which is a different claim than the one being made.
+func requireClusterTooling(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("L3c: docker not found in PATH: %v", err)
+	}
+	if _, err := exec.LookPath("kind"); err != nil {
+		t.Skipf("L3c: kind CLI not found in PATH (needed for load-image): %v", err)
+	}
 }
 
 // sanitizeTestName — the kind cluster name must be DNS-friendly (RFC 1123:

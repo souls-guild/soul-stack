@@ -53,7 +53,9 @@ Usage: classify-l3a-failure.py <go-test-output-file>
 
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKER_SOURCE = REPO_ROOT / "tests" / "e2e" / "harness" / "setupdecl.go"
@@ -63,6 +65,14 @@ MARKER_DECL = re.compile(r'standSetupMarker\s*=\s*"([^"]+)"')
 # same reason the marker is: a copy would agree with itself forever.
 L1_CLASSIFIER = REPO_ROOT / "scripts" / "classify-l1-failure.py"
 L1_PATTERN_DECL = re.compile(r"SETUP_DECLARED\s*=\s*re\.compile\(\s*r\"([^\"]+)\"")
+
+# NIM-490's pre-flight refuses a keeper binary that is not this tree, and it does
+# so INSIDE the declared bring-up region, so its refusal arrives here as
+# STAND-SETUP. The verdict is right — nothing was asserted — but the advice that
+# follows it is not: "rerun this one alone" reproduces a stale binary exactly,
+# forever. This needle is what lets the family say so.
+PROVENANCE_SOURCE = REPO_ROOT / "tests" / "e2e" / "harness" / "provenance.go"
+STALE_NEEDLE = "the keeper binary is STALE"
 
 # Whose block the following lines belong to. Go's chatty printer moves
 # attribution with three lines and only three: `=== RUN` when a test starts,
@@ -166,6 +176,15 @@ FAMILIES: list[tuple[str, list[str], str]] = [
         "far. NewStack now refuses to hand back a stack pointed at a keeper that\n"
         "is not its own (assertOwnKeeper), so a 401 surviving to here is either a\n"
         "keeper that changed identity mid-test or a real authorization defect.",
+    ),
+    (
+        "STALE_BINARY",
+        [STALE_NEEDLE],
+        "Not the machine — the harness refused before bringing anything up,\n"
+        "because keeper/bin/keeper does not carry the code in the tree (NIM-490).\n"
+        "Docker, Vault and Postgres are not implicated and nothing here is flaky.\n"
+        "The lines above name the mismatch and the fix; `make build` is the fix in\n"
+        "every case, and a rerun without it reproduces this exactly.",
     ),
     (
         "STATE_SUBSET",
@@ -308,6 +327,239 @@ def check_marker_came_from_the_source(marker: str) -> str:
             "     merely carries a similar constant; the string that reaches the log comes\n"
             "     from somewhere else and is no longer being read at all."
         )
+    return ""
+
+
+def next_step(test: str, family: str | None) -> tuple[str, str]:
+    """The line a reader actually acts on: headline, then the command to run.
+
+    A pure function for the same reason classify() is one — this is the only
+    output of the whole tool that tells someone to do something, and getting it
+    wrong costs more than a mislabelled verdict does. Inline in the report loop it
+    was reachable only by rendering a log, so the fixtures could not see it and a
+    branch could be deleted without one of them going red.
+
+    STALE_BINARY is the case that forces the branch. Its verdict is STAND-SETUP,
+    and everything STAND-SETUP normally means — the machine, contention, try it
+    alone — is false here: the binary is from another build and a rerun without
+    `make build` reproduces the refusal identically, every time, which is the one
+    shape where the generic advice sends a reader into a loop.
+    """
+    if family == "STALE_BINARY":
+        return (
+            "Rebuild FIRST — rerunning alone changes nothing:",
+            f"make build && cd tests/e2e && go test -tags=e2e -count=1 -run '^{test}$' -v .",
+        )
+    return (
+        "Rerun this one alone (no company, no contention):",
+        f"cd tests/e2e && go test -tags=e2e -count=1 -run '^{test}$' -v .",
+    )
+
+
+def check_stale_needle_matches_the_harness() -> str:
+    """STALE_NEEDLE still appears in the message provenance.go emits. "" if it does.
+
+    The marker is READ out of the Go source; this needle cannot be, because it is
+    a fragment of a format string rather than a constant, and hoisting it into one
+    would put the same fragment in three tiers' provenance.go for one tier's
+    classifier. So it is a copy — and an unchecked copy is precisely the failure
+    this whole tool is built against: reword the Go message and the family stops
+    firing, in silence, leaving the wrong advice back in place with no test red.
+
+    Both stale paths are required to carry it, not just one. They are two separate
+    format strings (version mismatch, uncommitted-source freshness) and the
+    freshness one is the shape a developer mid-edit actually hits; a needle
+    matching only the other would cover the rarer half and read as covering both.
+    """
+    try:
+        src = PROVENANCE_SOURCE.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"cannot read {PROVENANCE_SOURCE}: {exc}"
+
+    hits = src.count(STALE_NEEDLE)
+    if hits < 2:
+        return (
+            f"{STALE_NEEDLE!r} appears {hits}x in {PROVENANCE_SOURCE.name}, want both\n"
+            "     stale paths (version mismatch AND uncommitted-source freshness).\n"
+            "     The STALE_BINARY family keys on this string; where it does not appear,\n"
+            "     a refusal is reported as a bring-up failure and the reader is told to\n"
+            "     rerun the test alone, which reproduces a stale binary forever."
+        )
+    return ""
+
+
+def check_next_step_branches() -> str:
+    """next_step() still distinguishes a stale binary from everything else. "" if it does.
+
+    The verdict fixtures compare (test, verdict, family) and stop there, so they
+    would stay green with this branch collapsed to its generic half — and that
+    collapse is invisible in review, because the remaining line reads perfectly
+    well. What it says is just wrong for the one family that reaches it: the
+    rebuild is the fix, and a bare rerun re-runs the same binary.
+
+    Both directions are asserted. Only checking the stale branch would pass a
+    next_step() that prescribed `make build` for every failure, which quietly
+    doubles the cost of the flaky-container case this tool exists to triage.
+    """
+    stale_head, stale_cmd = next_step("TestSomething", "STALE_BINARY")
+    plain_head, plain_cmd = next_step("TestSomething", None)
+
+    if "make build" not in stale_cmd:
+        return (
+            f"STALE_BINARY is told {stale_cmd!r}, which does not rebuild.\n"
+            "     That command re-runs the very binary the harness just refused, so the\n"
+            "     reader gets the identical failure and no new information."
+        )
+    if "make build" in plain_cmd:
+        return (
+            f"a non-stale failure is told {plain_cmd!r}.\n"
+            "     A rebuild is not the fix for a container flake; prescribing it for every\n"
+            "     family makes the advice noise and hides the case where it is the point."
+        )
+    if stale_head == plain_head:
+        return (
+            f"both families get the same headline {stale_head!r}.\n"
+            "     The commands differ but nothing says why, and the headline is the part\n"
+            "     that gets read."
+        )
+    for name, cmd in (("STALE_BINARY", stale_cmd), ("generic", plain_cmd)):
+        if "TestSomething" not in cmd:
+            return f"the {name} command does not name the test: {cmd!r}"
+    return ""
+
+
+def check_next_step_is_joined() -> str:
+    """The report reaches next_step() with the classified family. "" if it does.
+
+    A different failure from the one above, and the one that survives it. That
+    check proves next_step() branches correctly; this proves the branch is
+    reached with the right argument. A perfectly-branching pure function called
+    as next_step(test, verdict) — or with a family variable from an outer scope,
+    or with None — is green on every unit assertion and wrong in every report,
+    and nothing else here would notice: the verdict fixtures stop at
+    (test, verdict, family) and never render the advice.
+
+    L3b's classifier extracts the whole report into a pure report_lines() a
+    fixture can call. That refactor is right there and wrong here: this render
+    loop carries a dozen family-specific branches, and moving it wholesale to buy
+    one assertion would be a large edit with its own risk in a ticket about not
+    trusting things you have not examined. So the SHAPE of the join is pinned
+    where it lives, by reading this file's own AST.
+
+    Note what that buys and what it does not. An identifier is not a value: this
+    check sees `next_step(test, family)` and is satisfied, so
+    `family = family_of("")` one line up passes it while emptying every report
+    printed. Extracting report_lines() does not close that either — it lifts the
+    join one level, from "which family" to "which blob", and L3b's fixtures call
+    report_lines() directly, so the same hole is open there. Only rendering a
+    real log through the real entry point closes it, in either script, which is
+    what check_report_renders_the_join does below.
+    """
+    import ast
+
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    main_fn = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    if main_fn is None:
+        return ("there is no main() in this file to inspect. If the report moved, move "
+                "this check with it — a guard that cannot find its subject gates nothing.")
+
+    calls = [n for n in ast.walk(main_fn)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "next_step"]
+    if not calls:
+        return ("main() never calls next_step(). Either the advice is no longer printed, "
+                "or it moved out of main() and this check now walks a function that does "
+                "not contain it — which passes by vacuum.")
+
+    for call in calls:
+        if len(call.args) != 2:
+            return (f"next_step() is called with {len(call.args)} positional argument(s); "
+                    "this check knows the (test, family) shape and cannot vouch for another.")
+        second = call.args[1]
+        if not isinstance(second, ast.Name) or second.id != "family":
+            got = ast.unparse(second)
+            return (f"next_step() is passed {got!r} as its family. The function branches on "
+                    "STALE_BINARY, so anything but the classified family sends every reader "
+                    "the generic advice — green on every assertion above, wrong in every "
+                    "report printed.")
+    return ""
+
+
+def check_report_renders_the_join() -> str:
+    """A real log through the real entry point still carries family and fix. "" if it does.
+
+    Every other check in this file calls one function directly with arguments it
+    chose itself. That is what leaves the join uncovered, and the join is its own
+    defect class: a pure function reached with an empty or adjacent argument
+    returns confidently, and the caller prints the confident answer. The AST
+    check above pins the join's shape; this pins its VALUE, which is the half an
+    identifier cannot vouch for.
+
+    The known-bad is not hypothetical. `family_of(out)` -> `family_of("")` in
+    main() leaves the identifier named `family`, satisfies the AST check, keeps
+    all twenty-odd fixtures green, and deletes `family: STALE_BINARY` and the
+    rebuild advice from every report the tool will ever print — which is the
+    whole of what NIM-490 added here. A subprocess is the price of seeing it:
+    calling main() in-process would need stdout capture and would still share
+    this module's globals, so it would not exercise argv, the file read, or
+    read_marker() the way CI does.
+
+    The headlines are asked of next_step() rather than written out here, and the
+    difference is which way this check is allowed to fail. Rewording a headline
+    must not redden it — the wording is not the property. The two printed lines
+    going missing must, and nothing else here would notice: `make build` also
+    appears in the family paragraph above them, so a report that computes the
+    advice and never prints it still carries that needle.
+    """
+    script = pathlib.Path(__file__).resolve()
+    marker = read_marker()
+    declared = f"    panic.go:694: {marker} — the stand's infrastructure never came up."
+    stale_head, _ = next_step("TestSomething", "STALE_BINARY")
+    plain_head, _ = next_step("TestSomething", None)
+    cases = (
+        (
+            "stale binary",
+            "--- FAIL: TestSomething (0.22s)\n"
+            f"    stack.go:181: L3a: {STALE_NEEDLE} - this run would test code that is "
+            "not in the tree.\n" + declared + "\n",
+            ("family: STALE_BINARY", "make build", stale_head),
+            (plain_head,),
+        ),
+        (
+            "ordinary bring-up failure",
+            "--- FAIL: TestSomething (61.35s)\n"
+            "    stack.go:187: NewStack: postgres: postgres container: run postgres: "
+            "context deadline exceeded\n" + declared + "\n",
+            (plain_head,),
+            ("family: STALE_BINARY", "make build", stale_head),
+        ),
+    )
+
+    for name, blob, want, unwanted in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "l3a.log"
+            log.write_text(blob, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(script), str(log)],
+                capture_output=True, text=True,
+            )
+        report = proc.stdout
+        indented = "\n".join(f"       {line}" for line in report.splitlines())
+        for needle in want:
+            if needle not in report:
+                return (f"the report rendered for a {name} does not contain {needle!r}.\n"
+                        "     next_step() and family_of() can both be correct and this still\n"
+                        "     fail: what is broken is what main() hands them, and no other\n"
+                        f"     check here renders a log at all.\n{indented}")
+        for needle in unwanted:
+            if needle in report:
+                return (f"the report rendered for an {name} contains {needle!r}, so the\n"
+                        "     stale-binary advice is reaching blocks that are not stale — a\n"
+                        "     reader is told to rebuild when rebuilding will not help.\n"
+                        f"{indented}")
     return ""
 
 
@@ -748,6 +1000,26 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         "tests/e2e/harness/stack.go:214:2: undefined: declareStandSetupFailure\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e [build failed]\n",
     ),
+    (
+        "a stale binary is STAND-SETUP, but family STALE_BINARY -> rebuild, not rerun",
+        # Verbatim from an NIM-490 run: a real uncommitted edit to
+        # keeper/internal/errand/soulcompat.go, no rebuild, one real L3a test. The
+        # pre-flight sits inside the declared region, so STAND-SETUP is the right
+        # verdict — nothing was asserted. The family is what stops the reader
+        # acting on the generic advice that follows it, which here would send them
+        # to look at docker and then rerun a binary that cannot pass.
+        [("TestE2EServiceNoop_Create", "STAND-SETUP", "STALE_BINARY")],
+        "=== RUN   TestE2EServiceNoop_Create\n"
+        "    noop_test.go:17: L3a: the keeper binary is STALE - an uncommitted source "
+        "file is younger than it is.\n"
+        "          binary:        /repo/keeper/bin/keeper  (built 2026-08-09T01:24:59-03:00)\n"
+        "          newer source:  keeper/internal/errand/soulcompat.go  "
+        "(edited 2026-08-09T01:30:12-03:00)\n"
+        "        Rebuild and re-run: `make build`.\n"
+        "    panic.go:694: @@MARKER@@ — the stand's infrastructure never came up, so "
+        "nothing above is a finding about the code.\n"
+        "--- FAIL: TestE2EServiceNoop_Create (0.05s)\n",
+    ),
 ]
 
 
@@ -775,6 +1047,45 @@ def self_test() -> int:
     else:
         print("classify-l3a-failure: ok   l1-compatibility "
               "(classify-l1-failure.py still recognises this marker)")
+
+    # Also before the fixtures: the STALE_BINARY fixture below carries the needle
+    # verbatim, so it agrees with a reworded harness just as happily.
+    if why := check_stale_needle_matches_the_harness():
+        print(f"classify-l3a-failure: FAIL stale-needle: {why}")
+        bad += 1
+    else:
+        print("classify-l3a-failure: ok   stale-needle "
+              "(both of provenance.go's refusals still say it)")
+
+    # The verdict fixtures below compare (test, verdict, family) and never look at
+    # what the tool tells the reader to DO, so without this the STALE_BINARY branch
+    # could be deleted with every one of them still green.
+    if why := check_next_step_branches():
+        print(f"classify-l3a-failure: FAIL next-step: {why}")
+        bad += 1
+    else:
+        print("classify-l3a-failure: ok   next-step "
+              "(a stale binary is told to rebuild, everything else to rerun alone)")
+
+    # And that the branch is reached with the right argument. The check above
+    # proves the function branches; this one proves the caller feeds it the
+    # family it classified.
+    if why := check_next_step_is_joined():
+        print(f"classify-l3a-failure: FAIL next-step-join: {why}")
+        bad += 1
+    else:
+        print("classify-l3a-failure: ok   next-step-join "
+              "(the report passes next_step the classified family, not something adjacent)")
+
+    # And that the value behind that identifier is the classified one. The check
+    # above reads the AST and cannot tell `family_of(out)` from `family_of("")`;
+    # this renders a real log through the real entry point, which can.
+    if why := check_report_renders_the_join():
+        print(f"classify-l3a-failure: FAIL rendered-join: {why}")
+        bad += 1
+    else:
+        print("classify-l3a-failure: ok   rendered-join "
+              "(a real log rendered end to end still carries the family and its fix)")
 
     for name, want, blob in SELF_TEST:
         got = [
@@ -873,8 +1184,9 @@ def main() -> int:
             print(f"{'':16}failed subtest(s): {shown}")
 
         if test != "<run>":
-            print(f"{'':16}Rerun this one alone (no company, no contention):")
-            print(f"{'':18}cd tests/e2e && go test -tags=e2e -count=1 -run '^{test}$' -v .")
+            headline, command = next_step(test, family)
+            print(f"{'':16}{headline}")
+            print(f"{'':18}{command}")
 
     findings = [t for t, v, _, _ in interesting if v == "TEST-FAILURE"]
     print()

@@ -18,9 +18,34 @@ kind-spin-up + helm-install + image-load).
 # Full L3c run (requires docker + kind CLI on PATH)
 make e2e-k8s
 
-# A single test directly
+# A single test directly — rebuild the IMAGE first, or the harness refuses
+make docker-build-keeper
 cd tests/e2e-k8s && go test -tags=e2e_k8s -run TestL3cKindUp -timeout=30m -p 1 ./...
 ```
+
+### The image must be this tree (NIM-490)
+
+`kind load docker-image` takes whatever `keeper:e2e-k8s` the local daemon holds,
+however old, and says nothing about its age. `NewStack` now runs
+`docker run --rm --entrypoint /keeper keeper:e2e-k8s version` before kind starts
+and **fails** when the image names another commit, or when a keeper-side source
+is uncommitted and younger than the image.
+
+The trap here is worse than L3a's in one respect, and the failure message says so:
+`make build` does **not** fix it. That builds the host binary; the cluster runs an
+image, and only `make docker-build-keeper` rebuilds it.
+
+Only the **keeper** image is checked. The tier also loads and deploys a soul
+image, and that one is still whatever the daemon holds — NIM-626. It is a
+separate ticket rather than a line here because the mechanism does not transfer
+unchanged: the soul image's source roots are `soul`/`shared`/`sdk`/`proto`, not
+`keeper`, so reusing this check's root list would both miss a `soul/` edit and
+redden on a `keeper/`-only one.
+
+Related, found while wiring the above: `.dockerignore` excluded `*/bin/`, which is
+exactly where `keeper.Dockerfile` and `soul.Dockerfile` COPY from, so
+`make docker-build-keeper` had failed on "keeper/bin/keeper-linux-amd64: not
+found" since the beta. Two `!` exceptions now cover the artifacts.
 
 Pre-requisites:
 

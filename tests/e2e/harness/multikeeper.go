@@ -92,9 +92,18 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 
 	// Fatal, not skip: see NewStack. A skip here reported a pass for a tier
 	// that ran nothing.
-	if _, err := locateKeeperBinary(); err != nil {
+	binaryPath, err := locateKeeperBinary()
+	if err != nil {
 		t.Fatalf("multi-keeper: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
+
+	// And that it is THIS tree's binary — placed inside the region for the
+	// reason NewStack gives. This stack spawns N of it (spawnKeeperProc), so a
+	// stale one does not misreport once: it misreports N times, in a tier whose
+	// whole subject is what several keepers do to each other, where "the other
+	// keeper behaved oddly" is the expected shape of a real finding and a
+	// version skew between processes is indistinguishable from one.
+	assertKeeperBinaryMatchesTree(t, "multi-keeper", binaryPath)
 
 	s := &Stack{
 		t:      t,

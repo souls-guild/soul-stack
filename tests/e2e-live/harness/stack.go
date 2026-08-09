@@ -181,8 +181,15 @@ type Stack struct {
 //     container. L3b-1 for now only checks its presence (skips the test if not built).
 //
 // Missing either binary - t.Skip with a hint about `make build` / `make build-linux`.
+// A keeper binary that is PRESENT but built from other code - t.Fatal
+// (NIM-490): absence means "E2E is impossible here", staleness means the tier
+// would answer about the wrong tree, and those must not read the same.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
+
+	if cfg.Souls < 0 {
+		cfg.Souls = 0
+	}
 
 	// From here to `infraUp = true` below is INFRASTRUCTURE — docker, tempdirs,
 	// TLS material, three third-party containers — and its failures are facts
@@ -197,14 +204,20 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	infraUp := false
 	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
-	if cfg.Souls < 0 {
-		cfg.Souls = 0
-	}
-
 	// Pre-flight: keeper binary (native, host-arch).
-	if _, err := locateKeeperBinary(); err != nil {
+	binaryPath, err := locateKeeperBinary()
+	if err != nil {
 		t.Skipf("L3b: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
+
+	// And that it is THIS tree's binary (NIM-490 - provenance.go). Inside the
+	// declared region, matching L3a: absence and staleness are the same kind of
+	// fact — this machine cannot stand up a valid L3b — and neither is a finding
+	// about the code. The refusal carries its own instruction either way; what
+	// the region buys is that the instruction is not read as an assertion that
+	// failed.
+	assertKeeperBinaryMatchesTree(t, "L3b", binaryPath)
+
 	// Pre-flight: linux-soul binary (for L3b-2+). A keeper-only stand (Souls=0)
 	// doesn't mount it - not required.
 	if cfg.Souls > 0 {

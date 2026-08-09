@@ -151,6 +151,15 @@ type Stack struct {
 // non-zero status. The skip cost a developer without a build 0 seconds instead
 // of a 5-minute timeout; a Fatalf here costs the same 0 seconds and says which
 // input is missing. See TestMissingKeeperBinaryFailsTheTierInsteadOfSkipping.
+//
+// PRESENCE was the whole of that pre-flight until NIM-490, and presence is the
+// weaker half of the question. The binary is a file left behind by the last
+// `make build`, so a present one can predate the tree by weeks and the tier
+// would answer confidently about code nobody is editing — the same false green
+// NIM-533 closed from the other side, reached by running something rather than
+// by running nothing. assertKeeperBinaryMatchesTree asks the binary which
+// commit it carries: absent is a fatal missing input, wrong is a fatal refusal
+// to answer at all (provenance.go).
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
 	if cfg.Souls <= 0 {
@@ -167,9 +176,30 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	infraUp := false
 	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
-	if _, err := locateKeeperBinary(); err != nil {
+	binaryPath, err := locateKeeperBinary()
+	if err != nil {
 		t.Fatalf("L3a: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
+
+	// Inside the declared region, one line below the presence check, because it
+	// answers the same question that check does — "can this machine stand up a
+	// valid L3a stand at all" — and a wrong binary is no more a finding about
+	// the code than a missing one. NIM-490 first put it above the defer, on the
+	// grounds that "your binary is from another tree" is an instruction and
+	// STAND-SETUP reads as "ignore this one". That trade was the wrong way
+	// round: the refusal's own text survives either placement, while outside the
+	// region it arrives as forty unlabelled `--- FAIL:` lines, and forty of those
+	// are read as forty findings.
+	//
+	// It execs the product and is still not a product entry point (setupdecl.go's
+	// doors). `keeper version` reads the artifact's nameplate; it exercises no
+	// behaviour this tier is testing, and there is no regression it can catch.
+	// A helper that grew past that — one that called keeperBinaryPath, or drove
+	// the binary to do something — would be derived as a door on the day it was
+	// written, and TestDeclaredRegionsEndBeforeTheProductRuns would then demand
+	// it move below `infraUp`. That is the correct answer for a helper that runs
+	// the product, and the wrong one for this.
+	assertKeeperBinaryMatchesTree(t, "L3a", binaryPath)
 
 	s := &Stack{
 		t:      t,

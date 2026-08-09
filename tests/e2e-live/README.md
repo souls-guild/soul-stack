@@ -11,18 +11,55 @@ systemd-PID-1). Unlike L3a (`tests/e2e/`, a soul-stub helper package), L3b:
 ## Running
 
 ```sh
-# Pre-requisite — cross-compile the linux binary to mount into the container
-make build-linux
+# Two pre-requisites, and they are different binaries:
+make build-linux    # soul-linux-amd64, mounted into the container
+make build          # keeper, run NATIVELY on the host by the harness
 
-# Full L3b run
+# Full L3b run (depends on both of the above)
 make e2e-live
 
-# Or a single test directly
+# Or a single test directly. Do the two builds first: a missing binary SKIPS
+# (reads as `ok`), and only a stale KEEPER fails — see the two sections below.
 SOUL_BIN_LINUX=$(pwd)/soul/bin/soul-linux-amd64 \
   go test -tags=e2e_live -run TestSmokeNginxLive ./...
 ```
 
 Requires **docker** with support for privileged containers (cgroup-mount + systemd-PID-1).
+
+### The keeper binary must be this tree (NIM-490)
+
+L3b runs the keeper as a host process from `keeper/bin/keeper` — a file, not
+something the harness compiles. `NewStack` now asks it which commit it carries
+(`keeper version`, stamped from `git describe`) and **fails** when the answer is
+not this tree, or when a keeper-side source is uncommitted and younger than the
+binary. The refusal is a declared bring-up failure (`STAND-SETUP`), placed below
+the declaration and above `infraUp = true`, so it lands before the containers are
+paid for and does not read as a finding about the code; `provenance_test.go`
+guards both ends.
+
+Absence is still a **skip** here, and that asymmetry with L3a — where NIM-533
+made a missing binary fatal, on the grounds that a tier which ran nothing must
+not report `ok` — is a known gap, not a decision: NIM-625. It is out of
+NIM-490's scope so the two changes stay separable. Staleness is a failure
+regardless: a tier that silently reports on last week's build is worth less than
+no tier.
+
+The trap this closes is L3b-specific and was undocumented: `make e2e-live` used
+to depend on `build-linux` **only**, which produces `keeper-linux-amd64` for the
+soul container and never touches the native keeper the harness actually spawns.
+Rebuilding the obvious thing did not fix the run. The target now depends on
+`build` as well, and the failure message says outright that `make build-linux` is
+not the remedy.
+
+### The soul binary is checked for presence only (NIM-636)
+
+The other pre-requisite, `soul/bin/soul-linux-amd64`, gets no such treatment: the
+harness checks that the file exists and mounts whatever `make build-linux` last
+produced, however old. `make e2e-live` depends on `build-linux`, so the common
+path rebuilds it — a direct `go test -tags=e2e_live` does not, which is the
+invocation the section above exists to make safe. The keeper's mechanism does not
+transfer as-is (different source roots), so it is NIM-636 rather than a one-line
+addition here.
 
 ### WSL2 + Docker Desktop
 
