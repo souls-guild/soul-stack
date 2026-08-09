@@ -11,7 +11,12 @@ import (
 // whose Plan is not declared pure-read. Distinct from the
 // `errand_module_not_allowed` family because the caller maps it to a DIFFERENT
 // terminal status (FAILED, not MODULE_NOT_ALLOWED) — see [Runner.Run].
-const ReasonDryRunUnsupported = "errand_dry_run_unsupported"
+//
+// Aliases [coremanifest.ReasonDryRunUnsupported]: since NIM-489 the Keeper quotes the
+// same token when it refuses a verb-shell dry_run at the request, and the two sides
+// cannot import each other (ADR-011). The local name is kept so runner call sites
+// read unchanged.
+const ReasonDryRunUnsupported = coremanifest.ReasonDryRunUnsupported
 
 // IsAllowed checks whether the module mod, addressed by fullName
 // (`<namespace>.<name>.<state>`), may be invoked via Errand on the path

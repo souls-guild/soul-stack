@@ -42,10 +42,15 @@ func (s *Stack) ExecErrand(t *testing.T, sid, module string, input map[string]an
 }
 
 // ExecErrandRaw sends the request and hands back the raw status + body without
-// interpreting either. dryRun=true reaches the Keeper-side capability gate
-// (ADR-0076(i), NIM-456), which refuses with 409 unless the target announced
-// `dry_run` — and a 409 is a status [Stack.ExecErrand] would turn into a t.Fatal,
-// so a test that wants to judge the refusal itself has to see it raw.
+// interpreting either. dryRun=true can be refused two different ways, and both are
+// statuses [Stack.ExecErrand] would turn into a t.Fatal, so a test that wants to judge
+// a refusal itself has to see it raw:
+//
+//   - 400 malformed-request — the module is verb-shell (ADR-033, NIM-489). Decided
+//     from the request alone, so it lands before the checks below; picking
+//     `core.cmd.shell` for a dry_run fixture means testing this and nothing else.
+//   - 409 soul-capability-unsupported — the Keeper-side capability gate
+//     (ADR-0076(i), NIM-456): the target never announced `dry_run`.
 func (s *Stack) ExecErrandRaw(t *testing.T, sid, module string, input map[string]any, dryRun bool) (int, string) {
 	t.Helper()
 	c := s.opClient(t)

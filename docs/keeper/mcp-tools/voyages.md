@@ -23,7 +23,7 @@ Creates a Voyage - a unified batch run. `kind=scenario`: apply named scenario to
 | `max_failures` | `string` | optional | The failure threshold is `N` absolute or `N%` from run units. Mutually exclusive with `fail_threshold`. |
 | `batch_size` | `integer` (≥1) | optional | **DEPRECATED** (use `batch`). Leg size; `null` → entire run in one Leg. |
 | `concurrency` | `integer` (1..500) | optional | `0`/missing → default `50`. |
-| `dry_run` | `boolean` | optional | Run dry-run. |
+| `dry_run` | `boolean` | optional | For `kind=command`: each per-host Errand asks the module for a `Plan` instead of applying it. A verb-shell module (`core.cmd.shell` / `core.exec.run`) is refused at creation with `malformed-request` — no pure-read `Plan` exists for it on any host. A target that does not admit the flag fails on its own row ([operator-api → Voyage](../operator-api/voyages.md)). |
 | `schedule_at` | `string` (date-time) | optional | Delayed start → `status=scheduled`. |
 | `inter_batch_interval_ms` | `integer` (≥0) | optional | Pause between Legs (ms). |
 | `on_failure` | `string` (enum `abort`/`continue`) | optional | Behavior upon failure of Leg. |

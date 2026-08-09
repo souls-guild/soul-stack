@@ -23,6 +23,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
 
 // --- fakes ---
@@ -2381,5 +2382,109 @@ func TestVoyageTargetEntry_FinishedAt_NanosecondWire(t *testing.T) {
 	}
 	if want := `"2026-06-10T12:00:09.25+03:00"`; string(got["finished_at"]) != want {
 		t.Errorf("finished_at = %s, want %s (nanosecond wire, WITHOUT .UTC()/Truncate)", got["finished_at"], want)
+	}
+}
+
+// TestVoyageCreate_CommandDryRunVerbShell_400 — ★ THE GUARD for the second entry point
+// (NIM-489). A dry_run Voyage over a verb-shell module is refused at creation, by the
+// SAME keeper-side validator the single-SID /exec path calls. Without it the request was
+// accepted (202), a row and one target per host were written, and the fleet answered with
+// one identical `errand_dry_run_unsupported` per host — a Voyage whose only possible
+// outcome was failure, reported as accepted.
+//
+// The resolver is primed with hosts on purpose: the refusal must precede resolve, so it
+// costs nothing and reveals no scope to a caller whose request was never valid.
+func TestVoyageCreate_CommandDryRunVerbShell_400(t *testing.T) {
+	for _, module := range coremanifest.VerbShellModules() {
+		t.Run(module, func(t *testing.T) {
+			store := &fakeVoyageStore{}
+			h := newVoyageHandler(store, &fakeVoyageScenarioResolver{},
+				&fakeVoyageCommandResolver{out: []string{"host-a", "host-b", "host-c"}}, allowAll())
+
+			rec := httptest.NewRecorder()
+			h.Create(rec, voyageReq(http.MethodPost, "/v1/voyages",
+				`{"kind":"command","module":"`+module+`","dry_run":true,"target":{"sids":["host-a"]}}`))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			for _, want := range []string{module, "dry_run", "errand_dry_run_unsupported"} {
+				if !strings.Contains(rec.Body.String(), want) {
+					t.Errorf("body does not carry %q: %s", want, rec.Body.String())
+				}
+			}
+			if store.insertCalls != 0 {
+				t.Errorf("insertCalls = %d, want 0 (refused before the row exists, so there is no Voyage to cancel)",
+					store.insertCalls)
+			}
+		})
+	}
+}
+
+// TestVoyagePreview_CommandDryRunVerbShell_400 — Preview shares resolveCommandScopeErr,
+// so it must refuse wherever Create does. A Preview that answered 200 for a request
+// Create rejects would tell the operator the plan is fine right before it is refused.
+func TestVoyagePreview_CommandDryRunVerbShell_400(t *testing.T) {
+	store := &fakeVoyageStore{}
+	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{},
+		&fakeVoyageCommandResolver{out: []string{"host-a", "host-b"}}, allowAll())
+
+	rec := httptest.NewRecorder()
+	h.Preview(rec, voyageReq(http.MethodPost, "/v1/voyages/preview",
+		`{"kind":"command","module":"core.cmd.shell","dry_run":true,"target":{"coven":["prod"]}}`))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "core.cmd.shell") {
+		t.Errorf("body does not name the module: %s", rec.Body.String())
+	}
+}
+
+// TestVoyageCreate_CommandDryRunAdmitted — the other half, in both directions, and what
+// keeps the guard above from being satisfied by a blanket refusal:
+//
+//   - a verb-shell module WITHOUT dry_run is an ordinary command Voyage — the single most
+//     common use of this endpoint;
+//   - dry_run over a non-verb-shell module is the whole point of the flag (NIM-488), and
+//     keeper must NOT decide it: whether that module exists on a given Soul and declares a
+//     pure-read Plan is per-host knowledge behind the isolation boundary (ADR-011).
+//
+// Keying the refusal on the catalogue's `errand_safe` flag instead of the verb-shell set
+// would pass the guard above and fail here, rejecting precisely the modules dry_run exists
+// for while still admitting the shell.
+func TestVoyageCreate_CommandDryRunAdmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "verb-shell without dry_run is a plain command voyage",
+			body: `{"kind":"command","module":"core.cmd.shell","target":{"sids":["host-a"]}}`,
+		},
+		{
+			name: "dry_run of a module keeper cannot judge stays a per-target answer",
+			body: `{"kind":"command","module":"core.file.present","dry_run":true,"target":{"sids":["host-a"]}}`,
+		},
+		{
+			name: "dry_run of an unknown module is not keeper's call either",
+			body: `{"kind":"command","module":"soul-mod-acme.thing.present","dry_run":true,"target":{"sids":["host-a"]}}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeVoyageStore{}
+			h := newVoyageHandler(store, &fakeVoyageScenarioResolver{},
+				&fakeVoyageCommandResolver{out: []string{"host-a"}}, allowAll())
+
+			rec := httptest.NewRecorder()
+			h.Create(rec, voyageReq(http.MethodPost, "/v1/voyages", tc.body))
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+			}
+			if store.insertCalls != 1 {
+				t.Errorf("insertCalls = %d, want 1", store.insertCalls)
+			}
+		})
 	}
 }

@@ -63,8 +63,14 @@ import (
 // module is voyages.module (whitelisted, NOT NULL for kind=command). input is
 // voyages.input (jsonb, passed into errands.input unchanged).
 // startedByAID is the AID of the initiating Archon (FK errands.started_by_aid).
+//
+// dryRun is voyages.dry_run and is part of the CONTRACT, not a hint: it selects
+// which module method the Soul invokes (Plan, not Apply — ADR-031/ADR-033), so an
+// implementation that drops it turns a preview into a real fleet-wide change. It
+// was omitted from this signature until NIM-559, which is exactly how the flag
+// came to be stored and echoed while every target ran for real.
 type CommandSpawner interface {
-	SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte) (errandID, status string, err error)
+	SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (errandID, status string, err error)
 }
 
 // commandResult is the runtime outcome of one host in a Leg, collected in a
@@ -602,7 +608,7 @@ func (w *VoyageWorker) runOneCommand(ctx context.Context, run *voyage.Voyage, si
 		return commandResult{SID: sid, Outcome: OutcomeFailed}
 	}
 
-	errandID, status, err := w.CommandSpawner.SpawnCommand(ctx, run.VoyageID, sid, *run.Module, run.StartedByAID, run.Input)
+	errandID, status, err := w.CommandSpawner.SpawnCommand(ctx, run.VoyageID, sid, *run.Module, run.StartedByAID, run.Input, run.DryRun)
 	if err != nil {
 		// Internal orchestrator-call error (not a failed Errand). On ctx cancellation
 		// (leaseLost / abort) use cancelled, otherwise failed (not silent success).

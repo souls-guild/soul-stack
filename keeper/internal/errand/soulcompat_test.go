@@ -132,15 +132,21 @@ func newGateFixture(cap SoulCapabilityChecker) *gateFixture {
 
 const gateSID = "host.test"
 
-// dryRunReq — the request under test: a verb-shell module, which is the case that
-// makes the gate load-bearing. On a Soul honoring dry_run the module is refused
-// as not PlanReadSafe and nothing runs; on one that ignores the flag the command
-// line executes for real.
+// dryRunReq — the request under test: a dry_run of a module the Soul side genuinely
+// admits on that path. `core.file.present` is PlanReadSafe, so on a Soul honoring the
+// flag Plan reports what the file WOULD become and the host is untouched; on a Soul
+// that ignores it, the very same request writes the file for real. That gap is what the
+// gate exists to close, and it only exists for a module dry_run can reach.
+//
+// It must NOT be a verb-shell module. Those are refused by [ValidateDryRunModule] ahead
+// of the gate (NIM-489) — a fixture using one would make every test here green through
+// the wrong branch, asserting the capability gate while the module admission did the
+// refusing.
 func dryRunReq() DispatchRequest {
 	return DispatchRequest{
 		SID:          gateSID,
-		Module:       "core.cmd.shell",
-		Input:        map[string]any{"command": "rm -rf /var/lib/soul-stack/state"},
+		Module:       "core.file.present",
+		Input:        map[string]any{"path": "/etc/soul-stack/keeper.yml", "content": "managed: true\n"},
 		TimeoutSec:   5,
 		DryRun:       true,
 		StartedByAID: "archon-alice",

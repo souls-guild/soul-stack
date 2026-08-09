@@ -46,7 +46,7 @@ type VoyageCreateRequest struct {
 	BatchPercent         *int       `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
 	Concurrency          *int       `json:"concurrency,omitempty" minimum:"1" maximum:"500"`
 	BatchMode            string     `json:"batch_mode,omitempty" doc:"barrier (default) | window"`
-	DryRun               bool       `json:"dry_run,omitempty"`
+	DryRun               bool       `json:"dry_run,omitempty" doc:"for kind=command - each per-host Errand asks the module for a Plan instead of Apply; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400"`
 	ScheduleAt           *time.Time `json:"schedule_at,omitempty" doc:"RFC3339 deferred start"`
 	InterBatchIntervalMS *int       `json:"inter_batch_interval_ms,omitempty"`
 	InterUnitIntervalMS  *int       `json:"inter_unit_interval_ms,omitempty"`
@@ -81,7 +81,7 @@ func voyageCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Create a Voyage",
-		Description:   "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit.",
+		Description:   "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
@@ -113,7 +113,7 @@ func voyagePreviewOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/preview",
 		Summary:       "Dry-resolve scope Voyage",
-		Description:   "Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create. Without revealing the SID list. Read-like - no audit.",
+		Description:   "Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module. Without revealing the SID list. Read-like - no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},

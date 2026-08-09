@@ -366,6 +366,9 @@ func (h *Handler) mapErrandCancelError(id json.RawMessage, toolName, errandID st
 // mapErrandDispatchError maps dispatcher sentinels to an MCP tool error.
 // Mirrors handlers/errand.go::writeDispatchError.
 func (h *Handler) mapErrandDispatchError(id json.RawMessage, toolName string, err error) jsonRPCResponse {
+	// Carries the offending module so the refusal can name it (see the REST twin).
+	var verbShell *errand.DryRunVerbShellError
+
 	switch {
 	case errors.Is(err, errand.ErrSIDEmpty):
 		return h.toolError(id, toolName, mcpCodeValidationFailed, "sid is empty")
@@ -374,6 +377,11 @@ func (h *Handler) mapErrandDispatchError(id json.RawMessage, toolName string, er
 	case errors.Is(err, errand.ErrTimeoutOutOfRange):
 		return h.toolError(id, toolName, mcpCodeValidationFailed,
 			"field 'timeout_seconds' must be in [1, 300]")
+	case errors.As(err, &verbShell):
+		// malformed-request, not one of the capability codes: no cluster or agent state
+		// can make this pair work, so the request itself is wrong (mirrors the REST 400,
+		// ADR-033 contract row, NIM-489).
+		return h.toolError(id, toolName, mcpCodeMalformedRequest, verbShell.Detail())
 	case errors.Is(err, errand.ErrDryRunNotAnnounced):
 		return h.toolError(id, toolName, mcpCodeSoulCapabilityUnsupported,
 			"the target soul's announced capability set does not include 'dry_run', so keeper cannot rule out a binary "+

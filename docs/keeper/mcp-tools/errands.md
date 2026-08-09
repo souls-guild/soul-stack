@@ -18,7 +18,7 @@ Running Errand on a specific Soul. Permission: `errand.run`, selector `host=<sid
 | `module` | `string` | yes | Module address `core.<class>.<state>` or `core.cmd.shell` / `core.exec.run` (whitelist on Soul-side). |
 | `input` | `object` | optional | Module Input (form depends on the module). |
 | `timeout_seconds` | `integer` (1..300) | optional | Full timeout. Default 30. |
-| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` instead of `Apply`. Admitted for `PlanReadSafe` modules only; one without it (incl. `core.cmd.shell` / `core.exec.run` / `core.http.probe`) answers `failed` + `errand_dry_run_unsupported`. The target must also announce the `dry_run` Soul-capability, else the call is refused before dispatch. |
+| `dry_run` | `boolean` | optional | `true` → Soul calls `mod.Plan` instead of `Apply`. Admitted for `PlanReadSafe` modules only. `core.cmd.shell` / `core.exec.run` are refused by Keeper with `malformed-request` (no pure-read Plan exists for them on any host); any other module without the marker (incl. `core.http.probe`) is dispatched and answers `failed` + `errand_dry_run_unsupported`. The target must also announce the `dry_run` Soul-capability, else the call is refused before dispatch. |
 
 **Output:**
 
@@ -35,7 +35,7 @@ Running Errand on a specific Soul. Permission: `errand.run`, selector `host=<sid
 | `error_message` | `string` | Masked reason FAILED/TIMED_OUT/MODULE_NOT_ALLOWED. |
 | `output` | `object` | Structural output read-safe modules; for shell/exec is missing. |
 
-Errors: `not-found` (Soul is not connected to the cluster), `soul-capability-unsupported` (`dry_run` requested and the target Soul did not announce that capability — a binary that ignores the flag would apply for real; also covers "support could not be confirmed", the message says which), `validation-failed` (empty sid/module, `timeout_seconds` outside [1, 300]). The `dry_run` gate is [ADR-0076(i)](../../adr/0076-engine-compat-window.md), mirroring REST `409` — see [operator-api → Errand](../operator-api/errands.md).
+Errors: `malformed-request` (`dry_run` requested for a verb-shell module — the pair cannot succeed on any host, so no capability code is used; the message names the module and says to drop the flag or pick a module with a pure-read `Plan`), `not-found` (Soul is not connected to the cluster), `soul-capability-unsupported` (`dry_run` requested and the target Soul did not announce that capability — a binary that ignores the flag would apply for real; also covers "support could not be confirmed", the message says which), `validation-failed` (empty sid/module, `timeout_seconds` outside [1, 300]). The `dry_run` gate is [ADR-0076(i)](../../adr/0076-engine-compat-window.md), mirroring REST `409` — see [operator-api → Errand](../operator-api/errands.md).
 
 #### `keeper.errand.list`
 

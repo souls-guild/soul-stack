@@ -15,6 +15,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -754,6 +755,15 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	if req.Module == "" {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"kind=command requires non-empty 'module'")}
+	}
+	// dry_run on a verb-shell module — the same keeper-side admission the single-SID
+	// /exec path applies in the dispatcher, brought forward to creation: the Voyage
+	// would otherwise resolve a scope, write a row and fan out one identical failure per
+	// host, all of it after the operator was told 202 (NIM-489). Same validator, so the
+	// two entry points cannot answer differently; same 400 carrier, so the refusal does
+	// not masquerade as a per-target outcome.
+	if refusal := errand.ValidateDryRunModule(req.Module, req.DryRun); refusal != nil {
+		return nil, &problemError{problem.New(problem.TypeMalformedRequest, "", refusal.Detail())}
 	}
 	if req.ScenarioName != "" {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",

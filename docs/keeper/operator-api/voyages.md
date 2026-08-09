@@ -19,7 +19,7 @@ Async-by-default: **202** + `{voyage_id, kind, scope_size, status, location}` + 
 - **kind=scenario** — bare-check `incarnation.run` (quick failure before resolution), then per-incarnation scope-check over each resolved incarnation (its covens ∪ `{name}`): start on incarnation outside the permission scope = privilege escalation → **403**.
 - **kind=command** - target ∩ Purview operator ([ADR-047 §S4](../../adr/0047-purview.md), security-fix). See below.
 
-**Errors:** `400` malformed JSON; `401` `unauthenticated` (no/invalid JWT) or `operator-revoked-token` (AID revoke, command existence-gate, see below); `403` RBAC deny by kind / explicit foreign host (command) / incarnation outside scope (scenario); `404` explicit incarnation does not exist (scenario); `422` invalid `kind` / empty `scenario_name`/`module` by kind / no target / invalid SID/coven/name / `where` > 4 KiB / `on_failure` not from `{abort, continue}` / `batch_size`+`batch_percent` at the same time / `batch_size`+`batch_mode=window` / ranges / empty resolve (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / effective batch above `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, see below); `500` orchestrator not configured / DB failure.
+**Errors:** `400` malformed JSON or (`kind=command`) `dry_run` on a verb-shell module — see below; `401` `unauthenticated` (no/invalid JWT) or `operator-revoked-token` (AID revoke, command existence-gate, see below); `403` RBAC deny by kind / explicit foreign host (command) / incarnation outside scope (scenario); `404` explicit incarnation does not exist (scenario); `422` invalid `kind` / empty `scenario_name`/`module` by kind / no target / invalid SID/coven/name / `where` > 4 KiB / `on_failure` not from `{abort, continue}` / `batch_size`+`batch_percent` at the same time / `batch_size`+`batch_mode=window` / ranges / empty resolve (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / effective batch above `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, see below); `500` orchestrator not configured / DB failure.
 
 > **`input` is not logged.** Audit events `scenario_run.started` / `command_run.invoked` do not carry the body `input` (invariant A of ADR-027).
 
@@ -39,6 +39,44 @@ Hybrid semantics - three branches in the target form (user choice 06/09/2026):
 
 > **soulprint/state-measurements Purview** in command∩Purview still under-display (fail-closed: with incomplete measurement support, the resolver would rather cut down its host, accessible ONLY by soulprint, than show someone else's); coven/regex/host are working fully (S3b-2b is postponed).
 
+##### `dry_run` for `kind=command`
+
+`dry_run: true` makes every per-host [Errand](errands.md) ask the module for a `Plan`
+instead of applying it, with exactly the semantics of the single-SID path — the same
+flag on the same request, one per resolved host. Two consequences follow from that,
+both per-target:
+
+- a host whose Soul did not announce the `dry_run` capability is refused **before** its
+  Errand is created, instead of applying for real ([errands.md](errands.md) →
+  capability gate);
+- a module the runner does not admit on the `Plan` path runs and comes back
+  `failed`, and the Errand carries `error_message: errand_dry_run_unsupported`.
+
+The run continues or stops on those according to `max_failures` / `on_failure`, like
+any other per-host failure.
+
+**Reading the outcome per host.** A `voyage_targets` row carries `status` and, once a
+dispatch succeeded, `errand_id` — it has no reason column, so the two cases above do
+not look the same in the drill even though both show `failed`. The second has an
+`errand_id`: follow it to [`GET /v1/errands/{errand_id}`](errands.md) for
+`error_message`. The first has none, because a refusal ahead of dispatch writes no
+`errands` row — for those the reason is in the Keeper log (`errand: dry_run refused
+before dispatch`, with `sid` / `module` / `started_by_aid`) and nowhere in the API.
+Same shape for any other pre-dispatch refusal, `soul_not_connected` included.
+
+**Refused at creation:** `dry_run` together with a verb-shell module
+(`core.cmd.shell` / `core.exec.run`) → **`400`**, from the same validator the
+single-SID path uses ([errands.md](errands.md)). The check runs inside scope
+resolution, so it lands before a scope is resolved, before a `voyages` row exists and
+before the `202` — the alternative is a run that reports accepted and then produces
+one identical, unavoidable failure per host.
+
+> **Fixed 2026-08-08 ([NIM-559](../../adr/0043-voyage.md)):** the flag was accepted,
+> stored and echoed back, but was **not** put on the per-host Errand request — every
+> target ran for real while the run described itself as a preview. If you have
+> `kind=command` runs recorded with `dry_run: true` from before this release, the
+> hosts were modified; the API answer and the UI for those runs say otherwise.
+
 ##### Tempo rate-limit
 
 `POST /v1/voyages` — resolver-heavy write endpoint under [Tempo](../config.md#tempo) per-AID rate-limiter ([ADR-050](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)): bucket `voyage_create` (default `10 rps`, burst `20`). Excess → **429 `tempo-exceeded`** + `Retry-After`. If Redis is unavailable, the limit is fail-OPEN (passthrough). GET/list/cancel are not limited (cheap).
@@ -47,7 +85,7 @@ Hybrid semantics - three branches in the target form (user choice 06/09/2026):
 
 Permission: **RBAC-by-kind** (same as Create). REST-only (no MCP-tool). Purpose - **predisplay of the number of batches in the UI** for late-binding target (`coven` / `require_alive`, where the number of hosts is resolved by Keeper): runs the same resolve and the same gates as Create, but **does not write** to `voyages`/`voyage_targets` and **does not expand the SID list** - gives only numbers. For a snapshot target (explicit `incarnations[]`/`sids[]`), the client counts the number of batches itself - the endpoint is not required.
 
-**Request** - the same body as `POST /v1/voyages` (`VoyageCreateRequest`). Taken into account (affect resolution/arithmetic): `target`, `kind`, `batch`/`batch_size`/`batch_percent`/`batch_mode`, `concurrency`, `max_failures`, `require_alive`. Ignored (not read in reply): `dry_run`, `schedule_at`, `inter_batch_interval_ms`, `inter_unit_interval_ms`, `on_failure`, `input`.
+**Request** - the same body as `POST /v1/voyages` (`VoyageCreateRequest`). Taken into account (affect resolution/arithmetic): `target`, `kind`, `batch`/`batch_size`/`batch_percent`/`batch_mode`, `concurrency`, `max_failures`, `require_alive`. Not reflected in the reply: `schedule_at`, `inter_batch_interval_ms`, `inter_unit_interval_ms`, `on_failure`, `input`. `dry_run` changes no number here either, but it **is** read: preview shares Create's admission, so `dry_run` on a verb-shell module gets the same `400` (a preview that answered `200` for a run Create would refuse is worse than useless).
 
 **Response `200 VoyagePreviewReply`:**
 

@@ -35,6 +35,30 @@ order to act in.
   the capability check sees for a host that was never connected, so the refusal is
   cross-checked against the lease rather than blaming that host's binary.
 
+- **A `kind=command` Voyage with `dry_run: true` starts previewing instead of
+  applying.** Until this release the flag never reached the hosts, so such a run
+  applied for real; it now does what it says. Two consequences to expect on the
+  first run after the upgrade, both per-host and both counted by
+  `max_failures` / `on_failure` like any other failure: a target whose Soul does
+  not announce the `dry_run` capability fails on its row instead of applying, and a
+  module the runner does not admit on the `Plan` path fails with
+  `errand_dry_run_unsupported`. A recurring `kind=command` Voyage that has been
+  *relied on* to change hosts while carrying `dry_run: true` will stop changing
+  them — drop the flag there. Recorded runs from before the upgrade did modify
+  their hosts, whatever the row and the UI say.
+
+  On the same axis: `dry_run` together with `core.cmd.shell` or `core.exec.run` is
+  now refused with `400` on `POST /v1/souls/{sid}/exec`, its MCP twin, and Voyage
+  create and preview. The two paths used to differ, and neither was right. On the
+  single-SID path the pair was accepted and answered `200` carrying `failed` +
+  `errand_dry_run_unsupported`, so a caller that read only the status code saw a
+  preview that never ran. On the Voyage path the flag was dropped along with
+  everything else described above, so the pair was answered `202` and then **ran
+  the command line for real on every resolved host** — no `dry_run` refusal
+  appeared anywhere, because nothing downstream was ever told it was a preview.
+  Nothing that legitimately worked stops working; the pair has never been
+  previewable.
+
 - **Seven new permissions land inside `<resource>.*` grants you already issued.**
   The catalog is closed and a wildcard in the action position expands to every
   known action of that resource, so a role written before this release grants
@@ -1942,6 +1966,59 @@ order to act in.
   wizard does) therefore offers only modules that cannot be planned, so the new
   capability is reachable through the API and MCP but not through the module
   picker; the catalog needs a way to say this at all (NIM-556).
+
+- **A `kind=command` Voyage with `dry_run: true` applied to every host for real.**
+  The flag was accepted by `POST /v1/voyages`, stored in the `voyages` row, echoed
+  back by `GET /v1/voyages/{id}` and shown in the UI — and then left behind. The
+  per-host leg builds an [Errand](docs/adr/0033-errand.md) dispatch request, and
+  that request was assembled without the field, so Go's zero value made every
+  target run `Apply`. An operator previewing a change across a fleet changed the
+  fleet, and nothing said so: the API answer, the row and the UI all agreed with
+  what had been asked for, and only the hosts disagreed. **If you have
+  `kind=command` runs recorded with `dry_run: true` from before this release, those
+  hosts were modified.** The bug is as old as `kind=command`; the Errand work of the
+  previous entries exposed it rather than causing it.
+
+  The flag now rides the per-host request, threaded through the single call the two
+  batch frames (`barrier` and `window`) share, so neither can drift from the other.
+  Two guard tests, not one: `dry_run: true` must arrive at the spawner, and `false`
+  must not arrive as `true` — a preview that quietly applies and an apply that
+  quietly previews are both wrong, and one assertion catches only the first. The
+  capability gate of the entries above now covers Voyage targets as a consequence:
+  a host that never announced `dry_run` fails on its own row instead of applying,
+  and that gate was not loosened to let a fleet run through.
+
+- **`dry_run` on a verb-shell module now answers `400`, not `200` with a failure.**
+  [ADR-033](docs/adr/0033-errand.md) has promised a keeper-side refusal since it was
+  written; only the Soul-side half existed. Asking to preview `core.cmd.shell` got
+  `200` carrying `FAILED errand_dry_run_unsupported` — a request that cannot succeed
+  on any host, in any fleet, at any agent version, reported as an attempt that
+  happened to fail. On the Voyage path it was wrong in the other direction — the
+  flag never reached the host, so the command line ran for real on every one of
+  them (the entry above). With the flag threaded, that same request would instead
+  fan out one identical, unavoidable failure per host, all of it after the operator
+  had been told `202`; this is the case the refusal catches at creation.
+
+  Keeper now refuses the pair up front, naming the module, on `POST
+  /v1/souls/{sid}/exec`, the MCP twin, and `kind=command` Voyage create and preview
+  — one validator called from both entry points, so the surfaces cannot answer
+  differently, and ahead of the `errands` row, the `errand.invoked` audit event and
+  Voyage scope resolution. `malformed-request`, not one of the `409` capability
+  types: nothing about the cluster or the target binary can make it work, so
+  pointing at a capability would send you to upgrade an agent that would refuse it
+  too. Unlike the capability refusals, "without `dry_run`" is the right advice here,
+  and the message says it.
+
+  **The refusal is deliberately narrow.** Verb-shell is two names Keeper already
+  holds as a constant (`core.cmd.shell`, `core.exec.run`); whether some other module
+  is installed on a given host and whether its `Plan` is pure-read lives on the far
+  side of the isolation boundary and differs per host. Those requests are still
+  dispatched and still come back per-target `failed` +
+  `errand_dry_run_unsupported` — `core.http.probe` included, which is a verb module
+  by the ADR's prose but not in Keeper's constant. Keying the check on the module
+  catalog's `errand_safe` flag was rejected for the reason the entry above records:
+  that flag is an Apply-path fact and marks nearly the complement of what `dry_run`
+  admits, so it would have rejected the 13 modules the flag exists for.
 
 - **`keeper init` refused the reference `keeper.yml` we ship.**
   `auth.jwt.ttl_bootstrap: 30d` in `examples/keeper/keeper.yml` is a well-formed

@@ -25,19 +25,29 @@ func commandClaimRow() scanRow {
 // fakeCommandSpawner is a [CommandSpawner] stub. It returns deterministic errandID
 // `er-<sid>` and status from statuses (default "success") or error from failSIDs.
 // It counts calls and records max parallelism (for concurrency-cap).
+//
+// dryRuns records the flag the executor passed per SID. A stub that merely answers
+// "success" cannot show whether the Voyage's dry_run reached the dispatch boundary,
+// which is why NIM-559 stayed invisible; the recording makes the argument itself
+// the subject of assertion.
 type fakeCommandSpawner struct {
 	mu          sync.Mutex
 	failSIDs    map[string]bool
 	statuses    map[string]string // sid -> errand-status (default "success")
 	calls       []string
+	dryRuns     map[string]bool // sid -> dryRun argument as received
 	active      int
 	maxParallel int
 	delay       time.Duration
 }
 
-func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte) (string, string, error) {
+func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, sid)
+	if s.dryRuns == nil {
+		s.dryRuns = map[string]bool{}
+	}
+	s.dryRuns[sid] = dryRun
 	s.active++
 	if s.active > s.maxParallel {
 		s.maxParallel = s.active
@@ -702,7 +712,7 @@ type fencingSpawner struct {
 	onFirst func()
 }
 
-func (s *fencingSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte) (string, string, error) {
+func (s *fencingSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, error) {
 	s.mu.Lock()
 	first := len(s.calls) == 0
 	s.calls = append(s.calls, sid)
@@ -1124,5 +1134,96 @@ func TestExecuteCommand_Window_FenceLostMidRun_NoFinalize(t *testing.T) {
 	// fencing stopped dispatch - no Errand was sent.
 	if len(sp.calls) != 0 {
 		t.Errorf("spawn calls = %d, want 0 (fencing before dispatch)", len(sp.calls))
+	}
+}
+
+// ---- dry_run reaches the dispatch boundary (NIM-559) ----
+//
+// The flag is not decoration: on the Soul side it selects Plan over Apply
+// (ADR-031/ADR-033). It was stored on the voyages row and echoed back by the API
+// while [CommandSpawner.SpawnCommand] had no parameter to carry it, so every
+// resolved host ran for real. These are the two executor frames, guarded
+// separately: a fix threaded through only one of them would still surprise the
+// operator on the other.
+
+func TestExecuteCommand_DryRunReachesSpawner(t *testing.T) {
+	t.Parallel()
+	fdb := &fakeDB{}
+	sp := &fakeCommandSpawner{}
+	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
+
+	// batch_size=2 over 3 hosts -> 2 Legs, so the flag is checked across the Leg
+	// boundary too (a per-Leg reconstruction of the request would drop it).
+	v := commandVoyage([]string{"a", "b", "c"}, intp(2), nil, nil, nil)
+	v.DryRun = true
+
+	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
+	if status != voyage.StatusSucceeded {
+		t.Fatalf("status = %q, want succeeded", status)
+	}
+	if summary.Total != 3 {
+		t.Fatalf("summary = %+v, want Total=3", summary)
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	if len(sp.dryRuns) != 3 {
+		t.Fatalf("spawner saw %d hosts, want 3 (calls: %v)", len(sp.dryRuns), sp.calls)
+	}
+	for _, sid := range []string{"a", "b", "c"} {
+		if !sp.dryRuns[sid] {
+			t.Errorf("host %s dispatched with dryRun=false; voyage.dry_run=true must reach the spawner, otherwise the host applies for real", sid)
+		}
+	}
+}
+
+func TestExecuteCommand_Window_DryRunReachesSpawner(t *testing.T) {
+	t.Parallel()
+	fdb := &fakeDB{}
+	sp := &fakeCommandSpawner{}
+	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
+
+	v := windowCommandVoyage([]string{"a", "b", "c"}, intp(2), nil)
+	v.DryRun = true
+
+	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
+	if status != voyage.StatusSucceeded {
+		t.Fatalf("status = %q, want succeeded", status)
+	}
+	if summary.Total != 3 {
+		t.Fatalf("summary = %+v, want Total=3", summary)
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, sid := range []string{"a", "b", "c"} {
+		if !sp.dryRuns[sid] {
+			t.Errorf("host %s dispatched with dryRun=false in window mode", sid)
+		}
+	}
+}
+
+// TestExecuteCommand_DryRunNotInvented is the other half of the guard: threading
+// must forward the row's value, not hardcode either constant. A spawner call with
+// dryRun=true for a Voyage that never asked for it would silently downgrade a real
+// change to a preview — the same class of defect in the opposite direction.
+func TestExecuteCommand_DryRunNotInvented(t *testing.T) {
+	t.Parallel()
+	fdb := &fakeDB{}
+	sp := &fakeCommandSpawner{}
+	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
+
+	v := commandVoyage([]string{"a", "b"}, nil, nil, nil, nil) // DryRun left at the zero value
+	if v.DryRun {
+		t.Fatal("fixture bug: commandVoyage must not set DryRun")
+	}
+
+	if status, _, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{})); status != voyage.StatusSucceeded {
+		t.Fatalf("status = %q, want succeeded", status)
+	}
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	for _, sid := range []string{"a", "b"} {
+		if sp.dryRuns[sid] {
+			t.Errorf("host %s dispatched with dryRun=true for a plain Voyage", sid)
+		}
 	}
 }
