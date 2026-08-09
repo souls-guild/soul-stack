@@ -28,7 +28,7 @@ import (
 // column itself is gone (NIM-408).
 func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)))
 	req = withClaims(req, "archon-alice")
@@ -71,7 +71,7 @@ func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 // reads, and its emptiness is a claim that can fail.
 func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
@@ -99,7 +99,7 @@ func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 // by the domain (ValidateCreateTraits) BEFORE the insert.
 func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)))
 	req = withClaims(req, "archon-alice")
@@ -120,7 +120,7 @@ func TestIncarnation_SetTraits_200_Replaces(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba","env":"prod"}}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -145,7 +145,7 @@ func TestIncarnation_SetTraits_EmptyClears(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -163,7 +163,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
 		bytes.NewReader([]byte(`{"traits":{"bad":{"nested":1}}}`)), "name", "redis-prod"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -178,7 +178,7 @@ func TestIncarnation_SetTraits_InvalidValue_422(t *testing.T) {
 // TestIncarnation_SetTraits_InvalidName_422 — invalid incarnation name → 422.
 func TestIncarnation_SetTraits_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/Bad_Name/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba"}}`)), "name", "Bad_Name"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -192,7 +192,7 @@ func TestIncarnation_SetTraits_404(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(_ string) pgx.Row { return errRow{err: pgx.ErrNoRows} },
 	}
-	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/ghost/traits",
 		bytes.NewReader([]byte(`{"traits":{"team":"dba"}}`)), "name", "ghost"), "archon-alice")
 	rec := incSetTraits(h, req)
@@ -203,5 +203,138 @@ func TestIncarnation_SetTraits_404(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&p)
 	if p.Type != problem.TypeNotFound {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeNotFound)
+	}
+}
+
+// --- gate (b): the label being stamped must be one the operator holds (NIM-587) ---
+//
+// A trait pair is a GRANT, not a description: `trait.<key>` is a live read-side
+// scope dimension for incarnations (incScopeColumns.Traits), so stamping `env=prod`
+// hands every `trait.env="prod"` role sight of this incarnation. Gate (a) — "may you
+// write to THIS incarnation" — is the route's question and a different one; these
+// four cases are the unit-layer known-bad for gate (b) on this surface. They pin the
+// VERDICT and the absence of a write; the SPELLING of a value belongs to the
+// integration guard against a real jsonb (see fakeIncDB.QueryRow).
+
+// TestIncarnation_SetTraits_PairOutsideTraitScope_422 — the operator holds
+// `env=prod` and tries to stamp `env=staging`: refused, the refusal NAMES the pair,
+// and the UPDATE never runs.
+func TestIncarnation_SetTraits_PairOutsideTraitScope_422(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
+		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
+	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
+		bytes.NewReader([]byte(`{"traits":{"env":"staging"}}`)), "name", "redis-prod"), "archon-alice")
+	rec := incSetTraits(h, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("Code = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var p problem.Details
+	_ = json.NewDecoder(rec.Body).Decode(&p)
+	if p.Type != problem.TypeValidationFailed {
+		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
+	}
+	if p.Detail != "trait env=staging is outside operator trait-scope" {
+		t.Errorf("Detail = %q, want the refused pair named", p.Detail)
+	}
+	if db.updateTraitsArg != nil {
+		t.Error("UPDATE traits ran on a refused pair - the gate must precede the write")
+	}
+	if db.canonicalizeCalls != 1 {
+		t.Errorf("canonicalizeCalls = %d, want 1 (the gate reads the payload as Postgres spells it)",
+			db.canonicalizeCalls)
+	}
+}
+
+// TestIncarnation_SetTraits_PairInsideTraitScope_200 — the positive control for the
+// case above: the SAME restricted operator stamping a pair it does hold is admitted
+// and the write happens. Without this a gate that refuses everything would pass the
+// refusal case.
+func TestIncarnation_SetTraits_PairInsideTraitScope_200(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil,
+		fakeIncScoper{traitExprs: []string{"env:prod"}}, nil)
+	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
+		bytes.NewReader([]byte(`{"traits":{"env":"prod"}}`)), "name", "redis-prod"), "archon-alice")
+	rec := incSetTraits(h, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if string(db.updateTraitsArg) != `{"env":"prod"}` {
+		t.Errorf("traits arg = %s, want the held pair written", db.updateTraitsArg)
+	}
+}
+
+// TestIncarnation_SetTraits_ScopedOnAnotherDimension_RefusesEveryPair — the behavior
+// change NIM-587 carries for deployed roles, pinned so it cannot regress silently in
+// either direction. An operator scoped `on coven=dba` has an EMPTY trait-scope (a
+// disjunct that constrains coven says nothing about traits, and mixed disjuncts are
+// dropped fail-closed), so it may no longer stamp ANY pair - while an empty payload,
+// which only CLEARS labels and grants nobody anything, still passes.
+func TestIncarnation_SetTraits_ScopedOnAnotherDimension_RefusesEveryPair(t *testing.T) {
+	scoper := fakeIncScoper{covens: []string{"dba"}}
+
+	t.Run("stamping a pair is refused", func(t *testing.T) {
+		db := &fakeIncDB{
+			selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+		}
+		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, scoper, nil)
+		req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
+			bytes.NewReader([]byte(`{"traits":{"team":"dba"}}`)), "name", "redis-prod"), "archon-alice")
+		rec := incSetTraits(h, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("Code = %d, want 422 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if db.updateTraitsArg != nil {
+			t.Error("UPDATE traits ran for an operator with an empty trait-scope")
+		}
+	})
+
+	t.Run("clearing the labels still passes", func(t *testing.T) {
+		db := &fakeIncDB{
+			selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+		}
+		h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, scoper, nil)
+		req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
+			bytes.NewReader([]byte(`{}`)), "name", "redis-prod"), "archon-alice")
+		rec := incSetTraits(h, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Code = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+		}
+		if string(db.updateTraitsArg) != "{}" {
+			t.Errorf("traits arg = %s, want \"{}\" (cleared)", db.updateTraitsArg)
+		}
+	})
+}
+
+// TestIncarnation_SetTraits_NoScoper_500_NoWrite — the gate cannot be EVALUATED (no
+// purview resolver wired): fail-closed. 500 rather than 422 because the operator did
+// nothing wrong, and above all NO WRITE - waving the write through on a missing
+// dependency is exactly what the gate exists to prevent.
+func TestIncarnation_SetTraits_NoScoper_500_NoWrite(t *testing.T) {
+	db := &fakeIncDB{
+		selectByNameRow: func(name string) pgx.Row { return makeIncarnationRow(name) },
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	req := withClaims(newChiRequest(http.MethodPut, "/v1/incarnations/redis-prod/traits",
+		bytes.NewReader([]byte(`{"traits":{"env":"prod"}}`)), "name", "redis-prod"), "archon-alice")
+	rec := incSetTraits(h, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("Code = %d, want 500 (body=%s)", rec.Code, rec.Body.String())
+	}
+	var p problem.Details
+	_ = json.NewDecoder(rec.Body).Decode(&p)
+	if p.Type != problem.TypeInternalError {
+		t.Errorf("Type = %q, want %q", p.Type, problem.TypeInternalError)
+	}
+	if db.updateTraitsArg != nil {
+		t.Error("UPDATE traits ran while the gate could not be evaluated - must fail closed")
 	}
 }

@@ -306,7 +306,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.traits-set",
-			Description:  "Wholesale REPLACES the incarnation's operator-set trait labels (incarnation.traits jsonb, ADR-060). 'traits' - full key->(scalar|list of scalars) set; empty/omitted = clear labels. The labels describe the INCARNATION and reach no host: a member carries only the traits an operator attached to it (NIM-281), assigned with keeper.soul.traits-assign. Permission: incarnation.traits-set (scope incarnation/coven/service by name). Fails with code=validation-failed on a malformed key / nested value; not-found if the incarnation doesn't exist.",
+			Description:  "Wholesale REPLACES the incarnation's operator-set trait labels (incarnation.traits jsonb, ADR-060). 'traits' - full key->(scalar|list of scalars) set; empty/omitted = clear labels. The labels describe the INCARNATION and reach no host: a member carries only the traits an operator attached to it (NIM-281), assigned with keeper.soul.traits-assign. Permission: incarnation.traits-set (scope incarnation/coven/service by name). Two gates: the incarnation lies inside the operator scope, and every pair stamped must lie inside the operator's own trait-scope (an incarnation-attached pair grants visibility, same rule as keeper.soul.traits-assign). Fails with code=validation-failed on a malformed key / nested value or a pair outside that trait-scope; not-found if the incarnation doesn't exist.",
 			InputSchema:  schemaIncarnationTraitsSetInput,
 			OutputSchema: schemaIncarnationTraitsSetOutput,
 		},

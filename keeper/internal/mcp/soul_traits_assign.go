@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"slices"
 	"sort"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -188,21 +188,14 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	// cannot happen. Canonicalizing the payload reads no row and opens no
 	// transaction, so the dry-run promise stands.
 	if mode == soul.TraitMerge || mode == soul.TraitReplace {
-		tscoper, tok := h.deps.PurviewResolver.(traitScoper)
-		if !tok {
-			h.deps.Logger.Error("mcp: soul.traits-assign resolver lacks TraitScope")
+		if err := handlers.ScreenTraitPairsInScope(ctx, h.deps.SoulDB, h.deps.PurviewResolver,
+			claims.Subject, "soul", "traits-assign", a.Traits); err != nil {
+			var outOfScope *handlers.TraitPairOutOfScopeError
+			if errors.As(err, &outOfScope) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed, outOfScope.Error())
+			}
+			h.deps.Logger.Error("mcp: soul.traits-assign trait-scope gate unavailable", "error", err)
 			return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
-		}
-		if allowed, unres := tscoper.TraitScope(claims.Subject, "soul", "traits-assign"); !unres {
-			raw, err := soul.CanonicalTraitPayload(ctx, h.deps.SoulDB, a.Traits)
-			if err != nil {
-				h.deps.Logger.Error("mcp: soul.traits-assign canonicalize trait payload", "error", err)
-				return h.toolError(req.ID, toolName, mcpCodeInternalError, "traits-assign unavailable")
-			}
-			if key, val, ok := firstTraitPairOutOfScope(rbac.TraitPairTexts(raw), allowed); !ok {
-				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-					"trait "+key+"="+val+" is outside operator trait-scope")
-			}
 		}
 	}
 
@@ -270,40 +263,10 @@ type covenScoper interface {
 	CovenScope(aid, resource, action string) ([]string, bool)
 }
 
-// traitScoper is the trait-projection surface of the RBAC resolver
-// ([rbac.Enforcer.TraitScope]), asserted for gate (b) of the per-soul trait
-// write (NIM-281). Mirrors [covenScoper].
-type traitScoper interface {
-	TraitScope(aid, resource, action string) (map[string][]string, bool)
-}
-
-// firstTraitPairOutOfScope reports the first (key, value) of `pairs` that the
-// operator may not attach, scanning keys in sorted order so the rejection is
-// stable. ok=true means every pair is inside scope.
-//
-// pairs comes from [rbac.TraitPairTexts] over the payload as Postgres will store
-// it — a scalar contributes one pair, a list one per element (one out-of-scope
-// element grants as much as a whole key would). It is NOT rendered from the
-// decoded map: the scope dimension is answered by `->>` over the stored jsonb,
-// and Go printed `1e+06` for a plain `1000000`, refusing an operator the pair it
-// plainly holds (NIM-529). REST ([handlers.SoulHandler] checkTraitPairsInScope)
-// projects through the SAME two functions — one fixed copy and one forgotten copy
-// is exactly the defect that ticket names.
-func firstTraitPairOutOfScope(pairs, allowed map[string][]string) (key, value string, ok bool) {
-	keys := make([]string, 0, len(pairs))
-	for k := range pairs {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	for _, k := range keys {
-		for _, v := range pairs[k] {
-			if !slices.Contains(allowed[k], v) {
-				return k, v, false
-			}
-		}
-	}
-	return "", "", true
-}
+// The trait projection of the resolver is no longer asserted here. Gate (b) is
+// [handlers.ScreenTraitPairsInScope] — ONE implementation for every trait write
+// (NIM-587) — and it does the assertion itself, fail-closed. A local copy is what
+// NIM-529 had to fix twice.
 
 // buildTraitsAssignOutput builds the output, matching REST.
 func buildTraitsAssignOutput(a soulTraitsAssignArgs, mode soul.TraitMode, rep soul.Report, dryRun bool) soulTraitsAssignOutput {

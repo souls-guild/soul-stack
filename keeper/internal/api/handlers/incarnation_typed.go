@@ -951,6 +951,22 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
 	}
 
+	// Gate (b), NIM-587: the pairs being stamped must lie inside the operator's own
+	// trait-scope. Route middleware already asked gate (a) — "may you write to THIS
+	// incarnation" — and that is a different question: `trait.<key>` is a live scope
+	// dimension for incarnations too (incScopeColumns.Traits), so stamping a pair
+	// hands every role scoped by it sight of this incarnation. Holding the object
+	// does not imply holding the label. Checked BEFORE the write.
+	if err := ScreenTraitPairsInScope(ctx, h.db, h.scoper, claims.Subject, "incarnation", "traits-set", traits); err != nil {
+		var outOfScope *TraitPairOutOfScopeError
+		if errors.As(err, &outOfScope) {
+			return zero, incProblem(problem.TypeValidationFailed, outOfScope.Error())
+		}
+		h.logger.Error("incarnation.set-traits: trait-scope gate unavailable",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "update incarnation traits failed")
+	}
+
 	res, err := incarnation.UpdateTraits(ctx, h.db, name, traits)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {

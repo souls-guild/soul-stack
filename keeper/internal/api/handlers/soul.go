@@ -1672,60 +1672,23 @@ type SoulTraitsAssignReply struct {
 	AuditPayload middleware.AuditPayload
 }
 
-// checkTraitPairsInScope is gate (b) of the per-soul trait write (NIM-281): every
-// pair the operator attaches must lie inside its own trait-scope, the mirror of
-// "the assigned coven label ∈ the operator's coven scope". A list value is checked
-// element-wise — each element is a pair in its own right, and one out-of-scope
-// element would grant just as much as a whole out-of-scope key.
-//
-// An unrestricted operator passes. Every other case resolves against
-// [rbac.Enforcer.TraitScope]; a resolver without that projection is fail-closed
-// 500, not a silently skipped gate.
-//
-// The pairs are read off the payload AS POSTGRES WILL STORE IT
-// ([soul.CanonicalTraitPayload] → [rbac.TraitPairTexts]), never off the decoded
-// map: the scope dimension this gate measures against is answered by `->>` over
-// the stored jsonb, and only jsonb knows the text it will yield. Rendering the
-// value in Go printed `1e+06` for a plain `1000000` and refused an operator the
-// pair it plainly holds (NIM-529). The MCP twin
-// ([mcp.Handler] soul.traits-assign) projects through the SAME two functions —
-// one fixed copy and one forgotten copy is exactly the defect that ticket names.
+// checkTraitPairsInScope is gate (b) of the per-soul trait write (NIM-281),
+// rendered for this surface. The gate ITSELF is [ScreenTraitPairsInScope] — one
+// implementation for every trait write in the system (NIM-587), so a fixed copy
+// and a forgotten copy are no longer possible. What stays here is the rendering:
+// which HTTP problem each of the two outcomes becomes, and the log line naming
+// this route. The refusal TEXT comes from the shared error, not from here.
 func (h *SoulHandler) checkTraitPairsInScope(ctx context.Context, claims *jwt.Claims, traits map[string]any) error {
-	scoper, ok := h.scoper.(traitScoper)
-	if !ok {
-		h.logger.Error("soul.traits-assign: resolver lacks TraitScope")
-		return &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
-	}
-	allowed, unrestricted := scoper.TraitScope(claims.Subject, "soul", "traits-assign")
-	if unrestricted {
+	err := ScreenTraitPairsInScope(ctx, h.pool, h.scoper, claims.Subject, "soul", "traits-assign", traits)
+	if err == nil {
 		return nil
 	}
-	raw, err := soul.CanonicalTraitPayload(ctx, h.pool, traits)
-	if err != nil {
-		h.logger.Error("soul.traits-assign: canonicalize trait payload", "error", err)
-		return &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
+	var outOfScope *TraitPairOutOfScopeError
+	if errors.As(err, &outOfScope) {
+		return &problemError{problem.New(problem.TypeValidationFailed, "", outOfScope.Error())}
 	}
-	pairs := rbac.TraitPairTexts(raw)
-	for _, key := range sortedMapKeys(pairs) {
-		for _, elem := range pairs[key] {
-			if !slices.Contains(allowed[key], elem) {
-				return &problemError{problem.New(problem.TypeValidationFailed, "",
-					"trait "+key+"="+elem+" is outside operator trait-scope")}
-			}
-		}
-	}
-	return nil
-}
-
-// sortedMapKeys — deterministic iteration so the rejected pair reported to the
-// operator is stable across calls.
-func sortedMapKeys(m map[string][]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
+	h.logger.Error("soul.traits-assign: trait-scope gate unavailable", "error", err)
+	return &problemError{problem.New(problem.TypeInternalError, "", "traits-assign unavailable")}
 }
 
 // AssignTraitsTyped — the domain function of POST /v1/souls/traits (handler-native): bulk

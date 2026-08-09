@@ -298,6 +298,39 @@ order to act in.
   surfaces now render through one function over the payload's canonical jsonb, so
   a pair an operator may attach is exactly a pair their scope reaches.
 
+- **Labelling an incarnation is now gated by the label, not only by the
+  incarnation** (NIM-587). `trait.<key>` is a live scope dimension for
+  incarnations exactly as it is for hosts, so a pair stamped on an incarnation
+  grants the same visibility a pair stamped on a host grants — and yet `PUT
+  /v1/incarnations/{name}/traits` and `keeper.incarnation.traits-set` asked only
+  whether the caller held the incarnation. An operator scoped
+  `incarnation.traits-set on coven=dba` could stamp `tier=gold` on an incarnation
+  in that coven and hand every `trait.tier="gold"` role sight of it — and,
+  through a `trait` Rite, of its members — while holding no such pair itself.
+  Both surfaces now screen through the same function as the two soul surfaces,
+  over the payload's canonical jsonb.
+
+  **What to re-read before upgrading.** A role whose `incarnation.traits-set` is
+  scoped on any dimension OTHER than `trait.` — `coven=`, `service=`,
+  `incarnation=` — has an EMPTY trait-scope and is now refused every pair with
+  `422 trait <k>=<v> is outside operator trait-scope`; an empty payload, which
+  only clears labels, still passes. That is the rule the soul surfaces already
+  applied, reaching the surface that was missing it, not a new one. A **bare**
+  `incarnation.traits-set` with no `default_scope` stays unrestricted and is
+  unaffected. To keep a scoped role able to label, give it a separate permission
+  constraining trait ALONE (`incarnation.traits-set on trait.tier="gold"`) — a
+  disjunct mixing trait with another dimension contributes nothing, by the same
+  fail-closed rule that governs `coven`. ⚠ Note that such a grant also **widens
+  gate (a)**: scope is per `(resource, action)`, so "may stamp this label" and
+  "may write to objects carrying it" cannot presently be separated.
+
+  **Create is deliberately out of scope.** `POST /v1/incarnations` and
+  `keeper.incarnation.create` still accept any well-formed trait, so an operator
+  refused a label on `traits-set` can still carry it at birth. Whether a create
+  is refused or the creator is taken to hold what it stamped is an open
+  permissions decision (NIM-622); both create surfaces move together when it
+  lands.
+
 - **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
   assert_failed` synchronously**, where it previously always answered `202` and
   surfaced a failed topology assert as `error_locked` plus a manual unlock. The

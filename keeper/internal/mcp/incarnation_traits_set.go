@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -19,15 +20,23 @@ import (
 // host row, and no member host reads these labels either (NIM-281). A host
 // carries only what keeper.soul.traits-assign put on it.
 //
-// SECURITY. RBAC — body-scoped OR-Check over the incarnation's coven/service
-// scope (its declared covens, with the name as the `incarnation=` dimension —
-// mirrors REST IncarnationScopeSelector + permission
-// incarnation.traits-set). Without it MCP would bypass REST protection (MCP
-// has no chi middleware). scope is resolved via a separate probe-SelectByName
-// (same cold RBAC round-trip as REST). No gate on trait keys here — this route
-// labels the incarnation, and the operator already holds it by scope; the
-// per-pair gate (b) belongs to the per-HOST write, where a pair can be attached
-// to a machine outside the label's own scope.
+// SECURITY — two gates, the same pair as the per-host write.
+//
+// Gate (a): body-scoped OR-Check over the incarnation's coven/service scope (its
+// declared covens, with the name as the `incarnation=` dimension — mirrors REST
+// IncarnationScopeSelector + permission incarnation.traits-set). Without it MCP
+// would bypass REST protection (MCP has no chi middleware). scope is resolved via
+// a separate probe-SelectByName (same cold RBAC round-trip as REST).
+//
+// Gate (b), NIM-587: every pair being stamped must lie inside the operator's own
+// trait-scope ([handlers.ScreenTraitPairsInScope], shared with REST and with the
+// per-host write). This header used to assert the opposite — that gate (b) was a
+// per-HOST concern because "the operator already holds the incarnation by scope".
+// That inference is false, and it was the hole. `trait.<key>` is a live scope
+// dimension for incarnations as well (incScopeColumns.Traits), so stamping
+// `tier=gold` here grants every `trait.tier=gold` role sight of this incarnation —
+// visibility the caller may not hold itself. Holding the object is gate (a);
+// holding the label is a separate question, and this is where it is asked.
 
 type incarnationTraitsSetArgs struct {
 	Name   string         `json:"name"`
@@ -80,6 +89,20 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 	} else if scopeErr := h.checkIncarnationScope(claims, "traits-set", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.traits-set")
+	}
+
+	// Gate (b), NIM-587 (parity with REST SetTraitsTyped): the stamped pairs must
+	// lie inside the operator's own trait-scope. Checked BEFORE the write, through
+	// the SAME function every other trait write calls.
+	if err := handlers.ScreenTraitPairsInScope(ctx, h.deps.IncarnationDB, h.deps.PurviewResolver,
+		claims.Subject, "incarnation", "traits-set", a.Traits); err != nil {
+		var outOfScope *handlers.TraitPairOutOfScopeError
+		if errors.As(err, &outOfScope) {
+			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, outOfScope.Error())
+		}
+		h.deps.Logger.Error("mcp: incarnation.traits-set trait-scope gate unavailable",
+			slog.String("name", a.Name), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update incarnation traits failed")
 	}
 
 	res, err := incarnation.UpdateTraits(ctx, h.deps.IncarnationDB, a.Name, a.Traits)
