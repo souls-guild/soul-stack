@@ -4,11 +4,16 @@
 // pins `iss` and checks `exp`. Used by the Operator API HTTP middleware
 // ([keeper/internal/api/middleware/auth.go]).
 //
-// Verifier does not distinguish "expired" from "not yet valid" with a
-// separate sentinel: the expired rate is high (short TTLs), and the rest
-// (`nbf`) is not set by the issuer. All other parse/signature/issuer errors
-// collapse to [ErrInvalidToken] and [ErrInvalidIssuer] for predictable
-// classification by the 401 handler.
+// `iat` and `nbf` are checked with [clockSkewLeeway], and an `iat` further
+// ahead than that gets its own sentinel ([ErrClockSkew]) rather than collapsing
+// into [ErrInvalidToken]: the two are the same 401 to a caller, but "the clocks
+// disagree" and "the signature does not match" send an operator to opposite
+// ends of the system. `exp` is exempt from the leeway and stays strict — see
+// the constant. `nbf` is not set by the issuer today and has no sentinel; it
+// inherits the tolerance so that adding one later behaves like `iat` rather
+// than like a second expiry. All other parse/signature/issuer errors collapse
+// to [ErrInvalidToken] and [ErrInvalidIssuer] for predictable classification by
+// the 401 handler.
 package jwt
 
 import (
@@ -32,6 +37,40 @@ type Claims struct {
 	ExpiresAt        time.Time
 }
 
+// clockSkewLeeway is the tolerance for `iat` and `nbf` (golang-jwt applies it
+// to `exp` as well; Verify takes that back — see below). It is not zero
+// because keeper runs as several stateless
+// instances behind one address ([ADR-002]) over one signing key from Vault
+// ([ADR-014]): a token minted by instance A is routinely verified by instance B,
+// and the nodes' clocks drift apart as a matter of course rather than as an
+// incident. At zero tolerance a verifier one second behind the issuer rejects a
+// one-second-old token because its `iat` is "in the future", and the operator's
+// retry lands on another instance and succeeds — authentication that flaps
+// instead of a clock that reports. The project already treats skew as a fact of
+// life elsewhere ([ADR-018] warns above 10 minutes rather than refusing).
+//
+// 60s is the entire budget and is deliberately small: RFC 7519 §4.1.4 allows
+// "some small leeway, usually no more than a few minutes", and the point of
+// validating `iat` at all is to reject one that was made up, which a wide
+// window would give away.
+//
+// It does NOT reach `exp`, even though golang-jwt applies one leeway to every
+// time claim and offers no way to split them — [Verifier.Verify] re-checks
+// expiry strictly afterwards for that reason. The asymmetry is the point.
+// Drift on `iat` refuses a token that is genuinely fresh, and the holder can
+// neither see why nor do anything about it. Drift on `exp` costs at most the
+// last second of a token's life, when the holder should be getting a new one
+// anyway — while widening it would extend how long a stolen Bearer keeps
+// working, on top of a floor (`auth.jwt.exchange_ttl`, minimum 1m, [ADR-058])
+// that is short on purpose. A minute of tolerance on a one-minute floor would
+// double it.
+//
+// [ADR-002]: docs/adr/0002-transport-grpc-ha.md
+// [ADR-014]: docs/adr/0014-operator-identity.md
+// [ADR-018]: docs/adr/0018-soulprint-typed.md
+// [ADR-058]: docs/adr/0058-operator-auth-ldap-oidc.md
+const clockSkewLeeway = 60 * time.Second
+
 // ErrInvalidToken is the general token parse/signature/structure error.
 // Includes: malformed, plus-bad-segments, invalid signature, missing required
 // claims (sub/iss/exp/iat), wrong-alg.
@@ -40,6 +79,14 @@ var ErrInvalidToken = errors.New("jwt: invalid token")
 // ErrExpiredToken means `exp` is in the past. It is a separate sentinel so
 // middleware can return a more informative `detail` in the 401 response.
 var ErrExpiredToken = errors.New("jwt: token expired")
+
+// ErrClockSkew means `iat` is further in the future than [clockSkewLeeway]
+// allows — the issuing instance's clock is ahead of this one by more than the
+// budget. It is a separate sentinel because the alternative was reporting it as
+// [ErrInvalidToken], which is the same string a forged signature produces: a
+// cluster whose clocks had drifted looked exactly like one being attacked, and
+// the diagnosis went to the wrong half of the system (NIM-621).
+var ErrClockSkew = errors.New("jwt: token issued in the future")
 
 // ErrInvalidIssuer means the `iss` claim does not match the issuer configured
 // on the Verifier.
@@ -53,6 +100,10 @@ const (
 	publicDetailInvalidToken  = "invalid token"
 	publicDetailExpiredToken  = "token expired"
 	publicDetailInvalidIssuer = "token issuer not trusted"
+	// publicDetailClockSkew names a cause the caller cannot act on by retrying
+	// and the operator can fix in one place. It reveals nothing: the caller
+	// supplied the `iat` this is measured against.
+	publicDetailClockSkew = "token issued in the future"
 )
 
 // ClassifyVerifyErr returns a public-safe detail string for an HTTP 401
@@ -72,6 +123,8 @@ func ClassifyVerifyErr(err error) string {
 	switch {
 	case errors.Is(err, ErrExpiredToken):
 		return publicDetailExpiredToken
+	case errors.Is(err, ErrClockSkew):
+		return publicDetailClockSkew
 	case errors.Is(err, ErrInvalidIssuer):
 		return publicDetailInvalidIssuer
 	default:
@@ -101,15 +154,19 @@ func NewVerifier(signingKey []byte, issuer string) (*Verifier, error) {
 }
 
 // Verify parses and validates tokenString. It returns extracted claims or one
-// of three sentinel errors ([ErrInvalidToken], [ErrExpiredToken],
-// [ErrInvalidIssuer]) for predictable HTTP 401 mapping.
+// of four sentinel errors ([ErrInvalidToken], [ErrExpiredToken],
+// [ErrClockSkew], [ErrInvalidIssuer]) for predictable HTTP 401 mapping. Adding
+// a fifth means extending [ClassifyVerifyErr] in the same change — see the
+// contract on the publicDetail constants.
 //
 // Checks:
 //
 //   - HMAC method (rejects `alg: none` and any asym algorithm);
 //   - HS256 signature with `signingKey`;
 //   - `iss == verifier.issuer`;
-//   - `exp` strictly in the future (jwtv5.WithExpirationRequired);
+//   - `exp` strictly in the future (jwtv5.WithExpirationRequired, plus an
+//     explicit re-check that [clockSkewLeeway] does not soften it);
+//   - `iat` no further ahead than [clockSkewLeeway], else [ErrClockSkew];
 //   - non-empty `sub` (otherwise the token is useless: there is nobody to
 //     attribute actions to).
 func (v *Verifier) Verify(tokenString string) (*Claims, error) {
@@ -130,11 +187,16 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 		jwtv5.WithValidMethods([]string{"HS256"}),
 		jwtv5.WithExpirationRequired(),
 		jwtv5.WithIssuedAt(),
+		jwtv5.WithLeeway(clockSkewLeeway),
 	)
 	if err != nil {
 		switch {
 		case errors.Is(err, jwtv5.ErrTokenExpired):
 			return nil, ErrExpiredToken
+		case errors.Is(err, jwtv5.ErrTokenUsedBeforeIssued):
+			// Past the leeway, so this is not ordinary drift between instances.
+			// Kept out of ErrInvalidToken so the 401 says which half to look at.
+			return nil, fmt.Errorf("%w: %s", ErrClockSkew, err.Error())
 		default:
 			return nil, fmt.Errorf("%w: %s", ErrInvalidToken, err.Error())
 		}
@@ -159,6 +221,17 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 	}
 	if claims.ExpiresAt == nil {
 		return nil, fmt.Errorf("%w: missing exp", ErrInvalidToken)
+	}
+	// Expiry, strictly — undoing the part of [clockSkewLeeway] that golang-jwt
+	// applied to `exp` because it cannot apply a leeway to one claim only. The
+	// reasoning is on the constant; the effect is that a token past its `exp` is
+	// refused on the same second here as it was before the leeway existed, and
+	// with the same [ErrExpiredToken]. Callers depend on that specific answer:
+	// the cookie exchange (keeper/internal/api/huma_auth_token.go) tells the
+	// browser "your session ended, sign in again" only because expiry arrives as
+	// its own error rather than as a generic 401.
+	if time.Now().After(claims.ExpiresAt.Time) {
+		return nil, ErrExpiredToken
 	}
 
 	return &Claims{

@@ -1733,6 +1733,58 @@ order to act in.
   scope of the fix — `errand.run` and the live `soul.console` still build a
   host-only context, so a `coven=` on either continues to deny.
 
+- **A second of clock drift between Keeper instances answered `401 invalid
+  token` on a token seconds old.** `NIM-621`. Keeper runs as several stateless
+  instances over one signing key from Vault
+  ([ADR-002](docs/adr/0002-transport-grpc-ha.md),
+  [ADR-014](docs/adr/0014-operator-identity.md)), so a token minted by one is
+  routinely verified by another — and the verifier validated `iat` with no
+  tolerance at all. A node one second behind the issuer therefore rejected a
+  one-second-old token as issued in the future, the operator's retry landed on a
+  different instance and succeeded, and what they saw was authentication that
+  flaps. The answer made it worse: every cause other than expiry collapsed to
+  `invalid token`, the same string a forged signature produces, so drifting
+  clocks were indistinguishable from an attack and the diagnosis went to the
+  signing key. The project already treats skew as normal elsewhere
+  ([ADR-018](docs/adr/0018-soulprint-typed.md) warns above 10 minutes rather
+  than refusing).
+
+  `iat` and `nbf` now carry a 60s tolerance — RFC 7519 §4.1.4 allows "some small
+  leeway", and the budget stays small on purpose because rejecting a made-up
+  `iat` is what validating it is for. Past the budget the refusal is its own
+  cause: `detail: "token issued in the future"`, not `invalid token`. A client
+  matching on the exact string `invalid token` will see the new one for this
+  case; that is the only behaviour change on the wire.
+
+  **`exp` is deliberately excluded.** golang-jwt applies one tolerance to every
+  time claim and offers no way to split them, so the leeway alone would have
+  accepted a token up to 60s past its expiry. On `auth.jwt.exchange_ttl`, whose
+  floor is one minute ([ADR-058](docs/adr/0058-operator-auth-ldap-oidc.md)),
+  that doubles how long a stolen Bearer keeps working — and it buys nothing,
+  because drift on `exp` only ever costs the last second of a token's life,
+  when the holder should be getting a new one anyway. `Verify` therefore
+  re-checks expiry strictly afterwards, and expiry still arrives as its own
+  error: the cookie exchange keeps answering `token expired` rather than the
+  generic `authentication required`, which is the difference between telling a
+  browser to sign in again and telling it nothing.
+
+  The e2e harness had built a conclusion on the old ambiguity. Its keeper
+  identity check read any 401 against a freshly minted token as proof that some
+  other process had taken the port, and reported an address to go and
+  investigate — a reading that was never sound and is now demonstrably wrong,
+  because a wall clock stepping backwards produces that 401 on a stack talking
+  to its own keeper. It now branches on the cause the keeper names and says
+  "check the clock" for skew. The strings it matches on live in another module's
+  `internal/` and cannot be imported, so a guard reads them out of the
+  verifier's source instead: rename one there and the guard says which binding
+  went stale, rather than the harness quietly falling back to blaming the port
+  again.
+
+  The `-1s` durations in gate summaries are clamped in the same pass
+  (`NIM-611`): `SECONDS` follows the wall clock, an NTP correction or a WSL2
+  resume steps it backwards, and the release table people read the run from was
+  printing negative tier times.
+
 - **`make dev-stop` stopped nothing, and took `make dev-down` with it.** `NIM-615`.
   The recipe quoted an inner `grep` pattern with `'...'` inside its own `'...'`
   string, which does not nest — it closes. With `SHELL := /bin/sh` the target was
@@ -1875,8 +1927,21 @@ order to act in.
   reproduce the silence being fixed. Third, an unreachable Postgres warns instead
   of blocking — with no registry to ask, a first-ever stand is indistinguishable
   from a wiped Vault, and refusing there would break every initial provision. A
-  first-ever stand with empty registries is unaffected and generates silently, as
-  before.
+  first-ever stand with empty registries generates them without objecting on a
+  machine with no neighbours, but not on a shared one: restart the Vault container where somebody
+  else already has souls and the next brand-new stand is refused too, because the
+  seed count spans every `keeper*` database and the root it would mint is the one
+  their seeds chain to. That refusal is the guard working, and it points at the
+  neighbour rather than at a database to drop.
+
+  One dev script changes behaviour with the guard. `dev/upgrade-demo/ui-stand.sh`
+  runs `make dev-provision` on exactly this symptom — `dev/mint-jwt.sh` failing —
+  so on a desynchronised host the demo now stops on the refusal instead of
+  quietly reissuing the anchors and coming up over registries it has just
+  orphaned. It runs under `set -e` and calls `make` directly, so the last lines
+  are the guard's `[provision] [fail]` block and make's own exit, with no
+  `[ui-stand][FAIL]` summary after them: take one of the ways out it lists, then
+  re-run the script.
 
 - **No fresh dev stand came up, on the release or on any branch off it.**
   `NIM-377` deleted the plugin's hand-written `manifest.yaml` and moved a

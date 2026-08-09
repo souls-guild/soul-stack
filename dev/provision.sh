@@ -272,7 +272,10 @@ check_vault_anchors_against_registries() {
         printf '[provision] [fail]      the root breaks whatever is there, whatever you do to this stand'"'"'s database.\n' >&2
         printf '[provision] [fail]      Ask whoever runs it before taking 2 or 3.)\n' >&2
     elif [ "${PG_DB}" != "keeper" ]; then
-        printf '[provision] [fail]   1. drop this stand'"'"'s database and re-provision - consistent again, no other stand touched:\n' >&2
+        printf '[provision] [fail]   1. drop this stand'"'"'s database and re-provision - consistent again, no other stand touched.\n' >&2
+        printf '[provision] [fail]      Stop this stand'"'"'s keeper first: Postgres refuses to drop a database that still\n' >&2
+        printf '[provision] [fail]      has a session on it, and a restarted Vault leaves the keeper running - which is\n' >&2
+        printf '[provision] [fail]      exactly the state you are in right now.\n' >&2
         printf '[provision] [fail]        docker exec -i %s-postgres psql -U keeper -d keeper -c '"'"'DROP DATABASE "%s"'"'"' && make dev-provision\n' "${STACK_PREFIX}" "${PG_DB}" >&2
     else
         printf '[provision] [fail]   1. (not available on the default stand: `keeper` is created once by the postgres\n' >&2

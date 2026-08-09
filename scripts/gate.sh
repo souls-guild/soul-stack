@@ -110,7 +110,25 @@ for spec in "$@"; do
   else
     outcome="FAIL"
   fi
+  # SECONDS is derived from the wall clock, which can step backwards — an NTP
+  # correction, and under WSL2 a resume — so this difference can come out
+  # negative. Seen twice in one session: `PASS proxmox -1s` in a make
+  # test-plugins table and `PASS check-gate -1s` in this very summary, which is
+  # the table a release run is read from. The column is an integer-second aid,
+  # not a measurement, so clamping costs it nothing; a negative number costs the
+  # whole table its credibility, and for a reporter whose only job is to be
+  # believed that is the expensive half. Same clamp as scripts/modules-run.sh
+  # (NIM-611).
+  #
+  # KNOWN BOUNDARY — no guard covers this, and the absence is deliberate.
+  # SECONDS cannot be made to step backwards between two reads in the same
+  # shell: a subshell does not move the parent's, and seeding it from the
+  # environment shifts both reads equally. A cheap imitation was written and
+  # measured on NIM-494: it stayed green with the clamp and without it, so it
+  # gated nothing — the very defect class NIM-481 is about. Reproducing it needs
+  # libfaketime, which is not worth a dependency for a cosmetic column.
   elapsed=$((SECONDS - started))
+  [ "${elapsed}" -ge 0 ] || elapsed=0
 
   names+=("${tier}")
   outcomes+=("${outcome}")

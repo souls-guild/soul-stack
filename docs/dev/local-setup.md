@@ -167,7 +167,14 @@ only neighbour is itself.)
 Ways out, narrowest blast radius first:
 
 ```sh
-# 1. named stand only — drop this stand's database, nobody else is touched
+# 1. named stand only — drop this stand's database, nobody else is touched.
+#    Stop this stand's keeper first. Postgres refuses to drop a database that
+#    still has a session on it ("is being accessed by other users"), and a
+#    restarted Vault leaves the keeper running — which is exactly the state you
+#    are in when the guard fires.
+#    The container is named after the compose project: soul-stack-postgres on the
+#    shared one, soul-stack-<slug>-postgres for a stand with DEDICATED_INFRA=1
+#    *and* a slug. provision prints the name that is true for you.
 docker exec -i soul-stack-postgres psql -U keeper -d keeper \
   -c 'DROP DATABASE "keeper_<slug>"' && DEV_STAND=<slug> make dev-provision
 
@@ -184,10 +191,21 @@ DEV_VAULT_REISSUE_ANCHORS=1 make dev-provision
 #    whichever is true for you.
 ```
 
-A first-ever stand is not affected: with the registries empty there is nothing
-to lose, and provision generates the anchors silently as before. If Postgres is
-unreachable the guard cannot tell a first-ever stand from a wiped Vault, so it
-warns and generates rather than blocking a machine that has nothing on it yet.
+A first-ever stand is unaffected **on a machine with no neighbours**: with every
+registry empty there is nothing to lose, so provision says so
+(`vault trust anchors missing, but no registry depends on them yet - generating`)
+and goes ahead, exactly as before the guard existed. On a shared host a brand-new stand can still be refused, and
+that is the guard working rather than a bug. `soul_seeds` is counted across every
+`keeper*` database because `pki/` is one engine per Vault, so after a
+`docker restart <prefix>-vault` on a host where somebody else already has souls,
+the next `DEV_STAND=fresh make dev-provision` stops: this stand's own registries
+are empty, but the root their seeds chain to is gone, and the root provision
+would generate here is that same one. The refusal then says to ask whoever runs
+the other stand instead of offering to drop a database — dropping yours would
+not put their root back. Expect this on the first contact with the guard, since
+standing up a new stand is what most people do first. If Postgres is unreachable
+the guard cannot tell a first-ever stand from a wiped Vault, so it warns and
+generates rather than blocking a machine that has nothing on it yet.
 
 ## Parallel stands (`DEV_STAND`)
 

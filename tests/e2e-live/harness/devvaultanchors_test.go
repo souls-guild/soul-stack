@@ -125,7 +125,16 @@ func TestDevProvisionRefusesToMintAnchorsUnderALiveRegistry(t *testing.T) {
 			// `make dev-reset` takes the shared Postgres volume down with it — every
 			// stand on the host. A stand with its own database has a way out that costs
 			// only its own, and that has to be the one offered first.
-			wantAny: []string{`DROP DATABASE "keeper_nim365"`, "no other stand touched", "WIPES THE SHARED POSTGRES VOLUME"},
+			//
+			// The DROP is also the one command here that fails when followed literally:
+			// the guard fires on a restarted Vault, which leaves the keeper connected,
+			// and Postgres will not drop a database that still has a session on it. An
+			// operator who hits "is being accessed by other users" at that point reads
+			// it as the advice being wrong, so the advice has to carry the step.
+			wantAny: []string{
+				`DROP DATABASE "keeper_nim365"`, "no other stand touched",
+				`Stop this stand's keeper first`, "WIPES THE SHARED POSTGRES VOLUME",
+			},
 		},
 		{
 			// The same refusal on a stand that owns its infrastructure. `dev-reset` there
@@ -284,10 +293,23 @@ func TestDevProvisionRefusesToMintAnchorsUnderALiveRegistry(t *testing.T) {
 	}
 }
 
+// anchorGenerationMarkers are the lines dev/provision.sh logs at every step that writes
+// something the guard reads: both KV keys, the pki engine and the root itself. The
+// ordering is measured against all four rather than against whichever comes first today.
+// Pinned on one marker, this test stays green through a reorder that breaks the guard —
+// move the pki blocks above the jwt key and the call, still ahead of the jwt line, runs
+// after a root has already been reissued. It would then rest on a fact it never checks.
+var anchorGenerationMarkers = []string{
+	"generating and writing ${VAULT_KV_PREFIX}/jwt-signing-key",
+	"generating and writing ${VAULT_KV_PREFIX}/sigil-signing-key",
+	"enabling pki/ secrets engine",
+	"generating pki root certificate",
+}
+
 // TestDevProvisionChecksAnchorsBeforeItGeneratesThem pins the one ordering the guard
 // depends on. It reads registries to decide whether generating is safe, so it is worth
-// nothing at all if it runs after the step that generates — the anchors would already be
-// new by the time it looked, and it would find them present and skip.
+// nothing at all if it runs after any step that generates — that anchor would already be
+// new by the time it looked, and it would find it present and skip.
 func TestDevProvisionChecksAnchorsBeforeItGeneratesThem(t *testing.T) {
 	code := provisionScriptSource(t)
 
@@ -297,15 +319,24 @@ func TestDevProvisionChecksAnchorsBeforeItGeneratesThem(t *testing.T) {
 			"uncalled one leaves provision exactly as silent as before NIM-365",
 			devProvisionScript, vaultAnchorGuardFunc)
 	}
-	generate := strings.Index(code, "generating and writing ${VAULT_KV_PREFIX}/jwt-signing-key")
-	if generate < 0 {
-		t.Fatalf("%s no longer logs the jwt-signing-key generation this ordering is measured against — "+
-			"re-anchor the check on whatever writes the key now", devProvisionScript)
-	}
-	if call > generate {
-		t.Fatalf("%s runs after the jwt-signing-key is generated. By then Vault holds a fresh anchor, the "+
-			"guard sees it as present and skips, and the tokens it exists to protect are already dead",
-			vaultAnchorGuardFunc)
+
+	for _, marker := range anchorGenerationMarkers {
+		switch n := strings.Count(code, marker); {
+		case n == 0:
+			t.Errorf("%s no longer logs %q, so this ordering is measured against a line that is gone — "+
+				"re-anchor it on whatever writes that anchor now", devProvisionScript, marker)
+		case n > 1:
+			// Two sites make a single index meaningless: the earlier one can sit after the
+			// guard while the later one does not, and the check would pass on whichever it
+			// happened to find first.
+			t.Errorf("%s logs %q from %d places, so no one position says when that anchor is written — "+
+				"give the step a single log line, or measure each site separately here",
+				devProvisionScript, marker, n)
+		case call > strings.Index(code, marker):
+			t.Errorf("%s runs after %s already logged %q. By then Vault holds a fresh anchor, the guard "+
+				"sees it as present and skips, and what it exists to protect is already orphaned",
+				vaultAnchorGuardFunc, devProvisionScript, marker)
+		}
 	}
 }
 

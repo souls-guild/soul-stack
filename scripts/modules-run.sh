@@ -304,9 +304,8 @@ for i in "${!modules[@]}"; do
   # correction, and under WSL2 a resume — so the difference can come out
   # negative. Seen twice while this script was being written: `PASS proxmox -1s`
   # in a `make test-plugins` table, and `PASS check-gate -1s` in gate.sh's own
-  # summary, which computes its column the same unclamped way (gate.sh:107,113)
-  # and is the most-read table in the repo. That one is not fixed here — it is
-  # somebody else's file and has its own ticket (NIM-611). The column is an
+  # summary, which is the most-read table in the repo and computed the same
+  # unclamped way until NIM-611 put this clamp there too. The column is an
   # integer-second aid, not a measurement, and clamping costs it nothing;
   # printing a negative duration costs the whole table its credibility, which
   # for a reporter whose only job is to be believed is the expensive half.

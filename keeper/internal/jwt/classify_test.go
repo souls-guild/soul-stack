@@ -7,11 +7,17 @@ import (
 )
 
 // TestClassifyVerifyErr — covers every branch of the switch in
-// ClassifyVerifyErr. Source of truth is verifier.go: the classifier only
-// distinguishes expired and invalid-issuer; everything else (malformed,
-// bad-signature, not-yet-valid, arbitrary error) collapses by design into
-// one generic detail "invalid token" — a defense against oracle attacks via
+// ClassifyVerifyErr. Source of truth is verifier.go: the classifier
+// distinguishes expired, clock-skewed and invalid-issuer; everything else
+// (malformed, bad-signature, arbitrary error) collapses by design into one
+// generic detail "invalid token" — a defense against oracle attacks via
 // distinguishing 401 causes.
+//
+// "Every branch" is a claim this test has to keep earning. ErrClockSkew was
+// added by NIM-621 without a case here, and the docstring went on saying the
+// classifier only knew two causes while the switch knew three — the exact
+// drift the contract on the publicDetail constants exists to prevent. A new
+// sentinel means a new row below, in the same change that adds it.
 //
 // Sentinel errors are checked both directly and wrapped
 // (fmt.Errorf("%w: …")), because Verify returns them wrapped.
@@ -35,6 +41,18 @@ func TestClassifyVerifyErr(t *testing.T) {
 			name: "expired token wrapped",
 			err:  fmt.Errorf("%w: extra context", ErrExpiredToken),
 			want: publicDetailExpiredToken,
+		},
+		{
+			name: "clock skew",
+			err:  ErrClockSkew,
+			want: publicDetailClockSkew,
+		},
+		{
+			// Verify wraps it with the library's message, and the wrapped form is
+			// the only one a caller ever sees.
+			name: "clock skew wrapped (as Verify returns it)",
+			err:  fmt.Errorf("%w: %s", ErrClockSkew, "token used before issued"),
+			want: publicDetailClockSkew,
 		},
 		{
 			name: "invalid issuer",
