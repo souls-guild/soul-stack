@@ -25,6 +25,7 @@ type fakeDoer struct {
 	status     int
 	gotHeaders stdhttp.Header
 	gotMethod  string
+	gotBody    string
 	calls      int
 	err        error
 }
@@ -33,6 +34,13 @@ func (d *fakeDoer) Do(req *stdhttp.Request) (*stdhttp.Response, error) {
 	d.calls++
 	d.gotMethod = req.Method
 	d.gotHeaders = req.Header.Clone()
+	if req.Body != nil {
+		body, readErr := io.ReadAll(req.Body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		d.gotBody = string(body)
+	}
 	if d.err != nil {
 		return nil, d.err
 	}

@@ -742,6 +742,66 @@
               "description": "Target URL (https:// only; SSRF-guard on the resolved IP)."
             }
           }
+        },
+        "request": {
+          "description": "One mutating HTTP API request (POST/PUT/PATCH/DELETE); success reports changed=true. ADR-015/ADR-016, https-only.",
+          "input": {
+            "allow_http": {
+              "type": "bool",
+              "description": "Allow http:// (lift https-only); file:// remains forbidden. Does not open up SSRF (default false)."
+            },
+            "allow_private": {
+              "type": "bool",
+              "description": "Lift the SSRF-guard for an explicitly trusted internal API (default false)."
+            },
+            "body": {
+              "type": "string",
+              "description": "Optional request body. The response body, not this request body, is returned in output.body."
+            },
+            "content_type": {
+              "type": "string",
+              "description": "Optional Content-Type header; when set, overrides headers[Content-Type]."
+            },
+            "headers": {
+              "type": "map",
+              "description": "HTTP headers (all values are sensitive-by-construction; output contains keys only).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "insecure_skip_verify": {
+              "type": "bool",
+              "description": "Disable TLS verification (self-signed / internal CA); MITM risk (default false)."
+            },
+            "method": {
+              "type": "string",
+              "required": true,
+              "description": "Explicit mutating HTTP method POST|PUT|PATCH|DELETE; GET/HEAD are forbidden.",
+              "enum": [
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "status_codes": {
+              "type": "list",
+              "description": "Expected response codes (list of int); defaults to [200].",
+              "items": {
+                "type": "int"
+              }
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Request timeout (Soul Stack duration, e.g. \"30s\").",
+              "format": "duration"
+            },
+            "url": {
+              "type": "string",
+              "required": true,
+              "description": "Target URL (https:// only; SSRF-guard on the resolved IP)."
+            }
+          }
         }
       }
     },

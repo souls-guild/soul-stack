@@ -7,8 +7,8 @@ import (
 	corehttp "github.com/souls-guild/soul-stack/soul/internal/coremod/http"
 )
 
-// TestHTTP_NotPlanReadSafe — core.http is a verb module (probe), changed is
-// structurally always false. The module.PlanReadSafe marker is NOT
+// TestHTTP_NotPlanReadSafe — core.http is a verb module (probe/request), not a
+// declarative desired-state module. The module.PlanReadSafe marker is NOT
 // implemented → the host applies default-deny (FAILED `plan.unsupported`) on
 // dry_run.
 func TestHTTP_NotPlanReadSafe(t *testing.T) {

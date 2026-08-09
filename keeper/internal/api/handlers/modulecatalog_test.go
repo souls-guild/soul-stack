@@ -265,6 +265,26 @@ func TestModuleCatalog_ListTyped_ErrandSafeFilter(t *testing.T) {
 		if !it.ErrandSafe {
 			t.Errorf("%q ended up in errand_safe filter without the flag", it.Name)
 		}
+		if it.Name == "core.http" {
+			if len(it.States) != 1 || it.States[0] != "probe" {
+				t.Errorf("errand-safe core.http states=%v, want exact [probe]", it.States)
+			}
+		}
+	}
+}
+
+func TestModuleCatalog_ListTyped_FullHTTPKeepsRequest(t *testing.T) {
+	h := NewModuleCatalogHandler(nil, nil)
+	resp, err := h.ListTyped(context.Background(), false)
+	if err != nil {
+		t.Fatalf("ListTyped: %v", err)
+	}
+	httpItem, ok := findItem(resp.Items, "core.http")
+	if !ok {
+		t.Fatal("core.http missing")
+	}
+	if len(httpItem.States) != 2 || httpItem.States[0] != "probe" || httpItem.States[1] != "request" {
+		t.Fatalf("full core.http states=%v, want [probe request]", httpItem.States)
 	}
 }
 

@@ -5,6 +5,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
+### Added
+
+- Soul-side `core.http.request` for one explicit POST/PUT/PATCH/DELETE API
+  mutation with the existing HTTP guards, a final post-redaction 64 KiB
+  diagnostic response cap, echoed-header-value redaction, no redirect replay,
+  and `changed=true` on an expected status. `core.http.probe` remains
+  GET/HEAD-only and read-only; scenario DSL
+  owns retries. The first contract fixture covers Consul Agent register,
+  maintenance and deregister on loopback with explicit `allow_http` and
+  `allow_private`.
+
 ### Upgrade notes
 
 Read this before upgrading a cluster that already has roles bound to operators.

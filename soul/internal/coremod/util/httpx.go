@@ -132,6 +132,12 @@ type HTTPClientOpts struct {
 	// https→http (paired with allow_http at the module level). false
 	// (default): non-https downgrade is rejected (netguard).
 	AllowHTTPRedirect bool
+	// DisableRedirects stops after the first wire response by returning
+	// http.ErrUseLastResponse from CheckRedirect. This is not a security-guard
+	// opt-out: mutating callers use it to guarantee that one Do call cannot be
+	// expanded into repeated 307/308 requests by net/http. Read-only fetchers
+	// leave it false and retain the normal guarded redirect policy.
+	DisableRedirects bool
 }
 
 // GuardWarnings builds a list of warning strings for weakened HTTP-fetch
@@ -196,6 +202,8 @@ func WarnHost(rawURL string) string {
 // guard is disabled, dial proceeds normally. AllowHTTPRedirect=true permits a
 // downgrade hop (paired with allow_http). InsecureSkipVerify=true disables TLS
 // chain verification (self-signed). Each flag weakens an independent guard.
+// DisableRedirects is orthogonal: it retains the first response and is used by
+// mutating callers to prevent redirect replay.
 //
 // Shared by core-modules doing HTTP; do not duplicate locally.
 func NewHTTPClient(opts HTTPClientOpts) *http.Client {
@@ -208,7 +216,11 @@ func NewHTTPClient(opts HTTPClientOpts) *http.Client {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	checkRedirect := CheckRedirect
-	if opts.AllowHTTPRedirect {
+	if opts.DisableRedirects {
+		checkRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	} else if opts.AllowHTTPRedirect {
 		checkRedirect = checkRedirectAllowingHTTP(MaxRedirects)
 	}
 	return &http.Client{

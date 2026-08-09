@@ -150,6 +150,24 @@ func TestHumaModule_List_ErrandSafeFilter(t *testing.T) {
 	if got, want := remarshalModule(t, rec.Body.Bytes()), remarshalModule(t, legacyBytes); got != want {
 		t.Errorf("errand_safe filter drift:\n got  = %s\n want = %s", got, want)
 	}
+	var wire struct {
+		Items []struct {
+			Name   string   `json:"name"`
+			States []string `json:"states"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &wire); err != nil {
+		t.Fatalf("decode errand-safe wire: %v", err)
+	}
+	for _, item := range wire.Items {
+		if item.Name == "core.http" {
+			if len(item.States) != 1 || item.States[0] != "probe" {
+				t.Fatalf("public errand-safe core.http states=%v, want exact [probe]", item.States)
+			}
+			return
+		}
+	}
+	t.Fatal("public errand-safe catalog is missing core.http")
 }
 
 func TestHumaModule_List_RBACDeny_403(t *testing.T) {

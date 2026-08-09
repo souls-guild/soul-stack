@@ -1,19 +1,18 @@
-// Package http implements the core module `core.http` ([ADR-015]) — a
-// read-probe for an HTTP endpoint (health-check / API-readiness / version
-// read). A declarative HTTP read-probe, deliberately narrowed to reads
-// only.
+// Package http implements the Soul-side `core.http` module ([ADR-015]) —
+// read-only HTTP probes and explicit mutating HTTP API requests.
 //
-// Verb MVP:
+// Verbs:
 //   - probe: GET/HEAD request to url, response returned via register
 //     (status / body / elapsed_ms / headers_keys). Host state is never
-//     mutated (see below), so this is a verb form, not declarative state.
+//     mutated;
+//   - request: one explicit POST/PUT/PATCH/DELETE request. A successful
+//     response reports changed=true. Idempotency and retry belong to the
+//     caller's API/scenario contract; the module never retries internally.
 //
 // changed semantics:
-//   - changed = false ALWAYS, by construction: a read-probe never mutates
-//     host state. Precedent: `core.exec.run` (module reports facts,
-//     `changed_when:` at the scenario level interprets them).
-//
-// Idempotent by nature (no-op on state).
+//   - probe: changed=false always, by construction;
+//   - request: changed=true only when the one explicit mutating response has
+//     a status listed in status_codes.
 //
 // Security ([ADR-016] "security first"). Secure-by-default: all three
 // guards are armed, each lifted only via its own explicit opt-out param
@@ -27,21 +26,51 @@
 //     Lift for legitimate internal health checks via `allow_private: true`;
 //   - TLS verification (default): system trust store. Lift for self-signed/
 //     internal CA via `insecure_skip_verify: true` (MITM risk);
-//   - redirects to non-https are blocked (util.CheckRedirect, downgrade
-//     protection); with allow_http, an https→http downgrade hop is allowed
-//     (AllowHTTPRedirect);
+//   - probe redirects to non-https are blocked (util.CheckRedirect, downgrade
+//     protection); with allow_http, its https→http downgrade hop is allowed.
+//     request stops at the first response so 307/308 cannot replay a mutation;
 //   - headers are sensitive-by-construction ([ADR-010] §7.4): values are
 //     never logged or returned (output only lists the requested header
-//     keys).
+//     keys). An echoed value is masked by BYTE COVERAGE — every occurrence of
+//     every sensitive value marks its bytes, and each maximal covered run
+//     becomes one mask. Not per-occurrence replacement: occurrences can
+//     overlap (two values sharing a boundary byte, or one value overlapping
+//     itself when its first byte equals its last), and a left-to-right
+//     replacer has already consumed past the second occurrence's start, so it
+//     leaves up to len(value)-1 plaintext bytes of a credential in the body.
+//     Header values are masked BEFORE vault-refs, so a value that itself
+//     carries an unresolved ref is still matched whole.
+//     A truncated response body additionally drops a trailing fragment of a
+//     header value: a cut lands before redaction runs, so a straddling value
+//     would survive as a plaintext prefix. There are THREE cuts, and each is
+//     repaired — the byte cap, the rune trim right after it, and the output
+//     cap that masking can push the text back over. The first two are
+//     repaired while the bytes are still raw, before UTF-8 repair, because a
+//     fragment ending inside a multi-byte rune is rewritten to U+FFFD and
+//     cannot be found afterwards. Both cuts descend together over ONE
+//     precomputed fragment table; the table is never rebuilt mid-descent,
+//     because the rune trim removes one byte per step and the response body
+//     is endpoint-controlled — a per-step rescan is a remote CPU sink.
+//     Only an INCOMPLETE value is dropped: one that ends whole at the cut is
+//     left to the masker, which is sound precisely because coverage unions
+//     overlapping occurrences. The descent repeats until the cut is clean,
+//     because removing one fragment can uncover another underneath it.
+//     The request body param is not covered: it is payload, not a credential
+//     (see docs/module/core/http/README.md).
+//
+// One Apply opens exactly one Do call. The one transport-level exception this
+// module does not intercept: net/http treats a request carrying
+// Idempotency-Key / X-Idempotency-Key as replayable and may resend it once
+// when a pooled connection dies before any response byte. That is opt-in by
+// the author — the header's whole meaning is "safe to repeat" — and silently
+// stripping it would contradict them.
 //
 // Lifting any guard returns a warning in output (`warnings` field,
 // core.repo/core.url convention): the operator sees the guard was weakened.
 // The warning carries only the host (never the full URL or headers).
 //
-// Mutating HTTP (POST/PUT/PATCH/DELETE) is deliberately deferred post-MVP
-// to a separate ADR extension (likely `core.http.request`), which will also
-// settle the changed contract for mutations. Verb `probe` stays strictly
-// read-only.
+// Neither verb executes a subprocess or writes the filesystem. The module's
+// only declared capability is network_outbound.
 //
 // [ADR-010]: docs/adr/0010-templating.md
 // [ADR-015]: docs/adr/0015-core-modules-mvp.md
@@ -66,22 +95,30 @@ import (
 // Name is the module's canonical address.
 const Name = "core.http"
 
-// defaultTimeout is the default probe timeout when param timeout is unset.
-// Shorter than core.url's (300s): probe is a health-check, not a download.
+// defaultTimeout is the default per-request timeout when param timeout is unset.
+// Shorter than core.url's (300s): this module talks to APIs, not downloads.
 const defaultTimeout = 30 * time.Second
 
-// defaultMethod is the default HTTP method. GET/HEAD only (read-only).
-const defaultMethod = http.MethodGet
+// defaultProbeMethod is the default method of the backward-compatible probe.
+// request deliberately has no default: mutation must always be explicit.
+const defaultProbeMethod = http.MethodGet
 
 // maxBodyBytes hard-caps the readable response body (OOM protection on large
 // responses). Bytes beyond the limit are discarded; output sets truncated=true.
 const maxBodyBytes = 64 * 1024
 
-// allowedMethods are the read-only methods allowed by verb probe. Mutating
-// methods (POST/PUT/PATCH/DELETE) are deliberately absent — see package doc.
-var allowedMethods = map[string]struct{}{
+// probeMethods and requestMethods keep the read/mutate boundary structural:
+// no state accepts a method from the other set.
+var probeMethods = map[string]struct{}{
 	http.MethodGet:  {},
 	http.MethodHead: {},
+}
+
+var requestMethods = map[string]struct{}{
+	http.MethodPost:   {},
+	http.MethodPut:    {},
+	http.MethodPatch:  {},
+	http.MethodDelete: {},
 }
 
 // Module implements sdk/module.SoulModule for core.http.
@@ -93,7 +130,8 @@ var allowedMethods = map[string]struct{}{
 //
 // NewClient is a field so unit tests can substitute a factory returning a
 // fake HTTPDoer with no network access (and assert which HTTPClientOpts the
-// module called it with).
+// module called it with). request additionally sets DisableRedirects, which
+// is a mutation-cardinality invariant rather than a guard opt-out.
 type Module struct {
 	// NewClient builds the HTTP client from the task's opt-out flags. In
 	// production: util.NewHTTPClient (system TLS trust store, redirect
@@ -111,16 +149,31 @@ func New() *Module {
 // Validate is NOT fully delegated to util.ValidateAgainstManifest (unlike
 // core.exec): beyond known-state + required, core.http has semantic checks
 // the manifest DSL can't express — URL scheme (ValidateFetchURL, https-only
-// by default, http(s) with allow_http), method enum (GET|HEAD), timeout
-// duration parsing. These are critical (ADR-016: SSRF/http-downgrade/mutating
-// methods are rejected at Validate). Bool-flag type checks (allow_private/
+// by default, http(s) with allow_http), the disjoint per-verb method sets,
+// and timeout duration parsing. These are critical (ADR-016: SSRF/http-
+// downgrade and the read/mutate boundary are rejected at Validate). Bool-flag type checks (allow_private/
 // allow_http/insecure_skip_verify) are here too, so a bad type fails before
-// Apply. known-state/required intentionally duplicate http.yaml — no single
+// Apply. known-state/required intentionally duplicate the manifest — no single
 // source is possible without these semantics in the DSL.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
-	if req.State != "probe" {
-		errs = append(errs, fmt.Sprintf("unknown verb %q (want probe)", req.State))
+	switch req.State {
+	case "probe":
+		if _, merr := normalizedProbeMethod(req.Params); merr != nil {
+			errs = append(errs, merr.Error())
+		}
+	case "request":
+		if _, merr := normalizedRequestMethod(req.Params); merr != nil {
+			errs = append(errs, merr.Error())
+		}
+		if _, berr := util.OptStringParam(req.Params, "body"); berr != nil {
+			errs = append(errs, berr.Error())
+		}
+		if _, cerr := util.OptStringParam(req.Params, "content_type"); cerr != nil {
+			errs = append(errs, cerr.Error())
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("unknown verb %q (want probe|request)", req.State))
 	}
 
 	// allow_http is checked before url: its value determines which scheme
@@ -137,8 +190,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		errs = append(errs, serr.Error())
 	}
 
-	if _, merr := normalizedMethod(req.Params); merr != nil {
-		errs = append(errs, merr.Error())
+	if _, herr := util.OptStringMapParam(req.Params, "headers"); herr != nil {
+		errs = append(errs, herr.Error())
 	}
 
 	if _, serr := util.OptIntSliceParam(req.Params, "status_codes"); serr != nil {
@@ -164,47 +217,51 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan is a no-op (no PlanReadSafe). core.http is a verb module (probe): an
-// HTTP endpoint read-probe has no desired host state to diff via pure-read
-// (changed is always false by construction, see package doc). Drift per
-// ADR-031 is undefined here. The host applies default-deny: dry_run for
-// core.http returns FAILED `plan.unsupported` — a deliberate refusal, not a
-// false "no drift". probe itself is read-only by nature but outside the
-// ADR-031 Plan/Apply contract.
+// Plan is a no-op (no PlanReadSafe). core.http is a verb module: neither a
+// probe nor an imperative mutation has desired host state to diff. The host
+// therefore applies default-deny for dry_run instead of reporting a false clean.
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
 
-// ErrandReadSafe is marker [sdkmodule.ErrandReadSafe] (ADR-033 §2): probe is
-// a read-only HTTP request that never mutates host state (`changed = false`
-// by construction, see package doc). Safe for ad-hoc invocation via Errand,
-// so the module explicitly opts into the Errand-runner whitelist. Verb
-// modules core.cmd.shell / core.exec.run stay in the hardcoded list
-// (imperative by design); this declares the pattern for future read-safe
-// core additions and symmetry with the sdk/module interface contract.
-func (m *Module) ErrandReadSafe() {}
-
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	if req.State != "probe" {
+	switch req.State {
+	case "probe":
+		return m.applyProbe(stream, req)
+	case "request":
+		return m.applyRequest(stream, req)
+	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown verb %q", req.State))
 	}
-	return m.applyProbe(stream, req)
 }
 
-// normalizedMethod returns the probe HTTP method: empty param → defaultMethod;
-// otherwise the value validated against allowedMethods. Returns an error for
-// an unknown/mutating method. Compared upper-cased (get → GET).
-func normalizedMethod(params *structpb.Struct) (string, error) {
+// normalizedProbeMethod returns the read-only probe method: empty → GET;
+// otherwise GET|HEAD, compared upper-cased for backward compatibility.
+func normalizedProbeMethod(params *structpb.Struct) (string, error) {
 	raw, err := util.OptStringParam(params, "method")
 	if err != nil {
 		return "", err
 	}
 	if raw == "" {
-		return defaultMethod, nil
+		return defaultProbeMethod, nil
 	}
 	m := strings.ToUpper(raw)
-	if _, ok := allowedMethods[m]; !ok {
+	if _, ok := probeMethods[m]; !ok {
 		return "", fmt.Errorf("param %q: unsupported method %q (want GET|HEAD)", "method", raw)
+	}
+	return m, nil
+}
+
+// normalizedRequestMethod requires an explicit mutating method. GET/HEAD are
+// rejected here even though net/http could send them: probe owns all reads.
+func normalizedRequestMethod(params *structpb.Struct) (string, error) {
+	raw, err := util.StringParam(params, "method")
+	if err != nil {
+		return "", err
+	}
+	m := strings.ToUpper(raw)
+	if _, ok := requestMethods[m]; !ok {
+		return "", fmt.Errorf("param %q: unsupported method %q (want POST|PUT|PATCH|DELETE)", "method", raw)
 	}
 	return m, nil
 }

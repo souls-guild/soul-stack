@@ -2,6 +2,7 @@ package errandrunner
 
 import (
 	"fmt"
+	"strings"
 
 	sdkmodule "github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
@@ -25,10 +26,12 @@ const ReasonDryRunUnsupported = "errand_dry_run_unsupported"
 // dryRun=false — Apply is called (ADR-033 §2):
 //  1. verb-shell modules ([coremanifest.IsVerbShell] — shell/exec, imperative
 //     by design), allowed by name WITHOUT a marker check;
-//  2. [sdkmodule.ErrandReadSafe] — the module declares its APPLY safe for
+//  2. `core.http.probe` — the read-only state of a mixed module whose sibling
+//     `core.http.request` mutates and therefore cannot use a module-wide marker;
+//  3. [sdkmodule.ErrandReadSafe] — the module declares its APPLY safe for
 //     ad-hoc invocation (BaseModule does NOT implement this interface, so a
 //     custom plugin on BaseModule defaults to deny);
-//  3. otherwise reject.
+//  4. otherwise reject.
 //
 // dryRun=true — Plan is called and Apply is NOT reached. The condition is
 // [sdkmodule.PlanReadSafe]: the module declares its Plan a genuine pure read
@@ -66,6 +69,17 @@ func IsAllowed(fullName string, mod sdkmodule.SoulModule, dryRun bool) (bool, st
 		return true, ""
 	}
 	if mod == nil {
+		return false, notAllowedReason(fullName)
+	}
+	// ErrandReadSafe is module-wide, while core.http now deliberately mixes a
+	// read-only probe with a mutating request. Admit the exact safe state, then
+	// default-deny every sibling BEFORE consulting the marker. This structural
+	// boundary means accidentally re-adding a module-wide marker can never open
+	// request (or a future core.http state) to ad-hoc mutation.
+	if fullName == "core.http.probe" {
+		return true, ""
+	}
+	if strings.HasPrefix(fullName, "core.http.") {
 		return false, notAllowedReason(fullName)
 	}
 	if _, ok := mod.(sdkmodule.ErrandReadSafe); ok {

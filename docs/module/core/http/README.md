@@ -1,148 +1,200 @@
 # core.http
 
-Read-probe HTTP endpoint (health-check / API-readiness / read version).
-**Soul-side**, statically built into the `soul` binary. Implementation -
-[`soul/internal/coremod/http/http.go`](../../../../soul/internal/coremod/http/http.go)
-(dispatcher + params validation) and
-[`soul/internal/coremod/http/probe.go`](../../../../soul/internal/coremod/http/probe.go)
-(verb `probe`). The scope is deliberately narrowed down to
-**readings**: "doing well" instead of muddy permissiveness.
+Soul-side HTTP API module built into the `soul` binary. It returns endpoint
+responses to `register`; it never writes response bytes to disk.
 
-`probe` is a **verb-form**, not a declarative-state: it does not result in anything
-state, and returns facts about the endpoint in `register`. Mutating HTTP
-(POST/PUT/PATCH/DELETE) deliberately postponed post-MVP by a separate ADR extension
-(probably `core.http.request`) - then the changed contract for
-mutations. `probe` remains strictly read-only.
+Implementation:
 
-## Read-only: doesn't change anything
+- [`http.go`](../../../../soul/internal/coremod/http/http.go) — dispatch and validation;
+- [`probe.go`](../../../../soul/internal/coremod/http/probe.go) — shared transport/response contract and read-only `probe`;
+- [`request.go`](../../../../soul/internal/coremod/http/request.go) — mutating `request`.
 
-`changed = false` **always**, constructive and non-configurable - read-probe not
-changes the state of the host. Use case - `core.exec.run`: the module gives facts, but
-interprets them `changed_when:` at the scenario level. Idempotency -
-by nature (no-op for state).
+## Verbs
 
-## States
-
-| State (verb) | Destination | `changed` |
+| Verb | Methods | Semantics |
 |---|---|---|
-| `probe` | One GET/HEAD request to `url`; response (status/body/elapsed_ms/headers_keys) is returned in `register`. | `false` always (read-only). |
+| `probe` | `GET` / `HEAD` (default `GET`) | Strictly read-only; `changed=false` always. Backward-compatible with the original core.http contract. |
+| `request` | `POST` / `PUT` / `PATCH` / `DELETE` (required) | Exactly one mutating API call; an expected response reports `changed=true`. GET/HEAD are rejected. |
 
-## probe — params
+`request` does not hide retries. API idempotency is the caller's contract, and
+additional attempts must be declared with scenario `retry`/`until` (or guarded
+by a prior probe/`when`).
+
+## Parameters
+
+Both verbs accept:
 
 | Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `url` | string | required | Target URL. **By default, only `https://`** (remove before `http(s)` - `allow_http`; `file://` is always disabled). See "Security". |
-| `method` | string | optional (default `GET`) | HTTP method. Only read-only `GET` / `HEAD` are allowed (the comparison is case-insensitive, `get` → `GET`). Mutating methods are rejected on `Validate`. `HEAD` does not read the body. |
-| `headers` | map | optional | Request headers. **Sensitive-by-construction** ([ADR-010 §7.4](../../../templating.md)): values ​​are never logged and do not end up in output - only the list of **keys** (`headers_keys`) is given in output. |
-| `status_codes` | list of ints | optional (default `[200]`) | A set of expected status codes. Actual status out of set → step `failed` (but with output attached for diagnostics). |
-| `timeout` | string (duration) | optional (default `30s`) | Request timeout in convention `duration` Soul Stack (`time.ParseDuration` + suffix `<N>d`). Must be positive. Shorter than `core.url` (health-check, not download). |
-| `allow_private` | bool | optional (default `false`) | Removes **SSRF-guard** for legitimate internal health-check (see "Security"). |
-| `allow_http` | bool | optional (default `false`) | Removes **https-only**: allows `http://` (downgrade redirect https→http is also allowed). `file://` remains prohibited. **Not** opens SSRF - dial-guard lives separately (orthogonal to `allow_private`). |
-| `insecure_skip_verify` | bool | optional (default `false`) | Disables **TLS verification** (self-signed / internal CA). MITM risk - platoon only for a trusted internal endpoint. Orthogonal to other flags. |
+| `url` | string | required | Target URL. HTTPS only unless `allow_http: true`; only HTTP(S) schemes are accepted. |
+| `headers` | map of string | optional | Request headers. Every value is sensitive-by-construction; only keys can appear in output. |
+| `status_codes` | list of int | optional, `[200]` | Accepted response statuses. A mismatch fails the step but keeps response diagnostics. An empty list also falls back to `[200]`. |
+| `timeout` | duration string | optional, `30s` | Positive Soul Stack duration (`250ms`, `30s`, `2m`, `<N>d`). |
+| `allow_private` | bool | optional, `false` | Lift the resolved-IP SSRF guard for an explicitly trusted private/loopback target. |
+| `allow_http` | bool | optional, `false` | Allow a plaintext `http://` target. For probe it also permits HTTP redirect hops; request never follows redirects. Does not lift the private-IP guard. |
+| `insecure_skip_verify` | bool | optional, `false` | Disable TLS certificate verification. Does not lift the other guards. |
 
-All three flags are **secure-by-default + explicit opt-out**: each weakens a separate one
-independent circuit, removing one does not affect the others. When cocking any
-of these, probe puts `warnings` in the output field (see "Output / register").
+`probe` additionally accepts optional `method` (`GET` or `HEAD`, default
+`GET`). `request` instead requires an explicit `method` from
+`POST|PUT|PATCH|DELETE` and accepts:
 
-## Security
+| Param | Type | Required/default | Meaning |
+|---|---|---|---|
+| `body` | string | optional, empty | Request body. It is never echoed; `output.body` is the response body. |
+| `content_type` | string | optional | Sets `Content-Type`. When both forms are present, this value overrides `headers.Content-Type`. |
 
-[ADR-016](../../../adr/0016-parity-license.md) "safety first":
+## Response and failure contract
 
-All loops **secure-by-default**; each is filmed separately
-opt-out-param, and removing one **doesn't** weaken the others (the flags are orthogonal).
+Success returns:
 
-- **https-only** (default) - `http://` and `file://` are rejected
-(`util.ValidateFetchURL`). Remove to `http(s)` - `allow_http: true` (`file://`
-remains disabled even with `allow_http`).
-- **TLS** - system trust store (default). Disable verification for
-self-signed / internal CA - `insecure_skip_verify: true`. MITM risk:
-Arm only for a trusted internal endpoint.
-- **Downgrade-redirect protection** (default) - redirect to non-https is blocked.
-With `allow_http: true` downgrade-hop `https→http` is allowed (paired with
-resolved http); redirect to a non-`http(s)` scheme is always blocked.
-- **SSRF-guard** (default) - probe in metadata / loopback / RFC1918 / link-local
-blocked by actually resolved IP (closes direct SSRF to
-cloud-metadata IAM `169.254.169.254` and DNS-rebind). Remove for legitimate
-internal health-check — `allow_private: true`. **`allow_http` SSRF not
-opens** - dial-guard lives separately (http still won't reach
-metadata/loopback without `allow_private`).
-- **Warning when guard is removed** - when any opt-out flag is armed, the probe is placed
-in the output field `warnings` (one line per captured contour): the operator sees
-fact of weakening security. Only **host** is included in the warning (NOT the full URL -
-it can carry `path`/`query` with sensitive data, and NOT headers). Formulations:
-  `TLS verification disabled (insecure_skip_verify) for <host>` /
-  `plaintext http allowed (allow_http) for <host>` /
-  `SSRF-guard disabled (allow_private) for <host>`.
-- **Headers** — sensitive-by-construction (values are not logged, in output —
-keys only).
-- **Body Cap** - response reads no more than `64 KiB` (OOM protection); over the limit
-the body is discarded, `truncated: true` is put in output (the border is cut according to
-full UTF-8 rune).
-
-## Capabilities / side-effects
-
-- **Does not execute subprocesses.** Pure in-memory HTTP client
-([`probe.go`](../../../../soul/internal/coremod/http/probe.go) - `doer.Do`); in
-manifest ([`http` module](../../../../shared/coremanifest/mod_http.go)) declared
-only [`network_outbound`](../../../naming-rules.md#required_capabilities-enum)
-(outgoing request), **without** `exec_subprocess` and `fs_write_root`.
-- **Read-only, does not write anything.** Unlike [`core.url`](../url/README.md) (that
-downloads the file and writes to FS → declares `fs_write_root`), `probe` does not touch
-the file system in general: the response is read into memory and returned to `register`.
-`changed = false` is constructive (see "Read-only: doesn't change anything").
-- **Body Cap - `64 KiB`** (`maxBodyBytes`,
-[`probe.go`](../../../../soul/internal/coremod/http/probe.go)): OOM protection on
-great answer. Above the limit, the body is discarded (`truncated: true`), border
-is cut using the full UTF-8 rune.
-- **SSRF-guard, downgrade- and TLS-protection** on a network call (see "Security"):
-default client blocks metadata/loopback/RFC1918/link-local by resolved IP
-(`allow_private`), rejects the downgrade redirect (`allow_http`) and verifies
-TLS chain (`insecure_skip_verify`). The HTTP client is built **per-call** from these
-three orthogonal flags (`util.NewHTTPClient(util.HTTPClientOpts{…})`), not
-is selected from pre-assembled instances.
-
-## Output / register
-
-`{ status, body, truncated, elapsed_ms, changed: false }`; `headers_keys`
-is added only if `headers` (sorted list of keys,
-without values). `warnings` (list of strings) is added only if it was armed
-at least one opt-out flag (`allow_private` / `allow_http` / `insecure_skip_verify`)
-- one line per captured contour, with `host` (without the full URL and headers).
-
-The body (`body`) is given as is - sensitive - the whole thing is **not** considered
-(the health endpoint normally returns `{"status":"ok"}`, which is why the probe is needed).
-**only** vault-ref substrings are masked from the body (`vault:…` → `***MASKED***`),
-including ref inside JSON. An arbitrary plaintext secret in the body is **not** masked:
-the body is semi-trusted, and the operator should not put something in the probe endpoint that it should not
-glow. Binary/broken body bytes are converted to valid UTF-8 (replaced with
-U+FFFD) so that the probe returns a clean result rather than dropping a step.
-
-If the status is outside `status_codes`, the step is `failed`, but with the same output (actual
-status/body are needed for diagnostics). Transport error (DNS/TLS/timeout/
-blocked downgrade redirect) → `failed` without output.
-
-## Example
-
-```yaml
-- name: Wait until the service answers HTTP 200
-  module: core.http.probe
-  register: health
-  retry: { count: 5, delay: 3s }
-  params:
-    url: https://service.internal:8443/healthz
-    method: GET
-    status_codes: [200]
-    allow_private: true
+```text
+status, body, truncated, elapsed_ms, headers_keys, changed, warnings?
 ```
 
-(minimum valid example - there are no tasks for `core.http` in `examples/` yet)
+- Response `body` is capped at 64 KiB by bytes. The read stops at the cap, and
+  the final text is capped again after UTF-8 sanitation and secret redaction —
+  both can expand bytes. A cut rolls back to the last complete UTF-8 rune and
+  sets `truncated=true`.
+- A truncated `body` also drops a trailing fragment that is a prefix of an
+  effective header value. A cut precedes redaction, so a value straddling it
+  would otherwise survive as a plaintext prefix that the whole-value masker
+  cannot see. There are **three** cuts and every one of them is repaired: the
+  read cap, the roll-back to the last complete rune immediately after it, and
+  the output cap that masking can push the text back over. The first two are
+  repaired on the raw bytes, while the fragment is still byte-exact —
+  afterwards UTF-8 repair rewrites a cut rune into `U+FFFD` and makes the
+  fragment unrecognisable. Both descend together over one fragment table
+  computed once: the roll-back removes a single byte per step, and the
+  response body is chosen by the endpoint, so rebuilding the table per step
+  would hand it a CPU sink. Only an *incomplete* value is removed: one that
+  ends whole at the cut is left for the masker, since a value that ends with
+  its own prefix (`secretsecret`) would otherwise be cut in half and leak the
+  remainder. Removal repeats until the cut is clean, because dropping one
+  fragment can uncover another. Intact bodies are never trimmed this way.
+- Any echoed effective request-header values are masked, then vault-ref
+  substrings. Header values go first so that a value which itself carries an
+  unresolved `${ vault(...) }` ref is still matched as a whole rather than
+  rewritten in the middle and left with its leading bytes exposed.
+  Masking works on **byte coverage**, not on replacing one occurrence at a
+  time: every occurrence of every sensitive value marks its bytes, and each
+  maximal covered run collapses into a single `***MASKED***`. Two occurrences
+  can overlap — two values abutting on a shared byte, one value overlapping
+  itself when its first byte equals its last, or a cut landing mid-repeat and
+  manufacturing the shape — and a matcher that consumes left to right has
+  already moved past the second occurrence's start, leaving up to
+  `len(value)-1` plaintext bytes of a credential in the body. A side effect
+  worth knowing: adjacent occurrences merge into one mask, so the number of
+  masks in the output does not count the echoes.
+  The whole response body is not treated as secret, so an endpoint must not
+  return unrelated arbitrary plaintext secrets.
+- The request `body` param is deliberately **not** masked in the response.
+  Unlike a header value it is ordinary payload — usually the very document the
+  operator wants to read back — and masking it would blank out every echo of
+  it, down to a body as common as `{}`. Put secrets in headers, not in the
+  body, if they must not come back in `output.body`.
+- `headers_keys` is the sorted set of effective request-header names. Values
+  and the raw `headers` map are never returned. `Content-Type` supplied via
+  `content_type` is included.
+- `probe` success has `changed=false`; `request` success has `changed=true`.
+- A status outside `status_codes` returns `failed` with the same diagnostic
+  response and `changed=false`.
+- DNS/TLS/timeout failures return `failed` without response output. Probe also
+  reports a blocked/invalid redirect this way. Request never follows a
+  redirect: its first 3xx is handled like any other status against
+  `status_codes`.
+- Every lifted guard adds a host-only `warnings` entry. URL path/query, header
+  values, request body and tokens never enter warnings.
+
+## Security and capabilities
+
+The three guards are independent and armed by default:
+
+- scheme: HTTPS-only, lifted only by `allow_http`;
+- resolved-address SSRF guard: metadata, loopback, RFC1918 and link-local are
+  blocked, lifted only by `allow_private`;
+- TLS chain verification, lifted only by `insecure_skip_verify`.
+
+Probe redirects reuse the same scheme and resolved-IP policy. Request stops at
+the first response, so a 307/308 cannot replay a mutating method/body; scenario
+retry remains the only source of another mutation. Header values are
+sensitive-by-construction, including `Authorization`, cookies and
+`X-Consul-Token`; they are transmitted but redacted even if an endpoint or
+transport echoes them, and are excluded from module output, diagnostic
+messages and logs/audit events.
+
+One `Apply` opens exactly one `Do` call, and no redirect can expand it. Note
+one transport-level exception the module deliberately does not intercept: Go's
+`net/http` treats a request carrying `Idempotency-Key` or `X-Idempotency-Key`
+as replayable and may resend it once if a pooled connection dies before any
+response byte arrives. That is opt-in — the author has to set a header whose
+entire meaning is "this request is safe to repeat" — and stripping it would
+silently contradict the author. Scenario `retry` remains the only module-level
+source of another mutation.
+
+The manifest grants exactly `network_outbound`. The module executes no
+subprocess and performs no filesystem writes.
+
+Only exact state `core.http.probe` is admitted by the Errand runner.
+`core.http.request` is mutating and therefore default-deny on that ad-hoc
+contour.
+
+## Consul Agent examples
+
+Consul Agent on `127.0.0.1:8500` requires both explicit opt-outs:
+`allow_http: true` for plaintext HTTP and `allow_private: true` for loopback.
+Scenario retry controls any repeated mutation.
+
+Register a Redis exporter:
+
+```yaml
+- name: Register Redis exporter in the local Consul Agent
+  module: core.http.request
+  params:
+    url: http://127.0.0.1:8500/v1/agent/service/register?replace-existing-checks=true
+    method: PUT
+    allow_http: true
+    allow_private: true
+    content_type: application/json
+    headers:
+      X-Consul-Token: "${ input.consul_token }"
+    body: >-
+      {"Name":"redis-exporter","ID":"redis-exporter","Address":"127.0.0.1","Port":9121}
+    status_codes: [200]
+```
+
+Enable maintenance mode without losing the Service ID:
+
+```yaml
+- name: Put Redis exporter in maintenance
+  module: core.http.request
+  params:
+    url: http://127.0.0.1:8500/v1/agent/service/maintenance/redis-exporter?enable=true
+    method: PUT
+    allow_http: true
+    allow_private: true
+    headers: { X-Consul-Token: "${ input.consul_token }" }
+```
+
+Deregister on destroy:
+
+```yaml
+- name: Deregister Redis exporter
+  module: core.http.request
+  params:
+    url: http://127.0.0.1:8500/v1/agent/service/deregister/redis-exporter
+    method: PUT
+    allow_http: true
+    allow_private: true
+    headers: { X-Consul-Token: "${ input.consul_token }" }
+```
+
+These are contract examples only; WB service wiring is intentionally outside
+NIM-608.
 
 ## See also
 
-- [README.md](../../README.md) - directory of core modules.
-- [core/url/README.md](../url/README.md) - downloading a file via URL (`fetched`, also https-only).
-- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
-- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs.
-- [ADR-016](../../../adr/0016-parity-license.md) - "security comes first" (https-only, SSRF-guard).
-- [templating.md](../../../templating.md) - secret-masking and sensitive-by-construction (§7.4).
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) — core.http contract and NIM-608 amendment.
+- [ADR-016](../../../adr/0016-parity-license.md) — secure-by-default HTTP policy.
+- [ADR-033](../../../adr/0033-errand.md) — exact-state Errand boundary.
+- [templating.md](../../../templating.md) — sensitive-by-construction parameters.
+- [core.url](../url/README.md) — download-to-filesystem module.

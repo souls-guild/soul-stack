@@ -14,8 +14,9 @@ package handlers
 // Source of truth for names/states — the Validate switches of soul-side core modules
 // (soul/internal/coremod/<m>/<m>.go) and docs/module/core/<m>/. Source of truth
 // for errand-safe — soul/internal/runtime/errandrunner/whitelist.go (the hard
-// list core.cmd.shell / core.exec.run) + marker sdk/module.ErrandReadSafe
-// (core.http.probe). Any divergence from the state list in the implementation must
+// list core.cmd.shell / core.exec.run) + the exact read-safe mixed-module state
+// core.http.probe (core.http.request is deliberately excluded). Any divergence
+// from the state list in the implementation must
 // be synced by hand — this is doc-data, not introspection.
 
 // coreModuleDoc — a static catalog entry for one core module.
@@ -90,8 +91,8 @@ var coreModuleDocs = []coreModuleDoc{
 	},
 	{
 		Name:             "core.http",
-		Description:      "Read-probe of an HTTP endpoint (verb probe, GET/HEAD, changed=false).",
-		States:           []string{"probe"},
+		Description:      "HTTP endpoint probe (GET/HEAD, changed=false) and explicit mutating request (POST/PUT/PATCH/DELETE, changed=true on success).",
+		States:           []string{"probe", "request"},
 		ErrandSafeStates: []string{"probe"},
 	},
 	{

@@ -2,6 +2,7 @@ package util_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	stdurl "net/url"
@@ -196,6 +197,17 @@ func TestNewHTTPClient_GuardWiring(t *testing.T) {
 		tr := c.Transport.(*http.Transport)
 		if tr.DialContext == nil {
 			t.Fatal("AllowHTTPRedirect must not lift the SSRF-guard")
+		}
+	})
+
+	t.Run("DisableRedirects: return first response without following", func(t *testing.T) {
+		c := util.NewHTTPClient(util.HTTPClientOpts{
+			AllowHTTPRedirect: true,
+			DisableRedirects:  true,
+		})
+		err := c.CheckRedirect(mkRedirReq(t, "http://next.example/x"), nil)
+		if !errors.Is(err, http.ErrUseLastResponse) {
+			t.Fatalf("DisableRedirects CheckRedirect error=%v, want http.ErrUseLastResponse", err)
 		}
 	})
 

@@ -161,6 +161,12 @@ type moduleCatalogItem struct {
 	ErrandSafe  bool          `json:"errand_safe"`
 	Params      []moduleParam `json:"params"`
 
+	// errandSafeStates is internal projection metadata. The public catalog
+	// keeps the historical module-level errand_safe bool, but a filtered list
+	// must expose only states that the Soul runner will actually admit. It is
+	// deliberately unexported so the wire/OpenAPI shape does not change.
+	errandSafeStates []string
+
 	// IntroducedIn — the engine release that added this module (ADR-0076(i)),
 	// carried outward so an author can see the floor a module implies before
 	// declaring a `compat:` window against it. omitempty — a module that predates
@@ -212,6 +218,9 @@ func (h *ModuleCatalogHandler) ListTyped(ctx context.Context, onlyErrandSafe boo
 		if onlyErrandSafe && !it.ErrandSafe {
 			continue
 		}
+		if onlyErrandSafe && len(it.errandSafeStates) > 0 {
+			it.States = append([]string(nil), it.errandSafeStates...)
+		}
 		out = append(out, it)
 	}
 	return ModuleCatalogReply{Items: out}, nil
@@ -245,13 +254,14 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 			introducedIn = m.IntroducedIn
 		}
 		items = append(items, moduleCatalogItem{
-			Name:         c.Name,
-			Kind:         "core",
-			Description:  c.Description,
-			States:       c.States,
-			ErrandSafe:   len(c.ErrandSafeStates) > 0,
-			Params:       params,
-			IntroducedIn: introducedIn,
+			Name:             c.Name,
+			Kind:             "core",
+			Description:      c.Description,
+			States:           c.States,
+			ErrandSafe:       len(c.ErrandSafeStates) > 0,
+			Params:           params,
+			IntroducedIn:     introducedIn,
+			errandSafeStates: append([]string(nil), c.ErrandSafeStates...),
 		})
 	}
 

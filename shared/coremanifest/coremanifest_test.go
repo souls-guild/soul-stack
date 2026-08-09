@@ -27,7 +27,7 @@ var expectedModules = map[string][]string{
 	"core.line":      {"present", "absent"},
 	"core.repo":      {"present", "absent"},
 	"core.firewall":  {"present", "absent"},
-	"core.http":      {"probe"},
+	"core.http":      {"probe", "request"},
 	"core.noop":      {"run"},                             // no-op/barrier anchor (ADR-015)
 	"core.module":    {"installed"},                       // SoulModule plugin delivery (ADR-065)
 	"core.soul":      {"registered"},                      // keeper-side (on: keeper)

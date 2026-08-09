@@ -5,11 +5,12 @@ import (
 	"testing"
 
 	sdkmodule "github.com/souls-guild/soul-stack/sdk/module"
+	corehttp "github.com/souls-guild/soul-stack/soul/internal/coremod/http"
 )
 
 // markerModule is an empty SoulModule with the ErrandReadSafe marker — the
-// shape of core.http / core.noop: Apply is cleared for ad-hoc, Plan is not
-// declared pure-read.
+// shape of core.noop: Apply is cleared for ad-hoc, Plan is not declared
+// pure-read. core.http cannot carry this module-wide marker after NIM-608.
 type markerModule struct{ sdkmodule.BaseModule }
 
 func (markerModule) ErrandReadSafe() {}
@@ -44,9 +45,34 @@ func TestIsAllowed_Hardcoded(t *testing.T) {
 
 func TestIsAllowed_Marker(t *testing.T) {
 	t.Parallel()
-	ok, reason := IsAllowed("core.http.probe", &markerModule{}, false)
+	ok, reason := IsAllowed("demo.module.read", &markerModule{}, false)
 	if !ok {
 		t.Errorf("IsAllowed(marker, apply) = (false, %q); want true", reason)
+	}
+}
+
+// TestIsAllowed_CoreHTTPStateBoundary is the executable security invariant for
+// the mixed core.http module: adding request must not make the module-wide
+// Errand path a mutation bypass. This uses the real module type, not a fake
+// marker, so re-adding ErrandReadSafe to core.http cannot silently defeat it.
+func TestIsAllowed_CoreHTTPStateBoundary(t *testing.T) {
+	t.Parallel()
+	mod := corehttp.New()
+
+	if ok, reason := IsAllowed("core.http.probe", mod, false); !ok {
+		t.Fatalf("probe denied: %q", reason)
+	}
+	if ok, reason := IsAllowed("core.http.request", mod, false); ok {
+		t.Fatalf("mutating request admitted through Errand (reason=%q)", reason)
+	}
+	if _, ok := any(mod).(sdkmodule.ErrandReadSafe); ok {
+		t.Fatal("core.http carries module-wide ErrandReadSafe; request would inherit read-safe admission")
+	}
+	// Defense in depth: even a marker-bearing module passed under core.http
+	// cannot bypass the state boundary. This pins the admission code, not only
+	// the current concrete Module method set.
+	if ok, reason := IsAllowed("core.http.request", &markerModule{}, false); ok {
+		t.Fatalf("module-wide marker admitted core.http.request (reason=%q)", reason)
 	}
 }
 

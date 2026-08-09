@@ -46,6 +46,7 @@ func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 		{"core.exec", "run", "env"},
 		{"core.file", "rendered", "vars"},
 		{"core.http", "probe", "headers"},
+		{"core.http", "request", "headers"},
 		{"core.url", "fetched", "headers"},
 	}
 	for _, f := range withStringItems {

@@ -32,7 +32,7 @@ names and a summary table of all core modules.
 The destiny step is addressed as `core.<module>.<state>` - for example
 `core.pkg.installed`, `core.file.rendered`. Top (`core.<module>`) —
 module name in Registry; `<state>`-suffix comes to the module in `ApplyRequest.state`
-and dispatched within the implementation. Verb-forms (`run`, `shell`, `probe`, `fetched`,
+and dispatched within the implementation. Verb-forms (`run`, `shell`, `probe`, `request`, `fetched`,
 `extracted`) - the same mechanism, just without the declarative semantics "lead to
 condition."
 
@@ -65,7 +65,7 @@ Statically built into the `soul` binary. Apply the same in pull (daemon) and pus
 | [`core.line`](core/line/README.md) | `present` / `absent` | In-place line-by-line editing of a file (lineinfile equivalent). |
 | [`core.repo`](core/repo/README.md) | `present` / `absent` | Batch repository (apt/dnf/yum/apk). |
 | [`core.firewall`](core/firewall/README.md) | `present` / `absent` | One firewall rule (ufw/firewalld). |
-| [`core.http`](core/http/README.md) | `probe` (verb) | Read-probe HTTP (health-check / readiness, `changed=false`). |
+| [`core.http`](core/http/README.md) | `probe` / `request` (verbs) | Read-only GET/HEAD probe (`changed=false`) and explicit POST/PUT/PATCH/DELETE API mutation (`changed=true` on expected status). |
 | [`core.augur`](core/augur/README.md) | `fetch` (verb) | Read-probe of live access to an external system (Vault/Prometheus/ELK) via the Augur broker ([ADR-025](../adr/0025-augur.md), `changed=false`). |
 
 ## Keeper-side core modules
