@@ -2936,6 +2936,102 @@ order to act in.
   docker-free and the container suites stay opt-in. The failback behavior itself
   was intact — only the call had drifted — and those tests pass again.
 
+- **The blocking live gate downloaded from public github.com on every run**
+  (NIM-542). Six
+  of the nine `make e2e-live-gate` tests run a live `create` of
+  `examples/service/redis`, and that create fetched three release tarballs —
+  `node_exporter`, `redis_exporter`, `vector` — from GitHub Releases inside the
+  soul container: ~18 downloads per gate run. This is the pre-tag blocking step
+  (`RELEASING.md` step e), and its acceptance is "three runs on an unchanged slice
+  give the same result"; github.com is not in the slice. It had already produced
+  red gates that were nothing but the network.
+
+  The harness now caches those tarballs outside the repo (digest-verified on the
+  way in; a wrong-digest file is deleted rather than reused), serves them over
+  HTTPS on an ephemeral local port laid out exactly like upstream, and points the
+  service at it with a `vars/99-*` layer. The harness verifies all three digests
+  itself because the subject does not verify all three: `vector` and
+  `redis-exporter` hand `checksum: "${ input.sha256 }"` to `core.url` and would
+  reject bad bytes inside the container, but `node-exporter/tasks/install.yml`
+  deliberately declares no checksum, so a truncated node_exporter tarball would
+  pass the fetch and surface later — a failed unpack, or a service that will not
+  start — wearing the costume of a product defect. `make e2e-live-artifacts`
+  primes the cache deliberately; the gate runs it as an early, named step so the
+  one network-dependent moment happens up front in half a minute rather than
+  twenty minutes in as a failed fetch.
+
+  **HTTPS, not plain HTTP — because the subject says so.** All three destinies
+  declare `base_url` with `pattern: "^https://[A-Za-z0-9._/:-]+$"`, and `core.url`
+  refuses a plain-http target unless the step opts in. Both are properties of the
+  service under test, so the first cut of the mirror — an http file server — did
+  not fail as a network problem but as
+  `input $.base_url … does not match pattern`, twenty minutes in, wearing the
+  costume of a product defect. Loosening the destiny would have been bending the
+  subject to fit the fixture. Instead the mirror mints a per-run CA and a leaf for
+  the address it advertises, and `SpawnSoulContainer` drops that root into the
+  container's trust store and runs `update-ca-certificates` before the soul
+  starts. The product walks its real fetch path — scheme check, TLS handshake,
+  chain validation, and the checksum wherever the destiny declares one — exactly
+  as it does against github.
+
+  **The layer goes into the fixture's materialized copy, never into
+  `examples/service/redis`.** The example is the subject under test (NIM-211);
+  bending it to suit the fixture would leave the gate green about a service nobody
+  runs. What the fixture writes is exactly the mirror override `vars/00-base.yaml`
+  already documents for an operator without github access.
+
+  An override three YAML layers away from where it is read is a claim that holds
+  until it doesn't — rename the file, add a `vars/_stack.yaml`, rename a var, and
+  it contributes nothing while the create still passes, from github, green. So the
+  mirror **counts what it served** and a successful run that never used it fails;
+  docker-free guards catch a fourth external fetch, a version or digest the catalog
+  does not carry, a vars layer that out-sorts `99-*`, or a `_stack.yaml`, twenty
+  minutes earlier. One of those guards exists because the http/https mistake above
+  walked straight into the gap: it starts a real mirror, reads each destiny's own
+  declared `pattern` at run time, and requires the URL the overlay generates to
+  satisfy it — neither side allowed to hardcode the scheme, or the test would only
+  be agreeing with itself. Two more guard the CA half, where the silence is
+  quieter still: `update-ca-certificates` reads only `*.crt` under
+  `/usr/local/share/ca-certificates` and ignores anything else without a word —
+  exit code 0, nothing added — so the file name is checked here rather than
+  described in a comment, and so is the property the container actually depends
+  on, that `caPEM` carries the CA-flagged root that signed the leaf and not the
+  leaf itself. Both mistakes are one-line edits that compile, pass every other
+  guard, and surface as `x509: certificate signed by unknown authority` inside a
+  container twenty minutes later, worn as a product defect.
+
+  **The container had to be booted first, and nothing had been checking that.**
+  Running a command in a soul container the moment it is declared ready exposed a
+  readiness check that had been wrong for as long as L3b has existed. It waits on
+  `systemctl is-system-running --wait` and accepted exit code 1 as "degraded,
+  which is normal for this image" — but systemctl returns 1 just as readily when
+  it could not reach the bus at all, which is systemd not being up yet, and
+  `--wait` does not help, because waiting is what it does *after* connecting. So a
+  container could be handed over mid-boot. `update-ca-certificates`, now the first
+  thing to run in one, creates two temp files in `/tmp` and reads them eighty
+  lines later; in between, `systemd-tmpfiles-setup.service` reaches the
+  `D /tmp 1777 root root -` line of `/usr/lib/tmpfiles.d/tmp.conf`, and `D` with
+  `--remove` empties the directory. The files vanished under the running script,
+  and the gate went red on a module-delivery test that fetches no artifacts and
+  has nothing to do with certificates. Readiness is now judged by the state
+  systemctl printed, matched per line; the exit code is kept wide only so a
+  genuinely degraded container is not thrown away. Measured on one container under
+  load: the old rule would have fired at 244 ms on `Failed to connect to bus`, the
+  new one waited for `running` at 761 ms.
+
+  **The real github path stays covered outside the gate.**
+  `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` runs the same create against real
+  GitHub Releases and is deliberately absent from `E2E_GATE_TESTS` — the one L3b
+  test allowed to fail for a reason outside the repository, which a blocking gate
+  must never be. It skips (naming the host) if upstream is unreachable *before* the
+  stand, and after a failure re-probes to print either "read this as environment"
+  or "upstream is still reachable, so read this as a finding". No new classifier
+  verdict was introduced: inside the gate the category no longer occurs, and
+  outside it the test answers the question itself.
+
+  **Not fixed:** `core.pkg.installed` still reaches `deb.debian.org` and
+  `packages.redis.io` on every live create. The tarballs were the scope.
+
 ---
 
 ## [v0.1.0-beta.1] — 2026-06-15

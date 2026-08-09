@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -104,6 +105,7 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 	// `cp -R src/. dest/`), commit with one deterministic commit.
 	runGit(t, "", "init", "-q", "-b", "main", repoDir)
 	copyTree(t, srcDir, repoDir)
+	s.addArtifactMirrorLayer(t, repoDir)
 	runGit(t, repoDir, "add", "-A")
 	// commit.gpgsign=false is local to the call: the operator's global
 	// ~/.gitconfig may require a signature (gpg/ssh key) that isn't
@@ -113,6 +115,65 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 		"commit", "-q", "-m", "e2e-live service snapshot from "+relativePath)
 
 	return "file://" + repoDir
+}
+
+// addArtifactMirrorLayer writes the local-mirror service-vars layer into the
+// materialized COPY of the service, between the copy and the commit (NIM-542).
+//
+// Here and nowhere else. examples/service/redis is the subject of these tests
+// (NIM-211) and editing it to suit the fixture would leave the gate green about
+// a service nobody runs; the copy is the fixture's own, and a layer added to it
+// is the same thing an operator does when they run against an internal mirror —
+// vars/00-base.yaml documents that override as supported and this is it.
+//
+// Written for the prefixes the service ITSELF reads, not for the whole catalog: a
+// smoke-nginx-live stand fetches nothing, gets no layer, and is therefore never
+// accused by assertArtifactsCameFromTheMirror of failing to use a mirror it had
+// no reason to touch.
+func (s *Stack) addArtifactMirrorLayer(t *testing.T, repoDir string) {
+	t.Helper()
+	if s.mirror == nil {
+		return
+	}
+
+	prefixes, err := scenarioArtifactPrefixes(repoDir)
+	if err != nil {
+		t.Fatalf("addArtifactMirrorLayer: scan %s: %v", repoDir, err)
+	}
+	cat := catalogSubset(artifactCatalog(), prefixes)
+	if len(cat) == 0 {
+		return
+	}
+	// A prefix the service fetches and the catalog does not carry would be left
+	// pointing at github while its neighbours go to the mirror — a partly
+	// hermetic gate, which reads as a hermetic one. The docker-free guard
+	// TestArtifactCatalogCoversEveryDefaultFetch catches this twenty minutes
+	// earlier for the example the gate uses; this catches it for any other.
+	if len(cat) != len(prefixes) {
+		var uncovered []string
+		for prefix := range prefixes {
+			if len(catalogSubset(artifactCatalog(), map[string]bool{prefix: true})) == 0 {
+				uncovered = append(uncovered, prefix)
+			}
+		}
+		sort.Strings(uncovered)
+		t.Fatalf("addArtifactMirrorLayer: %s fetches %v, which artifactCatalog() does not carry.\n"+
+			"  Those would still come from the public internet while the rest go to the mirror.\n"+
+			"  Add them to tests/e2e-live/harness/artifactcatalog.go and prime the cache:\n"+
+			"      make e2e-live-artifacts",
+			s.cfg.ExamplePath, uncovered)
+	}
+
+	dst := filepath.Join(repoDir, filepath.FromSlash(artifactMirrorVarsFile))
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("addArtifactMirrorLayer: mkdir %s: %v", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, artifactMirrorOverlay(s.mirror.baseURL, cat), 0o644); err != nil {
+		t.Fatalf("addArtifactMirrorLayer: write %s: %v", dst, err)
+	}
+
+	s.mirroredArtifacts = cat
+	t.Logf("addArtifactMirrorLayer: %s -> %s for %v", artifactMirrorVarsFile, s.mirror.baseURL, artifactMirrorPrefixes(cat))
 }
 
 // runGit runs a git command in dir (empty dir -> cwd from args) with the

@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -456,7 +456,13 @@ build-linux: bin-keeper bin-soul
 #
 # `-p 1` - serial (RAM-heavy: privileged containers with systemd + apt-install
 # running concurrently would kill a developer's laptop). Architect recommendation.
-e2e-live: build-linux
+#
+# e2e-live-artifacts first for the same reason the gate does it: the tarball cache
+# is filled once, up front and named, instead of at the first `create` twenty
+# minutes in. The nightly run needs the network anyway (TestL3bRedisLiveUpstream_*
+# fetches from real github on purpose), so this costs nothing there and makes a
+# fetch failure legible.
+e2e-live: build-linux e2e-live-artifacts
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -528,6 +534,29 @@ E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
 	TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart \
 	TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls
 
+# e2e-live-artifacts - fills the local cache of upstream release tarballs that the
+# L3b stand serves to the soul containers (NIM-542).
+#
+# Six of the nine gate tests run a live `create`, and that create used to fetch
+# node_exporter, redis_exporter and vector from github.com INSIDE the container -
+# about 18 downloads per gate run. The gate is the blocking pre-tag step
+# (RELEASING.md step e) and its acceptance is "three runs on an unchanged slice
+# agree"; github.com is not in the slice. The harness now serves those tarballs from
+# a local mirror over an ephemeral port and points the FIXTURE's service-vars at it
+# (never examples/service/redis - the example is the subject under test, NIM-211).
+#
+# The cache lives outside the repo and outside $TMPDIR ($SOUL_STACK_E2E_ARTIFACT_CACHE,
+# else $XDG_CACHE_HOME/soul-stack/e2e-live/artifacts): it must survive `git clean` and
+# a reboot, or "hermetic" would only mean "downloads once per run".
+#
+# Priming is idempotent and digest-checked, so this is safe to run at any time; it is
+# also the deliberate way to prepare a machine that is about to go offline. Once the
+# cache is warm, SOUL_STACK_E2E_ARTIFACT_OFFLINE=1 makes a missing entry a loud error
+# instead of a silent fetch - that is the switch acceptance (a) is checked with.
+e2e-live-artifacts:
+	@echo "e2e-live-artifacts: priming the L3b upstream-tarball cache"
+	@(cd tests/e2e-live && go run ./cmd/artifact-cache)
+
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
 	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
@@ -535,6 +564,8 @@ e2e-live-gate: build build-linux
 		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
 	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS) \
 		|| { echo "e2e-live-gate: the gate list does not name real tests - fix it before spending 20 minutes on a run whose verdict would be about the wrong set" >&2; exit 1; }
+	@$(MAKE) --no-print-directory e2e-live-artifacts \
+		|| { echo "e2e-live-gate: the upstream-tarball cache is neither warm nor fillable - the run below would have died on it twenty minutes in, inside a container, as a failed fetch against the product" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -1755,6 +1786,7 @@ help:
 	@echo "  bin-soul          cross-compile only soul (linux-amd64) -> soul/bin/soul-linux-amd64"
 	@echo "  bin-soul-lint     cross-compile only soul-lint (linux-amd64) -> soul-lint/bin/soul-lint-linux-amd64"
 	@echo "  e2e-live          L3b smoke-loop (tests/e2e-live, -tags=e2e_live, privileged docker, nightly)"
+	@echo "  e2e-live-artifacts  prime the L3b upstream-tarball cache (run before going offline)"
 	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
 	@echo "  docker-build-keeper  build the keeper:e2e-k8s image (for L3c kind load docker-image)"
 	@echo "  docker-build-soul    build the soul:e2e-k8s image (privileged systemd Debian-12 for L3c-3+)"

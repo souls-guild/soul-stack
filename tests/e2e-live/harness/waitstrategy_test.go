@@ -312,6 +312,150 @@ func TestNoBareWaitStrategyOption(t *testing.T) {
 	}
 }
 
+// The soul container's readiness (NIM-542).
+//
+// The note on `stands` above says the soul container is out of that table by
+// construction: nothing dials it from the host, so wait.ForExec on an in-container
+// signal is the property that fits it. That reasoning was right and incomplete —
+// it settled WHICH signal to read and never asked whether the reading was honest.
+// It was not: the check accepted exit code 1, and systemctl returns 1 both for
+// `degraded` (up, and fine here) and for a bus it could not reach (not up at
+// all). So the container was declared ready mid-boot, and the first thing to run
+// in it paid for that. Same family as NIM-406, one hop along: readiness that
+// reports ready before the thing is.
+
+// systemdStates — every state `systemctl is-system-running` can print, plus the
+// two non-states it prints instead when it cannot ask.
+//
+// Written out rather than reduced to one good and one bad case, because the bug
+// was a category error about this exact list: `degraded` and the bus failure are
+// indistinguishable by exit code and opposite in meaning, and a fix that merely
+// stopped accepting 1 would have traded a flaky gate for one that stalls 60 s per
+// container on any image with a failed unit.
+var systemdStates = []struct {
+	out   string
+	ready bool
+	note  string
+}{
+	{"running\n", true, "boot finished, every unit happy"},
+	{"degraded\n", true, "boot finished with failed units — the steady state of this image"},
+	{"initializing\n", false, "still before basic.target"},
+	{"starting\n", false, "still booting"},
+	{"maintenance\n", false, "emergency/rescue — no unit is going to start"},
+	{"stopping\n", false, "shutting down, not coming up"},
+	{"offline\n", false, "systemd is not the init of this container"},
+	{"unknown\n", false, "systemctl could not determine the state"},
+	{"Failed to connect to bus: No such file or directory\n", false,
+		"verbatim from the failing gate run: systemd is up but its bus is not, exit code 1"},
+	{"", false, "no output at all — an exec that produced nothing is not evidence of readiness"},
+}
+
+// TestSoulReadinessIsJudgedByWhatSystemdSaid — the predicate separates the two
+// states that mean "booted" from the eight that do not.
+func TestSoulReadinessIsJudgedByWhatSystemdSaid(t *testing.T) {
+	for _, s := range systemdStates {
+		if got := systemdFinishedBooting(s.out); got != s.ready {
+			t.Errorf("systemdFinishedBooting(%q) = %v, want %v — %s", s.out, got, s.ready, s.note)
+		}
+	}
+	// Multiplexed stdout+stderr arrive in one reader with no ordering guarantee,
+	// so the state can be preceded or followed by unrelated output. Rejecting a
+	// ready container over a stray warning costs a 60-second stall it never
+	// explains.
+	if !systemdFinishedBooting("Warning: something on stderr\nrunning\n") {
+		t.Error("a warning next to the state made a booted system read as not booted; " +
+			"the match has to be per line, not on the whole body")
+	}
+	if systemdFinishedBooting("the system is not running and never was\n") {
+		t.Error("a sentence merely CONTAINING the word matched; the line must equal the state, " +
+			"or any prose mentioning it reads as ready")
+	}
+}
+
+// TestSoulWaitStrategyConsultsTheState — the strategy the container receives
+// actually applies that predicate.
+//
+// Separate from the test above because the failure they catch is different, and
+// the second one is invisible to the first: deleting `.WithResponseMatcher(…)`
+// from the constructor leaves systemdFinishedBooting correct, tested and green,
+// and unused. testcontainers' default response matcher returns true for every
+// body (wait/exec.go, NewExecStrategy), so the exit code becomes the whole check
+// again and the bug is back with its guard still passing.
+func TestSoulWaitStrategyConsultsTheState(t *testing.T) {
+	exec, ok := soulWaitStrategy().(*wait.ExecStrategy)
+	if !ok {
+		t.Fatalf("soulWaitStrategy is %T, not a *wait.ExecStrategy — this guard reads its "+
+			"matchers directly and cannot see through another type", soulWaitStrategy())
+	}
+	if exec.ResponseMatcher == nil {
+		t.Fatal("the strategy has no response matcher, so readiness is decided by the exit " +
+			"code alone — which returns 1 for `degraded` and 1 for a bus it never reached")
+	}
+	for _, s := range systemdStates {
+		if got := exec.ResponseMatcher(strings.NewReader(s.out)); got != s.ready {
+			t.Errorf("the wired-in matcher read %q as ready=%v, want %v — %s", s.out, got, s.ready, s.note)
+		}
+	}
+	// The exit code is not the check, but it can still throw away a ready
+	// container: `degraded` exits 1, and this image is expected to be degraded.
+	if exec.ExitCodeMatcher == nil || !exec.ExitCodeMatcher(1) {
+		t.Error("exit code 1 is rejected before the output is ever read. That is `degraded` — " +
+			"the normal outcome for an image whose unit symlinks the Dockerfile deletes — and " +
+			"the container would wait out its whole budget and fail as a timeout")
+	}
+}
+
+// TestSoulWaitStrategyIsWiredIn — the soul container gets that strategy, and no
+// file quietly builds its own.
+//
+// Both halves are needed and neither implies the other. Dropping the call and
+// spelling wait.ForExec out again inside the ContainerRequest is a two-line edit
+// that leaves both tests above green while the container waits on the original
+// exit-code check; and a second wait.ForExec elsewhere in the package is a
+// readiness check nothing in this file has ever looked at.
+func TestSoulWaitStrategyIsWiredIn(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	const home = "waitstrategy.go"
+	calledOutsideHome := false
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			base := filepath.Base(path)
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "soulWaitStrategy" && base != home {
+					calledOutsideHome = true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "ForExec" || base == home {
+					return true
+				}
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "wait" {
+					t.Errorf("%s:%d: builds its own wait.ForExec instead of calling soulWaitStrategy(). "+
+						"Readiness is then whatever this call spells out, and every check in this file "+
+						"is guarding a constructor that container does not use.",
+						base, fset.Position(call.Pos()).Line)
+				}
+				return true
+			})
+		}
+	}
+	if !calledOutsideHome {
+		t.Fatalf("nothing outside %s calls soulWaitStrategy. The soul container is then waiting "+
+			"on whatever its ContainerRequest spells out inline — which is where the exit-code "+
+			"check this replaced used to live.", home)
+	}
+}
+
 // TestStandStrategiesAreWiredIn — the strategies guarded above are the ones the
 // containers actually get.
 //

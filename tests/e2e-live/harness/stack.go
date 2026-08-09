@@ -61,6 +61,21 @@ type Config struct {
 	ServiceName string
 	Souls       int
 	SoulModules []SoulModuleEntry
+
+	// UpstreamArtifacts — fetch the release tarballs from the public internet
+	// instead of from the harness's local mirror (NIM-542).
+	//
+	// Off by default, and that default is the ticket: six of the nine gate tests
+	// run a create of examples/service/redis, and each create pulled three
+	// tarballs from github.com — ~18 downloads whose outcome decided a blocking
+	// release gate. With this off, NewStack serves them from a local cache and
+	// the run needs nothing from the public internet.
+	//
+	// Exactly one test turns it ON — the non-gate TestL3bRedisLiveUpstream_*,
+	// which exists so the real github path stays covered somewhere. It is
+	// deliberately not in E2E_GATE_TESTS: a test whose verdict depends on a
+	// network outside the slice must not be able to block a release.
+	UpstreamArtifacts bool
 }
 
 // SoulModuleEntry - one entry of the `plugins.soul_modules[]` catalog
@@ -116,6 +131,24 @@ type Stack struct {
 	// dockerNetwork - user-defined bridge for soul containers. nil on L3a-style
 	// runs (cfg.Souls=0); created on the first SpawnSoulContainer call.
 	dockerNetwork *testcontainers.DockerNetwork
+
+	// mirror — the local stand-in for github.com's release downloads, started in
+	// NewStack unless cfg.UpstreamArtifacts (NIM-542). nil means the run fetches
+	// from upstream, which is the non-gate real-path test and nothing else.
+	mirror *artifactMirror
+
+	// mirroredArtifacts — the catalog entries the materialized service actually
+	// reads, filled in by materializeServiceRepo from the service's own scenario
+	// tree. Empty for a service that fetches nothing (smoke-nginx-live), which is
+	// what keeps the assertion below from accusing it of skipping a mirror it had
+	// no reason to touch.
+	mirroredArtifacts []upstreamArtifact
+
+	// sawSuccessfulApply — did any run reach success? Set by WaitApplySuccess.
+	// The mirror assertion is worthless before the first apply and misleading
+	// after a failed one: a test that died on bring-up would collect a second
+	// complaint about a mirror that was never going to be asked.
+	sawSuccessfulApply bool
 
 	// Internal state.
 	vaultToken string
@@ -186,6 +219,49 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		tmpDir: t.TempDir(),
 	}
 
+	// Every cleanup registered from here on gets drained even if NewStack never
+	// returns. It usually does return, and then the caller's `defer
+	// stack.Cleanup()` has already drained the slice and this is a no-op —
+	// runCleanups nils it, so it is safe to run twice.
+	//
+	// The case it exists for is a t.Fatalf between here and `return s`. The Stack
+	// is a local until then, so the caller has nothing to defer against, and the
+	// containers are only reachable through this slice. Postgres, Vault and Redis
+	// happen to survive that anyway — testcontainers hands them to Ryuk — but the
+	// host-side `keeper run` sub-process does not: nothing outside this process
+	// knows about it, and it holds the listener that the next test in the package
+	// is about to bind. One orphan turns the next run red for a reason that is not
+	// in the next run's slice, which is the exact failure this ticket exists to
+	// remove.
+	t.Cleanup(s.runCleanups)
+
+	// The local mirror for the release tarballs a create would otherwise pull
+	// from github.com (NIM-542). Before the containers on purpose: priming a cold
+	// cache is the one step here that can take minutes, and paying it after three
+	// containers are up only makes them wait.
+	//
+	// Infrastructure, and declared as such — a machine that cannot reach its own
+	// cache directory, or cannot prime it on the very first run, has said
+	// something about itself and nothing about this repo's code.
+	if !cfg.UpstreamArtifacts {
+		cacheDir, err := artifactCacheDir()
+		if err != nil {
+			t.Fatalf("NewStack: artifact cache: %v", err)
+		}
+		if err := ensureArtifactCache(cacheDir, artifactCatalog()); err != nil {
+			t.Fatalf("NewStack: %v", err)
+		}
+		// Advertised at the address the SOUL CONTAINER dials, not at the
+		// harness's own view of the socket: the fetch happens inside the
+		// container, where 127.0.0.1 is the container itself.
+		mirror, err := startArtifactMirror(cacheDir, keeperEndpointHost())
+		if err != nil {
+			t.Fatalf("NewStack: %v", err)
+		}
+		s.mirror = mirror
+		s.cleanups = append(s.cleanups, mirror.close)
+	}
+
 	// Derived from the per-container budget, not chosen next to it: this ctx is
 	// what actually caps the waits below, and an outer bound smaller than the sum
 	// of what it contains makes the inner budgets unreadable (NIM-406).
@@ -221,18 +297,22 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	s.caBundle = caPEM
 	tlsDir := filepath.Join(s.tmpDir, "tls")
 	if err := os.MkdirAll(tlsDir, 0o755); err != nil {
+		s.runCleanups()
 		t.Fatalf("NewStack: mkdir tls: %v", err)
 	}
 	certPath := filepath.Join(tlsDir, "keeper.crt")
 	keyPath := filepath.Join(tlsDir, "keeper.key")
 	caPath := filepath.Join(tlsDir, "vault-ca.crt")
 	if err := os.WriteFile(certPath, keeperCertPEM, 0o644); err != nil {
+		s.runCleanups()
 		t.Fatalf("NewStack: write keeper.crt: %v", err)
 	}
 	if err := os.WriteFile(keyPath, keeperKeyPEM, 0o600); err != nil {
+		s.runCleanups()
 		t.Fatalf("NewStack: write keeper.key: %v", err)
 	}
 	if err := os.WriteFile(caPath, caPEM, 0o644); err != nil {
+		s.runCleanups()
 		t.Fatalf("NewStack: write vault-ca.crt: %v", err)
 	}
 
@@ -240,6 +320,7 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	keeperYAML := s.buildKeeperYAML(certPath, keyPath, caPath)
 	keeperYAMLPath := filepath.Join(s.tmpDir, "keeper.yml")
 	if err := os.WriteFile(keeperYAMLPath, []byte(keeperYAML), 0o600); err != nil {
+		s.runCleanups()
 		t.Fatalf("NewStack: write keeper.yml: %v", err)
 	}
 
@@ -299,7 +380,36 @@ func (s *Stack) Cleanup() {
 	if s == nil {
 		return
 	}
+	s.assertArtifactsCameFromTheMirror()
 	s.runCleanups()
+}
+
+// assertArtifactsCameFromTheMirror — the run fetched its tarballs from HERE.
+//
+// The one assertion that can tell hermetic from lucky. Everything else about the
+// override is a claim made three layers from where it is read: the fixture writes
+// vars/99-*.yaml into a copy of the service, keeper merges it, the scenario reads
+// it, the destiny builds a URL from it. Every link in that chain can quietly stop
+// carrying the value — the layer out-sorted by a new sibling, silenced by a
+// `vars/_stack.yaml`, or reading a var the scenario renamed — and in every case
+// the create still SUCCEEDS, from github.com, and the gate is back to being
+// decided by a network outside its slice with a green run to show for it.
+//
+// Guarded by sawSuccessfulApply so it stays quiet when there was nothing to
+// fetch: a test that died during bring-up must not collect a second complaint
+// about a mirror it never reached the point of using. Guarded by t.Failed() for
+// the same reason one step later — an earlier apply can succeed and a later one
+// fail, and then this fires on a red test with the word "succeeded" in it,
+// pointing at the vars layer while the real failure sits above. A test that has
+// already failed has its finding; a second, wrongly-worded one only competes
+// with it.
+func (s *Stack) assertArtifactsCameFromTheMirror() {
+	if s.mirror == nil || len(s.mirroredArtifacts) == 0 || !s.sawSuccessfulApply || s.t.Failed() {
+		return
+	}
+	if msg := missingArtifacts(s.mirror, s.mirroredArtifacts); msg != "" {
+		s.t.Errorf("the run succeeded without using the local artifact mirror: %s", msg)
+	}
 }
 
 func (s *Stack) runCleanups() {
@@ -836,6 +946,10 @@ WHERE ar.apply_id = $1`
 			t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (rows=%v)", applyID, failSID, failStatus, snap)
 		}
 		if done {
+			// A run got all the way through, so whatever it needed to download,
+			// it downloaded. Cleanup checks it came from the local mirror
+			// (NIM-542) — before this point there is nothing to check.
+			s.sawSuccessfulApply = true
 			return
 		}
 		time.Sleep(300 * time.Millisecond)
