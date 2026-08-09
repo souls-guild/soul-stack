@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -945,17 +945,62 @@ WEBUI_REPO := ../soul-stack-web
 # exactly the situation it exists for, and that is how NIM-273 reached the
 # release. Same shape as NIM-238: an unperformed check must never read like a
 # passed one.
+#
+# The companion-absent branch is no longer an unconditional zero (NIM-485). Where
+# the companion is expected to sit next to this checkout - a release worktree -
+# its absence means the byte comparison did not happen in the one place it is
+# relied on, and printing `skipping` there made "not checked" and "checked, in
+# sync" the same exit code. It now fails, with WEBUI_SKIP as the declared escape.
+#
+# CI is the deliberate exception, and not because the check does not matter there.
+# The companion is never checked out in core CI, and checking it out would not be
+# enough either: comparing bytes needs `npm run build`, so honouring this branch in
+# CI means putting a node toolchain and a vite build on the critical path of every
+# core push, to re-derive bytes that are already committed. What CI needs instead
+# is the question that needs no build - has the companion moved past the commit
+# these bytes came from - and that is check-webui-freshness, which IS binding on a
+# release branch. So neither context stays silent; they just get the check each one
+# can actually answer.
+#
+# The `|| echo unknown` fallback is deliberately the STRICT default. If the script
+# that decides the context cannot run at all, the honest answer is "cannot tell",
+# and this whole ticket is about not letting "cannot tell" wear the same exit code
+# as "checked, fine" - a fail-open default here would reintroduce that at the one
+# spot that decides whether anything is enforced. The script answers `advisory` by
+# itself for the legitimately-lenient cases (not a git checkout, a tag, a feature
+# branch), so this fallback only fires when something is actually broken.
 check-webui:
-	@if [ ! -d "$(WEBUI_REPO)" ]; then \
-		echo "check-webui: companion $(WEBUI_REPO) not present - skipping (expected in CI and third-party clones)"; \
+	@ctx=$$(scripts/check-webui-freshness.sh --context 2>/dev/null || echo unknown); \
+	case "$$ctx" in required|unknown) mandatory=yes ;; *) mandatory=no ;; esac; \
+	if [ ! -d "$(WEBUI_REPO)" ]; then \
+		if [ "$$mandatory" = yes ] && [ -n "$(WEBUI_SKIP)" ]; then \
+			echo "check-webui: companion $(WEBUI_REPO) not present - skipped by WEBUI_SKIP (declared, not accidental)"; \
+		elif [ "$$mandatory" = yes ] && [ -z "$$CI" ]; then \
+			echo "check-webui: FAIL - companion $(WEBUI_REPO) is not present, and this tree is"; \
+			echo "  assembling a release. A release worktree is where the companion is supposed to"; \
+			echo "  sit alongside, and it is the one place the byte comparison is relied on: skipping"; \
+			echo "  it here is how an unpaired web merge reaches a release with a green gate."; \
+			echo "  Check the companion out next to this worktree, or state that you are skipping:"; \
+			echo "      make check WEBUI_SKIP=1"; \
+			exit 1; \
+		elif [ "$$mandatory" = yes ]; then \
+			echo "check-webui: companion $(WEBUI_REPO) not present in CI - the byte comparison is NOT"; \
+			echo "  performed here. On this branch the binding check is check-webui-freshness, which"; \
+			echo "  answers the staleness question without needing the companion built."; \
+		else \
+			echo "check-webui: companion $(WEBUI_REPO) not present - skipping (expected off a release branch and in third-party clones)"; \
+		fi; \
 	elif [ ! -d "$(WEBUI_SRC)" ]; then \
-		echo "check-webui: companion IS present but $(WEBUI_SRC) is not built."; \
-		echo "  This is the release-worktree case, and it is the one the drift guard exists for:"; \
-		echo "  an unpaired web merge is invisible until the bundle is compared against a real build."; \
-		echo "  Build it (cd $(WEBUI_REPO) && npm run build), or state that you are skipping:"; \
-		echo "      make check WEBUI_SKIP=1"; \
-		test -n "$(WEBUI_SKIP)" || exit 1; \
-		echo "check-webui: skipped by WEBUI_SKIP - declared, not accidental"; \
+		if [ -n "$(WEBUI_SKIP)" ]; then \
+			echo "check-webui: $(WEBUI_SRC) is not built - skipped by WEBUI_SKIP (declared, not accidental)"; \
+		else \
+			echo "check-webui: FAIL - companion IS present but $(WEBUI_SRC) is not built."; \
+			echo "  This is the release-worktree case, and it is the one the drift guard exists for:"; \
+			echo "  an unpaired web merge is invisible until the bundle is compared against a real build."; \
+			echo "  Build it (cd $(WEBUI_REPO) && npm run build), or state that you are skipping:"; \
+			echo "      make check WEBUI_SKIP=1"; \
+			exit 1; \
+		fi; \
 	elif ! diff -r -q $(WEBUI_SRC) $(WEBUI_DST) >/dev/null; then \
 		echo "embed-UI drift detected:"; \
 		diff -r $(WEBUI_SRC) $(WEBUI_DST) || true; \
@@ -989,8 +1034,12 @@ check-webui:
 #
 # What it does NOT catch, stated so nobody mistakes its scope: a companion that
 # moved on while core was never re-synced at all. No commit here touches assets in
-# that scenario, so nothing inside this repository can see it — detecting it needs
-# read access to the private companion, which is the open half of NIM-341.
+# that scenario, so nothing inside this repository can see it. That was the open
+# half of NIM-341, parked on "the companion is private and needs an org token";
+# the companion is public now, so check-webui-freshness below answers it by asking
+# the remote for one ref (NIM-485). Keep the two apart when reading a red gate:
+# this one says the bundle was edited outside the script, that one says the bundle
+# was never re-vendored.
 check-webui-embed:
 	@rec=$$(sed -n 's/^assets_sha256=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
 	if [ ! -d keeper/internal/webui/assets ]; then \
@@ -1030,6 +1079,30 @@ check-webui-provenance:
 			echo "  on the release branch and this SHA did not move, the embedded bundle is stale."; \
 		fi; \
 	fi
+
+# check-webui-freshness — has the companion moved past the commit the embedded
+# bundle was vendored from? Needs neither the companion checked out nor built: it
+# asks the remote for a single ref. Binding on release/* and hotfix/* and on a
+# checkout detached at a bare sha, advisory elsewhere; the script owns that
+# rule and check-webui asks it rather than keeping a second copy. Rationale, scope
+# and the deliberate non-answers are in the script header — including why it
+# compares commits and not "did anything bundle-relevant change" (no path list can
+# separate build config from test config in the companion's vite.config.ts, and a
+# list is the NIM-547 failure mode), and which trees it declines to judge at all.
+#
+# One of the two tiers of `make check` that need the network (the other is
+# check-vuln, which pulls the vulnerability database). Offline, say so:
+# WEBUI_FRESHNESS_SKIP=1 — a declared skip, unlike an accidental one, is visible.
+check-webui-freshness:
+	@scripts/check-webui-freshness.sh
+
+# The freshness check is a gate, so it gets a gate's guard: a check whose two
+# failure modes are "silently lenient" and "red for everyone" cannot be trusted
+# because it passed once by hand. Same shape as check-gate / check-ci-status —
+# a real local bare repository stands in for the companion, so the resolver, the
+# branch detection and the URL derivation are exercised rather than stubbed.
+check-webui-freshness-guard:
+	@scripts/check-webui-freshness-test.sh
 
 # keeper.dev.yml: the committed copy (dev/keeper.dev.yml) - golden, read by dev-smoke
 # and docs; keeper-run/dev-smoke render the config from keeper.dev.yml.tmpl. check-stand-template
@@ -1261,7 +1334,8 @@ sign:
 # first-hand instead of being skipped for it.
 GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
-	check-soul-template check-dev-stand-build check-webui check-webui-embed check-doc-links \
+	check-soul-template check-dev-stand-build check-webui check-webui-embed \
+	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
 	check-modules-run
@@ -1278,6 +1352,10 @@ check:
 	@echo "check:   so this gate is also silent about every data race in it, and that is where"
 	@echo "check:   the concurrent code lives (async runner + barriers, console pumps, applybus"
 	@echo "check:   fan-out). Docker-free, so it IS runnable here:   make test-race"
+	@echo "check: NOTE — docker-free is not network-free. check-webui-freshness asks the"
+	@echo "check:   companion for one branch tip (NIM-485), which adds a few seconds warm — but"
+	@echo "check:   ~30s per candidate URL that has to time out, and an ssh-shaped remote derives two,"
+	@echo "check:   so a minute or more on a checkout with several. Offline:  WEBUI_FRESHNESS_SKIP=1"
 	@echo "check:   Say what CI says:   make check-all"
 	@echo "check:   or one tier:        make test-race  |  make test-integration  |  make e2e"
 
@@ -1818,6 +1896,7 @@ help:
 	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
 	@echo "  check-integration-set  the L1 package set matches the tree (guards a green, empty L1)"
 	@echo "  check-webui-embed embedded UI bundle matches its recorded fingerprint (no companion needed)"
+	@echo "  check-webui-freshness  is the embedded UI still at the companion's branch tip? (binding on release/* and hotfix/*; needs network)"
 	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
 	@echo "  vet               go vet ./... across all modules"
 	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"
@@ -1854,7 +1933,8 @@ help:
 	@echo "  gen-audit-catalog regenerate the audit event-type catalog feeding the AuditEvent.type enum"
 	@echo "  check-template    CI guard on drift of the embedded plugin template (skip without companion)"
 	@echo "  sync-webui        vendor dist/ from companion soul-stack-web -> keeper/internal/webui/assets/"
-	@echo "  check-webui       CI guard on drift of the embedded UI (skip without companion)"
+	@echo "  check-webui       CI guard on drift of the embedded UI (needs the companion; fails on release/*)"
+	@echo "  check-webui-freshness-guard  guard tests for check-webui-freshness (throwaway repos; no companion, no network beyond loopback)"
 	@echo "  check-stand-template  CI guard on drift keeper.dev.yml.tmpl <-> committed keeper.dev.yml"
 	@echo "  check-soul-template   CI guard on drift soul.dev.yml.tmpl <-> committed soul.dev.yml (skip without .tmpl)"
 	@echo ""

@@ -17,28 +17,21 @@
 set -euo pipefail
 
 CORE_REPO="$(cd "$(dirname "$0")/.." && pwd)"
-WEB_REPO="${1:-$(cd "${CORE_REPO}/../soul-stack-web" && pwd)}"
-
-SRC="${WEB_REPO}/dist"
-DST="${CORE_REPO}/keeper/internal/webui/assets"
+# NOT `$(cd ... && pwd)` here: under `set -e` that dies with a raw `cd: no such
+# file or directory` and rc=1 the moment the companion is absent - i.e. exactly
+# the case the friendly message below exists for, reported instead as a shell
+# error with the wrong exit code. Normalise AFTER the directory is known to exist.
+WEB_REPO="${1:-${CORE_REPO}/../soul-stack-web}"
 
 if [[ ! -d "${WEB_REPO}" ]]; then
   echo "sync-webui.sh: companion soul-stack-web not found: ${WEB_REPO}" >&2
+  echo "  Clone it next to this repository, or name it: scripts/sync-webui.sh /path/to/soul-stack-web" >&2
   exit 2
 fi
+WEB_REPO="$(cd "${WEB_REPO}" && pwd)"
 
-# dist/ may be missing (a fresh companion checkout) or stale. We build
-# if dist/index.html is absent; otherwise we trust the existing build
-# (rebuilding after source edits is on the operator - `npm run build`).
-if [[ ! -f "${SRC}/index.html" ]]; then
-  echo "sync-webui.sh: dist missing - building companion (npm run build)"
-  (cd "${WEB_REPO}" && npm run build)
-fi
-
-if [[ ! -f "${SRC}/index.html" ]]; then
-  echo "sync-webui.sh: build did not produce ${SRC}/index.html - check the companion build" >&2
-  exit 2
-fi
+SRC="${WEB_REPO}/dist"
+DST="${CORE_REPO}/keeper/internal/webui/assets"
 
 # PROVENANCE (NIM-277). The embedded bundle is a build artefact of another
 # repository committed into this one, and until now it carried no record of
@@ -48,7 +41,10 @@ fi
 # a reviewer can read.
 #
 # Refuse to vendor from a dirty companion: a bundle built from uncommitted work
-# is not reproducible, and recording its SHA would be a lie.
+# is not reproducible, and recording its SHA would be a lie. This runs BEFORE the
+# build below, because the answer does not depend on building and refusing after
+# a full vite run only wastes the operator's time. dist/ is gitignored in the
+# companion, so the build itself never makes the tree dirty.
 WEB_SHA="$(git -C "${WEB_REPO}" rev-parse HEAD 2>/dev/null || true)"
 if [[ -z "${WEB_SHA}" ]]; then
   echo "sync-webui.sh: ${WEB_REPO} is not a git checkout - refusing to vendor a bundle with no provenance" >&2
@@ -59,8 +55,56 @@ if [[ -n "$(git -C "${WEB_REPO}" status --porcelain 2>/dev/null)" ]]; then
   echo "sync-webui.sh: commit or stash in ${WEB_REPO}, rebuild, then sync again." >&2
   exit 2
 fi
+
+# ALWAYS build. This used to build only when dist/index.html was absent and
+# otherwise trust whatever was already there, which quietly broke the one property
+# every downstream check rests on: that the mirrored bytes and the recorded commit
+# describe the same thing. A companion checkout whose dist/ was built before the
+# last few commits would be mirrored as-is while commit= below is read fresh from
+# HEAD - so the bundle stays stale, its fingerprint matches (assets_sha256 is
+# written below from these same bytes), and its provenance now points at the tip
+# (check-webui-freshness is satisfied). All three guards go green over exactly the
+# defect they exist to catch, and this script is the remedy every one of them
+# recommends, so that is the last place that can afford to be optimistic.
+#
+# The cost is a rebuild on every sync. That is bounded - this is an on-demand
+# target, not part of `make check` - and vite is incremental enough that an
+# unchanged tree rebuilds to identical bytes.
+echo "sync-webui.sh: building companion (npm run build) in ${WEB_REPO}"
+if ! (cd "${WEB_REPO}" && npm run build); then
+  echo "sync-webui.sh: companion build failed - the vendored bundle was NOT touched." >&2
+  echo "sync-webui.sh: if this is a fresh checkout, install its dependencies first: (cd ${WEB_REPO} && npm ci)" >&2
+  exit 2
+fi
+
+if [[ ! -f "${SRC}/index.html" ]]; then
+  echo "sync-webui.sh: build did not produce ${SRC}/index.html - check the companion build" >&2
+  exit 2
+fi
+
 WEB_DESC="$(git -C "${WEB_REPO}" describe --tags --always 2>/dev/null || echo "-")"
-WEB_BRANCH="$(git -C "${WEB_REPO}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-")"
+# NOT `rev-parse --abbrev-ref HEAD`: on a detached companion checkout that prints
+# the literal string `HEAD` and exits 0, so the provenance would claim the bundle
+# came from a branch named HEAD - and check-webui-freshness would then ask the
+# remote for refs/heads/HEAD and report a missing branch instead of a detached
+# source. Recording nothing is the truthful answer; the freshness check falls back
+# to the branch being assembled when this line is empty.
+WEB_BRANCH="$(git -C "${WEB_REPO}" symbolic-ref --quiet --short HEAD 2>/dev/null || printf '')"
+
+# Say what an empty branch= costs, here, where it is still cheap to fix. The
+# freshness check falls back to the recorded branch when the branch being
+# assembled is not in the companion yet; with nothing recorded there is nothing
+# to fall back TO, and on release/* that becomes a red whose real cause (this
+# checkout was detached, an hour ago, in another repository) is invisible from
+# the tree that reds.
+if [[ -z "${WEB_BRANCH}" ]]; then
+  {
+    echo "sync-webui.sh: NOTE - the companion is on a detached HEAD, so the provenance will record no"
+    echo "  branch=. That is truthful, but it removes the fallback check-webui-freshness uses when the"
+    echo "  companion has not opened the branch being assembled yet. Check out the branch you are"
+    echo "  vendoring from and re-run if you want that fallback."
+  } >&2
+fi
 
 echo "sync-webui.sh: ${SRC} -> ${DST}"
 

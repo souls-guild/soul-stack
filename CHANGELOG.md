@@ -1159,7 +1159,131 @@ order to act in.
   response field is narrowed; the `?type=` filter stays a free string, because a
   filter has to keep matching historical rows whose type has since been retired.
 
+- **`make check-webui-freshness` — the gate now notices that the embedded UI is
+  not the companion's current one.** Merging the UI repository without re-running
+  `make sync-webui` leaves keeper serving a bundle nobody built from current
+  sources, and nothing failed: `check-webui` prints `skipping` and exits zero
+  where the companion is not checked out, and `check-webui-embed` compares the
+  bundle against a fingerprint recorded by the same sync that produced it, which
+  a stale bundle matches perfectly. That happened on two consecutive web merges — three times in all,
+  counting NIM-273 — and a human found it every time. The new check asks the one
+  question those two structurally cannot —
+  is `WEBUI_SOURCE`'s `commit=` still the tip of the companion branch this tree
+  is assembling — with a single anonymous `git ls-remote`: no companion checkout,
+  no npm, no token. It is **binding on `release/*` and `hotfix/*`** and advisory
+  everywhere else, so a release cannot be assembled around a stale `/ui` while an
+  unrelated feature branch stays quiet; hotfix branches are binding because they
+  reach `main` without passing a release branch. `WEBUI_FRESHNESS_SKIP=1` is the
+  declared escape for offline work, and every failing path names it — most of the
+  conditions that fail here (offline, no remote, no provenance file) are not cured
+  by the re-sync the message would otherwise be recommending. A checkout that is
+  on no branch at all cannot answer "is this a release?", and an unanswerable
+  question counts as binding rather than as "not a release": otherwise one
+  detached HEAD would turn the check off silently, which is the failure it exists
+  to prevent. Three detachments that are not that case are recognised rather than
+  counted as unanswerable — a conflicted rebase resolves to the branch being
+  rebased and is then judged as that branch, while a bisect stays advisory (it
+  lands on old commits on purpose) and so does a checkout sitting exactly on a
+  tag, a released version whose bundle is supposed to be frozen. Exactly
+  one tree is skipped outright — one with no `assets/` at all, which cannot carry
+  a stale bundle; a tree that is not a git checkout (an unpacked source tarball)
+  is advisory, which still reports. That single skip is unconditional, and it is
+  safe because of something outside this check: `//go:embed all:assets` refuses to
+  compile an empty or missing directory, so "delete `assets/` and the gate goes
+  quiet" reds the `build` tier first. A bundle *with* no `WEBUI_SOURCE` beside it
+  still fails — that is an inconsistency, not an absence, and it is the live state
+  of `main` and `hotfix/R5-I-provision-hardening`, so the hotfix branch reds until
+  it carries a re-vendored bundle. A pull request is judged by its **base** branch,
+  not by `GITHUB_REF_NAME` (which is `<n>/merge` there and could never match
+  `release/*`): the review before the merge is where an unpaired bundle is still
+  cheap to catch. A merge-queue run is read the same way — its ref spells the base
+  out as `gh-readonly-queue/<base>/pr-<n>-<sha>`, and that run is the last gate
+  before the commit lands on that base, so taking the ref at face value would go
+  quiet exactly there.
+  When the companion has no such branch yet — a release train that starts in core —
+  the check says so and compares against the branch the bytes were actually
+  vendored from, rather than reding until someone opens the branch on the other
+  side; a red nobody can clear teaches everyone to stop reading reds. When that
+  fallback is unavailable because the bundle records no `branch=` at all — which
+  is what `sync-webui` writes for a detached companion, and what it now warns
+  about while the companion is still in reach — the red says so instead of
+  blaming a branch nobody has to open. And the branch a bundle is *labelled* with
+  is judged only after its commit: a release train opens the companion's next
+  branch AT the commit already vendored, so for that moment the label reads
+  `release/<prev>` while the bytes are the tip of `release/<next>`, and calling
+  that stale would red a tree that is exactly up to date at the busiest hour of
+  the train.
+  It compares pointers, not content, so an inert companion commit still asks
+  for a re-sync — deliberate, because `vite.config.ts` carries both the build and
+  the test config and no path list can separate the two honestly. When the UI
+  really did not change, the whole diff is two provenance lines.
+  A red has two shapes and the message names both, because only one of them is
+  cleared by re-vendoring. Besides the unpaired merge there is a bundle vendored
+  from a companion commit **that was never pushed**, and there `make sync-webui`
+  is the wrong move in both directions: from the branch tip it rewinds the UI past
+  the work that was vendored, and from the local checkout it re-records the same
+  unpublished SHA. That state means the release bundle cannot be rebuilt by
+  anyone else, so it earns a red of its own; the fix is to push the companion.
+  `git branch -r --contains <sha>` in the companion separates the two shapes,
+  while `ls-remote | grep` cannot — an ancestor is published and is the tip of
+  nothing.
+  Three things the check deliberately does not overstate. It reports "does not
+  match the companion tip", never "is behind": `ls-remote` returns one SHA and
+  answers equality, not ancestry, and on a force-pushed branch "behind" would
+  simply be false. The companion repository is *derived* — every remote of this
+  checkout with `-web` appended, origin first, first answer wins — so a fork-based
+  checkout can be answered by a `-web` that trails or leads upstream; every
+  mismatch therefore names the URL that answered, and `WEBUI_REMOTE_URL=<url>`
+  pins a different one, which is what keeps a red that re-vendoring cannot clear
+  diagnosable. And `unknown` binds but cannot ask everything: without a branch,
+  "was this vendored from the branch being assembled" is unanswerable, so only
+  staleness against the recorded branch is checked and the banner says which
+  question was skipped. A rebase started from an already-detached HEAD stays
+  `unknown` too — git writes the literal string `detached HEAD` as the branch being
+  rebased, and reading that as a branch name would have downgraded a release
+  worktree to advisory with one `git rebase`.
+  Three things a green does not mean, written down because an unwritten limit
+  gets read as coverage: nobody hand-edited `WEBUI_SOURCE` (nothing binds
+  `commit=` to the bytes beside it, and writing the companion's tip into that
+  line greens all three web checks at once); the companion has opened the branch
+  being assembled (until it does, the fallback measures against the recorded
+  branch, so UI work landing elsewhere stays invisible); and the check actually
+  ran (`WEBUI_FRESHNESS_SKIP=1` exits zero and `gate.sh` prints PASS — a known
+  boundary of every tier, visible in the log rather than in the summary table).
+
 ### Changed
+
+- **`check-webui` fails instead of skipping where the companion is mandatory.**
+  Absent companion still skips off a release branch (third-party clones, ticket
+  worktrees that never touch the UI), but on `release/*` it is now an error with
+  `WEBUI_SKIP=1` as the declared opt-out — a release worktree is exactly where
+  the companion is supposed to sit next to core, so "no companion" there is an
+  unconfigured tree rather than a legitimate skip. CI keeps skipping the byte
+  comparison, knowingly: running it there would mean checking out the companion
+  *and* building it on every core push, and `check-webui-freshness` answers the
+  question that mattered without either. Both targets read the same answer from
+  `check-webui-freshness.sh --context`, so the two cannot drift apart, and when
+  that answer cannot be obtained at all the caller assumes the strict one — a
+  gate that fails open at the exact moment it cannot tell where it is running is
+  not a gate.
+
+- **`make sync-webui` always rebuilds the companion.** It used to build only when
+  `dist/index.html` was missing and otherwise mirror whatever was already there,
+  while reading `commit=` fresh from the companion's HEAD. A checkout whose `dist/`
+  predated its last few commits was therefore mirrored as-is under a provenance
+  line pointing at the tip: the bundle stayed stale, its fingerprint matched
+  (`check-webui-embed` derives it from those same bytes), and freshness was
+  satisfied. All three checks went green over exactly the defect they exist to
+  catch — in the one script every one of them recommends as the remedy. A failed
+  build now leaves the vendored bundle untouched and says so, pointing at
+  `npm ci` for a fresh checkout, and a detached companion records an empty
+  `branch=` rather than a branch literally named `HEAD`. Running it with no
+  companion beside the repository now prints the "not found, or name it
+  explicitly" message it always carried: the default path was resolved with a
+  `cd` under `set -e`, so the script died on a raw `cd: no such file or
+  directory` before reaching its own guard — and the person most likely to follow
+  a "run make sync-webui" red is precisely the one without the companion checked
+  out.
 
 - **A Tiding's `incarnation` selector now binds through `incarnation.run_completed`.**
   It used to bind through `incarnation.drift_checked`, the only run-scope event
