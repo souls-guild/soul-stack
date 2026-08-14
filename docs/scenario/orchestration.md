@@ -776,14 +776,24 @@ Example (primary discovery before point reconfiguration of replicas):
 
 ```yaml
 - name: Detect actual redis role per host
-  module: core.exec.run                                        # on: omitted = all member hosts
+  module: core.cmd.shell                                       # on: omitted = all member hosts
   register: redis_role
   changed_when: false                                          # probe state does not change
   params:
-    command: "redis-cli role | head -1"
+    cmd: "redis-cli role | head -1"                            # a pipeline -> shell, not argv
 ```
 
-**The success of the probe is through the semantics of the module (`failed_when:` to `register.self.*`).** The Probe step is no different from the usual one: the status of the host is determined by the module (non-zero exit `core.exec.run` → host `failed`) or the inherited `failed_when:` **by its own result** (`register.self.stdout`/`.rc`). If the probe crashes on the host, **standard step fall handling** from the DSL core works (`retry:` / `onfail:` / script stop / `error_locked`).
+**A probe that exits non-zero fails its host by default.** The probe step is no different from the usual one: without `failed_when:` the host's status is whatever the module reported, and the verb modules judge that by their `exit_codes` param, which defaults to `[0]` ([destiny/tasks.md](../destiny/tasks.md), `failed_when:`). For a probe that answers by exit code — `grep -q`, `test`, `systemctl is-active` — the accepted codes belong on the task:
+
+```yaml
+params:
+  cmd: "systemctl is-active redis-server"
+  exit_codes: [0, 3]                                           # 3 = inactive, still an answer
+```
+
+`failed_when:` on `register.self.*` still has the last word over both, and `failed_when: false` tolerates any code. The probe's own result carries `register.self.stdout` / `.stderr` / `.exit_code` — there is **no** `.rc` field, and referencing one is a CEL `no such key` that fails the task. Those fields are present even when the probe failed on its exit code, so a predicate over them is always evaluable. Once the probe does fail the host, **standard step fall handling** from the DSL core works (`retry:` / `onfail:` / script stop / `error_locked`).
+
+> Mind the pipeline: `sh -c` reports the exit code of the **last** command, so `redis-cli role | head -1` stays 0 even when `redis-cli` cannot connect. An exit-code check does not cover that — a probe whose answer must be non-empty asserts on `register.self.stdout`, as the `retry: until:` idiom below does.
 
 > **"Probe completeness" is NOT expressed in a manual idiom.** The previous spec example carried `failed_when: size(register.redis_role) < incarnation.host_count` ("fail if not all hosts responded to the probe"). This idiom is **removed** - it is physically unexecutable: `failed_when:` is calculated by Soul-side per-host and sees only `register:` previous tasks + `register.self.*`; **own** aggregate `register.<this-probe>` by name and cross-host `size(...)` to it **not available** → CEL `no such key`. The completeness of the probe does not need manual verification - protection from destructive operations on an incomplete probe is provided by the fail-stop staged-render barrier (see footgun below).
 

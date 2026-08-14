@@ -187,9 +187,9 @@ The command is carried on the Errand transport with the module pinned to `core.c
 |---|---|---|
 | `errand_id` | `string` (ULID) | Run id; also the key for `keeper.errand.get` when `async=true`. |
 | `sid` | `string` | Mirror input. |
-| `status` | `string` | `running` / `success` / `failed` / `timed_out` / `module_not_allowed`. |
+| `status` | `string` | `running` / `success` / `failed` / `timed_out` / `cancelled` / `module_not_allowed`. The tool pins the module to `core.cmd.shell`, whose accepted exit codes default to `[0]` (NIM-687) — **a command that exits non-zero comes back `failed`**, with `exit_code`/`stdout`/`stderr` filled in. The tool's arguments carry no `exit_codes` knob; a caller who needs another code treated as success runs the command through an Errand ([`POST /v1/souls/{sid}/exec`](../operator-api/errands.md)), whose free-form `input` takes the module's own params. |
 | `async` | `boolean` | `true` → server-cap exceeded, follow up via `keeper.errand.get`. |
-| `exit_code` | `integer` | Exit status of the command. A non-zero code is a normal result, not a tool error. |
+| `exit_code` | `integer` | Exit status of the command. A `failed` result carries its code and both streams, not just an error message — that is the point of the `[0]` default above. Present on **every** terminal result the Soul reported, which includes the ones that never ran a process to completion: `cancelled` and `module_not_allowed` report `0` because nothing set a code, and so does a `failed` that stopped at a bad param or an executable that would not launch. Absent in three cases, none of them a real exit: while `running`; for a `timed_out` the Keeper declared on its own timer without waiting for the Soul (if the Soul's own timeout report wins the race, the field is there and reads `0`); and for a `failed` the Keeper synthesised because the Soul's result payload would not decode, whose `error_message` says so. So the code alone never separates success from "no code was ever produced": read `status` first, always. |
 | `stdout`, `stderr` | `string` | Masked output (cap 64 KiB per channel). |
 | `stdout_truncated`, `stderr_truncated` | `boolean` | Cap exceeded. |
 | `duration_ms` | `integer` | Duration on the Soul side. |

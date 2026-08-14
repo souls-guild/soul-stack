@@ -670,7 +670,8 @@ A task is considered finally-failed if all `count` attempts failed/timed out (wi
   register: migration_status
   changed_when: contains(register.self.stdout, "pending")
   params:
-    command: "redis-migrate status"
+    cmd: redis-migrate
+    args: ["status"]
 ```
 
 Inside the expression, `register.self.*` is available—the fields of the task's own result (`.stdout`, `.exit_code`, custom fields from the `output:` module).
@@ -683,15 +684,39 @@ Inside the expression, `register.self.*` is available—the fields of the task's
 
 - **Type:** CEL expression, whole line = CEL without wrapper `${ … }` (top-level expression-key, [ADR-010](../adr/0010-templating.md)).
 - **Applies to:** module task.
-- **Semantics:** overrides how the framework considers `register.<name>.failed`. The default is exit_code != 0 (for exec modules) or the module itself reports failure. `failed_when:` gives a custom criterion.
+- **Semantics:** overrides how the framework considers `register.<name>.failed`. Without `failed_when:` the task's `failed` is exactly what the module reported. For the verb modules (`core.exec.run`, `core.cmd.shell`) that is decided by their [`exit_codes`](../module/core/exec/README.md) param, and **it defaults to `[0]`** — a command that ran and exited non-zero fails the task. `failed_when:` gives a custom criterion and has the last word over whatever the module decided.
+
+> **A code that is an answer rather than an error is declared at the task.** `grep` exiting 1 means "no match", `diff` exiting 1 means "they differ" — legitimate results, and the default set rejects them. Widen the set on the task that expects them:
+>
+> ```yaml
+> params:
+>   cmd: grep
+>   args: ["-q", "listen", "/etc/redis/redis.conf"]
+>   exit_codes: [0, 1]          # 1 = no match, still an answer
+> ```
+>
+> `exit_codes` takes exact integers and inclusive `"lo-hi"` string ranges, mixed freely: `[0]`, `[0, 1, 2]`, `["2-5"]`, `[0, "2-5"]`. An empty list is rejected — it would accept no code at all, not even 0. A process killed by a signal reports `-1`, and no range covers it (the string form is non-negative), so waive that one as a bare integer: `[0, -1]`.
 
 ```yaml
 - name: Run migration with non-zero exit on partial
   module: core.exec.run
   register: migration
-  failed_when: "!(register.self.exit_code in [0, 2])"    # 2 = partial OK
-  params: { command: "redis-migrate up" }
+  params: { cmd: redis-migrate, args: ["up"], exit_codes: [0, 2] }    # 2 = partial OK
 ```
+
+**Turning the check off entirely** is `failed_when: false` on the task — the sanctioned way back to the pre-NIM-687 behaviour, where any exit code was tolerated:
+
+```yaml
+- name: Best-effort cache warm-up
+  module: core.cmd.shell
+  register: warm
+  failed_when: "false"                  # any exit code is acceptable here
+  params: { cmd: "redis-cli --scan | head -100 | xargs -r redis-cli touch" }
+```
+
+The output survives the failure either way: on a rejected exit code the final event still carries `stdout` / `stderr` / `exit_code`, so `register.<name>.*` is fully populated and a predicate like `failed_when: register.self.exit_code != 3` is evaluable. The original module error is kept in `register.<name>.ignored_error` when a waiver suppressed it.
+
+> **A waived task ends OK, not CHANGED.** `failed` is read before `changed`, so a task that fails on its exit code and is then waived by `failed_when: false` reports **OK** — and `onchanges:` dependents of that task do **not** fire. If a handler must run off that task, waive the code with `exit_codes:` instead: the task then succeeds normally and stays CHANGED.
 
 `failed_when: false` - the task is never considered abandoned (no matter what happens, we continue). This is the "ignore errors" behavior, but through a unified mechanism.
 

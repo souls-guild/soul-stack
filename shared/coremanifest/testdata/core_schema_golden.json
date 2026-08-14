@@ -224,6 +224,10 @@
                 "type": "string"
               }
             },
+            "exit_codes": {
+              "type": "list",
+              "description": "Exit codes accepted as success: integers and/or \"lo-hi\" ranges, e.g. [0, 1] or [0, \"2-5\"]. Defaults to [0] — any other code fails the task (NIM-687). `sh -c` reports the LAST command of a pipeline."
+            },
             "onlyif": {
               "type": "string",
               "description": "Idempotency: shell command; exit≠0 → skip."
@@ -363,6 +367,10 @@
               "items": {
                 "type": "string"
               }
+            },
+            "exit_codes": {
+              "type": "list",
+              "description": "Exit codes accepted as success: integers and/or \"lo-hi\" ranges, e.g. [0, 1] or [0, \"2-5\"]. Defaults to [0] — any other code fails the task (NIM-687)."
             },
             "onlyif": {
               "type": "string",

@@ -271,15 +271,17 @@ func TestApply_AllGuards_PassThrough_Runs(t *testing.T) {
 }
 
 // stderr from Result is threaded into output alongside stdout/exit_code
-// (the stderr field isn't covered by the basic tests).
+// (the stderr field isn't covered by the basic tests). Code 3 is declared
+// acceptable here so the case stays about the output fields, not about the
+// exit_codes verdict.
 func TestApply_OutputCarriesStderr(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["probe"] = []util.Result{{ExitCode: 3, Stdout: "out", Stderr: "err-text"}}
 	m := newModule(r, noStat)
 
-	ev := apply(t, m, map[string]any{"cmd": "probe"})
+	ev := apply(t, m, map[string]any{"cmd": "probe", "exit_codes": []any{0, 3}})
 	if ev.Failed {
-		t.Fatal("non-zero exit should not produce failed")
+		t.Fatalf("exit 3 is listed in exit_codes, should not fail: msg=%q", ev.Message)
 	}
 	if got := ev.Output.Fields["stderr"].GetStringValue(); got != "err-text" {
 		t.Fatalf("stderr=%q", got)
@@ -329,24 +331,36 @@ func TestApply_Production_RealArgv_NoShellExpansion(t *testing.T) {
 	}
 }
 
-// Production New(): non-zero exit from a real /bin/false does NOT fail the
-// step (core.exec's contract — the user decides via failed_when). exit_code=1.
-func TestApply_Production_RealFalse_NonZeroNotFailed(t *testing.T) {
+// Production New() against a real /bin/false: exit 1 fails the step and the
+// event still carries exit_code. Uses the real os/exec runner, so it also
+// proves the parts assembled in New() agree on the contract.
+func TestApply_Production_RealFalse_NonZeroFails(t *testing.T) {
 	m := exec.New()
 	ev := apply(t, m, map[string]any{"cmd": "/usr/bin/false"})
-	if ev.Failed {
-		// fallback to /bin/false
-		m2 := exec.New()
-		ev = apply(t, m2, map[string]any{"cmd": "/bin/false"})
+	firstMsg := ev.Message
+	if ev.Output == nil {
+		// No output means nothing ran (ENOENT — false lives in /bin here), which
+		// is a different class from a rejected code. Retry at the other path
+		// rather than read a launch failure as an exit code.
+		ev = apply(t, exec.New(), map[string]any{"cmd": "/bin/false"})
 	}
-	if ev.Failed {
-		t.Fatalf("non-zero exit should not produce failed: msg=%q", ev.Message)
+	if ev.Output == nil {
+		// Two readings, and the test cannot tell them apart from here: `false`
+		// is at neither path on this box, or the module dropped the output it
+		// owes on a rejected code. Name both — blaming the box for a broken
+		// module is how this guard would stop meaning anything. Both messages
+		// are reported: `ev` now holds only the second attempt, and if the two
+		// paths failed for different reasons the first one is the evidence that
+		// distinguishes them.
+		t.Fatalf("no output from either path: /usr/bin/false msg=%q, /bin/false msg=%q. "+
+			"Either `false` is at neither path here, or the rejected-code path lost its output",
+			firstMsg, ev.Message)
 	}
-	if !ev.Changed {
-		t.Fatal("a run command should be changed")
+	if !ev.Failed {
+		t.Fatal("Failed=false for exit 1 with no exit_codes; the default set is [0]")
 	}
-	if ev.Output.Fields["exit_code"].GetNumberValue() != 1 {
-		t.Fatalf("exit_code=%v want 1", ev.Output.Fields["exit_code"].GetNumberValue())
+	if got := ev.Output.Fields["exit_code"].GetNumberValue(); got != 1 {
+		t.Fatalf("exit_code=%v want 1", got)
 	}
 }
 

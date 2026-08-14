@@ -2402,9 +2402,9 @@ var (
 "properties":{
 "errand_id":{"type":"string","description":"Run id; also the key for keeper.errand.get when async=true."},
 "sid":{"type":"string"},
-"status":{"type":"string","enum":["running","success","failed","timed_out","cancelled","module_not_allowed"]},
+"status":{"type":"string","enum":["running","success","failed","timed_out","cancelled","module_not_allowed"],"description":"The pinned module is core.cmd.shell, whose accepted exit codes default to [0] (NIM-687): a command that ran and exited non-zero comes back failed. There is no exit_codes argument here - a caller who needs another code treated as success runs the command through an Errand (POST /v1/souls/{sid}/exec), whose free-form input takes the module's own params."},
 "async":{"type":"boolean","description":"true -> server-cap exceeded, follow up via keeper.errand.get."},
-"exit_code":{"type":"integer","description":"Exit status of the command. A non-zero code is a normal result, not a tool error."},
+"exit_code":{"type":"integer","description":"Exit status of the command. A failed result carries its code and both streams, not just an error message - that is the point of the [0] default. Present on EVERY terminal result the Soul reported, including the ones that never ran a process to completion: cancelled and module_not_allowed report 0 because nothing set a code, and so does a failed that stopped at a bad param or an executable that would not launch. Absent in three cases, none of them a real exit: while running; for a timed_out the Keeper declared on its own timer without waiting for the Soul (if the Soul's own timeout report wins the race, the field is there and reads 0); and for a failed the Keeper synthesised because the Soul's result payload would not decode, whose error_message says so. So the code alone never separates success from 'no code was ever produced': read status first, always."},
 "stdout":{"type":"string","description":"Masked, capped at 64 KiB."},
 "stderr":{"type":"string","description":"Masked, capped at 64 KiB."},
 "stdout_truncated":{"type":"boolean"},

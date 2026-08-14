@@ -77,7 +77,10 @@ func TestApply_Run_BasicSuccess(t *testing.T) {
 	}
 }
 
-func TestApply_Run_NonZeroExit_NotFailed(t *testing.T) {
+// A command that ran and exited non-zero fails the task: exit_codes defaults to
+// [0] (NIM-687). Widening the set and keeping the output on the failure are
+// covered by the shared verb-shell guard in coremod (both modules at once).
+func TestApply_Run_NonZeroExit_Fails(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["false"] = []util.Result{{ExitCode: 1}}
 	m := newModule(r, func(string) (bool, error) { return false, nil })
@@ -90,11 +93,11 @@ func TestApply_Run_NonZeroExit_NotFailed(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	ev := stream.Last()
-	if ev.Failed {
-		t.Fatal("Failed=true for non-zero exit; should pass through, the user decides via failed_when")
+	if !ev.Failed {
+		t.Fatal("Failed=false for a non-zero exit; without exit_codes only 0 is accepted")
 	}
-	if !ev.Changed {
-		t.Fatal("Changed=false for a run command")
+	if ev.Output == nil {
+		t.Fatalf("failed event carries no output; the code must travel with the verdict: msg=%q", ev.Message)
 	}
 	if ev.Output.Fields["exit_code"].GetNumberValue() != 1 {
 		t.Fatalf("exit_code=%v want 1", ev.Output.Fields["exit_code"].GetNumberValue())

@@ -134,7 +134,9 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 		t.Error("core.cmd must be errand_safe (whitelist core.cmd.shell)")
 	}
 	// core params are now read from coremanifest (ADR-045 S2): core.cmd carries
-	// cmd/cwd/env/timeout/onlyif/unless; cmd is required.
+	// cmd/cwd/env/creates/onlyif/unless/exit_codes; cmd is required. The list is
+	// illustrative — the assertion below is on the count and on `cmd`, so a new
+	// param does not have to be added here to keep the test honest.
 	if len(cmd.Params) == 0 {
 		t.Error("core.cmd params must be populated from coremanifest, got 0")
 	}

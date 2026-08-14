@@ -32,6 +32,16 @@ Pull-ad-hoc exec of a single module on a specific Soul via mTLS EventStream. Err
 
 **Response (`ErrandResult` / `ErrandStatus`):** `status` ∈ `running` / `success` / `failed` / `timed_out` / `module_not_allowed`; `exit_code` (NULL for read-safe non-shell); `stdout`/`stderr` (masked output, cap 64 KiB) + `*_truncated` flags; `duration_ms`; `error_message` (masked reason FAILED/TIMED_OUT/MODULE_NOT_ALLOWED); `output` (structural output of read-safe modules, not available for shell/exec).
 
+**A non-zero exit code is `status: failed`.** The verb-shell modules judge the code
+against their `exit_codes` param, which defaults to `[0]`
+([`core.exec`](../../module/core/exec/README.md)), and an errand reports `failed`
+for whatever the module reported. `stdout` / `stderr` / `exit_code` are filled in on
+that failure exactly as on success — the diagnostic survives the verdict. A command
+whose non-zero code is an answer rather than an error (`grep`, `diff`,
+`systemctl is-active`) declares it in `input`: `{"cmd": "…", "exit_codes": [0, 1]}`.
+There is no errand-level waiver — `failed_when:` belongs to scenarios, not to
+ad-hoc exec.
+
 **Errors:** `400 malformed-request` (`dry_run` requested for a verb-shell module — see below), `404 not-found` (Soul is not connected to the cluster), `409 soul-capability-unsupported` (`dry_run` requested and the target did not announce that capability — see below), `422 validation-failed` (empty `module`, `timeout_seconds` outside [1, 300]).
 
 ### `dry_run` on a verb-shell module is refused outright

@@ -8,9 +8,15 @@
 //   - unless: run a helper command; skip if its exit=0.
 //   - onlyif: run a helper command; skip if its exit≠0.
 //
-// Output: stdout, stderr, exit_code. A non-zero exit from the main command is
-// NOT automatically considered failed — the user decides via `failed_when:`
-// in the scenario what counts as an error (e.g. grep exiting 1 is normal).
+// Output: stdout, stderr, exit_code — carried on success AND on a failure by
+// exit code, so the stderr that explains the failure never goes missing.
+//
+// Which codes count as success is the `exit_codes` param, and by default only
+// 0 does: a command that ran and exited non-zero fails the task (NIM-687).
+// Codes that are an answer rather than an error — grep exiting 1, `diff`
+// exiting 1 — are declared, either by widening the set (`exit_codes: [0, 1]`,
+// `exit_codes: [0, "2-5"]`) or by overriding the verdict from the scenario with
+// `failed_when:`, which is applied after Apply and has the last word.
 package exec
 
 import (
@@ -94,6 +100,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
+	// Read before the guards: a malformed exit_codes is an author error, and it
+	// should surface whether or not this particular host happens to skip.
+	exitCodes, err := util.OptExitCodesParam(req.Params, "exit_codes")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
 
 	skip, reason, serr := m.shouldSkip(ctx, creates, unless, onlyif)
 	if serr != nil {
@@ -114,13 +126,20 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		Env:  envSlice(envMap),
 	})
 	if res.Err != nil {
+		// A different class from a bad exit code: nothing ran, so there is no
+		// output to report and no code to judge.
 		return util.SendFailed(stream, fmt.Sprintf("exec %s: %v", cmd, res.Err))
 	}
-	return util.SendFinal(stream, true, map[string]any{
+	output := map[string]any{
 		"stdout":    res.Stdout,
 		"stderr":    res.Stderr,
 		"exit_code": float64(res.ExitCode),
-	})
+	}
+	if !exitCodes.Allows(res.ExitCode) {
+		return util.SendFailedWithOutput(stream, fmt.Sprintf(
+			"exec %s: exit code %d is not accepted (exit_codes: %s)", cmd, res.ExitCode, exitCodes), output)
+	}
+	return util.SendFinal(stream, true, output)
 }
 
 // shouldSkip is the combined `creates`/`unless`/`onlyif` check (order: creates

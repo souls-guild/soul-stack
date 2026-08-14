@@ -134,16 +134,17 @@ func TestApply_EnvPassedToShell(t *testing.T) {
 	}
 }
 
-// stdout/stderr/exit_code from Result are always forwarded to output, even on
-// non-zero exit (exit code alone doesn't fail the step — changed_when decides that).
+// stdout/stderr/exit_code from Result are always forwarded to output. Here the
+// code is accepted, so the step succeeds; that they survive a REJECTED code is
+// the separate contract guard in coremod.
 func TestApply_OutputCarriesStdoutStderrExit(t *testing.T) {
 	r := internaltest.NewRunner()
 	r.Results["sh -c probe"] = []util.Result{{ExitCode: 2, Stdout: "out\n", Stderr: "err\n"}}
 	m := newModule(r, func(string) (bool, error) { return false, nil })
 
-	ev := apply(t, m, map[string]any{"cmd": "probe"})
+	ev := apply(t, m, map[string]any{"cmd": "probe", "exit_codes": []any{0, 2}})
 	if ev.Failed {
-		t.Fatal("non-zero exit should not produce failed")
+		t.Fatalf("exit 2 is listed in exit_codes but the step failed: %s", ev.Message)
 	}
 	if got := ev.Output.Fields["stdout"].GetStringValue(); got != "out\n" {
 		t.Fatalf("stdout=%q", got)

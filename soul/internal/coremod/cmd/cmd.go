@@ -5,7 +5,17 @@
 //     the shell here handles pipes, redirects, globs, and variables.
 //
 // Same idempotency flags as core.exec: creates / unless / onlyif. Output:
-// stdout/stderr/exit_code.
+// stdout/stderr/exit_code, carried on success AND on a failure by exit code,
+// so the stderr explaining the failure never goes missing.
+//
+// Which codes count as success is the `exit_codes` param, and by default only 0
+// does: a shell line that ran and exited non-zero fails the task (NIM-687).
+// Codes that are an answer rather than an error are declared, either by
+// widening the set (`exit_codes: [0, 1]`, `exit_codes: [0, "2-5"]`) or by
+// overriding the verdict from the scenario with `failed_when:`, which is
+// applied after Apply and has the last word. Mind that `sh -c` reports the exit
+// code of the LAST command in a pipeline, so `a | b` still hides a failure of
+// `a` from the check.
 //
 // Security: the cmd string goes into `sh -c` unescaped — shell by design,
 // TRUSTED-ONLY module. Any interpolation into cmd (CEL-render, register,
@@ -89,6 +99,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
+	// Read before the guards: a malformed exit_codes is an author error, and it
+	// should surface whether or not this particular host happens to skip.
+	exitCodes, err := util.OptExitCodesParam(req.Params, "exit_codes")
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
+	}
 
 	skip, reason, serr := m.shouldSkip(ctx, creates, unless, onlyif)
 	if serr != nil {
@@ -109,13 +125,20 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		Env:  envSlice(envMap),
 	})
 	if res.Err != nil {
+		// A different class from a bad exit code: no shell ran, so there is no
+		// output to report and no code to judge.
 		return util.SendFailed(stream, fmt.Sprintf("sh -c: %v", res.Err))
 	}
-	return util.SendFinal(stream, true, map[string]any{
+	output := map[string]any{
 		"stdout":    res.Stdout,
 		"stderr":    res.Stderr,
 		"exit_code": float64(res.ExitCode),
-	})
+	}
+	if !exitCodes.Allows(res.ExitCode) {
+		return util.SendFailedWithOutput(stream, fmt.Sprintf(
+			"sh -c: exit code %d is not accepted (exit_codes: %s)", res.ExitCode, exitCodes), output)
+	}
+	return util.SendFinal(stream, true, output)
 }
 
 func (m *Module) shouldSkip(ctx context.Context, creates, unless, onlyif string) (bool, string, error) {
