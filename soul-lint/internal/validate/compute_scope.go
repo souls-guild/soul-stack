@@ -80,7 +80,7 @@ func computeScopeDiagnostics(scenarioPath string, tasks []config.Task) []diag.Di
 // readable. `on: keeper` on the BLOCK is not the counter-example it looks like:
 // that construction renders no children at all — the top-level dispatch tests
 // IsKeeperTask before the block branch and hands it to renderKeeperTask, which
-// is module-only (NIM-691).
+// is module-only (NIM-652).
 func computeScopeWalk(eng *cel.Engine, path string, tasks []config.Task, prefix string, out *[]diag.Diagnostic) {
 	for i := range tasks {
 		t := &tasks[i]
