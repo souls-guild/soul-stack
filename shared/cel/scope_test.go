@@ -6,15 +6,20 @@ import (
 	"testing"
 )
 
-// keeperScopeVars — the shape of render.keeperVars: a run-level context with a
-// resolved compute: block that this context nonetheless cannot read. Compute is
-// deliberately NON-empty: the bug being guarded here reported "no such key" for a
-// name the run had actually computed.
-func keeperScopeVars() Vars {
+// outOfScopeVars — the shape of render.loopInvariantVars: a run-level context with
+// a resolved compute: block that this context nonetheless does not carry. Compute
+// is deliberately NON-empty: the bug being guarded here reported "no such key" for
+// a name the run had actually computed.
+//
+// The loop axis stands in for every out-of-scope context in these tests. The
+// keeper-side one that opened the ticket is NOT among them any more — `on: keeper`
+// reads compute (NIM-619, render.keeperVars); see
+// render.TestComputeScope_KeeperTaskReadsCompute.
+func outOfScopeVars() Vars {
 	return Vars{
 		Input:        map[string]any{"cluster": "prod"},
 		Compute:      map[string]any{"topology_node_count": 3},
-		ComputeScope: ComputeOutOfScopeKeeperTask,
+		ComputeScope: ComputeOutOfScopeLoopAxis,
 	}
 }
 
@@ -25,9 +30,9 @@ func keeperScopeVars() Vars {
 func TestComputeScope_NamesTheNamespaceNotTheKey(t *testing.T) {
 	e := newEngine(t)
 
-	_, err := e.EvalExpression("compute.topology_node_count", keeperScopeVars())
+	_, err := e.EvalExpression("compute.topology_node_count", outOfScopeVars())
 	if err == nil {
-		t.Fatal("compute.topology_node_count in an on: keeper task: expected an error, got none")
+		t.Fatal("compute.topology_node_count on the loop axis: expected an error, got none")
 	}
 	if !errors.Is(err, ErrNamespaceOutOfScope) {
 		t.Fatalf("expected ErrNamespaceOutOfScope, got %T: %v", err, err)
@@ -37,7 +42,7 @@ func TestComputeScope_NamesTheNamespaceNotTheKey(t *testing.T) {
 	if strings.Contains(msg, "no such key") {
 		t.Fatalf("message still blames a key: %s", msg)
 	}
-	for _, want := range []string{"compute", "namespace", "on: keeper"} {
+	for _, want := range []string{"compute", "namespace", "loop.items"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("message does not mention %q: %s", want, msg)
 		}
@@ -61,7 +66,7 @@ func TestComputeScope_NamesTheNamespaceNotTheKey(t *testing.T) {
 func TestComputeScope_AnyNameFailsTheSameWay(t *testing.T) {
 	e := newEngine(t)
 	for _, expr := range []string{"compute.topology_node_count", "compute.nothing_like_it"} {
-		_, err := e.EvalExpression(expr, keeperScopeVars())
+		_, err := e.EvalExpression(expr, outOfScopeVars())
 		if !errors.Is(err, ErrNamespaceOutOfScope) {
 			t.Fatalf("%s: expected ErrNamespaceOutOfScope, got %v", expr, err)
 		}
@@ -80,7 +85,7 @@ func TestComputeScope_SilentFormsNowSpeak(t *testing.T) {
 		"compute['topology_node_count']",
 		"false && compute.topology_node_count > 0", // an untaken branch is still refused
 	} {
-		_, err := e.EvalExpression(expr, keeperScopeVars())
+		_, err := e.EvalExpression(expr, outOfScopeVars())
 		if !errors.Is(err, ErrNamespaceOutOfScope) {
 			t.Fatalf("%s: expected ErrNamespaceOutOfScope, got %v", expr, err)
 		}
@@ -89,13 +94,22 @@ func TestComputeScope_SilentFormsNowSpeak(t *testing.T) {
 
 // TestComputeScope_EveryOutOfScopeContextNamesItself — a context that refuses must
 // say WHICH context, or the author learns only that they cannot do it.
+//
+// The case list is checked against [computeScopeCount] rather than kept by hand: a
+// new stance that nobody adds here would otherwise be tested by nothing, and the
+// first thing it would fail to do is name itself.
 func TestComputeScope_EveryOutOfScopeContextNamesItself(t *testing.T) {
 	e := newEngine(t)
 	cases := map[ComputeScope]string{
-		ComputeOutOfScopeKeeperTask: "on: keeper",
-		ComputeOutOfScopeLoopAxis:   "loop.items",
-		ComputeOutOfScopeCovenList:  "on: [covens]",
-		ComputeOutOfScopeDestiny:    "destiny",
+		ComputeOutOfScopeLoopAxis:    "loop.items",
+		ComputeOutOfScopeCovenList:   "on: [covens]",
+		ComputeOutOfScopeDestiny:     "destiny",
+		ComputeOutOfScopeStateMatch:  "state_changes",
+		ComputeOutOfScopeFlowControl: "when:",
+	}
+	if len(cases)+1 != computeScopeCount { // +1: ComputeAvailable names no context
+		t.Fatalf("cases cover %d stances, ComputeScope has %d -- a new stance is untested",
+			len(cases)+1, computeScopeCount)
 	}
 	for scope, want := range cases {
 		_, err := e.EvalExpression("compute.x", Vars{ComputeScope: scope})
@@ -163,7 +177,7 @@ func TestComputeScope_CachePoisoning(t *testing.T) {
 		t.Fatalf("priming the cache in an in-scope context: %v", err)
 	}
 
-	_, err := e.EvalExpression("compute.topology_node_count", keeperScopeVars())
+	_, err := e.EvalExpression("compute.topology_node_count", outOfScopeVars())
 	if !errors.Is(err, ErrNamespaceOutOfScope) {
 		t.Fatalf("cached in-scope program served to an out-of-scope context: %v", err)
 	}
@@ -186,7 +200,7 @@ func TestComputeScope_NoFalsePositives(t *testing.T) {
 		Vars:           map[string]any{"compute": "a var that happens to be called that"},
 		SoulprintHosts: hostsFixture(),
 		AllowHosts:     true,
-		ComputeScope:   ComputeOutOfScopeKeeperTask,
+		ComputeScope:   ComputeOutOfScopeLoopAxis,
 	}
 	for _, expr := range []string{
 		"input.computed_at",
@@ -207,10 +221,10 @@ func TestComputeScope_NoFalsePositives(t *testing.T) {
 func TestComputeScope_Interpolation(t *testing.T) {
 	e := newEngine(t)
 
-	if _, err := e.EvalInterpolation("nodes=${ compute.topology_node_count }", keeperScopeVars()); !errors.Is(err, ErrNamespaceOutOfScope) {
+	if _, err := e.EvalInterpolation("nodes=${ compute.topology_node_count }", outOfScopeVars()); !errors.Is(err, ErrNamespaceOutOfScope) {
 		t.Fatalf("interpolated reference: expected ErrNamespaceOutOfScope, got %v", err)
 	}
-	if _, err := e.EvalInterpolation("we compute this later: ${ input.cluster }", keeperScopeVars()); err != nil {
+	if _, err := e.EvalInterpolation("we compute this later: ${ input.cluster }", outOfScopeVars()); err != nil {
 		t.Fatalf("the word in literal text is not a reference: %v", err)
 	}
 }
@@ -223,7 +237,7 @@ func TestComputeScope_LoopVariableShadows(t *testing.T) {
 	e := newEngine(t)
 	out, err := e.EvalExpression("compute.n", Vars{
 		Loop:         map[string]any{"compute": map[string]any{"n": 42}},
-		ComputeScope: ComputeOutOfScopeKeeperTask,
+		ComputeScope: ComputeOutOfScopeLoopAxis,
 	})
 	if err != nil {
 		t.Fatalf("shadowed by a loop variable: %v", err)
@@ -253,7 +267,7 @@ func TestComputeScope_ReferenceHelpersMatchTheGuard(t *testing.T) {
 		_, err := e.EvalExpression(expr, Vars{
 			SoulprintHosts: hostsFixture(),
 			AllowHosts:     true,
-			ComputeScope:   ComputeOutOfScopeKeeperTask,
+			ComputeScope:   ComputeOutOfScopeLoopAxis,
 		})
 		guardRefused := errors.Is(err, ErrNamespaceOutOfScope)
 		if got := e.ExpressionReferencesCompute(expr); got != guardRefused {
@@ -273,5 +287,105 @@ func TestComputeScope_ReferenceHelpersMatchTheGuard(t *testing.T) {
 	}
 	if e.InterpolationReferencesCompute("we compute this later") {
 		t.Fatal("the bare word outside a block is not a reference")
+	}
+}
+
+// TestComputeNames_ReadsWhatTheAuthorWrote — the extraction behind soul-lint's
+// unknown-name rule. Names come out only where the SOURCE carries them; anything
+// else is dynamic, and a dynamic use must never be turned into an invented name.
+func TestComputeNames_ReadsWhatTheAuthorWrote(t *testing.T) {
+	e := newEngine(t)
+
+	cases := []struct {
+		expr    string
+		names   []string
+		dynamic bool
+	}{
+		{"compute.topology_node_count", []string{"topology_node_count"}, false},
+		{"compute['topology_node_count']", []string{"topology_node_count"}, false},
+		{"has(compute.maybe)", []string{"maybe"}, false},
+		{"compute.a + compute.b", []string{"a", "b"}, false},
+		{"compute.a > 0 ? compute.b : compute.a", []string{"a", "b", "a"}, false},
+		{`compute.outer.inner`, []string{"outer"}, false}, // the namespace member, not the path below it
+
+		// Dynamic: the name is not in the source.
+		{"compute[input.key]", nil, true},
+		{"size(compute)", nil, true},
+		{"compute", nil, true},
+		{"compute.known + size(compute)", []string{"known"}, true}, // both halves reported
+
+		// Not the namespace at all.
+		{"input.computed_at", nil, false},
+		{"vars.compute", nil, false},
+		{`"compute.x"`, nil, false},
+		{"input.cluster", nil, false},
+
+		// A syntax error belongs to the compiler, which reports it with a position.
+		{"compute.", nil, false},
+	}
+
+	for _, tc := range cases {
+		names, dynamic := e.ExpressionComputeNames(tc.expr)
+		if dynamic != tc.dynamic {
+			t.Errorf("%s: dynamic = %v, want %v", tc.expr, dynamic, tc.dynamic)
+		}
+		if strings.Join(names, ",") != strings.Join(tc.names, ",") {
+			t.Errorf("%s: names = %v, want %v", tc.expr, names, tc.names)
+		}
+	}
+}
+
+// TestComputeNames_Interpolation — the form the rule actually meets: params: and
+// vars: values, where several blocks contribute to one string and a single dynamic
+// block has to make the whole value dynamic (the rule cannot judge the rest of it).
+func TestComputeNames_Interpolation(t *testing.T) {
+	e := newEngine(t)
+
+	cases := []struct {
+		raw     string
+		names   []string
+		dynamic bool
+	}{
+		{"nodes=${ compute.topology_node_count }", []string{"topology_node_count"}, false},
+		{"${ compute.a }-${ compute.b }", []string{"a", "b"}, false},
+		{"${ compute.a }-${ compute[input.k] }", []string{"a"}, true},
+		{"we compute this later", nil, false},
+		{"literal ${ input.cluster }", nil, false},
+		{"${ compute.x", nil, false}, // unterminated block: the scanner's error, not ours
+	}
+
+	for _, tc := range cases {
+		names, dynamic := e.InterpolationComputeNames(tc.raw)
+		if dynamic != tc.dynamic {
+			t.Errorf("%q: dynamic = %v, want %v", tc.raw, dynamic, tc.dynamic)
+		}
+		if strings.Join(names, ",") != strings.Join(tc.names, ",") {
+			t.Errorf("%q: names = %v, want %v", tc.raw, names, tc.names)
+		}
+	}
+}
+
+// TestComputeNames_AgreeWithReferences — the two helpers answer the same question
+// at different resolutions, so they must not disagree about whether the namespace
+// is touched at all. A reference with neither a name nor the dynamic flag would be
+// a silent hole: the unknown-name rule would skip an expression the guard sees.
+func TestComputeNames_AgreeWithReferences(t *testing.T) {
+	e := newEngine(t)
+	for _, expr := range []string{
+		"compute.topology_node_count",
+		"compute['x']",
+		"has(compute.x)",
+		"size(compute)",
+		"compute[input.k]",
+		"compute",
+		"input.computed_at",
+		"vars.compute",
+		`"compute.x"`,
+	} {
+		names, dynamic := e.ExpressionComputeNames(expr)
+		touched := len(names) > 0 || dynamic
+		if got := e.ExpressionReferencesCompute(expr); got != touched {
+			t.Errorf("%s: ReferencesCompute=%v but names=%v dynamic=%v", expr, got, names, dynamic)
+		}
 	}
 }

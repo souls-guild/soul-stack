@@ -141,7 +141,8 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// FALSE form_field_unknown (form is gated before merge in the semantic
 		// phase) and would skip $type on covenant fields. No-op for non-extends
 		// (no FS access) — bit-for-bit identical to before this feature.
-		diags = append(diags, config.ResolveScenarioCovenant(scn, scnDoc, scenarioServiceRoot(opts.Path))...)
+		covenantDiags := config.ResolveScenarioCovenant(scn, scnDoc, scenarioServiceRoot(opts.Path))
+		diags = append(diags, covenantDiags...)
 		// Stage validation (ADR-056 §S5): offline Passage stratification using
 		// the same config.Stratify function the runtime calls before dispatch.
 		// Catches register cycles and serial+staged BEFORE apply (the config
@@ -164,11 +165,15 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// resolver (resolveCovenList) — the literal is visible without CEL eval.
 		if scn != nil {
 			diags = append(diags, onIncarnationNameDiagnostics(opts.Path, scn.Tasks)...)
-			// `compute.*` in a context that has no such namespace (NIM-619):
-			// an `on: keeper` task's params:/vars:, the loop axis, `on: [covens]`.
-			// Offline parity with shared/cel.guardComputeScope, which refuses the
-			// same expressions at compile time during render.
-			diags = append(diags, computeScopeDiagnostics(opts.Path, scn.Tasks)...)
+			// `compute.*` that will not resolve (NIM-619): the loop axis and
+			// `on: [covens]` have no such namespace (offline parity with
+			// shared/cel.guardComputeScope, which refuses the same expressions at
+			// compile time during render), and everywhere the namespace IS present
+			// a name outside the block is a misspelling. The name half is disabled
+			// when a covenant fragment failed to resolve: scn.Compute would then be
+			// missing the fragment's own entries and every one of them would be
+			// reported as a typo.
+			diags = append(diags, computeDiagnostics(opts.Path, scn, !diag.HasErrors(covenantDiags))...)
 		}
 		// A scenario renders under the window its service declares (it has no
 		// compat: block of its own) — so its features are weighed against

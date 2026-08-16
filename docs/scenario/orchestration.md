@@ -350,7 +350,7 @@ examples `wait: { condition: C, timeout: T }` → probe step with
 
 ### 2.4. `compute:` - calculated vars of the run
 
-`compute:` - **top-level** script block (next to `input:`/`state_changes:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in the Soul-side render contexts — a task's `params:` / `where:` / `vars:` and `apply: input:` — and in `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23). The full table of what is in scope, and what an out-of-scope reference now says, is at the end of this section.
+`compute:` - **top-level** script block (next to `input:`/`state_changes:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in the run's render contexts — a task's `params:` / `where:` / `vars:` and `apply: input:`, on the Soul side and under `on: keeper` alike — and in `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23). The full table of what is in scope, and what an out-of-scope reference now says, is at the end of this section.
 
 ```yaml
 name: create
@@ -377,29 +377,41 @@ tasks:
 
 **Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` is rejected as out-of-scope (see the table below). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
 
-**Where the namespace exists, and what a reference outside it says (NIM-619).** `compute:` is resolved in the run-level Keeper context, but it is not readable from every context the Keeper renders. Some contexts run *before* or *beside* the point where the value has a meaning, and there the name is not merely empty — the namespace is **absent**:
+**Where the namespace exists, and what a reference outside it says (NIM-619).** `compute:` is resolved in the run-level Keeper context, and it is readable wherever that context is the one being rendered — on the Soul side and on the keeper side alike. A few contexts run *before* the value has a meaning, *beside* it, or on the other side of the wire entirely, and there the name is not merely empty — the namespace is **absent**:
 
 | Context | `compute.<name>` |
 |---|---|
 | A Soul-side task: `params:` / `where:` / task `vars:` / `apply: input:` | **in scope** |
+| An `on: keeper` task — its `params:` and its own `vars:` | **in scope** |
 | `state_changes` (`set:` / `add:` / `remove:` value) | **in scope** |
 | A later `compute[i]` referring to an earlier `compute[j]`, j<i | **in scope** |
-| An `on: keeper` task — its `params:` and its own `vars:` | out of scope |
 | `loop.items:` / `loop.when:` — the host-invariant loop axis | out of scope |
 | `on: [covens]` — resolved once per run, before a host is chosen | out of scope |
 | The isolated destiny pass | out of scope |
 | `state_changes` → `add:` → `match:` | out of scope |
+| `when:` / `changed_when:` / `failed_when:` / `retry.until:` | out of scope |
 
-An out-of-scope reference fails **at compile**, before any evaluation, and the message names the namespace and the context rather than the key:
+The last row is the one that surprises, because those four keys sit on a task whose `params:` **do** read `compute.*`. They are not rendered by Keeper at all: they travel into the `RenderedTask` verbatim and Soul evaluates them itself, in the flow-control sandbox ([ADR-012](../adr/0012-keeper-soul-grpc.md)(d)) whose context is `input` / `vars` / `incarnation` / `soulprint.self` / `register` — `compute` is not one of its names, on either side of the wire. The detour is one line, and it is the ordinary one: put the value in the task's own `vars:` (which **is** rendered, with the namespace in scope) and write the predicate against that.
+
+```yaml
+- name: scale out
+  vars:
+    n: "${ compute.node_count }"      # rendered by Keeper — compute is in scope here
+  when: vars.n > 1                    # evaluated by Soul — reads the rendered vars
+  module: core.exec.run
+```
+
+An out-of-scope reference in a **rendered** context fails **at compile**, before any evaluation, and the message names the namespace and the context rather than the key (the one exception is an `add:` `match:` **inside a `foreach`**, which takes the context-aware merge-time evaluator so it can read the `as` name and still comes back as an eval-time `no such key`; `soul-lint` refuses that shape offline either way):
 
 ```
-CEL out of scope "compute.topology_node_count": the compute namespace does not
-exist in an on: keeper task (its params: and vars: render in the run-level keeper
-context) -- the whole namespace is absent here, not just this name; compute: is in
-scope for the Soul-side contexts only …
+CEL out of scope "compute.node_count": the compute namespace does not exist in
+loop.items:/loop.when: (the host-invariant loop axis) -- the whole namespace is
+absent here, not just this name; the loop axis sees input.*/vars.*/register.*/
+incarnation.* and soulprint.hosts -- drive the loop from one of those, or build
+the list inside loop.items: itself
 ```
 
-Because the check is at compile it also fires on the forms that used to be **silent**: `has(compute.x)` no longer evaluates to `false` and `size(compute)` no longer returns `0` in a context that has no namespace. Task-level `vars:` are not a way around it — a keeper task's `vars:` layer onto that same run-level context. `soul-lint` reports the same thing offline as `compute_out_of_scope`, with the YAML path to edit.
+Because the check is at compile it also fires on the forms that used to be **silent**: `has(compute.x)` no longer evaluates to `false` and `size(compute)` no longer returns `0` in a context that has no namespace. The four flow-control keys already refused honestly and still do, in cel-go's own words (`undeclared reference to 'compute'`) — their sandbox never declared the namespace, so there was nothing to correct at the engine; what was missing was anyone saying so **before** the run. `soul-lint` now does, for both halves: `compute_out_of_scope` with the YAML path to edit — and, where the namespace *is* in scope, a name that no `compute:` entry declares (or one declared further down) as `compute_unknown_name`, listing the names that do exist. The offline walk covers the `compute:` block, the task list (`block:` children included) and `state_changes:`; the destiny pass and tasks spliced in by `include:` are left to the run.
 
 **Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`vars`/`compute`).
 

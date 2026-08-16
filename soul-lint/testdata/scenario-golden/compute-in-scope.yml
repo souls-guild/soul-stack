@@ -17,18 +17,34 @@ tasks:
     params:
       cmd: echo ${ compute.node_count }
 
-  # Out of scope, and nothing is read: a literal coven label that merely contains
-  # the word, and an input field whose name merely starts with it. A rule built on
-  # a regex would flag both of these and push authors to rename unrelated things.
+  # In scope on the keeper side too (NIM-619): `on: keeper` renders in the very
+  # run-level context compute was resolved in. Alongside it, two things that only
+  # LOOK like the namespace — a literal coven label containing the word and an
+  # input field whose name starts with it. A rule built on a regex would flag both
+  # and push authors to rename unrelated things.
   - name: register the seed from the keeper side
     module: core.soul.registered
     on: keeper
+    vars:
+      label: node-${ compute.node_count }
     params:
       sid: ${ input.hosts[0] }
       coven:
         - compute-cluster
+        - ${ vars.label }
       await_online: true
       await_timeout: ${ input.compute_timeout }
+
+  # The detour for the flow-control keys, which Soul evaluates in a sandbox
+  # without the namespace: task `vars:` ARE rendered by the Keeper, with compute
+  # in scope, and the rendered value is what the predicate reads.
+  - name: gate on a computed value through vars
+    module: core.exec.run
+    vars:
+      n: ${ compute.node_count }
+    when: vars.n > 1
+    params:
+      cmd: /usr/bin/true
 
   # Out of scope, driven by a list the axis can actually see.
   - name: fan out over the declared hosts

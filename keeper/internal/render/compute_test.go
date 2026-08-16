@@ -2,10 +2,12 @@ package render
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -187,6 +189,18 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
 		t.Fatal("★ Render: expected an error — destiny must not see compute (isolation, compute.* unavailable in the destiny pass)")
+	}
+	// WHICH error, not merely one (NIM-619). destinyIn carries no compute map, so a
+	// destiny pass that wrongly declared the namespace available would still fail —
+	// with `no such key: cfg`, about a name the parent had just computed correctly.
+	// Asserting only err != nil accepts that, and with it the mutation of
+	// hostComputeScope returning cel.ComputeAvailable unconditionally, which deletes
+	// the ADR-009 V2 isolation and leaves every test in this package green.
+	if !errors.Is(err, cel.ErrNamespaceOutOfScope) {
+		t.Fatalf("★ Render: want ErrNamespaceOutOfScope (the destiny pass has no compute namespace), got %v", err)
+	}
+	if !strings.Contains(err.Error(), "destiny") {
+		t.Fatalf("★ Render: the error must name the context the author is standing in: %v", err)
 	}
 }
 

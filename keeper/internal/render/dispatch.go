@@ -132,6 +132,13 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // params is a normal CEL no-such-key error, as intended: a keeper step
 // operates on input/incarnation/vars, not host facts).
 //
+// compute: IS available (NIM-619). It used to be omitted, which made
+// `compute.<name>` here fail as `no such key: <name>` — a sentence about a key
+// that was spelled correctly and had just been computed, because the activation
+// substitutes an empty map for a namespace the context left out. Both halves of
+// that are gone: the namespace is passed through, and the omission itself is no
+// longer expressible in silence (compute_scope_guard_test.go).
+//
 // incarnation.state — read-only pre-run snapshot (RenderInput.State, the same
 // stateBefore under FOR UPDATE, see [incarnationVars]): a keeper task
 // (core.cloud.destroyed etc.) reads `incarnation.state.<path>` in params just
@@ -170,12 +177,13 @@ func keeperVars(in RenderInput) cel.Vars {
 		Register:    reg,
 		Incarnation: inc,
 		Vars:        in.ServiceVars,
+		Compute:     in.Compute,
 		Ctx:         in.Ctx,
-		// compute: is Soul-side scope (params:/where:/apply.input, state_changes) —
-		// declaring the absence turns `compute.<name>` here into an error that names
-		// the namespace and this context, instead of the old `no such key: <name>`,
-		// which named a key that was spelled perfectly well (NIM-619).
-		ComputeScope: cel.ComputeOutOfScopeKeeperTask,
+		// compute: is in scope here (NIM-619 variant B). It fits this context by
+		// construction: [Pipeline.resolveCompute] runs ONCE per run before the task
+		// loop, in a soulprint-free run-level context — the same one a keeper task
+		// renders in. Nothing about it is per-host, so there is no drift to import.
+		ComputeScope: cel.ComputeAvailable,
 	}
 }
 

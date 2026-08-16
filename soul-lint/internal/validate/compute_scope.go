@@ -1,34 +1,51 @@
 package validate
 
-// Offline compute-scope check (NIM-619): `compute.<name>` written where the
-// `compute` namespace does not exist.
+// Offline compute checks (NIM-619). Two rules share one walk over the scenario,
+// because both answer the same question — "will this `compute.<name>` resolve?" —
+// and differ only in why the answer is no:
 //
-// The namespace is resolved ONCE per run in the Soul-side context (ADR-009
-// amendment 2026-06-23) and is readable from a task's params:/where:/apply.input
-// and from state_changes. Three scenario contexts render WITHOUT it, and each is
-// visible in the YAML without evaluating anything:
+//   - compute_out_of_scope: the context has no `compute` namespace at all;
+//   - compute_unknown_name: the context HAS it, but the scenario declares no entry
+//     by that name (a misspelling), or declares it LATER in the block than the
+//     entry reading it (entries resolve in declaration order).
 //
-//   - an `on: keeper` task's params: and its own vars: (render.keeperVars);
+// The namespace is resolved ONCE per run in a run-level, soulprint-free context
+// (ADR-009 amendment 2026-06-23) and is therefore readable in everything Keeper
+// RENDERS: a task's params:/vars:/where:/apply.input, assert.that[],
+// `state_changes:`, and — since NIM-619 — an `on: keeper` task
+// (render.keeperVars). Four scenario contexts read without it, and each is visible
+// in the YAML without evaluating anything:
+//
 //   - `loop.items:` / `loop.when:`, the host-invariant loop axis
 //     (render.loopInvariantVars);
-//   - the `on: [covens]` elements (render.resolveCovenList).
+//   - the `on: [covens]` elements (render.resolveCovenList);
+//   - an `add:` operation's `match:` (render.EvalStateMatch — elem/value only);
+//   - `when:` / `changed_when:` / `failed_when:` / `until:`, which Keeper does not
+//     render at all — they travel to Soul as text and are evaluated in the
+//     flow-control sandbox (cel.NewFlowControl), whose env has no `compute`.
 //
-// The runtime half of the rule (shared/cel.guardComputeScope) refuses all three at
-// compile time with the same wording — this is the offline half, so the author
-// hears it from soul-lint instead of from a failed apply. Both halves ask
-// shared/cel the same question through the same AST walk
+// Both halves ask shared/cel the same question through the same AST walk
 // ([cel.Engine.InterpolationReferencesCompute] /
-// [cel.Engine.ExpressionReferencesCompute]): the word in prose or inside a CEL
-// string literal is not a reference, and a rule built on a regex would disagree
-// with the engine in exactly those places.
+// [cel.Engine.ExpressionComputeNames] and their siblings): the word in prose or
+// inside a CEL string literal is not a reference, and a rule built on a regex
+// would disagree with the engine in exactly those places. A reference whose name
+// is not in the source (`compute[input.k]`, `size(compute)`) leaves the cell to the
+// run — the linter reports what the author wrote, never a name it inferred.
 //
-// NOT covered offline: the fourth context, the isolated destiny pass. soul-lint's
-// destiny entry point lints `destiny.yml`, whose tasks live in a separate file
-// this rule never receives; the runtime guard covers it (NIM-619 comment).
+// NOT covered offline, deliberately:
+//
+//   - the isolated destiny pass — the runtime guard refuses it, but soul-lint's
+//     destiny entry point lints `destiny.yml`, whose tasks live in a file this rule
+//     never receives;
+//   - tasks pulled in by `include:` — they are not in ScenarioManifest.Tasks;
+//   - the name rule as a whole when a covenant fragment failed to resolve, since
+//     the declared set would then be missing the fragment's own entries
+//     (mergeComputeSections prepends them).
 
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -38,8 +55,8 @@ import (
 
 // computeScopeEngine — the CEL engine used only to PARSE (no evaluation, no
 // vault): built lazily once per process, like keeper's flowControlEngine. A
-// construction failure disables the rule rather than failing the lint: this is an
-// additional check over a scenario the other rules have already read, and the
+// construction failure disables the rules rather than failing the lint: these are
+// additional checks over a scenario the other rules have already read, and the
 // runtime guard still refuses the same expression.
 var (
 	computeScopeEngineOnce sync.Once
@@ -50,95 +67,209 @@ func computeScopeEngine() *cel.Engine {
 	computeScopeEngineOnce.Do(func() {
 		eng, err := cel.New()
 		if err != nil {
-			return // leaves the instance nil — the rule no-ops
+			return // leaves the instance nil — the rules no-op
 		}
 		computeScopeEngineInst = eng
 	})
 	return computeScopeEngineInst
 }
 
-// computeScopeDiagnostics raises compute_out_of_scope for every `compute.*`
-// reference in a scenario context that has no such namespace. tasks is
-// ScenarioManifest.Tasks; nil manifest → no tasks → nil (caller guards).
-func computeScopeDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {
+// computeDiagnostics runs both rules over a parsed scenario.
+//
+// namesResolved is the caller's statement that scn.Compute is the FULL declared
+// set — i.e. that covenant resolution either did not apply or did not fail. False
+// disables the name rule (an incomplete set would report a covenant's own entries
+// as typos) and leaves the scope rule, which does not depend on names.
+func computeDiagnostics(scenarioPath string, scn *config.ScenarioManifest, namesResolved bool) []diag.Diagnostic {
 	eng := computeScopeEngine()
-	if eng == nil {
+	if eng == nil || scn == nil {
 		return nil
 	}
-	var out []diag.Diagnostic
-	computeScopeWalk(eng, scenarioPath, tasks, "$.tasks", &out)
+	c := &computeChecker{eng: eng, path: scenarioPath}
+	if namesResolved {
+		c.declared = declaredComputeNames(scn.Compute)
+	}
+	c.computeBlock(scn.Compute)
+	c.tasks(scn.Tasks, "$.tasks")
+	c.stateChanges(scn.StateChanges)
+	return c.out
+}
+
+// declaredComputeNames maps each declared name to its position in the block.
+// Non-nil even for an empty block: "this scenario declares nothing" is a fact the
+// name rule uses, not a reason to stay silent.
+func declaredComputeNames(block config.ComputeBlock) map[string]int {
+	out := make(map[string]int, len(block))
+	for i, cv := range block {
+		out[cv.Name] = i
+	}
 	return out
 }
 
-// computeScopeWalk recurses over the task list, including block: children.
+// computeChecker carries the walk's state. declared == nil disables the name rule.
+type computeChecker struct {
+	eng      *cel.Engine
+	path     string
+	declared map[string]int
+	out      []diag.Diagnostic
+}
+
+// visible is the "everything declared" limit for a context outside the block: by
+// the time any task renders, the whole block has resolved.
+const visible = 1 << 30
+
+// tasks recurses over the task list, including block: children.
 //
 // `on:` is read from EACH task on its own and is never inherited downwards:
 // mergeBlockInheritance carries when/where/vars/requisites and never On, so a
-// descendant is keeper-side only by saying `on: keeper` itself. A block's `on:`
-// narrows the roster its descendants run on, and propagating it here would flag
-// params: that render in the ordinary per-host context, where compute IS
-// readable. `on: keeper` on the BLOCK is not the counter-example it looks like:
-// that construction renders no children at all — the top-level dispatch tests
-// IsKeeperTask before the block branch and hands it to renderKeeperTask, which
-// is module-only (NIM-652).
-func computeScopeWalk(eng *cel.Engine, path string, tasks []config.Task, prefix string, out *[]diag.Diagnostic) {
+// descendant is keeper-side only by saying `on: keeper` itself. `on: keeper` on the
+// BLOCK renders no children at all — the top-level dispatch tests IsKeeperTask
+// before the block branch and hands it to renderKeeperTask, which is module-only
+// (NIM-652).
+func (c *computeChecker) tasks(tasks []config.Task, prefix string) {
 	for i := range tasks {
 		t := &tasks[i]
 		where := fmt.Sprintf("%s[%d]", prefix, i)
 
 		// `on: [covens]` — the labels resolve once per run, before any host is
-		// chosen. The scalar `on: keeper` is not a list and falls through here.
+		// chosen. The scalar `on: keeper` is not a list and falls through here; it
+		// reads compute like any other task (NIM-619).
 		if elems, ok := onListElements(t.On); ok {
 			for j, s := range elems {
-				*out = appendComputeScopeDiag(*out, eng, path,
-					fmt.Sprintf("%s.on[%d]", where, j), s, cel.ComputeOutOfScopeCovenList)
+				c.interpolation(fmt.Sprintf("%s.on[%d]", where, j), s, cel.ComputeOutOfScopeCovenList)
 			}
 		}
 
 		if t.Loop != nil {
-			computeScopeValue(eng, path, t.Loop.Items, where+".loop.items",
-				cel.ComputeOutOfScopeLoopAxis, out)
+			c.value(t.Loop.Items, where+".loop.items", cel.ComputeOutOfScopeLoopAxis)
 			// loop.when: is an expression key — the whole string is CEL, no `${ }`.
-			if t.Loop.When != "" && eng.ExpressionReferencesCompute(t.Loop.When) {
-				*out = append(*out, computeScopeDiag(path, where+".loop.when",
-					t.Loop.When, cel.ComputeOutOfScopeLoopAxis))
-			}
+			c.expression(where+".loop.when", t.Loop.When, cel.ComputeOutOfScopeLoopAxis)
 		}
 
-		// A keeper-side task: params: and the task's own vars: both render in the
-		// run-level keeper context, so `vars:` is no way around the params: rule
-		// (resolveTaskVars layers onto the very same context).
-		if isKeeperTask(t) {
-			if t.Module != nil {
-				computeScopeValue(eng, path, t.Module.Params, where+".params",
-					cel.ComputeOutOfScopeKeeperTask, out)
+		// The flow-control predicates are not rendered at all: Keeper copies them
+		// into the RenderedTask verbatim and they are evaluated in the Soul-side
+		// sandbox (cel.NewFlowControl), which declares input/register/incarnation/
+		// soulprint/vars and NOT compute. Checking a name against the compute: block
+		// here would announce "the namespace exists, this name does not" about a
+		// namespace that is absent — this ticket's own mistake, re-committed offline.
+		c.expression(where+".when", t.When, cel.ComputeOutOfScopeFlowControl)
+		c.expression(where+".changed_when", t.ChangedWhen, cel.ComputeOutOfScopeFlowControl)
+		c.expression(where+".failed_when", t.FailedWhen, cel.ComputeOutOfScopeFlowControl)
+		if t.Retry != nil {
+			c.expression(where+".retry.until", t.Retry.Until, cel.ComputeOutOfScopeFlowControl)
+		}
+
+		// Everything below renders WITH the namespace, so what is checked there is
+		// the name. `where:` belongs to this half and not the one above: it is a
+		// keeper-side per-host predicate, rendered from hostVars like params:.
+		c.expression(where+".where", t.Where, cel.ComputeAvailable)
+		if t.Assert != nil {
+			for j, that := range t.Assert.That {
+				c.expression(fmt.Sprintf("%s.assert.that[%d]", where, j), that, cel.ComputeAvailable)
 			}
-			computeScopeValue(eng, path, t.Vars, where+".vars",
-				cel.ComputeOutOfScopeKeeperTask, out)
+		}
+		c.value(t.Vars, where+".vars", cel.ComputeAvailable)
+		if t.Module != nil {
+			c.value(t.Module.Params, where+".params", cel.ComputeAvailable)
+		}
+		if t.Apply != nil {
+			c.value(t.Apply.Input, where+".apply.input", cel.ComputeAvailable)
 		}
 
 		if t.Block != nil {
-			computeScopeWalk(eng, path, t.Block.Block, where+".block", out)
+			c.tasks(t.Block.Block, where+".block")
 		}
 	}
 }
 
-// isKeeperTask mirrors render.IsKeeperTask (the scalar `on: keeper`, the only
-// scalar form the validator accepts). Duplicated rather than imported: soul-lint is
-// offline and does not depend on keeper/.
-func isKeeperTask(t *config.Task) bool {
-	s, ok := t.On.(string)
-	return ok && s == config.KeeperTarget
+// computeBlock checks the block against ITSELF: entry i resolves with entries j<i
+// in scope (render.resolveCompute accumulates), so a reference to a later name is
+// a forward reference that fails at run time with the very "no such key" this
+// ticket is about.
+func (c *computeChecker) computeBlock(block config.ComputeBlock) {
+	if c.declared == nil {
+		return
+	}
+	for i, cv := range block {
+		s, ok := cv.Value.(string)
+		if !ok {
+			continue // a literal passes through unrendered
+		}
+		c.check("$.compute."+cv.Name, s, false, cel.ComputeAvailable, i)
+	}
 }
 
-// computeScopeValue walks a decoded YAML value (params:/vars:/loop.items:) and
+// stateChanges walks the `state_changes:` section, where the namespace is present
+// for everything the run evaluates over the scenario context: a `value:`, a map
+// `key:`, a `foreach: in:`, a modify `patch:`, and a modify/remove `match:` (all of
+// those go through stateChangesVars render-side or stateOpVars merge-time, which
+// carry compute).
+//
+// One exception, and it is a verb, not a key: an `add:` `match:`. Identity there is
+// a pure function of `elem` and `value` (render.EvalStateMatch, the stance ADR-019
+// takes for migration-CEL), so the namespace is absent. It is absent whether or not
+// the add sits inside a foreach: the binding-only snapshot an add carries into merge
+// has no compute in it either, so the rule reports both the same way.
+//
+// The RUN is not yet as consistent as the rule, and the difference is worth knowing
+// when reading a failure. A flat add refuses at compile, naming the namespace. An add
+// inside a foreach takes a different route — render.renderStateOp attaches the
+// foreach binding as RenderedOp.Context so the predicate can read the `as` name, and
+// findListMatch then picks EvalStateOpExpr over EvalStateMatch. That evaluator builds
+// its Vars with stateOpVars, which declares ComputeAvailable over a snapshot that has
+// no compute, so the same mistake comes back as an eval-time no-such-key instead. The
+// gate still holds — this rule refuses the shape offline, so a scenario that lints
+// clean never reaches that path — but the runtime halves disagree, and closing that is
+// a tail ticket, not this one.
+func (c *computeChecker) stateChanges(sc *config.StateChanges) {
+	if sc == nil {
+		return
+	}
+	if !sc.IsList {
+		// Legacy map form: `sets:` values are interpolated the same way.
+		keys := make([]string, 0, len(sc.Sets))
+		for k := range sc.Sets {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			c.interpolation("$.state_changes.sets."+k, sc.Sets[k], cel.ComputeAvailable)
+		}
+		return
+	}
+	c.stateOps(sc.Ops, "$.state_changes")
+}
+
+// stateOps recurses over the ordered operation list, including a foreach's `do:`.
+func (c *computeChecker) stateOps(ops []config.StateChange, prefix string) {
+	for i := range ops {
+		op := &ops[i]
+		where := fmt.Sprintf("%s[%d]", prefix, i)
+
+		c.value(op.Value, where+".value", cel.ComputeAvailable)
+		c.interpolation(where+".key", op.Key, cel.ComputeAvailable)
+		c.value(op.Patch, where+".patch", cel.ComputeAvailable)
+		c.interpolation(where+".in", op.In, cel.ComputeAvailable)
+
+		matchScope := cel.ComputeAvailable
+		if op.Verb == config.VerbAdd {
+			matchScope = cel.ComputeOutOfScopeStateMatch
+		}
+		// match: is an expression key — the whole string is CEL, no `${ }`.
+		c.expression(where+".match", op.Match, matchScope)
+
+		c.stateOps(op.Do, where+".do")
+	}
+}
+
+// value walks a decoded YAML value (params:/vars:/apply.input:/loop.items:) and
 // tests every string it contains. Map keys are visited in sorted order so a
 // scenario always produces its diagnostics in the same order — a map's range order
 // would otherwise shuffle the report between runs.
-func computeScopeValue(eng *cel.Engine, path string, v any, where string, scope cel.ComputeScope, out *[]diag.Diagnostic) {
+func (c *computeChecker) value(v any, where string, scope cel.ComputeScope) {
 	switch val := v.(type) {
 	case string:
-		*out = appendComputeScopeDiag(*out, eng, path, where, val, scope)
+		c.interpolation(where, val, scope)
 	case map[string]any:
 		keys := make([]string, 0, len(val))
 		for k := range val {
@@ -146,32 +277,86 @@ func computeScopeValue(eng *cel.Engine, path string, v any, where string, scope 
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			computeScopeValue(eng, path, val[k], where+"."+k, scope, out)
+			c.value(val[k], where+"."+k, scope)
 		}
 	case []any:
 		for i, e := range val {
-			computeScopeValue(eng, path, e, fmt.Sprintf("%s[%d]", where, i), scope, out)
+			c.value(e, fmt.Sprintf("%s[%d]", where, i), scope)
 		}
 	case []string:
 		for i, s := range val {
-			*out = appendComputeScopeDiag(*out, eng, path, fmt.Sprintf("%s[%d]", where, i), s, scope)
+			c.interpolation(fmt.Sprintf("%s[%d]", where, i), s, scope)
 		}
 	}
 }
 
-// appendComputeScopeDiag tests one interpolated string and appends a diagnostic if
-// it reads the namespace.
-func appendComputeScopeDiag(out []diag.Diagnostic, eng *cel.Engine, path, where, raw string, scope cel.ComputeScope) []diag.Diagnostic {
-	if !eng.InterpolationReferencesCompute(raw) {
-		return out
-	}
-	return append(out, computeScopeDiag(path, where, raw, scope))
+func (c *computeChecker) interpolation(where, raw string, scope cel.ComputeScope) {
+	c.check(where, raw, false, scope, visible)
 }
 
-// computeScopeDiag builds the diagnostic. The message says what the runtime error
-// now says — the NAMESPACE is absent here, not the name — because the message that
-// sent this ticket's author hunting was one naming a key ("no such key:
-// topology_node_count") that was spelled perfectly.
+func (c *computeChecker) expression(where, expr string, scope cel.ComputeScope) {
+	c.check(where, expr, true, scope, visible)
+}
+
+// check is the single decision point. Out of scope → one diagnostic for the whole
+// string, whatever names it holds: the namespace is what is missing, and listing
+// names there would repeat the mistake the ticket was filed about. In scope → one
+// diagnostic per undeclared name, deduplicated so `${ compute.x }-${ compute.x }`
+// is reported once.
+//
+// limit is the number of block entries visible at this point: [visible] outside the
+// block, the entry's own index inside it.
+func (c *computeChecker) check(where, raw string, whole bool, scope cel.ComputeScope, limit int) {
+	if raw == "" {
+		return
+	}
+	if scope != cel.ComputeAvailable {
+		refs := c.eng.InterpolationReferencesCompute(raw)
+		if whole {
+			refs = c.eng.ExpressionReferencesCompute(raw)
+		}
+		if refs {
+			c.out = append(c.out, computeScopeDiag(c.path, where, raw, scope))
+		}
+		return
+	}
+	if c.declared == nil {
+		return
+	}
+	names, dynamic := c.eng.InterpolationComputeNames(raw)
+	if whole {
+		names, dynamic = c.eng.ExpressionComputeNames(raw)
+	}
+	// A reference whose name is not in the source (`compute[input.k]`, `size(compute)`)
+	// makes the whole cell unjudgeable, not just itself: the extractor parses with
+	// macros OFF, so a comprehension variable named `compute` reads as the namespace
+	// and its field as a name. `input.hosts.map(compute, compute.role)` is legal CEL
+	// and would otherwise be reported as the undeclared name `role`. The unpaired
+	// identifier is what both cases have in common, so it silences the name rule for
+	// the cell and leaves the reading to the run.
+	if dynamic {
+		return
+	}
+	seen := make(map[string]bool, len(names))
+	for _, n := range names {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		idx, ok := c.declared[n]
+		switch {
+		case !ok:
+			c.out = append(c.out, c.unknownNameDiag(where, raw, n))
+		case idx >= limit:
+			c.out = append(c.out, c.forwardRefDiag(where, raw, n))
+		}
+	}
+}
+
+// computeScopeDiag builds the out-of-scope diagnostic. The message says what the
+// runtime error now says — the NAMESPACE is absent here, not the name — because the
+// message that sent this ticket's author hunting was one naming a key ("no such
+// key: topology_node_count") that was spelled perfectly.
 func computeScopeDiag(path, where, raw string, scope cel.ComputeScope) diag.Diagnostic {
 	context, hint := scope.Describe()
 	return diag.Diagnostic{
@@ -185,4 +370,57 @@ func computeScopeDiag(path, where, raw string, scope cel.ComputeScope) diag.Diag
 		Hint:     hint,
 		YAMLPath: where,
 	}
+}
+
+// unknownNameDiag is the other half of the pair, and the one the ticket's author
+// was looking for when the scope error misled them: here the namespace IS present,
+// so a name that is not in it really is a misspelling.
+func (c *computeChecker) unknownNameDiag(where, raw, name string) diag.Diagnostic {
+	return diag.Diagnostic{
+		Level: diag.LevelError,
+		Phase: diag.PhaseSemanticValidate,
+		File:  c.path,
+		Code:  "compute_unknown_name",
+		Message: fmt.Sprintf(
+			"%q reads compute.%s, which the scenario never declares -- the namespace exists here, this name does not",
+			raw, name),
+		Hint:     c.declaredHint(),
+		YAMLPath: where,
+	}
+}
+
+// forwardRefDiag — the name IS declared, further down. Entries resolve in
+// declaration order, so at this point it does not exist yet; the run-time symptom
+// is the same "no such key" as a typo, which is why it is worth separating here.
+func (c *computeChecker) forwardRefDiag(where, raw, name string) diag.Diagnostic {
+	return diag.Diagnostic{
+		Level: diag.LevelError,
+		Phase: diag.PhaseSemanticValidate,
+		File:  c.path,
+		Code:  "compute_unknown_name",
+		Message: fmt.Sprintf(
+			"%q reads compute.%s, which is declared LATER in the compute: block -- entries resolve in declaration order, so it has no value yet",
+			raw, name),
+		Hint:     fmt.Sprintf("move %s above this entry, or read it from a task instead (the whole block has resolved by then)", name),
+		YAMLPath: where,
+	}
+}
+
+// declaredHint lists what the scenario does declare, capped: a block with fifty
+// entries would otherwise push the actual message off the terminal.
+func (c *computeChecker) declaredHint() string {
+	if len(c.declared) == 0 {
+		return "the scenario has no compute: block -- add one, or drop the reference"
+	}
+	names := make([]string, 0, len(c.declared))
+	for n := range c.declared {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	const maxNames = 8
+	suffix := ""
+	if len(names) > maxNames {
+		names, suffix = names[:maxNames], ", ..."
+	}
+	return "declared compute: entries are " + strings.Join(names, ", ") + suffix
 }

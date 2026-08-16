@@ -740,24 +740,37 @@ order to act in.
 
 ### Added
 
-- **`soul-lint` catches an out-of-scope `compute.*` before the run**
-  (`compute_out_of_scope`). `validate-scenario` reads the same scope table the
-  render engine enforces and reports a keeper-side `params:`/`vars:`, a
-  `loop.items:`/`loop.when:` and an `on: [covens]` element that reference the
-  namespace, each at the YAML path to edit. Until now nothing caught these
-  statically: the linter had no notion of `compute` references at all, so the
-  first sign was a failed run — and the message that run produced was the one this
-  release also fixes. The rule asks the CEL parser rather than a regex, so prose
-  in a param, a coven label like `compute-cluster` and an `input.compute_timeout`
-  are not flagged, and a child of an `on: keeper` `block:` is not flagged either
-  (`on:` is not inherited by block children — the child renders Soul-side, where
-  the namespace exists). Two contexts stay off the offline pass and are caught by
-  the run instead: a task spliced in by `include:` (the rule sees the scenario's
-  own task list, and the include is resolved on the keeper — a pre-existing limit
-  of every per-task rule, not of this one, NIM-655), and the isolated destiny
-  pass (the destiny linter is handed `destiny.yml`, whose tasks live in a file it
-  never receives). The runtime guard covers both; a clean `soul-lint` is a
-  narrower statement than a clean run.
+- **`soul-lint` catches a `compute.*` that will not resolve, before the run.**
+  Two rules over one walk of the scenario — its `compute:` block, its tasks
+  (including `block:` children) and its `state_changes:`. `compute_out_of_scope`
+  reports a `loop.items:`/`loop.when:`, an `on: [covens]` element, an `add:`
+  operation's `match:`, or one of the four flow-control keys (`when:` /
+  `changed_when:` / `failed_when:` / `retry.until:`) that references the namespace
+  — the contexts that lack it and that the offline pass can see. The flow-control
+  four are the ones an author is most likely to get wrong, because they sit on a
+  task whose `params:` **do** read `compute.*`; the diagnostic names the Soul-side
+  sandbox they actually run in and points at the one-line detour through the
+  task's own `vars:`. `compute_unknown_name` covers the far
+  more ordinary mistake, wherever the namespace *is* in scope:
+  `compute.node_cont` for a declared `node_count`, and a reference to an entry
+  declared **further down** the block (entries resolve top to bottom, so a forward
+  reference has no value yet). The diagnostic lists the names that do exist. Until
+  now nothing caught any of this statically: the linter had no notion of `compute`
+  references at all, so the first sign was a failed run.
+
+  Both rules ask the CEL parser rather than a regex, so prose in a param, a coven
+  label like `compute-cluster` and an `input.compute_timeout` are not flagged; a
+  reference whose name is not in the source (`compute[input.key]`,
+  `size(compute)`) is left to the run rather than guessed at; and a child of an
+  `on: keeper` `block:` is not treated as keeper-side (`on:` is not inherited by
+  block children). Three things stay off the offline pass and are caught by the
+  run instead: a task spliced in by `include:` (the rule sees the scenario's own
+  task list, and the include is resolved on the keeper — a pre-existing limit of
+  every per-task rule, not of this one, NIM-655); the isolated destiny pass (the
+  destiny linter is handed `destiny.yml`, whose tasks live in a file it never
+  receives); and the name rule when an `extends:` covenant failed to resolve,
+  since the merged `compute:` block is then unknown and every name would look
+  undeclared. A clean `soul-lint` is a narrower statement than a clean run.
 
 - **The composed incarnation name, previewed before it is permanent**
   ([ADR-0079 (g)](docs/adr/0079-incarnation-name-template.md)). When a create
@@ -1304,24 +1317,47 @@ order to act in.
   a "run make sync-webui" red is precisely the one without the companion checked
   out.
 
-- **`compute.<name>` in a context that has no `compute:` namespace now says so,
-  instead of blaming the key.** A `compute:` value is readable Soul-side (a task's
-  `params:`/`where:`/`vars:`, `apply: input:`) and in `state_changes`; it is not
-  readable from an `on: keeper` task, from the `loop.items:`/`loop.when:` axis,
-  from `on: [covens]`, from the isolated destiny pass, or from `state_changes`
-  `match:`. Those contexts used to be handed an empty map, so a reference failed
-  with `no such key: <name>` — a message that names the one thing that is not
-  wrong, and that would have been identical for every possible name. It is now a
-  compile-time refusal naming the namespace, the context the author is standing
-  in, and what to write instead. Two consequences worth expecting: the check runs
-  before evaluation, so it also fires on a branch that a run would never have
-  reached; and the previously **silent** forms are silent no longer — `has(compute.x)`
-  stopped evaluating to `false` and `size(compute)` stopped returning `0` in a
-  context that never had the namespace. A scenario relying on either as a feature
-  test will now fail at render; test the underlying `input.*`/`vars.*` instead.
-  Routing the reference through a keeper task's `vars:` was never a way around the
-  scope and is refused the same way. The full table is in
+- **`compute.<name>` is readable from an `on: keeper` task, and elsewhere a
+  context without the namespace now says so instead of blaming the key.** A
+  keeper-side task used to be handed no `compute` at all, so `${ compute.x }` in
+  its `params:` failed with `no such key: x` — for a name that was declared and
+  spelled right. The omission had no reason behind it: `compute:` resolves once
+  per run, in the very run-level context an `on: keeper` task renders in, so there
+  was never a per-host value to import. It is now in scope there, in `params:` and
+  in the task's own `vars:`, exactly as on the Soul side.
+
+  The namespace is genuinely absent from four contexts, each because it runs
+  before or beside the point where a computed value means anything: the
+  `loop.items:`/`loop.when:` axis, `on: [covens]`, the isolated destiny pass
+  ([ADR-009](docs/adr/0009-scenario-dsl.md) V2), and `state_changes` `add:`
+  `match:`. Those used to be handed an empty map and produced the same misleading
+  `no such key`; they now refuse at **compile**, naming the namespace, the context
+  the author is standing in, and what to write instead — with one exception left
+  standing: an `add:` `match:` **inside a `foreach`** is routed to the
+  context-aware merge-time evaluator so the predicate can read the `as` name, and
+  that path still reports an eval-time `no such key`. `soul-lint` refuses the
+  shape offline either way, so a scenario that lints clean does not reach it.
+  Two consequences worth
+  expecting: the check runs before evaluation, so it also fires on a branch a run
+  would never have reached; and the previously **silent** forms are silent no
+  longer — `has(compute.x)` stopped evaluating to `false` and `size(compute)`
+  stopped returning `0` in a context that never had the namespace. A scenario
+  relying on either as a feature test will now fail at render; test the underlying
+  `input.*`/`vars.*` instead. The full table is in
   [docs/scenario/orchestration.md §2.4](docs/scenario/orchestration.md).
+
+  A fifth context is out of scope and always was, with nothing to fix at the
+  engine: `when:` / `changed_when:` / `failed_when:` / `retry.until:` are not
+  rendered by the Keeper at all — they travel into the `RenderedTask` verbatim and
+  Soul evaluates them in the flow-control sandbox
+  ([ADR-012](docs/adr/0012-keeper-soul-grpc.md)(d)), over
+  `input`/`vars`/`incarnation`/`soulprint.self`/`register`. That sandbox never
+  declared `compute`, so it already refused honestly in cel-go's own words
+  (`undeclared reference to 'compute'`) rather than blaming a key. It is called
+  out here because the surprise is real — the same task's `params:` **do** read
+  `compute.*` — and because the detour is one line: put the value in the task's
+  own `vars:`, which is rendered with the namespace in scope, and write the
+  predicate against that.
 
 - **`compute` is now a reserved binding name.** `loop.as:`/`loop.index_as:` and
   `state_changes` `foreach.as:` reject it (`loop_var_reserved` /

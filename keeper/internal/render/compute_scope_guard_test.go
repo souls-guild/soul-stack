@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"path/filepath"
 	"sort"
@@ -28,27 +29,35 @@ import (
 // AST test below fails when the package grows a literal that is not listed here, so
 // adding a context forces an answer to the question this ticket was about.
 //
-// declared=false is an explicit exemption and owes a reason, not a shrug.
+// `want` is the SOURCE TEXT of the ComputeScope value, not a "was it set" flag.
+// Presence alone would let a builder be flipped from out-of-scope to available and
+// still pass, which is a real mutation: hostComputeScope returning ComputeAvailable
+// unconditionally deletes the ADR-009 V2 destiny isolation, and the destiny pass
+// carries no compute map either way, so the eval error stays "no such key" and
+// nothing behavioural notices. An empty `want` means the literal must NOT set the
+// field, and owes a reason.
 var computeScopeStance = map[string]struct {
-	declared bool
-	reason   string
+	want   string
+	reason string
 }{
-	"hostVars":          {declared: true}, // in scope per-host; the destiny pass opts out via hostComputeScope
-	"stateChangesVars":  {declared: true}, // in scope: state_changes is host-invariant by construction
-	"stateOpVars":       {declared: true}, // in scope: the merge-time half of state_changes
-	"resolveCompute":    {declared: true}, // in scope: the block resolves inside its own namespace
-	"keeperVars":        {declared: true}, // OUT: on: keeper renders in the run-level context
-	"resolveCovenList":  {declared: true}, // OUT: on: [covens] resolves once per run
-	"loopInvariantVars": {declared: true}, // OUT: the host-invariant loop axis
-	"EvalStateMatch":    {declared: true}, // OUT: match: sees elem/value and nothing else
+	"hostVars":          {want: "hostComputeScope(in)"},            // in scope per-host; the destiny pass opts out inside that helper
+	"stateChangesVars":  {want: "cel.ComputeAvailable"},            // in scope: state_changes is host-invariant by construction
+	"stateOpVars":       {want: "cel.ComputeAvailable"},            // in scope: the merge-time half of state_changes
+	"resolveCompute":    {want: "cel.ComputeAvailable"},            // in scope: the block resolves inside its own namespace
+	"keeperVars":        {want: "cel.ComputeAvailable"},            // IN: on: keeper IS the run-level context compute resolved in
+	"resolveCovenList":  {want: "cel.ComputeOutOfScopeCovenList"},  // OUT: on: [covens] resolves once per run
+	"loopInvariantVars": {want: "cel.ComputeOutOfScopeLoopAxis"},   // OUT: the host-invariant loop axis
+	"EvalStateMatch":    {want: "cel.ComputeOutOfScopeStateMatch"}, // OUT: match: sees elem/value and nothing else
 
 	"flowControlVarsFromStruct": {
-		declared: true,
-		reason:   "explicitly ComputeAvailable with a comment: the flow-control env does not declare the name, so cel-go's own undeclared-reference error already names the namespace",
+		want: "cel.ComputeAvailable",
+		reason: "the flow-control env does not declare `compute` at all, so cel-go's own undeclared-reference error already names the namespace. " +
+			"cel.ComputeOutOfScopeFlowControl exists for that context but is deliberately NOT set here: Soul builds its own Vars for the same " +
+			"predicate, and ADR-012(d) wants keeper-side static-when to fail bit-for-bit the way Soul fails. soul-lint uses the stance offline, " +
+			"where there is no env to do the refusing",
 	},
 	"resolveTaskVars": {
-		declared: false,
-		reason:   "the zero Vars is returned next to a non-nil error and is never evaluated; on the success path the caller's base carries the stance",
+		reason: "the zero Vars is returned next to a non-nil error and is never evaluated; on the success path the caller's base carries the stance",
 	},
 }
 
@@ -98,9 +107,9 @@ func TestComputeScope_EveryVarsBuilderDeclaresItsStance(t *testing.T) {
 					return true
 				}
 				seen[fn.Name.Name] = true
-				if got := celVarsLitSets(lit, "ComputeScope"); got != want.declared {
-					t.Errorf("%s: %s sets ComputeScope=%v, the table says %v (%s)",
-						fset.Position(lit.Pos()), fn.Name.Name, got, want.declared, want.reason)
+				if got := celVarsLitValue(fset, lit, "ComputeScope"); got != want.want {
+					t.Errorf("%s: %s sets ComputeScope=%q, the table says %q (%s)",
+						fset.Position(lit.Pos()), fn.Name.Name, got, want.want, want.reason)
 				}
 				return true
 			})
@@ -128,17 +137,25 @@ func isCelVarsLit(e ast.Expr) bool {
 	return ok && pkg.Name == "cel"
 }
 
-func celVarsLitSets(lit *ast.CompositeLit, field string) bool {
+// celVarsLitValue returns the source text of a field's value in a composite
+// literal, or "" when the literal does not set the field.
+func celVarsLitValue(fset *token.FileSet, lit *ast.CompositeLit, field string) string {
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
 			continue
 		}
-		if key, ok := kv.Key.(*ast.Ident); ok && key.Name == field {
-			return true
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != field {
+			continue
 		}
+		var buf strings.Builder
+		if err := printer.Fprint(&buf, fset, kv.Value); err != nil {
+			return "<unprintable>"
+		}
+		return buf.String()
 	}
-	return false
+	return ""
 }
 
 func sortedKeys[V any](m map[string]V) []string {
@@ -175,38 +192,52 @@ func computeScopeInput(manifest *config.ScenarioManifest) RenderInput {
 	}
 }
 
-// TestComputeScope_KeeperTaskParamsNameTheNamespace — the ticket's own reproduction,
-// end to end through Render.
-func TestComputeScope_KeeperTaskParamsNameTheNamespace(t *testing.T) {
+// TestComputeScope_KeeperTaskReadsCompute is the ticket's own reproduction, end to
+// end through Render, with the answer this ticket settled on: the task renders and
+// SEES the value. `on: keeper` renders in the run-level context — the very one
+// [Pipeline.resolveCompute] resolves the block in, before the task loop — so there
+// was never anything per-host to import, only a namespace the builder left out.
+//
+// NON-VACUITY (the mutation this test exists to catch): delete `Compute: in.Compute`
+// from render.keeperVars. The activation substitutes an empty map for the absent
+// namespace, so this goes red at EVAL with `no such key: topology_node_count` — the
+// exact sentence the ticket was filed about — and not at compile.
+func TestComputeScope_KeeperTaskReadsCompute(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := computeScopeInput(computeScopeScenario(config.Task{
 		Name: "seed",
 		On:   config.KeeperTarget,
 		Module: &config.ModuleTask{
 			Module: "core.soul.registered",
-			Params: map[string]any{"count": "${ compute.topology_node_count }"},
+			Params: map[string]any{
+				"count": "${ compute.topology_node_count }",
+				"sid":   "node-${ compute.topology_node_count }.example.com",
+			},
 		},
 	}))
 
-	_, _, err := p.Render(context.Background(), in)
-	if err == nil {
-		t.Fatal("compute.* in an on: keeper task: expected an error, got none")
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("compute.* in an on: keeper task: %v", err)
 	}
-	if !errors.Is(err, cel.ErrNamespaceOutOfScope) {
-		t.Fatalf("expected ErrNamespaceOutOfScope, got %T: %v", err, err)
+	if len(tasks) == 0 {
+		t.Fatal("no rendered tasks")
 	}
-	if strings.Contains(err.Error(), "no such key") {
-		t.Fatalf("the message still blames a key that exists and is spelled right: %v", err)
+	fields := tasks[0].Params.GetFields()
+	// A whole cell that is one `${ … }` keeps its native type (ADR-010).
+	if got := fields["count"].GetNumberValue(); got != 3 {
+		t.Fatalf("params.count = %v, want 3 -- the keeper context did not see the computed value", got)
 	}
-	if !strings.Contains(err.Error(), "on: keeper") {
-		t.Fatalf("the message does not say WHICH context refused it: %v", err)
+	if got := fields["sid"].GetStringValue(); got != "node-3.example.com" {
+		t.Fatalf("params.sid = %q, want %q", got, "node-3.example.com")
 	}
 }
 
-// TestComputeScope_KeeperTaskVarsAreNoWayAround — task-level vars: layer onto the
-// very same keeper context, so routing the reference through them must not work.
-// The ticket calls this out as the obvious workaround that silently isn't.
-func TestComputeScope_KeeperTaskVarsAreNoWayAround(t *testing.T) {
+// TestComputeScope_KeeperTaskVarsReadCompute — task-level vars: layer onto that very
+// same keeper context (resolveTaskVars takes it as its base), so the value reaches
+// params: through them too. Under the old omission this was the "obvious workaround
+// that silently isn't"; it is now simply the same context, twice.
+func TestComputeScope_KeeperTaskVarsReadCompute(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := computeScopeInput(computeScopeScenario(config.Task{
 		Name: "seed",
@@ -218,9 +249,42 @@ func TestComputeScope_KeeperTaskVarsAreNoWayAround(t *testing.T) {
 		},
 	}))
 
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("compute.* through a keeper task's vars:: %v", err)
+	}
+	if len(tasks) == 0 {
+		t.Fatal("no rendered tasks")
+	}
+	if got := tasks[0].Params.GetFields()["count"].GetNumberValue(); got != 3 {
+		t.Fatalf("params.count = %v, want 3", got)
+	}
+}
+
+// TestComputeScope_KeeperTaskMisspellingSaysNoSuchKey — the counterweight to the two
+// above. With the namespace present, a wrong name is an ordinary no-such-key, and
+// that message is now TRUE: the namespace is there, this name is not. soul-lint
+// catches the same mistake offline (compute_unknown_name).
+func TestComputeScope_KeeperTaskMisspellingSaysNoSuchKey(t *testing.T) {
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := computeScopeInput(computeScopeScenario(config.Task{
+		Name: "seed",
+		On:   config.KeeperTarget,
+		Module: &config.ModuleTask{
+			Module: "core.soul.registered",
+			Params: map[string]any{"count": "${ compute.topology_node_conut }"},
+		},
+	}))
+
 	_, _, err := p.Render(context.Background(), in)
-	if !errors.Is(err, cel.ErrNamespaceOutOfScope) {
-		t.Fatalf("compute.* laundered through task vars:, expected ErrNamespaceOutOfScope, got %v", err)
+	if err == nil {
+		t.Fatal("a misspelled compute name in a keeper task: expected an error")
+	}
+	if errors.Is(err, cel.ErrNamespaceOutOfScope) {
+		t.Fatalf("a real typo reported as an absent namespace: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no such key") {
+		t.Fatalf("expected the ordinary no-such-key, got: %v", err)
 	}
 }
 

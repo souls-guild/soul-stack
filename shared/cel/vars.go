@@ -63,10 +63,12 @@ type Vars struct {
 
 	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
 	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
-	// soulprint), available in CEL as `compute.<name>`. Scope — apply.input AND
-	// state_changes (host-invariant by construction). nil/empty ⇒ `compute.<name>`
-	// gives the normal no-such-key. NOT passed into the destiny pass (isolation:
-	// destiny sees the result only via apply.input).
+	// soulprint), available in CEL as `compute.<name>` in every context that IS that
+	// run-level context — a task's params/where/vars and apply.input, on the Soul
+	// side and under `on: keeper` alike, plus state_changes (host-invariant by
+	// construction). nil/empty ⇒ `compute.<name>` gives the normal no-such-key. NOT
+	// passed into the destiny pass (isolation: destiny sees the result only via
+	// apply.input). Which contexts are out of scope, and why: [ComputeScope].
 	//
 	// A nil Compute means "this run has no compute: block", NOT "this context has
 	// no compute namespace" — the second is [ComputeScope]'s job. Conflating them

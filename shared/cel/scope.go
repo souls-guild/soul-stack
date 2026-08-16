@@ -19,6 +19,12 @@ import (
 // Worse, the guard forms were silent: `has(compute.x)` evaluated false and
 // `size(compute)` returned 0, with no error at all.
 //
+// The keeper-side case that opened the ticket is now answered by SCOPE rather than
+// by a message: `compute` is host-invariant and resolved once per run, so a keeper
+// task simply gets it (render.keeperVars). What is left here are the contexts that
+// lack it for a structural reason, where no message can be replaced by an
+// inclusion.
+//
 // The fix follows the two precedents already in this package rather than adding a
 // third mechanism:
 //
@@ -30,12 +36,18 @@ import (
 //
 // `compute` cannot use non-declaration: one env ([contextVars]) serves both the
 // contexts that have the namespace (a Soul-side task's params:/where:/apply.input,
-// state_changes) and the ones that do not (an `on: keeper` task, the loop axis,
-// `on: [covens]`, the isolated destiny pass). So each context declares its own
-// stance in [Vars.ComputeScope], and the guard runs at COMPILE — before eval,
+// an `on: keeper` task, state_changes) and the ones that do not (the loop axis,
+// `on: [covens]`, the isolated destiny pass, `add: match:`). So each context declares
+// its own stance in [Vars.ComputeScope], and the guard runs at COMPILE — before eval,
 // before any vault() side effect, and on every reference position (`compute.x`,
 // `compute['x']`, `has(compute.x)`, `size(compute)`), including branches an
 // eval-time sentinel value would never reach.
+//
+// One stance ([ComputeOutOfScopeFlowControl]) belongs to a context this env never
+// sees: `when:`/`changed_when:`/`failed_when:`/`until:` are evaluated by
+// [NewFlowControl], which does not declare `compute` and therefore refuses on its
+// own. It is named here anyway because soul-lint checks those keys offline, where
+// there is no env to do the refusing.
 
 // computeRoot is the CEL identifier of the scenario-level `compute:` namespace
 // (ADR-009 amendment 2026-06-23). Also a reserved `loop.as:`/`loop.index_as:` name
@@ -51,7 +63,7 @@ const computeRoot = "compute"
 // undeclared-reference errors that the restricted engines ([NewMigration],
 // [NewFlowControl], [NewServiceVars]) already produce by non-declaration, and
 // every ad-hoc Vars literal outside the render package would have to opt in to
-// keep working. Instead the four contexts that lack the namespace name themselves,
+// keep working. Instead the contexts that lack the namespace name themselves,
 // and keeper/internal/render carries a guard test (compute_scope_guard_test.go)
 // asserting that EVERY context builder in the package declares a stance — so a new
 // builder cannot silently inherit "available" the way the ones in this ticket
@@ -63,10 +75,6 @@ const (
 	// missing name is an ordinary no-such-key (the author really did mistype, or
 	// the `compute:` block really has no such entry).
 	ComputeAvailable ComputeScope = iota
-
-	// ComputeOutOfScopeKeeperTask — an `on: keeper` task: its params: and its own
-	// vars: render in the run-level keeper context (render.keeperVars).
-	ComputeOutOfScopeKeeperTask
 
 	// ComputeOutOfScopeLoopAxis — `loop.items:` / `loop.when:`, the host-invariant
 	// loop axis (render.loopInvariantVars).
@@ -84,14 +92,32 @@ const (
 	// a pure function of the two bound elements and NO scenario context is available
 	// (render.EvalStateMatch, the same stance ADR-019 takes for migration-CEL).
 	ComputeOutOfScopeStateMatch
+
+	// ComputeOutOfScopeFlowControl — the flow-control keys `when:` /
+	// `changed_when:` / `failed_when:` / `until:`, which are not rendered at all:
+	// Keeper copies them into the RenderedTask verbatim and they are evaluated in
+	// the Soul-side flow-control sandbox ([NewFlowControl], ADR-012(d)) over a
+	// flow_context of input/vars/incarnation/soulprint.self/register.
+	//
+	// This one is carried by no [Vars] literal, and that is the point of naming it:
+	// the sandbox does not declare `compute` at all, so at RUN time cel-go already
+	// refuses with its own undeclared-reference error, and a scope stance would be
+	// redundant there. Offline is where the name earns its keep — soul-lint has no
+	// engine boundary to lean on, so without a stance it would have to either check
+	// those keys against the `compute:` block (announcing "the namespace exists
+	// here, this name does not" about a namespace that does not exist there — the
+	// very inversion this ticket was filed about) or say nothing.
+	ComputeOutOfScopeFlowControl
 )
+
+// computeScopeCount is the number of stances, so a test can walk every one of them
+// instead of a hand-kept list that a new constant silently falls out of.
+const computeScopeCount = int(ComputeOutOfScopeFlowControl) + 1
 
 // contextName describes the context in the words the author used to get here
 // (the YAML key, not the Go builder). Empty for [ComputeAvailable].
 func (s ComputeScope) contextName() string {
 	switch s {
-	case ComputeOutOfScopeKeeperTask:
-		return "an on: keeper task (its params: and vars: render in the run-level keeper context)"
 	case ComputeOutOfScopeLoopAxis:
 		return "loop.items:/loop.when: (the host-invariant loop axis)"
 	case ComputeOutOfScopeCovenList:
@@ -100,6 +126,8 @@ func (s ComputeScope) contextName() string {
 		return "the isolated destiny pass"
 	case ComputeOutOfScopeStateMatch:
 		return "state_changes add: match: (identity is a pure function of elem and value)"
+	case ComputeOutOfScopeFlowControl:
+		return "when:/changed_when:/failed_when:/until: (the Soul-side flow-control sandbox)"
 	default:
 		return ""
 	}
@@ -108,8 +136,6 @@ func (s ComputeScope) contextName() string {
 // hint is the way out of this particular context — what to write instead.
 func (s ComputeScope) hint() string {
 	switch s {
-	case ComputeOutOfScopeKeeperTask:
-		return "compute: is in scope for the Soul-side contexts only (a task's params:/where:/apply.input and state_changes) -- build the value here from input.*/vars.*/register.*, or move the step Soul-side"
 	case ComputeOutOfScopeLoopAxis:
 		return "the loop axis sees input.*/vars.*/register.*/incarnation.* and soulprint.hosts -- drive the loop from one of those, or build the list inside loop.items: itself"
 	case ComputeOutOfScopeCovenList:
@@ -118,6 +144,8 @@ func (s ComputeScope) hint() string {
 		return "a destiny sees run-level computed values only through apply: input: (ADR-009 V2 isolation) -- pass the value in explicitly"
 	case ComputeOutOfScopeStateMatch:
 		return "match: compares the element already in state (elem) with the one being added (value) and sees nothing else -- fold the computed part into the value itself, then match on the rendered result"
+	case ComputeOutOfScopeFlowControl:
+		return "these predicates run on the Soul side over flow_context (input/vars/incarnation/soulprint.self/register) -- put the computed value in the task's vars: (`n: ${ compute.<name> }`) and write the predicate against vars.n"
 	default:
 		return ""
 	}
@@ -268,6 +296,115 @@ func (e *Engine) InterpolationReferencesCompute(raw string) bool {
 	}
 	return false
 }
+
+// ExpressionComputeNames reads the `compute.<name>` selections out of a
+// WHOLE-STRING CEL expression: the names the author actually wrote, plus a
+// dynamic flag for a reference whose name is NOT in the source
+// (`compute[input.key]`, or the bare namespace handed to `size()`).
+//
+// Exported for soul-lint's `compute_unknown_name`, the rule that catches the
+// mistake the old `no such key` message was blamed for and never actually
+// diagnosed offline: a name that is not in the scenario's `compute:` block at all.
+// Splitting known names from dynamic use is the whole point — a rule that treated
+// `compute[k]` as a name would invent one, and one that ignored the flag would
+// report every dynamic lookup as a typo.
+//
+// Unparseable text → no names, not dynamic: a syntax error belongs to the
+// compiler, which reports it with a position (as in [Engine.VarRefs]).
+func (e *Engine) ExpressionComputeNames(expr string) (names []string, dynamic bool) {
+	if !containsIdentText(expr, computeRoot) {
+		return nil, false
+	}
+	parsed, err := e.parseNoMacro(expr)
+	if err != nil {
+		return nil, false
+	}
+	return computeNameRefs(parsed.Expr())
+}
+
+// InterpolationComputeNames is [Engine.ExpressionComputeNames] over an
+// interpolated string (`params:` values, `vars:` values, `loop.items:`): the union
+// of the names from every `${ … }` block, dynamic if ANY block is.
+func (e *Engine) InterpolationComputeNames(raw string) (names []string, dynamic bool) {
+	if !containsIdentText(raw, computeRoot) {
+		return nil, false
+	}
+	segs, err := e.scanInterpolation(raw)
+	if err != nil {
+		return nil, false
+	}
+	for _, s := range segs {
+		if !s.expr {
+			continue
+		}
+		n, d := e.ExpressionComputeNames(s.text)
+		names = append(names, n...)
+		dynamic = dynamic || d
+	}
+	return names, dynamic
+}
+
+// computeNameRefs walks the parsed expression once, pairing every `compute`
+// identifier with the name selected from it. An identifier left unpaired is a use
+// whose name the source does not carry → dynamic.
+//
+// The two readable forms are Select (`compute.x`) and the index operator
+// (`compute['x']` with a string literal). `has(compute.x)` and `size(compute)`
+// funnel through those same nodes because the parse runs with macros off — the
+// first is a call over a Select (readable), the second a call over a bare Ident
+// (dynamic), which is exactly the distinction the flag exists to draw.
+func computeNameRefs(root ast.Expr) (names []string, dynamic bool) {
+	idents := map[int64]bool{} // every `compute` identifier node
+	paired := map[int64]bool{} // the ones a name was read from
+
+	ast.PostOrderVisit(root, ast.NewExprVisitor(func(n ast.Expr) {
+		switch n.Kind() {
+		case ast.IdentKind:
+			if n.AsIdent() == computeRoot {
+				idents[n.ID()] = true
+			}
+		case ast.SelectKind:
+			s := n.AsSelect()
+			if op := s.Operand(); isComputeIdent(op) {
+				paired[op.ID()] = true
+				names = append(names, s.FieldName())
+			}
+		case ast.CallKind:
+			c := n.AsCall()
+			if c.IsMemberFunction() || c.FunctionName() != indexOperator {
+				return
+			}
+			args := c.Args()
+			if len(args) != 2 || !isComputeIdent(args[0]) {
+				return
+			}
+			if args[1].Kind() != ast.LiteralKind {
+				return // compute[expr] — the name is not in the source
+			}
+			key, ok := args[1].AsLiteral().Value().(string)
+			if !ok {
+				return
+			}
+			paired[args[0].ID()] = true
+			names = append(names, key)
+		}
+	}))
+
+	for id := range idents {
+		if !paired[id] {
+			return names, true
+		}
+	}
+	return names, false
+}
+
+func isComputeIdent(e ast.Expr) bool {
+	return e != nil && e.Kind() == ast.IdentKind && e.AsIdent() == computeRoot
+}
+
+// indexOperator is cel-go's function name for `a[b]` (common/operators.Index),
+// spelled out rather than imported for one constant.
+const indexOperator = "_[_]"
 
 // containsIdentText is the hot-path pre-filter: does the raw text contain ident as
 // a whole word? Substring-only would send `computed_at` / `my.compute` through the
