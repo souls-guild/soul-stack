@@ -164,6 +164,11 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// resolver (resolveCovenList) — the literal is visible without CEL eval.
 		if scn != nil {
 			diags = append(diags, onIncarnationNameDiagnostics(opts.Path, scn.Tasks)...)
+			// `compute.*` in a context that has no such namespace (NIM-619):
+			// an `on: keeper` task's params:/vars:, the loop axis, `on: [covens]`.
+			// Offline parity with shared/cel.guardComputeScope, which refuses the
+			// same expressions at compile time during render.
+			diags = append(diags, computeScopeDiagnostics(opts.Path, scn.Tasks)...)
 		}
 		// A scenario renders under the window its service declares (it has no
 		// compat: block of its own) — so its features are weighed against

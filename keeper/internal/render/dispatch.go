@@ -171,6 +171,11 @@ func keeperVars(in RenderInput) cel.Vars {
 		Incarnation: inc,
 		Vars:        in.ServiceVars,
 		Ctx:         in.Ctx,
+		// compute: is Soul-side scope (params:/where:/apply.input, state_changes) —
+		// declaring the absence turns `compute.<name>` here into an error that names
+		// the namespace and this context, instead of the old `no such key: <name>`,
+		// which named a key that was spelled perfectly well (NIM-619).
+		ComputeScope: cel.ComputeOutOfScopeKeeperTask,
 	}
 }
 
@@ -182,7 +187,8 @@ func keeperVars(in RenderInput) cel.Vars {
 // form is an omitted `on:`). Fail-closed: a stale `on: ["${ incarnation.name }"]`
 // errors out instead of silently resolving to an empty set.
 func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string, error) {
-	// on: resolves not per-host — soulprint is unavailable in this context.
+	// on: resolves not per-host — soulprint is unavailable in this context, and so
+	// is compute (declared, so a reference says which, NIM-619).
 	vars := cel.Vars{
 		Input:    in.Input,
 		Register: in.Register,
@@ -191,7 +197,8 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 			"service":         in.Incarnation.Service,
 			"service_version": in.Incarnation.ServiceVersion,
 		},
-		Ctx: in.Ctx,
+		Ctx:          in.Ctx,
+		ComputeScope: cel.ComputeOutOfScopeCovenList,
 	}
 
 	out := make([]string, 0, len(items))

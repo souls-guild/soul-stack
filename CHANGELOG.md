@@ -740,6 +740,25 @@ order to act in.
 
 ### Added
 
+- **`soul-lint` catches an out-of-scope `compute.*` before the run**
+  (`compute_out_of_scope`). `validate-scenario` reads the same scope table the
+  render engine enforces and reports a keeper-side `params:`/`vars:`, a
+  `loop.items:`/`loop.when:` and an `on: [covens]` element that reference the
+  namespace, each at the YAML path to edit. Until now nothing caught these
+  statically: the linter had no notion of `compute` references at all, so the
+  first sign was a failed run — and the message that run produced was the one this
+  release also fixes. The rule asks the CEL parser rather than a regex, so prose
+  in a param, a coven label like `compute-cluster` and an `input.compute_timeout`
+  are not flagged, and a child of an `on: keeper` `block:` is not flagged either
+  (`on:` is not inherited by block children — the child renders Soul-side, where
+  the namespace exists). Two contexts stay off the offline pass and are caught by
+  the run instead: a task spliced in by `include:` (the rule sees the scenario's
+  own task list, and the include is resolved on the keeper — a pre-existing limit
+  of every per-task rule, not of this one, NIM-655), and the isolated destiny
+  pass (the destiny linter is handed `destiny.yml`, whose tasks live in a file it
+  never receives). The runtime guard covers both; a clean `soul-lint` is a
+  narrower statement than a clean run.
+
 - **The composed incarnation name, previewed before it is permanent**
   ([ADR-0079 (g)](docs/adr/0079-incarnation-name-template.md)). When a create
   scenario declares `name_template`, the name is assembled server-side from the
@@ -1284,6 +1303,32 @@ order to act in.
   directory` before reaching its own guard — and the person most likely to follow
   a "run make sync-webui" red is precisely the one without the companion checked
   out.
+
+- **`compute.<name>` in a context that has no `compute:` namespace now says so,
+  instead of blaming the key.** A `compute:` value is readable Soul-side (a task's
+  `params:`/`where:`/`vars:`, `apply: input:`) and in `state_changes`; it is not
+  readable from an `on: keeper` task, from the `loop.items:`/`loop.when:` axis,
+  from `on: [covens]`, from the isolated destiny pass, or from `state_changes`
+  `match:`. Those contexts used to be handed an empty map, so a reference failed
+  with `no such key: <name>` — a message that names the one thing that is not
+  wrong, and that would have been identical for every possible name. It is now a
+  compile-time refusal naming the namespace, the context the author is standing
+  in, and what to write instead. Two consequences worth expecting: the check runs
+  before evaluation, so it also fires on a branch that a run would never have
+  reached; and the previously **silent** forms are silent no longer — `has(compute.x)`
+  stopped evaluating to `false` and `size(compute)` stopped returning `0` in a
+  context that never had the namespace. A scenario relying on either as a feature
+  test will now fail at render; test the underlying `input.*`/`vars.*` instead.
+  Routing the reference through a keeper task's `vars:` was never a way around the
+  scope and is refused the same way. The full table is in
+  [docs/scenario/orchestration.md §2.4](docs/scenario/orchestration.md).
+
+- **`compute` is now a reserved binding name.** `loop.as:`/`loop.index_as:` and
+  `state_changes` `foreach.as:` reject it (`loop_var_reserved` /
+  `reserved_binding_name`), matching the other context roots. In the loop axis the
+  shadow was merely confusing; in `state_changes` it was silent and worse — that
+  context *does* have the namespace, so `as: compute` validated, rendered, and
+  quietly made every `compute.<name>` mean a field of the element being iterated.
 
 - **A Tiding's `incarnation` selector now binds through `incarnation.run_completed`.**
   It used to bind through `incarnation.drift_checked`, the only run-scope event

@@ -344,11 +344,14 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 // (rewriteHostsWhere) into a native filter-comprehension BEFORE compile — the
 // rewritten result is cached.
 //
-// The cache key includes the env discriminator (loopKey) and allowHosts: a
-// program compiled against a child loop-env is incompatible with the base
-// (different declared-variable set); allowHosts changes the outcome for the same
-// text (rewrite vs isolation error). loopKey == "" — the base env.
-func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (cel.Program, error) {
+// The cache key includes the env discriminator (the loop names), allowHosts and
+// computeScope: a program compiled against a child loop-env is incompatible with
+// the base (different declared-variable set); allowHosts changes the outcome for
+// the same text (rewrite vs isolation error); computeScope decides whether a
+// `compute` reference is admissible at all ([ComputeScope.cacheTag] — the key must
+// carry it, the cache is consulted before any guard). Empty loopNames — the base
+// env.
+func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts bool, computeScope ComputeScope) (cel.Program, error) {
 	// flow-control mode ([NewFlowControl]) forces host-accessor isolation:
 	// soulprint.hosts/soulprint.where are unavailable regardless of Vars.AllowHosts
 	// (cross-host, scenario-only — the Soul has none). Guards against a caller that
@@ -358,12 +361,13 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 	}
 
 	cacheKey := expr
-	if loopKey != "" {
-		cacheKey = loopKey + "\x01" + expr
+	if len(loopNames) > 0 {
+		cacheKey = strings.Join(loopNames, "\x00") + "\x01" + expr
 	}
 	if !allowHosts {
 		cacheKey = "\x02" + cacheKey
 	}
+	cacheKey = computeScope.cacheTag() + cacheKey
 
 	e.mu.RLock()
 	prg, ok := e.cache[cacheKey]
@@ -373,6 +377,10 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 	}
 
 	if err := guardUnsupported(expr, e.kv != nil); err != nil {
+		return nil, err
+	}
+
+	if err := e.guardComputeScope(expr, computeScope, loopNames); err != nil {
 		return nil, err
 	}
 

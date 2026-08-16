@@ -527,13 +527,18 @@ var stateOpExpectValues = map[string]bool{
 // foreachReservedBindings — names `foreach.as:` must not shadow: the bare as-binding
 // is declared in the merge-time CEL context (render.renderForeach) and would clobber
 // the fixed scenario context OR the collection element's local bindings. Beyond
-// loopReservedNames (input/register/incarnation/soulprint/vars) it adds
+// loopReservedNames (input/register/incarnation/soulprint/vars/compute) it adds
 // elem/key/value — the current element's local bindings in add-match/modify-patch
 // (ADR-057 §b): `as: elem` would shadow the elem binding of a nested add operation
 // (reserved_binding_name).
+//
+// `compute` is here for the same reason it is in loopReservedNames (NIM-619), and
+// the stakes are higher: state_changes is one of the contexts that DOES have the
+// namespace (render.stateOpVars), so `as: compute` would not fail — it would quietly
+// make `compute.<name>` read the element being iterated.
 var foreachReservedBindings = map[string]bool{
 	"input": true, "register": true, "incarnation": true,
-	"soulprint": true, "vars": true,
+	"soulprint": true, "vars": true, "compute": true,
 	"elem": true, "key": true, "value": true,
 }
 
@@ -1017,7 +1022,7 @@ func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "reserved_binding_name",
 			Message:  fmt.Sprintf("foreach.as %q shadows a reserved name (CEL context or per-element binding)", name),
-			Hint:     "reserved: input, register, incarnation, soulprint, vars, elem, key, value",
+			Hint:     "reserved: input, register, incarnation, soulprint, vars, compute, elem, key, value",
 			YAMLPath: path + ".as",
 		}))
 	}

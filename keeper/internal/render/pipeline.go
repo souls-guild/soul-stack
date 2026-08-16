@@ -1233,6 +1233,13 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 		SoulprintSelf: flowSection(flowContextSelfKey),
 		Register:      register,
 		// AllowHosts intentionally false: NewFlowControl enforces soulprint.hosts isolation.
+		//
+		// ComputeScope stays ComputeAvailable, and that is not a claim that compute
+		// is readable here: the flow-control env does not DECLARE the name
+		// (cel.flowControlVars), so `compute.x` in a when: is an undeclared-reference
+		// compile error from cel-go itself — already unambiguous, already naming the
+		// namespace. Overriding it would replace that with our message for no gain.
+		ComputeScope: cel.ComputeAvailable,
 	}
 }
 
@@ -1891,7 +1898,15 @@ func mergeLoop(a, b map[string]any) map[string]any {
 // The result must be bool (evalBoolExpr). Called by merge per existing
 // element — stateless with respect to Pipeline (cel.Engine is thread-safe).
 func (p *Pipeline) EvalStateMatch(predicate string, elem, value any) (bool, error) {
-	vars := cel.Vars{Loop: map[string]any{"elem": elem, "value": value}}
+	vars := cel.Vars{
+		Loop: map[string]any{"elem": elem, "value": value},
+		// No scenario context here means the compute namespace is not here either
+		// (NIM-619): declaring the absence turns `compute.<name>` in a match: into a
+		// statement about this context, instead of a no-such-key naming a key that
+		// was never the problem — and stops `has(compute.x)` from quietly deciding
+		// two elements are not the same thing.
+		ComputeScope: cel.ComputeOutOfScopeStateMatch,
+	}
 	return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
 }
 
@@ -1932,6 +1947,8 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 		Incarnation: asMap("incarnation"),
 		Vars:        asMap("vars"),
 		Compute:     asMap("compute"),
+		// merge-time evaluation of state_changes — the same scope as stateChangesVars.
+		ComputeScope: cel.ComputeAvailable,
 	}
 	if sp, ok := ctx["soulprint"].(map[string]any); ok {
 		if self, ok := sp["self"].(map[string]any); ok {

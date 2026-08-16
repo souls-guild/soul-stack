@@ -350,7 +350,7 @@ examples `wait: { condition: C, timeout: T }` → probe step with
 
 ### 2.4. `compute:` - calculated vars of the run
 
-`compute:` - **top-level** script block (next to `input:`/`state_changes:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in `apply: input:` and in `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23).
+`compute:` - **top-level** script block (next to `input:`/`state_changes:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in the Soul-side render contexts — a task's `params:` / `where:` / `vars:` and `apply: input:` — and in `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23). The full table of what is in scope, and what an out-of-scope reference now says, is at the end of this section.
 
 ```yaml
 name: create
@@ -375,7 +375,31 @@ tasks:
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
 
-**Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` → no-such-key (like `register.*` - §10). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
+**Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` is rejected as out-of-scope (see the table below). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
+
+**Where the namespace exists, and what a reference outside it says (NIM-619).** `compute:` is resolved in the run-level Keeper context, but it is not readable from every context the Keeper renders. Some contexts run *before* or *beside* the point where the value has a meaning, and there the name is not merely empty — the namespace is **absent**:
+
+| Context | `compute.<name>` |
+|---|---|
+| A Soul-side task: `params:` / `where:` / task `vars:` / `apply: input:` | **in scope** |
+| `state_changes` (`set:` / `add:` / `remove:` value) | **in scope** |
+| A later `compute[i]` referring to an earlier `compute[j]`, j<i | **in scope** |
+| An `on: keeper` task — its `params:` and its own `vars:` | out of scope |
+| `loop.items:` / `loop.when:` — the host-invariant loop axis | out of scope |
+| `on: [covens]` — resolved once per run, before a host is chosen | out of scope |
+| The isolated destiny pass | out of scope |
+| `state_changes` → `add:` → `match:` | out of scope |
+
+An out-of-scope reference fails **at compile**, before any evaluation, and the message names the namespace and the context rather than the key:
+
+```
+CEL out of scope "compute.topology_node_count": the compute namespace does not
+exist in an on: keeper task (its params: and vars: render in the run-level keeper
+context) -- the whole namespace is absent here, not just this name; compute: is in
+scope for the Soul-side contexts only …
+```
+
+Because the check is at compile it also fires on the forms that used to be **silent**: `has(compute.x)` no longer evaluates to `false` and `size(compute)` no longer returns `0` in a context that has no namespace. Task-level `vars:` are not a way around it — a keeper task's `vars:` layer onto that same run-level context. `soul-lint` reports the same thing offline as `compute_out_of_scope`, with the YAML path to edit.
 
 **Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`vars`/`compute`).
 
