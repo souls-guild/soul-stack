@@ -1,6 +1,8 @@
 package render
 
 import (
+	"strings"
+
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -132,6 +134,18 @@ func walkSealed(engine *cel.Engine, set *SealedSet, v any, sources cel.SealSourc
 			walkSealed(engine, set, val, sources, joinIdx(path, i))
 		}
 	case string:
+		// A literal `vault:<mount>/<path>` cell is replaced by the secret it
+		// names in the vault-resolve phase — walkVaultValue keys off the same
+		// prefix — so its provenance is known here without an expression to
+		// inspect (DetectSealed reads `${ … }` segments and a bare ref has
+		// none). Sealing it keeps the declarative layer of
+		// audit.MaskSecretsSealed ahead of the regex last resort, which would
+		// mask such a cell only when its KEY looked sensitive and would raise a
+		// declarative-gap alarm every time it did.
+		if strings.HasPrefix(t, vaultRefPrefix) {
+			set.add(path)
+			return
+		}
 		if engine.DetectSealed(t, sources) {
 			set.add(path)
 		}

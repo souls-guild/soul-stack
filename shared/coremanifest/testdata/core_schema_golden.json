@@ -112,6 +112,20 @@
               "type": "int",
               "description": "How many VMs to create (default 1, \u003e= 1)."
             },
+            "credentials": {
+              "type": "string",
+              "secret": true,
+              "pattern": "^vault:.*",
+              "description": "Vault reference keeper reads and hands to the driver, e.g. `vault:secret/cloud/wb-dev`. A reference, never a value. Requires driver."
+            },
+            "driver": {
+              "type": "string",
+              "description": "CloudDriver plugin alias to call, e.g. `wb` (soul-cloud-wb). Carries the driver in the step instead of the providers registry; requires credentials."
+            },
+            "fqdn_suffix": {
+              "type": "string",
+              "description": "Suffix keeper predicts the self-onboard FQDN from: <name>-<index>.<suffix>. Inline source only - with `provider` the registry entry already holds it."
+            },
             "generate_userdata": {
               "type": "bool",
               "description": "Generate userdata from keeper.yml cloud_init (ADR-017(h))."
@@ -122,16 +136,19 @@
             },
             "profile": {
               "type": "map",
-              "description": "VM profile parameters (backend-specific)."
+              "description": "VM spec handed to the driver as-is. A string instead names an entry of the profiles registry (independent of the providers one - allowed with an inline driver)."
             },
             "provider": {
               "type": "string",
-              "required": true,
-              "description": "Name of the cloud Provider in the registry (driver + credentials + region)."
+              "description": "Name of an entry of the providers registry (driver + credentials + region). Mutually exclusive with driver/credentials."
+            },
+            "region": {
+              "type": "string",
+              "description": "Region passed to the driver alongside the credentials. Inline source only - with `provider` the registry entry already holds it."
             },
             "self_onboard": {
               "type": "bool",
-              "description": "The VM onboards itself from cloud-init (Variant T, ADR-017(h)): keeper predicts the FQDN and bakes per-VM tokens into userdata. Requires name + providers.fqdn_suffix."
+              "description": "The VM onboards itself from cloud-init (Variant T, ADR-017(h)): keeper predicts the FQDN and bakes per-VM tokens into userdata. Requires name + a suffix (fqdn_suffix inline, providers.fqdn_suffix in the registry)."
             },
             "userdata": {
               "type": "string",
@@ -142,10 +159,23 @@
         "destroyed": {
           "description": "Keeper-side (on:keeper). Cloud VMs destroyed, registries cascade-updated (ADR-017).",
           "input": {
+            "credentials": {
+              "type": "string",
+              "secret": true,
+              "pattern": "^vault:.*",
+              "description": "Vault reference keeper reads and hands to the driver, e.g. `vault:secret/cloud/wb-dev`. A reference, never a value. Requires driver."
+            },
+            "driver": {
+              "type": "string",
+              "description": "CloudDriver plugin alias to call, e.g. `wb` (soul-cloud-wb). Carries the driver in the step instead of the providers registry; requires credentials."
+            },
             "provider": {
               "type": "string",
-              "required": true,
-              "description": "Name of the cloud Provider in the registry."
+              "description": "Name of an entry of the providers registry (driver + credentials + region). Mutually exclusive with driver/credentials."
+            },
+            "region": {
+              "type": "string",
+              "description": "Region passed to the driver alongside the credentials. Inline source only - with `provider` the registry entry already holds it."
             },
             "sids": {
               "type": "list",
@@ -171,15 +201,28 @@
               "type": "bool",
               "description": "Allow downtime (stop/start) for cpu/ram resize. Required when changing cpu/ram; disk-only is online (default false)."
             },
+            "credentials": {
+              "type": "string",
+              "secret": true,
+              "pattern": "^vault:.*",
+              "description": "Vault reference keeper reads and hands to the driver, e.g. `vault:secret/cloud/wb-dev`. A reference, never a value. Requires driver."
+            },
             "desired": {
               "type": "map",
               "required": true,
               "description": "Target resources in our units: cpu_cores (cores) / ram_mb (MB) / disk_gb (GB). At least one \u003e 0; fields with 0 are unchanged."
             },
+            "driver": {
+              "type": "string",
+              "description": "CloudDriver plugin alias to call, e.g. `wb` (soul-cloud-wb). Carries the driver in the step instead of the providers registry; requires credentials."
+            },
             "provider": {
               "type": "string",
-              "required": true,
-              "description": "Name of the cloud Provider in the registry."
+              "description": "Name of an entry of the providers registry (driver + credentials + region). Mutually exclusive with driver/credentials."
+            },
+            "region": {
+              "type": "string",
+              "description": "Region passed to the driver alongside the credentials. Inline source only - with `provider` the registry entry already holds it."
             },
             "vm_ids": {
               "type": "list",

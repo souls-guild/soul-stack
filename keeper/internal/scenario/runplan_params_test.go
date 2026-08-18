@@ -153,6 +153,59 @@ func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 	}
 }
 
+// TestMaskRunPlanParams_SealedResolvedRefSubtree ★ — the shape a cloud step
+// has by the time it reaches this channel (NIM-668): the author wrote
+// `credentials: vault:secret/cloud/wb-dev`, and the vault-resolve phase
+// (ADR-010, phase 1) already replaced that string with the secret MAP.
+//
+// This is the DOWNSTREAM half of that chain, and only that half: it hands the
+// masker a sealed path and requires the whole subtree to go, whatever the driver
+// named its keys. That the path is sealed in the first place — that
+// collectSealed marks a cell holding a bare `vault:` ref — is asserted where it
+// happens, in render.TestCollectSealed_MatchesVaultResolve, which derives the
+// expected set from a real resolveVaultRefs run. The two meet on the path string
+// `credentials`; neither test invokes the other's half.
+//
+// The `conn` cell is what makes this guard bite: its key name carries no secret
+// fragment, so the regex last resort would not touch it. It is masked only
+// because the render phase marked the path — drop the seal and the secret is in
+// the JSON. `credentials` is kept alongside it deliberately: that name IS
+// caught by the key regex, so it alone would prove nothing about the seal.
+func TestMaskRunPlanParams_SealedResolvedRefSubtree(t *testing.T) {
+	const secret = "wb-inline-access-key-DO-NOT-LEAK"
+	task := &render.RenderedTask{
+		Name:   "provision",
+		Module: "core.cloud.created",
+		Params: mustParamsStruct(t, map[string]any{
+			"driver": "wb",
+			"region": "ru-central1",
+			"credentials": map[string]any{
+				"access_key_id":     "AKIAINLINE",
+				"secret_access_key": secret,
+			},
+			"conn": map[string]any{"folder_id": "b1g0000", "oauth": secret},
+		}),
+	}
+	// What render.collectSealed produces for the two raw `vault:` cells.
+	raw := maskRunPlanParams(task, map[string]bool{"credentials": true, "conn": true})
+
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("★ secret %q leaked into run-plan params: %s", secret, raw)
+	}
+	got := decodeRunPlanParams(t, raw)
+	for _, k := range []string{"credentials", "conn"} {
+		if got[k] != "***MASKED***" {
+			t.Errorf("%s = %#v, want ***MASKED*** (whole subtree, not a map)", k, got[k])
+		}
+	}
+	if got["driver"] != "wb" {
+		t.Errorf("driver = %v, want wb (the alias is what audit names - kept)", got["driver"])
+	}
+	if got["region"] != "ru-central1" {
+		t.Errorf("region = %v, want ru-central1 (not a secret - kept)", got["region"])
+	}
+}
+
 // TestMaskRunPlanParams_NestedSealedMasked ★ — a sealed path inside a nested
 // structure (acl[].password) is masked via the generalized idx form,
 // neighboring values stay intact.

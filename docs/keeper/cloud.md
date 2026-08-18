@@ -6,6 +6,8 @@ Module inside the `keeper` binary, responsible for cloud operations (creating / 
 
 **Provider** — configured cloud account (AWS account, GCP project, OpenStack-tenant). Stored in Postgres ([storage.md](storage.md)), managed via OpenAPI / MCP. CRUD surface **implemented**:
 
+> **The registries are one of two sources, not a precondition.** A step may carry the driver, its credentials and its region itself and provision with **zero rows** here - see [Two sources for the driver](#two-sources-for-the-driver-registry-or-inline). Everything in this section describes the registry source.
+
 | Method + path | Permission | MCP-tool | Destination |
 |---|---|---|---|
 | `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Create Provider; `409 provider-already-exists` for take `name`. |
@@ -73,13 +75,55 @@ In the cloud-create service script, a normal step with `on: keeper`, using the k
 
 What `core.cloud` (state `created`) does:
 
-1. **Resolve Provider registry.** `params.provider` is the name of the string `providers` (not the name of the CloudDriver plugin). Keeper reads the line, takes `type` (= plugin name `soul-cloud-<type>`), `region` and `credentials_ref`.
+1. **Resolve Provider registry** (registry mode - see [Two sources for the driver](#two-sources-for-the-driver-registry-or-inline)). `params.provider` is the name of the string `providers` (not the name of the CloudDriver plugin). Keeper reads the line, takes `type` (= plugin name `soul-cloud-<type>`), `region` and `credentials_ref`.
 2. **Resolves credentials.** By `credentials_ref` (`vault:<mount>/<path>`) Keeper reads the secret from Vault KV with the same keeper-side Vault client as `core.vault.kv-read`, and puts the plain secret + `region` in `CreateRequest.credentials`. The driver is **NOT running in Vault** (see [Credentials-flow](#credentials-flow) below).
 3. **Pulls `CloudDriver.Create`** via PluginHost (spawn one-shot, ADR-020): the provider creates a VM, streams progress, waits for readiness (running + IP/DNS) and returns `VmInfo` with `fqdn` (= SID) filled in.
 4. For each VM, an entry is created in `souls` with `status: pending` and a bootstrap token is issued under its FQDN (the plain token goes only to register-output - `register.<step>.hosts[i].bootstrap_token`, to the database - hash).
 5. Cloud-init on the VM (via `userdata`) puts **setup only**: `soul`-binary, CA, `soul.yml`, systemd-unit - **without token**. The token is delivered by a separate keeper-side step `module: core.bootstrap.delivered` ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)); he also makes redeem (`soul init`) on VM. After init, Soul raises EventStream and goes to `connected`.
 
 Steps 4-5 - **B-flat (default)** mode. With `self_onboard: true`, the order is different: tokens are issued **BEFORE** create and baked in userdata - VM onboards itself, the delivery step is not needed (see Self-onboard "Option T").
+
+### Two sources for the driver: registry or inline
+
+The step gets its CloudDriver from **exactly one** of two sources (NIM-668). Both end up as the same tuple - driver alias, credentials, region, fqdn_suffix - so the driver, the audit event and the step output cannot tell them apart.
+
+| Source | How it is written | When it fits |
+|---|---|---|
+| **registry** | `provider: <name>` - a row of the `providers` registry carries `type`/`region`/`credentials_ref` | A fleet that already manages its accounts through the API; one row, many services |
+| **inline** | `driver:` + `credentials:` (+ optional `region:` / `fqdn_suffix:`) in the step itself | A fleet that keeps its cloud account in Vault and its topology in git - **zero rows** in `providers`/`profiles` |
+
+```yaml
+- name: provision
+  on: keeper
+  module: core.cloud.created
+  params:
+    driver:       wb                             # plugin alias -> soul-cloud-wb
+    credentials:  vault:secret/cloud/wb-dev      # a REFERENCE, never a value
+    region:       ru-central1
+    fqdn_suffix:  wb.internal                    # needed by self_onboard (SID prediction)
+    profile:      "${ vars.cloud.profile }"      # the VM spec itself, an object
+    count:        3
+```
+
+| Param | Type | Meaning |
+|---|---|---|
+| `driver` | string | The CloudDriver plugin alias - the same value the registry keeps in `providers.type`, naming the binary `soul-cloud-<driver>`. Replaces the registry's `type` resolution, it does not look anything up. |
+| `credentials` | string (`vault:<mount>/<path>`) | Where the secret lives. **Keeper reads it for you** in the vault-resolve phase ([ADR-010](../adr/0010-templating.md) phase 1) and hands the driver the plain map - the same Option A flow the registry path uses ([Credentials-flow](#credentials-flow)). A **literal credential written into a definition is refused**: by the time the module runs, this cell must be the secret map, and a surviving string means either a value in git or a reference nothing resolved. The refusal does not echo what it read. |
+| `region` | string | Merged into the credentials map under the same key the registry path writes (`region`), so a driver reads it from one place whichever source produced it. Omitted - a `region` the secret itself carries is left alone. |
+| `fqdn_suffix` | string | The DNS suffix keeper predicts SIDs with before create - what `providers.fqdn_suffix` gives the registry path. Required by `self_onboard: true`, unused otherwise (see [Self-onboard "Option T"](#self-onboard-option-t)). |
+
+**The rules, and why they are refusals rather than preferences:**
+
+- **`provider` XOR the inline pair.** Naming both is refused, naming neither is refused. A silent preference would let a step that *looks* like it points at `wb-prod` actually run against the inline credentials - the audit event would name one of them and the run would use the other.
+- **Half the inline pair is refused as half a pair.** `driver:` without `credentials:` and `credentials:` without `driver:` each report the missing half by name; neither reports "no source set", because the author clearly chose the inline one.
+- **`credentials` is written literally, never through an expression.** The `vault:` ref is read in phase 1 and `${ … }` renders in phase 3 ([ADR-010](../adr/0010-templating.md)), so `credentials: "${ vars.cloud.credentials }"` produces a reference one phase *after* the only pass that would have read it: the module gets a string where the secret map belongs and refuses, naming the phase order rather than the value. Every other param of the step may come from `vars`; this one is the exception, which is why the example writes it out.
+- **`region` / `fqdn_suffix` alongside `provider` are refused.** In registry mode those two are columns of the registry row. A step quietly overriding `region` would move a fleet to another data centre through a param the author read as documentation, so the module refuses and names the column to change instead. Registry mode has exactly one place to set them.
+- **`profile` is orthogonal to all of this.** The `profiles` registry is independent of the `providers` one, so an inline `driver` **may** name a registry profile by string and a registry `provider` **may** take an inline spec object - that split is the point (a fleet keeps its sizes in the registry while the driver comes from the step). `profile` as a **string** = the name of a `profiles` row; as an **object** = the VM spec itself, handed to the driver as-is. The type is the discriminator: a name is never an object, a spec is never a bare string - with one static caveat, that the manifest declares a single type (`map`) because the schema DSL has no union, so the string form must reach the param through an expression (`"${ vars.profile }"`) rather than as a literal. With no registry configured at all, a string `profile` is refused naming the inline form as the way out.
+- **Symmetry.** `created`, `destroyed` and `resized` read the source the same way - a fleet does not switch to the registry to tear itself down.
+
+**In audit and output.** The `cloud.provisioned` event names the driver alias where the registry path names the registry row (`provider: wb`), plus `driver` - the audit tells the two apart by the value, and never carries the credentials. The credentials cell is sealed at render time ([ADR-010](../adr/0010-templating.md) §7.4) because it was written as a `vault:` reference, so the whole resolved subtree is masked in the run-plan params, `status_details`, `error_summary` and the SSE stream - declaratively, by path, ahead of the key-name regex.
+
+> **Removing the registries is a separate change.** Both sources are supported; nothing is deprecated here. Whether `providers`/`profiles` stay is decided in NIM-669.
 
 #### Re-running `create` (provision idempotency, NIM-170 / NIM-189)
 
@@ -236,7 +280,7 @@ If there is no block, the `generate_userdata: true` parameter fails the script s
 
 ### Self-onboard "Option T"
 
-Third mode of bootstrap delivery ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): VM onboards **itself in one cloud-init cycle**, without the `core.bootstrap.delivered` step and without claim-callback. Chicken-egg "SID is known only AFTER create" removed by FQDN prediction: keeper itself sets the base name of the VM batch (param `name` → `CreateRequest.name`, the driver names the VM `<name>-<index>`) and knows the FQDN suffix of the provider (registry field `providers.fqdn_suffix`, migration 094) - full FQDN `<name>-<index>.<fqdn_suffix>` is known to each VM BEFORE create.
+Third mode of bootstrap delivery ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): VM onboards **itself in one cloud-init cycle**, without the `core.bootstrap.delivered` step and without claim-callback. Chicken-egg "SID is known only AFTER create" removed by FQDN prediction: keeper itself sets the base name of the VM batch (param `name` → `CreateRequest.name`, the driver names the VM `<name>-<index>`) and knows the FQDN suffix - from the registry field `providers.fqdn_suffix` (migration 094) in registry mode, from the step param `fqdn_suffix:` in [inline mode](#two-sources-for-the-driver-registry-or-inline) - so the full FQDN `<name>-<index>.<fqdn_suffix>` is known to each VM BEFORE create.
 
 ```yaml
 - name: provision
@@ -261,7 +305,7 @@ Contract params: `self_onboard: true` (bool, opt) **requires `name`**; **mutuall
 
 > **★ Security is a deliberate departure from B-flat.** B-flat keeps userdata "without tokens" (cloud-provider stores userdata in plaintext-metadata, accessible to VM processes). Self-onboard puts tokens in userdata deliberately: they are **single-use** - redeem occurs immediately, on the first boot cycle, re-use is impossible; the alternative is mandatory push delivery, which is not available on some platforms. Mode - **opt-in per-step** (`self_onboard`); default remains B-flat.
 
-Bounds: provider without predictable FQDN (empty `fqdn_suffix`) - clear step error; on platforms with userdata disabled (`ci_user_data` off, [ADR-066](../adr/0066-teleport-onboarding-profile.md)), the mode is not available - there is a standard full-install path via Teleport ([ADR-063](../adr/0063-bootstrap-token-delivery.md)).
+Bounds: no predictable FQDN - clear step error, naming the place the author can actually set it (the registry column in registry mode, the `fqdn_suffix` param inline); on platforms with userdata disabled (`ci_user_data` off, [ADR-066](../adr/0066-teleport-onboarding-profile.md)), the mode is not available - there is a standard full-install path via Teleport ([ADR-063](../adr/0063-bootstrap-token-delivery.md)).
 
 ### Security
 
