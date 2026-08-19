@@ -34,7 +34,9 @@ type ScenarioManifest struct {
 	Tasks        []Task         `yaml:"tasks"`
 
 	// Extends names a covenant fragment at the service-repo root (`covenant.yml`
-	// without extension, base name `^[a-z][a-z0-9-]*$`) whose input/compute/
+	// without extension, `<dir>/<name>` at most one directory deep, each segment
+	// matching refPathSegment — see reCovenantName in covenant.go, which is the
+	// authority) whose input/compute/
 	// state_changes/validate sections the scenario inherits (covenant.go). Empty /
 	// absent = no inheritance (forward-compat: existing scenarios without extends
 	// are unaffected). Resolving the fragment against the snapshot FS is keeper-side
@@ -1399,8 +1401,9 @@ func semanticValidateScenario(m *ScenarioManifest, root *ast.MappingNode) []diag
 
 // validateExtendsField — semantic check of the `extends:` form (covenant.go). Empty/
 // absent extends = no inheritance (valid, nothing checked — forward-compat). A
-// non-empty name must be a valid covenant reference (ValidExtendsName: single-segment
-// kebab, traversal-clamped by the name grammar): else covenant_extends_invalid.
+// non-empty name must be a valid covenant reference (ValidExtendsName: one segment,
+// optionally under one subdirectory, traversal-clamped by the name grammar): else
+// covenant_extends_invalid.
 // Resolving the fragment against the FS is S2 (keeper-side); only the name form here.
 func validateExtendsField(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
 	if m.Extends == "" {
@@ -1412,7 +1415,7 @@ func validateExtendsField(m *ScenarioManifest, root *ast.MappingNode) []diag.Dia
 	return []diag.Diagnostic{atPath(root, "$.extends", diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:    "covenant_extends_invalid",
-		Message: fmt.Sprintf("extends %q is not a valid covenant name", m.Extends),
-		Hint:    "single-segment kebab-case (^[a-z][a-z0-9-]*$); names the root covenant.yml-family fragment, must not contain path separators",
+		Message: fmt.Sprintf("extends %q is not a valid covenant name: %s", m.Extends, refNameRejection(m.Extends, "")),
+		Hint:    "one segment, optionally under one subdirectory (`covenant`, `shared/scenario_create`); names a covenant.yml-family fragment relative to the service root, no `..` and no second subdirectory level",
 	})}
 }

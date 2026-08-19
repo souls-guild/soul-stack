@@ -261,7 +261,12 @@ func (s *DeprecationScanner) scenarioDirs(art *artifact.ServiceArtifact) ([]stri
 	}
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
+		// A `_`/`.`-prefixed directory holds shared include bodies, not a
+		// scenario (config.IsSharedDirName, orchestration.md §6). Keeping the
+		// unparseable ones (the point of this walk) must not extend to a
+		// directory that was never a scenario: it has no main.yml by design and
+		// would surface as a permanent phantom gap.
+		if e.IsDir() && !config.IsSharedDirName(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}

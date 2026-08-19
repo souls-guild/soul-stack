@@ -104,6 +104,34 @@ func TestDestinyLoad_WithinInclude(t *testing.T) {
 	}
 }
 
+// TestDestinyLoad_IncludeSubdirectory — NIM-694 widened the include grammar to
+// one subdirectory level, and destiny shares that grammar with scenario. The
+// witness is a DECOY: a flat `tasks/place.yml` with different content sits next
+// to `tasks/shared/place.yml`, so a resolver that reduced the name to its base
+// (or otherwise dropped the directory) would load the decoy and be caught here
+// rather than silently splicing the wrong file into a run.
+func TestDestinyLoad_IncludeSubdirectory(t *testing.T) {
+	tr := &testRepo{t: t, dir: t.TempDir()}
+	tr.initRepo()
+	tr.writeFile("destiny.yml", destinyManifestYML)
+	tr.writeFile("tasks/main.yml", "- include: shared/place.yml\n")
+	tr.writeFile("tasks/place.yml", "- name: decoy\n  module: core.exec.run\n  changed_when: \"false\"\n  params:\n    cmd: echo\n    args: [\"decoy\"]\n")
+	tr.writeFile("tasks/shared/place.yml", destinyTasksYML)
+	tr.commit("destiny with a shared include body")
+
+	loader := NewDestinyLoader(t.TempDir(), nil)
+	art, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(art.Tasks) != 1 {
+		t.Fatalf("len(tasks) = %d, want 1", len(art.Tasks))
+	}
+	if art.Tasks[0].Module == nil || art.Tasks[0].Module.Module != "core.file.present" {
+		t.Fatalf("task0 = %+v, want core.file.present from tasks/shared/place.yml, not the flat decoy", art.Tasks[0].Module)
+	}
+}
+
 // TestDestinyLoad_IncludeCycle — a within-destiny include cycle (a→b→a)
 // is detected, it does not hang the load.
 func TestDestinyLoad_IncludeCycle(t *testing.T) {

@@ -176,8 +176,10 @@ func (l *DestinyLoader) parseTasks(art *DestinyArtifact) ([]config.Task, error) 
 
 // destinyIncludeResolver — the within-destiny [config.IncludeResolver]:
 // include targets stay strictly inside the snapshot's `tasks/` directory
-// (destiny/tasks.md §4 — a neighbor in the same folder, escaping it is
-// forbidden). securejoin inside readSnapshotFile clamps `..`/absolute
+// (destiny/tasks.md §4 — `<file>.yml` or one subdirectory down
+// `<dir>/<file>.yml`; escaping `tasks/` is forbidden). One tier only: a destiny
+// is its own git artifact and has no service level to fall back to, unlike the
+// scenario resolver. securejoin inside readSnapshotFile clamps `..`/absolute
 // paths/symlinks. The display path (`tasks/<sub>.yml`) is the cycle-detection
 // key.
 func destinyIncludeResolver(localDir string) config.IncludeResolver {

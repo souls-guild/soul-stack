@@ -70,6 +70,56 @@ tasks:
 	}
 }
 
+// TestSurvey_SharedDirIsNotAScenario — NIM-694. This walk deliberately does NOT
+// use artifact.ListScenarios, because it must keep scenarios that fail to parse
+// (see scenarioDirs). That rule must not swallow a directory that was never a
+// scenario: `scenario/_create/` holds the shared include bodies of the create
+// family, has no main.yml BY DESIGN, and would otherwise be reported as a
+// GapParseFailed on every survey — a permanent phantom gap an operator can never
+// clear, in the one surface whose whole point is that a real gap is visible.
+func TestSurvey_SharedDirIsNotAScenario(t *testing.T) {
+	root := writeServiceTree(t, map[string]string{
+		"create": `name: create
+tasks:
+  - include: _create/provision.yml
+`,
+	})
+	shared := filepath.Join(root, "scenario", "_create")
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", shared, err)
+	}
+	body := `- name: place a file
+  module: core.file.present
+  params:
+    path: /etc/demo.conf
+    content: hello
+`
+	if err := os.WriteFile(filepath.Join(shared, "provision.yml"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write provision.yml: %v", err)
+	}
+
+	s := testScanner(t)
+	art := &artifact.ServiceArtifact{LocalDir: root}
+
+	names, err := s.scenarioDirs(art)
+	if err != nil {
+		t.Fatalf("scenarioDirs: %v", err)
+	}
+	if len(names) != 1 || names[0] != "create" {
+		t.Fatalf("scenarioDirs = %v, want only [create] — a shared body directory is not a scenario", names)
+	}
+
+	byParam := map[string]*DeprecationUsage{}
+	gaps := map[string]*DeprecationGap{}
+	members := []incarnation.Incarnation{{Name: "demo-a"}}
+	s.surveyDefinition(art, definitionKey{service: "demo", version: "v1"},
+		members, incarnationNames(members), nil, byParam, gaps)
+
+	if len(gaps) != 0 {
+		t.Fatalf("the shared bodies directory was surveyed as a scenario: %+v", gaps)
+	}
+}
+
 // ★ The invariant this surface hangs on: a definition built on plugin modules is
 // NOT reported as clean when the catalog cannot resolve them. Here the survey is
 // handed a nil catalog (the offline case — no Sigil service), which since

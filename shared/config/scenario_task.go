@@ -229,6 +229,77 @@ var taskKnownKeys = func() map[string]bool {
 	return out
 }()
 
+// refPathSegment — ONE path segment of a service-relative DSL reference: the
+// `include:` target (this file) and the `extends:` covenant name (covenant.go).
+// A lowercase letter or `_` first — the `_` prefix marks a directory holding
+// shared pieces rather than a scenario (orchestration.md §6) — then
+// letters/digits/`_`/`-`.
+//
+// `.` is outside the alphabet on purpose: `.`, `..` and hidden names cannot be
+// expressed AT ALL, so the traversal clamp is the grammar itself rather than a
+// post-hoc filepath check. Both references allow at most ONE `/` on top of this
+// segment, i.e. one subdirectory level; resolvers securejoin on top of that.
+const refPathSegment = `[a-z_][a-z0-9_-]*`
+
+// IsSharedDirName reports whether a directory inside `scenario/` (or `upgrade/`)
+// holds SHARED pieces rather than a scenario: its name starts with `_` or `.`
+// (orchestration.md §6). A service groups the common bodies of one scenario
+// family under `scenario/_create/` and includes them by name (`include:
+// _create/deploy.yml`); such a directory must never surface as a runnable
+// scenario.
+//
+// The convention is one contract with [refPathSegment] — the segment alphabet
+// admits a leading `_` precisely so these directories are nameable — and lives
+// here so every scenario walker (keeper listing, linters) reads the same rule
+// instead of re-deriving it.
+func IsSharedDirName(name string) bool {
+	return strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".")
+}
+
+// refNameRejection explains WHY name failed the shared reference grammar
+// ([refPathSegment], one optional subdirectory level) by naming the single rule
+// that bit. Listing every rule in one message is what the caller used to do, and
+// it makes the diagnostic unfalsifiable: an author cannot tell which rule they
+// broke, and a test asserting on the rejection cannot tell either — a guard for
+// the depth cap stays green when the alphabet is what rejected the input.
+//
+// The regexes remain the authority. This function only explains their verdict
+// and is never consulted to ACCEPT anything, so it cannot widen the grammar by
+// disagreeing with them.
+//
+// wantSuffix is ".yml" for an include target, "" for an extends name.
+func refNameRejection(name, wantSuffix string) string {
+	depth := strings.Count(name, "/")
+	switch {
+	case name == "":
+		return "must not be empty"
+	case strings.HasPrefix(name, "/"):
+		return "must not be an absolute path"
+	case hasTraversalSegment(name):
+		// Checked before the depth cap: `_create/../../escape.yml` breaks both,
+		// and the traversal is the rule the author actually needs to hear about.
+		return "must not contain a `.` or `..` path segment"
+	case depth > 1:
+		return fmt.Sprintf("at most one subdirectory level (`<dir>/<name>%s`), got %d", wantSuffix, depth)
+	case wantSuffix != "" && !strings.HasSuffix(name, wantSuffix):
+		return "must end in `" + wantSuffix + "`"
+	default:
+		return "each path segment must match `" + refPathSegment + "`"
+	}
+}
+
+// hasTraversalSegment — a `.` or `..` SEGMENT, not merely a dot in the name:
+// `.hidden.yml` is rejected by the segment alphabet, which is a different rule
+// and gets a different message.
+func hasTraversalSegment(name string) bool {
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // Validation regexes.
 var (
 	// reModuleAddress — 3-level kebab-case `<ns>.<module>.<state>` for a scenario
@@ -236,10 +307,11 @@ var (
 	// segment `<state>` — destiny/tasks.md §4.
 	reModuleAddress = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-	// reIncludeFile — include file name. Only a `.yml` extension, no `/` and no `..`
-	// (the engine does the two-level resolve, an author never writes `../`,
-	// orchestration.md §6).
-	reIncludeFile = regexp.MustCompile(`^[a-z][a-z0-9_-]*\.yml$`)
+	// reIncludeFile — include target: a `.yml` file name, optionally under ONE
+	// subdirectory level (`_create/deploy.yml`). A second level, `..` and absolute
+	// paths stay outside the grammar (the engine does the two-level resolve, an
+	// author never writes `../`, orchestration.md §6).
+	reIncludeFile = regexp.MustCompile(`^(?:` + refPathSegment + `/)?` + refPathSegment + `\.yml$`)
 
 	// reRegisterID — identifier for `register:` and `id:` (a stable task address for
 	// "task X changed" alerts, ADR-009-amend). One format because register and id
@@ -896,8 +968,8 @@ func validateIncludeField(kv *ast.MappingValueNode, pathPrefix string) []diag.Di
 		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "name_invalid_format",
-			Message:  fmt.Sprintf("include %q must be a sibling file name ending in .yml (no slashes, no ..)", sn.Value),
-			Hint:     "two-level resolve is done by the engine; authors never write ../ — see orchestration.md §6",
+			Message:  fmt.Sprintf("include %q is not a valid target: %s", sn.Value, refNameRejection(sn.Value, ".yml")),
+			Hint:     "shared bodies live in a `_`-prefixed directory (`include: _create/deploy.yml`); the two-level resolve is done by the engine, authors never write ../ — see orchestration.md §6",
 			YAMLPath: pathPrefix + ".include",
 		})}
 	}

@@ -342,3 +342,60 @@ Consequences inside this ADR's grammar:
 - **A soul-lint WARNING `vars_shadows_service_var` is to be added (NIM-416)** — a scenario or
   task var taking over a service var's name. Modelled on the existing `vars_collision`, which reports exactly this shape
   for the file↔task pair; without it the merge would let one silently win.
+
+### Amendment 2026-08-17 (NIM-694): `include:` and `extends:` take one subdirectory level; a `_`-prefixed directory under `scenario/` is not a scenario
+
+A service with several scenarios of one family — Redis today has `create` and
+`create_from_souls`, `update` and `destroy` follow — had **nowhere to put the shared pieces**.
+Both service-level sharing mechanisms this ADR introduced accepted a single flat name:
+`include:` matched `^[a-z][a-z0-9_-]*\.yml$` and `extends:` matched `^[a-z][a-z0-9-]*$`, so
+everything shared landed side by side in the service root and in `scenario/`, with the family
+encoded in the filename (`redis-provision.yml`) rather than in the tree. The amendment 2026-06-29
+above created this pressure itself: it made several create scenarios per service normal, and then
+gave their common tasks one flat namespace to live in.
+
+**Decision — widen the reference grammar by exactly one directory level, in one place.**
+
+- **One shared segment alphabet, `[a-z_][a-z0-9_-]*`, and at most one directory**
+  (`refPathSegment`, `shared/config/scenario_task.go`). `include:` accepts
+  `<file>.yml` or `<dir>/<file>.yml`; `extends:` accepts `<name>` or `<dir>/<name>`. `_` joins
+  the alphabet — a leading `_` is what marks a shared directory, and a service is free to use it
+  in filenames too.
+- **`.` stays outside the alphabet, which is the whole traversal defence at the grammar layer.**
+  `..`, absolute paths and hidden names are not "rejected"; they are **unrepresentable**. The
+  securejoin clamps in `readCovenantFile` and `ServiceLoader.ReadFile` remain as the second line
+  and are guard-tested against a real file planted outside the snapshot — a defence that depends on
+  one regexp is a defence one refactor away from gone.
+- **Why one level and not N.** The cap is the point, not a limitation to lift later: `include:`
+  resolves through **two tiers** (local, then service-level, §6), and every extra directory level
+  multiplies the places a reader must check to answer "which file is this". One level splits a
+  family from a flat list; two would let a service build a private tree with two-tier shadowing
+  inside it.
+- **A directory under `scenario/` (or `upgrade/`) whose name starts with `_` or `.` is NOT a
+  scenario** (`config.IsSharedDirName`). It is skipped by discovery **explicitly and silently**,
+  **even when it contains `main.yml`** — the prefix is the signal. The previous behaviour was an
+  accident of implementation: a directory without `main.yml` was skipped by *failing to load*, so
+  the convention would have been a side effect of an error path, and every listing logged a
+  `scenario skipped — no main.yml` warning for a directory that was never a scenario. Both scenario
+  walkers implement it — `artifact.listFromDir` (the API/lint listing) and
+  `scenario.scenarioDirs` (the deprecation walk, which deliberately keeps *unparseable* scenarios
+  and would otherwise report a shared directory as a permanent phantom coverage gap).
+- **soul-lint resolves the service level offline instead of deferring it.** Inside a service tree
+  (`<root>/service.yml` + `<root>/scenario/<name>/main.yml`) the linter now resolves both tiers
+  from disk and reports the expander's own diagnostics at their own level — an include that
+  resolves at neither tier is an **ERROR** (`include_resolve_failed`), not the old
+  `stage_include_unresolved` hint that let a broken reference exit OK. Outside a service tree the
+  second tier genuinely does not exist offline, and the hint is kept. Deferring to the keeper was
+  tolerable while a service had a handful of flat includes; with a family directory per scenario
+  group it would have left the majority of references unchecked at authoring time.
+
+**Backward compatibility is total.** The grammar is a strict superset and the discovery skip keys
+on a prefix no existing directory carries, so a service in the flat layout — `examples/service/redis`
+and `wb-service-redis` both are — loads bit-for-bit as before. There is no migration: the new
+layout is available, not required.
+
+Normative edits — [`docs/scenario/orchestration.md`](../scenario/orchestration.md) §1 (the layout
+tree + the `_`-prefix rule), §6 (one subdirectory in `include:`), §6.1 (one subdirectory in
+`extends:`), §8 (the open question "service-level location of include targets" is closed),
+[`docs/destiny/tasks.md §4`](../destiny/tasks.md) (the same target grammar reaches destiny
+`include:` through the shared validator; resolution stays inside `tasks/`).

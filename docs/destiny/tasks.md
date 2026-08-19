@@ -7,7 +7,8 @@ Related documents: [concept.md](concept.md), [manifest.md](manifest.md), [input.
 ## 1. File format
 
 - **`tasks/main.yml`** — destiny entry point. Top-level YAML - **list** of tasks executed in order of appearance.
-- **`tasks/<sub>.yml`** - include-neighbors, same structure (top-level list of tasks).
+- **`tasks/<sub>.yml`**, and since 2026-08-17 also **`tasks/<dir>/<sub>.yml`** one
+  level down - include targets, same structure (top-level list of tasks).
 - There is no wrapper (`tasks:` key) at the top level of the file - the path to the file tells the context.
 
 ## 2. Types of tasks
@@ -17,7 +18,7 @@ A list element is **one** of three types, discriminated by the presence of exact
 | View | Discriminator | What does |
 |---|---|---|
 | **Module-task** | `module:` | Calls one state module with parameters |
-| **Include-task** | `include:` | Includes the adjacent file `tasks/<name>.yml` (expands inline) |
+| **Include-task** | `include:` | Includes `tasks/<name>.yml`, or `tasks/<dir>/<name>.yml` one level down (expands inline) |
 | **Block** | `block:` | Inline task group with common `when:` / requisites (see §6.5) |
 
 Asynchronous execution - `async: true` flag on any task, **not** a separate view. See §6.
@@ -85,7 +86,8 @@ Any other key is a validation error.
 
 - **Type:** string.
 - **Applies to:** include task.
-- **Semantics:** file name from the same folder `tasks/` (without slashes). Expands inline, without a separate scope.
+- **Semantics:** file name inside the folder `tasks/`, optionally under one
+subdirectory of it (`shared/probe.yml`). Expands inline, without a separate scope.
 - **Expansion - before render, into a flat list.** within-destiny `include:`
 is expanded when the destiny artifact is loaded (before the render phase), just like
 scenario-include ([scenario/orchestration.md §6](../scenario/orchestration.md)):
@@ -102,7 +104,11 @@ and its `onchanges:`-consumer are kept in one file `tasks/<name>.yml`** (standar
 `examples/destiny/node-exporter` and `examples/destiny/redis`: install-register and restart
 live together). Extending this to cross-file addressing is open Q §12.
 - **Rules:**
-  - relative paths beyond `tasks/` are not allowed (`../...`, absolute);
+  - the target is `<file>.yml` or `<dir>/<file>.yml` — **at most one** directory
+deep, each segment matching `[a-z_][a-z0-9_-]*` (amendment 2026-08-17, one grammar
+shared with scenario `include:`, [scenario/orchestration.md §6](../scenario/orchestration.md));
+  - relative paths beyond `tasks/` are not allowed (`../...`, absolute) — `.` is
+outside the segment alphabet, so they cannot be written at all;
 resolve strictly inside the snapshot directory `tasks/` (securejoin-clamp);
   - the included file has the same structure (top-level list of tasks);
   - nested `include:` are allowed (expanded recursively);
@@ -140,7 +146,14 @@ groups - **separate for each pass** (destiny id groups do not intersect with
 cross-file register link is already rejected by the per-file linter (see rule below),
 so the drop does not leave dangling register links.
 
-> **In the scenario the rule `include:` is different.** The behavior for **destiny** is described here: `include:` is strictly a neighbor in the same folder `tasks/`. In scenario, the resolution is two-level (locally → service-level, fallback is done by the engine, `../` is still prohibited in the syntax) - see [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md). This rule §4 for destiny **does not change**; the difference in scenario is fixed in the scenario spec.
+> **In the scenario the rule `include:` is different.** The grammar is the same one
+> (`<file>.yml` or `<dir>/<file>.yml`, one level, shared alphabet); what differs is
+> **where the name is looked up**. For **destiny** the lookup is one-tier: strictly
+> inside this destiny's own `tasks/`. In scenario the resolution is two-level
+> (locally → service-level, fallback is done by the engine, `../` is still prohibited
+> in the syntax) - see [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md).
+> A destiny is its own git artifact with its own `ref:`, so it has no service level to
+> fall back to; that asymmetry is deliberate and does not change.
 
 ### `block:`
 

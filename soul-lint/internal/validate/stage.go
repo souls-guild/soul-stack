@@ -22,9 +22,12 @@ package validate
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+
+	securejoin "github.com/cyphar/filepath-securejoin"
 
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -32,51 +35,90 @@ import (
 
 // stageDiagnostics runs Passage stratification over an already-parsed
 // scenario and returns additional diagnostics (info/errors) that the caller
-// appends to the parse diagnostics. scenarioPath is the path to main.yml
-// (its directory is used for scenario-local resolution of include targets,
-// mirroring the keeper's two-level resolve, but without the service layer —
-// unavailable offline).
+// appends to the parse diagnostics. scenarioPath is the path to main.yml.
+//
+// Include targets are resolved by the same two-level resolve the keeper runs
+// ([scenarioIncludeResolver]) whenever the file sits in a real service tree
+// ([scenarioServiceLevelDir]) — so the stage graph offline is built over the
+// same task list as at apply time, and an include that resolves at NEITHER level
+// is a plain ERROR. For a loose scenario file outside a service tree the service
+// level does not exist offline, so resolution stays local-only and an unresolved
+// include is downgraded to the stage_include_unresolved HINT: the keeper will
+// resolve it against the real snapshot.
 //
 // m==nil (parse failed with errors) → no point stratifying (the graph is
-// unreliable) → nil. An include resolve error → HINT "stage graph checked
-// only against locally-resolved tasks" + stratification over whatever did
-// resolve (we don't fail: the include may have pointed into the service
-// layer, unavailable offline).
+// unreliable) → nil.
 func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Diagnostic {
 	if m == nil {
 		return nil
 	}
 
 	dir := filepath.Dir(scenarioPath)
+	// serviceDir == "" — the second resolve level is unavailable (a loose file);
+	// it also switches the diagnostics below back to the HINT downgrade.
+	serviceDir := scenarioServiceLevelDir(scenarioPath)
+	// The securejoin root for BOTH levels, and only inside a service tree: it is
+	// the root, not the level, that decides which file an escaping symlink lands
+	// on, so it has to be the same root the keeper uses (the snapshot root).
+	var root string
+	if serviceDir != "" {
+		root = scenarioServiceRoot(scenarioPath)
+	}
 	var out []diag.Diagnostic
 
-	// A conditional include with a dynamic `when:` (register./soulprint.) is a
-	// static ERROR offline (conditional-include group-drop, ADR-009 amendment).
-	// This is a property of the include task itself in m.Tasks, independent of
-	// target resolution (so we check it BEFORE ExpandIncludes — otherwise the
-	// downgrade-to-HINT below would mask it). Includes expand BEFORE Stratify:
-	// register from earlier tasks isn't collected yet, per-host soulprint is
-	// unknown → only a static predicate is allowed. Prod rejects this too
-	// (ExpandIncludes → include_when_dynamic_unsupported), but soul-lint catches
-	// it offline.
-	out = append(out, dynamicIncludeWhenDiagnostics(scenarioPath, m.Tasks)...)
-
-	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioLocalIncludeResolver(dir))
-	// Offline include resolution is incomplete (no service layer): downgrade
-	// expand's error diagnostics to HINT so they don't mask stage validation
-	// with a false failure. A genuinely broken include is caught by full
-	// validation on the keeper.
+	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioIncludeResolver(root, dir, serviceDir))
+	// In a service tree include resolution offline is COMPLETE (both levels are on
+	// disk), so expand's diagnostics are passed through at their own level: an
+	// unresolvable include, a cycle or a cross-file duplicate address is a real
+	// defect the linter must fail on, not a deferral to the keeper. Outside one
+	// the failure may be nothing but the missing service level — downgraded to a
+	// HINT, as before NIM-694.
+	//
+	// include_when_dynamic_unsupported is the ONE code exempt from that downgrade.
+	// A dynamic `when:` on an include is a property of the include node itself —
+	// the predicate — not of target resolution, so it is a real error whether or
+	// not a service level exists to resolve against. Sweeping it into the
+	// loose-file downgrade would report a genuine defect as "could not resolve".
+	//
+	// This used to be reported by a pre-pass over m.Tasks instead, and the code
+	// was filtered out of the pass-through to avoid printing it twice. That
+	// pre-pass walked m.Tasks and recursed through block:, but never into the
+	// includes' own includes, while expandOne raises the code at ANY expansion
+	// depth — so the filter silently ate the nested case and the linter went
+	// quiet on a real defect. The expander is strictly the more complete
+	// producer: it checks the predicate BEFORE resolving the target
+	// (include_expand.go), so it still reports a top-level offender whose target
+	// is missing, which is the only thing the pre-pass could do that resolution
+	// order might otherwise have cost. Hence: one producer, every depth.
 	for _, d := range expandDiags {
-		if d.Level == diag.LevelError {
+		switch {
+		case d.Code == "include_when_dynamic_unsupported":
+			if d.File == "" {
+				d.File = scenarioPath
+			}
+			out = append(out, d)
+		case serviceDir == "" && d.Level == diag.LevelError:
 			out = append(out, diag.Diagnostic{
 				Level:   diag.LevelHint,
 				Phase:   diag.PhaseSemanticValidate,
 				File:    scenarioPath,
 				Code:    "stage_include_unresolved",
 				Message: fmt.Sprintf("include does not resolve offline (%s): %s -- the stage graph is checked only against locally available tasks", d.Code, d.Message),
-				Hint:    "full Passage validation runs on the keeper, where the service-layer include is available",
+				Hint:    "lint the scenario inside its service tree (<service>/scenario/<name>/main.yml) to resolve service-level includes, or rely on full validation at the keeper",
 			})
+		default:
+			if d.File == "" {
+				d.File = scenarioPath
+			}
+			out = append(out, d)
 		}
+	}
+	// A failed expansion leaves a TRUNCATED task list (the broken branch is
+	// dropped): stratifying it would report register/passage errors about a plan
+	// that never existed. Report the expansion failure alone — the author fixes
+	// the include first, the stage graph is checked on the next run.
+	if diag.HasErrors(out) {
+		return out
 	}
 
 	plan, err := config.Stratify(tasks)
@@ -173,50 +215,190 @@ func passagePlanSummary(plan config.Passage) string {
 	return fmt.Sprintf("staged run: %d Passage by register dependency, tasks in each %v (register consumer executes strictly after the probe)", plan.Count, counts)
 }
 
-// dynamicIncludeWhenDiagnostics raises include_when_dynamic_unsupported for
-// every include task with a non-empty NON-static `when:` (conditional-include
-// group-drop, ADR-009 amendment). Target resolution is NOT needed — this is a
-// property of the include node itself (the predicate), so offline static
-// validation is complete and independent of the service layer. The walk
-// recurses through block: — a within-block include is expanded like any other,
-// so its conditional when: needs the same offline check.
-// IsStaticIncludeWhen is the same criterion prod's
-// ExpandIncludes uses (input./vars./incarnation. — allowed;
-// register./soulprint. — not).
-func dynamicIncludeWhenDiagnostics(scenarioPath string, tasks []config.Task) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	for i := range tasks {
-		t := &tasks[i]
-		if t.Include != nil && t.When != "" && !config.IsStaticIncludeWhen(t.When) {
-			out = append(out, diag.Diagnostic{
-				Level:   diag.LevelError,
-				Phase:   diag.PhaseSemanticValidate,
-				File:    scenarioPath,
-				Code:    "include_when_dynamic_unsupported",
-				Message: fmt.Sprintf("include %q carries a dynamic when %q (reference to register./soulprint.) -- include expands BEFORE stratification, only a static predicate input./vars./incarnation. is available", t.Include.Include, t.When),
-				Hint:    "replace with a static predicate (input./vars./incarnation.) or move the condition onto a module task of the included file via when:",
-			})
-		}
-		if t.Block != nil {
-			out = append(out, dynamicIncludeWhenDiagnostics(scenarioPath, t.Block.Block)...)
-		}
+// scenarioServiceLevelDir returns the service-level include directory for a
+// linted scenario — `<service>/scenario`, the second level of the ADR-009
+// resolve — or "" when the file is not part of a service tree.
+//
+// The marker is the layout itself: main.yml's parent directory is named
+// `scenario` AND the service root above it carries service.yml. Anything else
+// (a loose file, a fixture in a testdata directory) has no service level: taking
+// "one directory up" there would let an unrelated neighbouring file answer an
+// include, which is worse than not resolving it at all.
+//
+// `upgrade/<slug>/main.yml` deliberately returns "" as well: the keeper expands
+// an upgrade's includes against `scenario/` (the resolver takes the scenario
+// name, not the channel), so treating `upgrade/` as the service level here would
+// green-light an include the keeper cannot resolve.
+func scenarioServiceLevelDir(scenarioPath string) string {
+	// Detection and the returned directory both come off the ABSOLUTE path: the
+	// lexical form decides nothing. `create/main.yml` decomposes to "." (base ".",
+	// not "scenario") and `main.yml` decomposes to "." as well but there "." is the
+	// scenario's OWN directory, not the level above it — so the lexical form got
+	// the verdict wrong in one case and the directory wrong in the other, and the
+	// linter's exit code became a function of the caller's shell history.
+	abs, err := filepath.Abs(scenarioPath)
+	if err != nil {
+		return ""
 	}
-	return out
+	serviceDir := filepath.Dir(filepath.Dir(abs))
+	if filepath.Base(serviceDir) != "scenario" {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(scenarioServiceRoot(scenarioPath), "service.yml")); err != nil {
+		return ""
+	}
+	return pathLike(scenarioPath, serviceDir)
 }
 
-// scenarioLocalIncludeResolver is a within-scenario [config.IncludeResolver]
-// for the offline linter: include targets resolve from main.yml's directory
-// (the scenario-local layer of the ADR-009 two-level resolve; the service
-// layer is unavailable offline). path.Clean clamps escapes outside the
-// scenario directory (`..`/absolute paths).
-func scenarioLocalIncludeResolver(dir string) config.IncludeResolver {
-	return func(name string) ([]byte, string, error) {
-		rel := path.Clean("/" + name)[1:] // strips a leading `..`/absolute path up to scenario-root.
-		full := filepath.Join(dir, rel)
-		data, err := os.ReadFile(full)
-		if err != nil {
-			return nil, "", err
-		}
-		return data, rel, nil
+// pathLike renders target the way the operator addressed the scenario: absolute
+// for an absolute invocation, cwd-relative for a relative one, so that a relative
+// invocation keeps producing the short paths it always produced in diagnostics
+// (the resolver builds its display strings by joining onto this directory).
+//
+// The service level is carried in this form and does reach [readerAt], which
+// re-absolutises it before clamping under the service root. That round-trip
+// (Abs after Rel) is exact only because both are purely lexical AND nothing
+// chdirs between them — soul-lint never does. Should that ever stop holding,
+// this is the pair to fix: the value is meant as display text, and the read side
+// must not start depending on the cwd it was rendered against.
+func pathLike(scenarioPath, target string) string {
+	if filepath.IsAbs(scenarioPath) {
+		return target
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return target
+	}
+	rel, err := filepath.Rel(cwd, target)
+	if err != nil {
+		return target
+	}
+	return rel
+}
+
+// scenarioIncludeResolver is the offline twin of the keeper's two-level
+// scenario-include resolve (orchestration.md §6, keeper/internal/scenario/
+// include.go): the target is read from main.yml's own directory
+// (`scenario/<name>/<file>`) first, and only if it is absent there — from the
+// service level (`scenario/<file>`). Both levels are ordinary directories in the
+// linted tree, so the linter resolves exactly what the keeper will; the shared
+// bodies of a scenario family (`include: _create/deploy.yml`) live at the
+// service level and are found by the second tier.
+//
+// root — the service repo root, the securejoin root for BOTH levels; "" for a
+// loose file outside a service tree. dir — the directory of main.yml.
+// serviceDir — the second level, or "" when there is none
+// ([scenarioServiceLevelDir]); then the resolver is local-only and the caller
+// downgrades a failure to a HINT.
+//
+// The display path (diagnostics + the cycle-detection key) is the resolved path,
+// so the two levels are distinct sources and a local file shadowing a
+// service-level one is not mistaken for a cycle.
+//
+// path.Clean("/"+name) clamps `..`/absolute targets to the level's own root —
+// defence in depth: the include grammar (config reIncludeFile) cannot express
+// them in the first place.
+//
+// The READ goes through securejoin ROOTED AT THE SERVICE ROOT, with the level
+// pre-joined as a relative path — byte for byte what the keeper does against a
+// snapshot (keeper/internal/scenario/include.go joins `scenario/<name>/` and
+// hands the whole thing to artifact.readSnapshotFile, whose root is the snapshot
+// root). The root is the entire contract: securejoin re-roots an escaping
+// symlink AT WHATEVER ROOT IT IS GIVEN, so rooting one tier lower — at the
+// scenario's own directory — does not merely narrow what resolves, it silently
+// resolves a DIFFERENT file. A `scenario/<name>/link -> /decoy` symlink then
+// makes the linter read `scenario/<name>/decoy/…` while the keeper runs
+// `<root>/decoy/…`, and the linter blesses a body it never opened. Rooting at
+// the service root also keeps a symlink that legitimately points elsewhere
+// INSIDE the repo (`scenario/create/deploy.yml -> ../../shared_bodies/…`)
+// resolvable, as it was before this file clamped anything at all, while a
+// symlink pointing OUT of the repo is still refused — which a purely lexical
+// clamp cannot do, since it never touches the file system. Parity here is the
+// point of expanding includes offline at all: a linter that accepts a plan the
+// keeper rejects, or checks a different file than the keeper runs, is worse than
+// one that defers.
+// path.Clean is kept for the DISPLAY path only, which is diagnostic text and the
+// cycle-detection key, never an argument to a read.
+func scenarioIncludeResolver(root, dir, serviceDir string) config.IncludeResolver {
+	localRead := readerAt(root, dir)
+	serviceRead := readerAt(root, serviceDir)
+	return func(name string) ([]byte, string, error) {
+		rel := path.Clean("/" + name)[1:] // strips a leading `..`/absolute path up to the level root.
+		local := filepath.Join(dir, rel)
+		data, err := localRead(name)
+		if err == nil {
+			return data, local, nil
+		}
+		// Fall back to the service level ONLY when the local file is absent: an
+		// I/O error (permission denied, a broken symlink) must never be masked
+		// into "not found" — same rule as the keeper resolver.
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, "", fmt.Errorf("include %q: reading locally (%s): %w", name, local, err)
+		}
+		if serviceDir == "" {
+			return nil, "", fmt.Errorf("include %q not found locally (%s) and there is no service level offline", name, local)
+		}
+		service := filepath.Join(serviceDir, rel)
+		data, err = serviceRead(name)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, "", fmt.Errorf("include %q not found either locally (%s) or at service-level (%s)", name, local, service)
+			}
+			return nil, "", fmt.Errorf("include %q: reading service-level (%s): %w", name, service, err)
+		}
+		return data, service, nil
+	}
+}
+
+// readerAt binds one resolve level to the securejoin root it must be read under.
+// Inside a service tree that root is the service root and the level is addressed
+// by its path relative to it, so the clamp behaves exactly as the keeper's does
+// against a snapshot root. levelDir arrives in whatever form the caller renders
+// for diagnostics, cwd-relative included, and is made absolute HERE before the
+// root-relative path is derived from it — exact because Abs and Rel are both
+// lexical and nothing chdirs in between.
+//
+// root == "" is the loose-file case — there is no service tree, hence no keeper
+// counterpart to be in parity with, so the level is its own root. Every READ
+// failure on that path is downgraded to a hint by the caller (a dynamic `when:`
+// on an include is not: it is a defect in the include node itself and stays an
+// error at every depth).
+func readerAt(root, levelDir string) func(string) ([]byte, error) {
+	if levelDir == "" {
+		return func(string) ([]byte, error) { return nil, fs.ErrNotExist }
+	}
+	if root == "" {
+		return func(name string) ([]byte, error) { return readWithin(levelDir, name) }
+	}
+	abs, err := filepath.Abs(levelDir)
+	if err == nil {
+		var rel string
+		if rel, err = filepath.Rel(root, abs); err == nil {
+			return func(name string) ([]byte, error) { return readWithin(root, filepath.Join(rel, name)) }
+		}
+	}
+	// Not reachable as the caller stands (root != "" already means Abs succeeded
+	// on the scenario path moments earlier, and Rel between two absolute paths
+	// cannot fail on a single-volume system) — but the fallback must not be
+	// "root at the level itself". THAT is precisely the pre-fix rooting, and it
+	// does not fail, it reads a DIFFERENT file. A read that cannot be shown
+	// equivalent to the keeper's has to fail loudly, so the failure is bound once
+	// here and returned for every name.
+	failure := fmt.Errorf("locating %q under service root %q: %w", levelDir, root, err)
+	return func(string) ([]byte, error) { return nil, failure }
+}
+
+// readWithin reads name strictly within base. base is made absolute first:
+// securejoin on a RELATIVE base with a leading `..` normalizes the escape away
+// instead of refusing it, and the path handed to soul-lint on the command line is
+// routinely relative (the trial harness converts for the same reason).
+func readWithin(base, name string) ([]byte, error) {
+	if abs, err := filepath.Abs(base); err == nil {
+		base = abs
+	}
+	full, err := securejoin.SecureJoin(base, name)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(full)
 }

@@ -284,6 +284,14 @@ func listFromDir(serviceRoot, dir string, logger *slog.Logger) ([]Scenario, erro
 			continue
 		}
 		name := e.Name()
+		// A `_`/`.`-prefixed directory holds shared include bodies, not a
+		// scenario (config.IsSharedDirName): skipped EXPLICITLY and silently,
+		// before loadScenario, so the convention does not depend on main.yml
+		// being absent and the "no main.yml" warning keeps meaning a broken
+		// scenario rather than firing on every listing.
+		if config.IsSharedDirName(name) {
+			continue
+		}
 		sc, ok := loadScenario(serviceRoot, dir, name, logger)
 		if !ok {
 			continue

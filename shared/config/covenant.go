@@ -45,12 +45,14 @@ type ScenarioFragment struct {
 	Validate     []ValidateRule `yaml:"validate,omitempty"`
 }
 
-// reCovenantName — the covenant-fragment name in `extends:` (also the base name
-// of the `covenant.yml` family). A strictly single-level kebab name: starts with
-// a letter, then letters/digits/dash. By construction it excludes `/`, `.`, `..`
-// and absolute paths — the traversal clamp comes from the name grammar, not a
-// post-hoc filepath check (the name CANNOT express escaping the directory).
-var reCovenantName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+// reCovenantName — the covenant-fragment name in `extends:` (also the path of the
+// `covenant.yml` family relative to the service root, extension stripped). Built
+// from [refPathSegment], with at most ONE subdirectory level: `covenant`,
+// `scenario_create`, `shared/scenario_create`. By construction it excludes `.`,
+// `..` and absolute paths — the traversal clamp comes from the name grammar, not
+// a post-hoc filepath check (the name CANNOT express escaping the service root);
+// readCovenantFile securejoins on top of that.
+var reCovenantName = regexp.MustCompile(`^(?:` + refPathSegment + `/)?` + refPathSegment + `$`)
 
 // ValidExtendsName reports whether a name in `extends:` is valid as a covenant
 // reference (form + traversal clamp). Empty string → false (that is "no

@@ -298,6 +298,63 @@ func TestListScenarios_SkipsFolderWithoutMain(t *testing.T) {
 	}
 }
 
+// TestListScenarios_SkipsSharedDirs is the NIM-694 guard for the shared-bodies
+// convention: a `_`/`.`-prefixed directory under scenario/ holds the common
+// include bodies of a scenario family and is NOT a scenario.
+//
+// Both halves matter and fail differently if the explicit skip is removed:
+//   - `_shared` HAS a valid main.yml, so "no main.yml" would not save us — it
+//     would be listed as a runnable scenario and shown in the UI;
+//   - `_empty` has none, so it would produce the "scenario skipped" warning on
+//     every listing, turning a deliberate convention into log noise that makes
+//     the same warning useless for its real subject (a broken scenario).
+func TestListScenarios_SkipsSharedDirs(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", "description: ok\n")
+	writeScenario(t, root, "_shared", "description: shared bodies, not a scenario\n")
+	writeScenario(t, root, ".hidden", "description: hidden, not a scenario\n")
+	if err := os.MkdirAll(filepath.Join(root, scenarioDir, "_empty"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	got, err := ListScenarios(root, logger)
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "create" {
+		t.Fatalf("want only create, got %+v", got)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("shared directories must be skipped silently, got log output:\n%s", logs.String())
+	}
+}
+
+// TestListUpgrades_SkipsSharedDirs mirrors TestListScenarios_SkipsSharedDirs for
+// the second discovery channel (ADR-0068): both walk the same listFromDir, so
+// the convention must hold on both or the helper's claim is only half true.
+func TestListUpgrades_SkipsSharedDirs(t *testing.T) {
+	root := t.TempDir()
+	writeUpgrade(t, root, "v1_to_v2", "description: ok\n")
+	writeUpgrade(t, root, "_shared", "description: shared bodies, not an upgrade\n")
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	got, err := ListUpgrades(root, logger)
+	if err != nil {
+		t.Fatalf("ListUpgrades: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "v1_to_v2" {
+		t.Fatalf("want only v1_to_v2, got %+v", got)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("shared directories must be skipped silently, got log output:\n%s", logs.String())
+	}
+}
+
 // TestListScenarios_IgnoresFilesAtTopLevel verifies that file
 // `scenario/foo.txt` next to directories is ignored (subdirectories only).
 func TestListScenarios_IgnoresFilesAtTopLevel(t *testing.T) {

@@ -106,7 +106,7 @@ The grammar is identical to the service manifest's — plain `MAJOR.MINOR.PATCH`
 
 ## When you need neighbors `tasks/main.yml`
 
-One `tasks/main.yml` copes as long as destiny remains an atomic brick. If the file goes beyond ~150 lines or logical subsections are clearly allocated inside, we move them to the neighbors of `tasks/<sub>.yml` and connect them through `include:`. Comparison with the scenario, where `scenario/<name>/main.yml` is immediately projected onto its include neighbors (`install.yml`, `replication.yml`, etc.):
+One `tasks/main.yml` copes as long as destiny remains an atomic brick. If the file goes beyond ~150 lines or logical subsections are clearly allocated inside, we move them to the neighbors of `tasks/<sub>.yml` — or one level down, into `tasks/<dir>/<sub>.yml` — and connect them through `include:`. Comparison with the scenario, where `scenario/<name>/main.yml` is immediately projected onto its include neighbors (`install.yml`, `replication.yml`, etc.):
 
 ```yaml
 # tasks/main.yml — top-level list of tasks, without a wrapper.
@@ -125,7 +125,7 @@ One `tasks/main.yml` copes as long as destiny remains an atomic brick. If the fi
   params: { name: redis-server }
 ```
 
-`include:` includes a file from the same folder `tasks/`. The exact syntax of include (calculation of `when:`, scope of variables, processing of `register:` across the border) - see [tasks.md](tasks.md). Depth of nesting - according to conviction, without a hard limit; in practice, level 1 covers all realistic scenarios.
+`include:` includes a file from the folder `tasks/`, or from one subdirectory of it (`include: shared/probe.yml`) when several neighbors share a body — deeper than one level is a validation error. The exact syntax of include (calculation of `when:`, scope of variables, processing of `register:` across the border) - see [tasks.md](tasks.md). Depth of nesting - according to conviction, without a hard limit; in practice, level 1 covers all realistic scenarios.
 
 ## See also
 

@@ -27,9 +27,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// covenantFileExt — the covenant-fragment file extension in the service-repo root.
-// File name = `<extends>.yml` (the `extends:` name + this extension), sibling to
-// types.yml/service.yml/scenario/.
+// covenantFileExt — the covenant-fragment file extension. The path is
+// `<serviceRoot>/<extends>.yml` (the `extends:` name + this extension): a root
+// sibling of types.yml/service.yml/scenario/ for a bare name, or one
+// subdirectory below it (`extends: shared/scenario_create`) — the grammar caps
+// the depth, see [reCovenantName].
 const covenantFileExt = ".yml"
 
 // ResolveScenarioCovenant merges the covenant fragment into the scenario manifest IN
@@ -39,10 +41,10 @@ const covenantFileExt = ".yml"
 // fragment must stay read-only — it is local to this call and reused nowhere.
 //
 // No-op when `m.Extends` is empty (a scenario without inheritance — forward-compat
-// bit-for-bit, no FS access). Otherwise: the covenant.yml path in the snapshot ROOT
+// bit-for-bit, no FS access). Otherwise: the covenant.yml path under the snapshot ROOT
 // (`<serviceRoot>/<extends>.yml`) is built from the extends name, the fragment is read
-// by a securejoin reader (traversal clamp: the name is a single-segment kebab per
-// [ValidExtendsName], securejoin clamps additionally), decoded by
+// by a securejoin reader (traversal clamp: the name carries no `.`/`..` and at most one
+// subdirectory level per [ValidExtendsName], securejoin clamps additionally), decoded by
 // [LoadCovenantFragmentFromBytes] and merged add-only. After merge — post-merge form
 // validation over the merged `m.Input`.
 //
@@ -78,7 +80,7 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			File: scenarioPath, Code: "covenant_extends_invalid",
 			Message: fmt.Sprintf("extends: %q - invalid covenant-fragment name", name),
-			Hint:    "single-segment kebab-case (^[a-z][a-z0-9-]*$), no path separators",
+			Hint:    "one segment, optionally under one subdirectory (`covenant`, `shared/scenario_create`); no `..`, no absolute path, no second subdirectory level",
 		}}
 	}
 
@@ -89,8 +91,8 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 			return []diag.Diagnostic{{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				File: scenarioPath, Code: "covenant_extends_target_not_found",
-				Message: fmt.Sprintf("extends: %q - covenant file %s not found in service root", name, covenantFile),
-				Hint:    "covenant.yml family (<extends>.yml) lives in service-repo root, sibling of service.yml/types.yml",
+				Message: fmt.Sprintf("extends: %q - covenant file %s not found under the service root", name, covenantFile),
+				Hint:    "covenant.yml family (<extends>.yml) is resolved from the service-repo root: `extends: covenant` → ./covenant.yml, `extends: shared/scenario_create` → ./shared/scenario_create.yml",
 			}}
 		}
 		return []diag.Diagnostic{{
@@ -199,15 +201,16 @@ func resolveCovenantFormDiags(m *ScenarioManifest, doc *Document, scenarioPath s
 	return out
 }
 
-// readCovenantFile reads covenant.yml from the serviceRoot snapshot by file name
-// (`<extends>.yml`). securejoin clamps any escape outside serviceRoot (defence-in-
-// depth on top of the covenant name grammar). Returns fs.ErrNotExist transparently —
-// the caller tells "covenant not found" from other I/O errors.
+// readCovenantFile reads covenant.yml from the serviceRoot snapshot by relative path
+// (`<extends>.yml`, at most one subdirectory deep). securejoin clamps any escape
+// outside serviceRoot (defence-in-depth on top of the covenant name grammar).
+// Returns fs.ErrNotExist transparently — the caller tells "covenant not found" from
+// other I/O errors.
 func readCovenantFile(serviceRoot, name string) ([]byte, error) {
 	// securejoin requires a root without `..` components: callers (trial/soul-lint) may
 	// pass a relative serviceRoot (`../examples/...`) — make it absolute. This does NOT
-	// weaken the clamp outside serviceRoot (the covenant name is a single-segment
-	// kebab, securejoin clamps additionally).
+	// weaken the clamp outside serviceRoot (the covenant name carries no `..`,
+	// securejoin clamps additionally).
 	if abs, aerr := filepath.Abs(serviceRoot); aerr == nil {
 		serviceRoot = abs
 	}

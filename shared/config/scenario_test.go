@@ -1481,14 +1481,60 @@ tasks:
 }
 
 func TestLoadScenarioManifest_IncludeBadName(t *testing.T) {
-	src := `name: x
-tasks:
-  - include: ../escape.yml
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "name_invalid_format") {
-		dump(t, diags)
-		t.Fatalf("expected name_invalid_format for include with ../")
+	// The include target is clamped by the GRAMMAR, not by a later path check:
+	// `.` is outside the segment alphabet, so `..`, hidden names and an absolute
+	// path cannot be written at all; the subdirectory is capped at ONE level
+	// (NIM-694) so a service cannot grow a tree the two-level resolve would have
+	// to walk.
+	// Each row pins the rule that must reject it, not merely THAT something did.
+	// Asserting the code alone made every row interchangeable: the two depth-cap
+	// rows stayed green when the segment alphabet was what rejected them, so the
+	// cap the ticket asked for had no guard of its own.
+	for _, tc := range []struct{ name, wantReason string }{
+		{"../escape.yml", "must not contain a `.` or `..` path segment"},
+		{"_create/../../escape.yml", "must not contain a `.` or `..` path segment"},
+		{"a/b/c.yml", "at most one subdirectory level"},
+		{"_create/nested/deploy.yml", "at most one subdirectory level"},
+		{"/abs.yml", "must not be an absolute path"},
+		{".hidden.yml", "each path segment must match"},
+		{"_create/.hidden.yml", "each path segment must match"},
+		{"deploy.yaml", "must end in `.yml`"},
+		{"deploy", "must end in `.yml`"},
+		{"_create/", "must end in `.yml`"},
+		{"UPPER.yml", "each path segment must match"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "name: x\ntasks:\n  - include: \"" + tc.name + "\"\n"
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			d := diagWithCode(diags, "name_invalid_format")
+			if d == nil {
+				dump(t, diags)
+				t.Fatalf("expected name_invalid_format for include %q", tc.name)
+			}
+			if !strings.Contains(d.Message, tc.wantReason) {
+				t.Fatalf("include %q rejected for the wrong reason:\n got: %s\nwant it to name: %s",
+					tc.name, d.Message, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestLoadScenarioManifest_IncludeSubdirectory is the NIM-694 grammar guard for
+// the shared-bodies layout: the common pieces of a scenario family live in a
+// `_`-prefixed directory and are included by a one-level relative path.
+func TestLoadScenarioManifest_IncludeSubdirectory(t *testing.T) {
+	for _, name := range []string{"provision.yml", "_create/deploy.yml", "_create/sentinel-tls.yml", "shared/body_2.yml"} {
+		t.Run(name, func(t *testing.T) {
+			src := "name: x\ntasks:\n  - include: \"" + name + "\"\n"
+			m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if err != nil || diag.HasErrors(diags) {
+				dump(t, diags)
+				t.Fatalf("include %q must be accepted, err=%v", name, err)
+			}
+			if len(m.Tasks) != 1 || m.Tasks[0].Include == nil || m.Tasks[0].Include.Include != name {
+				t.Fatalf("include %q did not decode: %#v", name, m.Tasks)
+			}
+		})
 	}
 }
 

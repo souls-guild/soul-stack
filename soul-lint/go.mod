@@ -2,7 +2,10 @@ module github.com/souls-guild/soul-stack/soul-lint
 
 go 1.26.4
 
-require github.com/souls-guild/soul-stack/shared v0.0.0
+require (
+	github.com/cyphar/filepath-securejoin v0.7.0
+	github.com/souls-guild/soul-stack/shared v0.0.0
+)
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

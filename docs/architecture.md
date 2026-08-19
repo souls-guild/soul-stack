@@ -391,7 +391,7 @@ Moved to [`docs/adr/0045-param-dsl.md`](adr/0045-param-dsl.md). Brings modular i
 
 ### Destiny task structure
 
-The contents of destiny live in **`destiny-<name>/tasks/main.yml`** as a top-level YAML task list (without the `tasks:` / `steps:` wrapper), and not in `destiny.yml` itself. Root `destiny.yml` - manifest only (`name`, `description`, `input`, opt. `required_modules`); `tasks/main.yml` - entry point, with the ability to connect `include: <file>.yml` neighbors inside the same folder `tasks/`.
+The contents of destiny live in **`destiny-<name>/tasks/main.yml`** as a top-level YAML task list (without the `tasks:` / `steps:` wrapper), and not in `destiny.yml` itself. Root `destiny.yml` - manifest only (`name`, `description`, `input`, opt. `required_modules`); `tasks/main.yml` - entry point, with the ability to connect `include: <file>.yml` neighbors inside the same folder `tasks/`, or one subdirectory down (`include: <dir>/<file>.yml`).
 
 One list element is a call to one module with parameters and optional binding. Task fields (`name`, `module`, `params`, `when`, `register`, `output`, `no_log`, `include`), task naming convention (capital letter, imperative, English) and rules `include:` - fixed in **[`docs/destiny/tasks.md`](destiny/tasks.md)**. The architectural section here does not duplicate the field table, so that there is no drift between two sources.
 
@@ -660,6 +660,9 @@ redis/
 │       ├── ubuntu.yaml
 │       └── debian.yaml
 ├── scenario/                           # auto-discover from directory, directory name = scenario name
+│   ├── _create/                        # OPT: shared bodies of the create family; a `_`/`.` name is NOT a scenario
+│   │   ├── provision.yml               # `include: _create/provision.yml` from any scenario of the service
+│   │   └── deploy.yml
 │   ├── create/
 │   │   ├── main.yml                    # entry point: input + state_changes + tasks (all inline)
 │   │   ├── standalone.yml              # reusable mode blocks (include from main.yml)
@@ -681,7 +684,7 @@ redis/
 └── ...
 ```
 
-Each folder `scenario/<name>/` is a separate operation (CRUD-style) on the service. `main.yml` - scenario entry point: contains **inline** `input`, `state_changes` and `tasks`. Neighboring `*.yml` are sub-tasks, included through `include:` into `main.yml`. There is no need to list the scenarios in `service.yml` - keeper finds them with auto-discovery based on the directory structure.
+Each folder `scenario/<name>/` is a separate operation (CRUD-style) on the service — except one whose name starts with `_` or `.`, which is by convention a home for bodies several scenarios share and is never discovered as a scenario, main.yml or no main.yml. `main.yml` - scenario entry point: contains **inline** `input`, `state_changes` and `tasks`. Neighboring `*.yml` are sub-tasks, included through `include:` into `main.yml`; a target may also sit one level down (`_create/provision.yml`) or at the service level `scenario/` — full resolution rules in [`docs/scenario/orchestration.md §6`](scenario/orchestration.md). There is no need to list the scenarios in `service.yml` - keeper finds them with auto-discovery based on the directory structure.
 
 ### `service.yml` - manifest
 

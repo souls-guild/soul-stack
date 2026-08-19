@@ -206,7 +206,18 @@ func schemaDocumentDiags(path string, src []byte) []diag.Diagnostic {
 // types.yml). The root holds the covenant.yml family (sibling of
 // service.yml/types.yml) that extends resolves against.
 func scenarioServiceRoot(scenarioPath string) string {
-	return filepath.Dir(filepath.Dir(filepath.Dir(scenarioPath)))
+	// Absolute FIRST. The three Dir calls are lexical, so `main.yml` linted from
+	// inside the scenario directory decomposes to "." and every consumer then
+	// resolves against the wrong root — silently, because a wrong-but-existing
+	// root reads as "covenant not found" rather than as an error. Absolutising
+	// downstream does not repair it: readCovenantFile and readWithin both call
+	// filepath.Abs and were still handed "." from here. The verdict must be a
+	// function of the file on disk, never of how the operator typed its path.
+	abs, err := filepath.Abs(scenarioPath)
+	if err != nil {
+		abs = scenarioPath
+	}
+	return filepath.Dir(filepath.Dir(filepath.Dir(abs)))
 }
 
 // destinyVarsCollisionDiags raises a warn for every name declared BOTH in

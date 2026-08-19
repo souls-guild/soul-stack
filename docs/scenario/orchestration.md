@@ -11,17 +11,24 @@ Related documents: [concept.md](concept.md), [destiny/tasks.md](../destiny/tasks
 ## 1. File format and layout
 
 ```
-scenario/<name>/
-├── main.yml                  # entry point: name, description, input, state_changes, tasks (inline)
-├── <sub>.yml                 # include neighbors (same task structure)
-├── templates/                # OPTS: templates used by the steps in this script
-├── vars.yml                  # OPTS: scenario locales (like destiny vars.yml)
-└── tests/                    # OPT.: tests of this script
-    └── <case>/
-        └── case.yml
+scenario/
+├── _<family>/                # OPT.: shared bodies of a family of scenarios (NOT a scenario)
+│   ├── provision.yml
+│   └── deploy.yml
+├── <shared>.yml              # OPT.: service-level include neighbor (flat form)
+└── <name>/
+    ├── main.yml              # entry point: name, description, input, state_changes, tasks (inline)
+    ├── <sub>.yml             # include neighbors (same task structure)
+    ├── templates/            # OPTS: templates used by the steps in this script
+    ├── vars.yml              # OPTS: scenario locales (like destiny vars.yml)
+    └── tests/                # OPT.: tests of this script
+        └── <case>/
+            └── case.yml
 ```
 
 `main.yml` contains **inline** `input:`, `state_changes` and `tasks:`. Neighboring `*.yml` are connected via `include:` ([destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks)). Folder layout (`templates/`, `vars.yml`, `tests/`) - **symmetrical to destiny** intentionally, without a separate dictionary; two-level resolve - see §6.
+
+**A directory under `scenario/` whose name starts with `_` or `.` is NOT a scenario** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-08-17). It holds shared task bodies of a family of scenarios (`create`, `create_from_souls`, later `update`/`destroy`), addressed as `include: _<family>/<file>.yml` (§6). It is skipped by scenario discovery **even when it does contain `main.yml`** — the prefix is the signal, not the absence of an entry point — so a shared body never turns up in the scenario listings the API serves, nor in the deprecation walk. Discovery is what the prefix governs: it removes the directory from the listings, and is not an admission check on the run path. The same rule applies to `upgrade/`. `soul-lint` is not a discoverer (`validate-scenario` takes an explicit path), so nothing there filters the name; what skips these directories is whatever walks a `scenario/` tree — the two keeper walkers above, and the corpus loop in the repo `Makefile`.
 
 Structure `main.yml` (blocks `name`, `description`, `input`, `state_changes`, `tasks`) - in [architecture.md → "`scenario/<name>/main.yml`"](../architecture.md). Block `input:` - according to the general standard [docs/input.md](../input.md).
 
@@ -807,7 +814,11 @@ Error handling in scenario - **only mechanisms inherited from the DSL core**: `r
 
 **Name collision - shadowing.** If the name exists both locally and at the service-level - **the near one completely overlaps the far one, without merging**. This is consistent with the priority rule of task-level `vars:` over file-level in [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution) (more local scope wins entirely).
 
-**`../` is not allowed in the syntax.** The script writer **never writes** relative paths with `../`. Fallback to service-level is done by the **engine**, not the author: the author refers to the resource by name (`template: templates/redis.conf.tmpl` in the step `core.file.rendered`, `include: replication.yml`), the engine searches first locally, then at the service-level. **The resolved path is printed to the apply log** and checked by `soul-lint` (see backlog in [soul-lint.md](../soul-lint.md)).
+**`../` is not allowed in the syntax.** The script writer **never writes** relative paths with `../`. Fallback to service-level is done by the **engine**, not the author: the author refers to the resource by name (`template: templates/redis.conf.tmpl` in the step `core.file.rendered`, `include: replication.yml`), the engine searches first locally, then at the service-level. **The resolved path is printed to the apply log** and checked by `soul-lint` (see [soul-lint.md](../soul-lint.md)).
+
+**One subdirectory level in `include:`** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-08-17). The target is `<file>.yml` or `<dir>/<file>.yml` — **at most one** directory deep, each segment matching `[a-z_][a-z0-9_-]*`. Both forms go through the same two levels, so `include: _create/provision.yml` written in `scenario/create/main.yml` finds `scenario/create/_create/provision.yml` first and `scenario/_create/provision.yml` second — the shared-bodies directory of §1 is reached by the ordinary service-level fallback, not by a new mechanism. `.` is outside the segment alphabet on purpose: `..`, absolute paths and hidden names **cannot be written at all**, so traversal is refused by the grammar before any resolve, and securejoin inside the loader is the second line of defence. Two levels (`a/b/c.yml`) is a validation error — the cap keeps the include namespace shallow enough to read at a glance. The clamp is applied at the **service root**, both by the keeper against the materialised snapshot and by `soul-lint` offline, so both sides read the same file for the same name. What the clamp judges is the symlink target as **written**, not where it eventually lands: a target that never expresses an escape resolves normally (`scenario/create/deploy.yml -> ../../shared_bodies/deploy.yml` is fine), while a leading `..` run that would step above the service root is truncated **at** the root before the rest of the path is appended. So a target that walks out of the repo and back in again (`../../../<repo>/shared`) is refused even though its destination is inside the service — it is re-rooted, not followed.
+
+**The two levels are FIXED directories, not "relative to the including file".** Resolution always tries `scenario/<name>/` and then `scenario/`, whichever file the `include:` was written in. So inside a shared body `scenario/_create/provision.yml`, a plain `include: sentinel.yml` does **not** find its own neighbour `scenario/_create/sentinel.yml` — the two levels tried are `scenario/<name>/sentinel.yml` and `scenario/sentinel.yml`. A shared body addresses its siblings the same way everyone else does, by the full `include: _create/sentinel.yml`. This keeps an include target's meaning independent of which file spliced it, so a body moved between directories resolves identically; the failure names both attempted paths, so the mistake is one error message from being fixed.
 
 #### Expanding `include:` - before render, into a flat list
 
@@ -836,7 +847,7 @@ requisites / `on:` / `where:`) **not expanded** - this is an error
 
 **Conditional include (`when:` on the include task) - render-phase group-drop ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-24).** On the include task, allow `when:` - then the connected group is included in the plan only if the predicate is true; if false - ALL tasks of the connected file are **physically absent** in the plan (real exception, not placeholder: not issued, index not reserved). The predicate must be **static** (`input.*`/`vars.*`/`incarnation.*`) because include is expanded **before** stratification when `register:` is not yet collected and per-host `soulprint` is unknown; dynamic include-when (`register.*`/`soulprint.*`) → `include_when_dynamic_unsupported` (catches both expansion and `soul-lint` offline). Full semantics - [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks) (scenario is inherited as is).
 
-> **This is an override of the rule `include:` from [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks).** In destiny `include:` is strictly a neighbor in the same folder `tasks/`, going beyond it is prohibited. In the scenario, the rule is **different**: `include:` (and resolve `templates/`/`vars.yml`/`tests/`) two-level - locally, then service-level, fallback is done by the engine. `tasks.md §4` **does not change** - the behavior for destiny is described there; the difference in scenario is recorded here.
+> **This is an override of the rule `include:` from [destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks).** In destiny `include:` stays inside the folder `tasks/` (one subdirectory level is allowed since 2026-08-17, but there is only ONE tier); going beyond `tasks/` is prohibited. In the scenario, the rule is **different**: `include:` (and resolve `templates/`/`vars.yml`/`tests/`) two-level - locally, then service-level, fallback is done by the engine. The **grammar of the target is shared** (`<file>.yml` or `<dir>/<file>.yml`, one level); what differs is where it is resolved. `tasks.md §4` **does not change** in kind - the behavior for destiny is described there; the difference in scenario is recorded here.
 
 > **Synthesized tasks `core.module.installed`.** Immediately after expanding `include:` (before stratification), Keeper inserts install steps of custom modules from `service.yml::modules[]` into the flat plan - before the first consumer task of each module, with the marker name `install <ns>.<module> (service manifest)`. These are regular tasks of the plan (render → dispatch → TaskEvent), in run-view they are visible like the rest. Synthesis mechanics (position, takeover by explicit step, MVP restrictions) - [keeper/modules.md → Auto-synthesis](../keeper/modules.md), [ADR-065](../adr/0065-core-module-installed.md).
 
@@ -854,6 +865,8 @@ Layout: `scenario/<name>/tests/<case>/case.yml`. Format `case.yml` - `verify:` /
 `extends: <covenant-name>` - **top-level** script key: the script **inherits** the general service-level contract of sections `input:` / `compute:` / `state_changes:` / `validate:` from the covenant fragment file in the **root service repo** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-29). Covenant - **service-level shared catalog**, isomorphic to `types.yml` ([ADR-062](../adr/0062-input-types.md), named input schemas) and service-level `include:` (§6, task sets): three mechanisms fumble between scenarios of different nature (type / tasks / contract sections), all resolve BEFORE consumers and do not introduce a wire entity.
 
 **`extends:` NAMES the covenant file.** The meaning of `extends:` is **name of the covenant file without extension**: `extends: <name>` resolves to the file **`<name>.yml`** in the root of the service repo (the mechanism supports an arbitrary name, symmetrically to how `apply: { destiny: <name> }` addresses destiny by name). **Convention:** the general contract sections of the service are called **`covenant`** → file **`covenant.yml`**, link **`extends: covenant`**. This convention is used in all the examples below.
+
+**One subdirectory level in the name** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-08-17). `extends: <name>` and `extends: <dir>/<name>` are both valid — at most one directory deep, each segment matching `[a-z_][a-z0-9_-]*`, resolved relative to the **service root** (`extends: shared/scenario_create` → `shared/scenario_create.yml`). A service with several covenants (several families of scenarios, see the convention note below) can therefore keep them in `shared/` instead of scattering them across the repo root. Resolution stays clamped to the service root by securejoin, and `.` is outside the segment alphabet, so `..`, absolute paths and hidden names are unrepresentable in the grammar to begin with.
 
 ```yaml
 # covenant.yml (service-repo root) - TOTAL minimum
@@ -1162,12 +1175,15 @@ successfully, but the collection did not change - a latent bug that verbs fix
 Truly per-task waves (each task in Passage has its own width) remain
 deferred: within one Passage, tasks go to the host with one `ApplyRequest`. New
 ADR for a real request.
-- **Service-level location of include targets.** Two-level resolve (§6)
-looks for the include target first locally (`scenario/<name>/<file>`), then on
-service-level. The current implementation treats service-level as a shared directory
-`scenario/<file>` (parent of script directories). This is a worker default; exact
-canonical place of common include resources of the service (the same `scenario/`, or
-separate directory) is not a closed solution.
+- **Service-level location of include targets - CLOSED** (2026-08-17). Two-level
+resolve (§6) looks for the include target first locally
+(`scenario/<name>/<file>`), then at service-level, and the canonical service-level
+place is the **same `scenario/` directory**: flat (`scenario/<file>.yml`) for a
+resource shared by the whole service, or a `_`-prefixed subdirectory
+(`scenario/_<family>/<file>.yml`) for the bodies of one family of scenarios (§1).
+A separate top-level directory was rejected: it would need its own discovery rule,
+while `_<family>/` reuses the existing service-level tier and is excluded from
+scenario discovery by the prefix alone.
 - **Full scope forwarding via `include:`.** Now only pure scope is expanded
 `include: <file>`; scope/control modifiers on an include task
 (`vars:`/`loop:`/`when:`/requisites/`on:`/`where:`) are rejected

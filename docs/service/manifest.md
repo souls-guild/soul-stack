@@ -22,12 +22,21 @@ service-<name>/
 │   ├── 00-base.yaml                    # the base layer; the name carries its order
 │   ├── 10-tls.yaml                     # OPT.: further layers, merged in lexical order
 │   └── _stack.yaml                     # OPT.: explicit pipeline instead of that order
+├── covenant.yml                        # OPT.: shared contract sections of the scenarios (extends: covenant - ADR-009)
+├── shared/                             # OPT.: further covenants, one subdirectory deep (extends: shared/<name>)
+│   └── scenario_create.yml
 ├── scenario/                           # operations; auto-discover from directory
+│   ├── _create/                        # OPT.: shared task bodies of the create family - NOT a scenario
+│   │   ├── provision.yml               #        addressed as `include: _create/provision.yml`
+│   │   └── deploy.yml
+│   ├── redis-provision.yml             # OPT.: service-level include neighbor (flat form)
 │   ├── create/
 │   │   ├── main.yml                    # entry point: input + state_changes + tasks
 │   │   ├── install.yml                 # OPTS: include-neighbors main.yml
 │   │   ├── templates/                  # OPTS: scenario-local templates
 │   │   └── tests/                      # OPT: script tests
+│   ├── create_from_souls/
+│   │   └── main.yml
 │   ├── add_user/
 │   │   └── main.yml
 │   ├── update_acl/
@@ -266,6 +275,8 @@ Choice semantics, three branches of the contract and bare-incarnation on the API
 ### When you need neighbors `main.yml`
 
 One `main.yml` copes as long as the script remains visible (~150 lines). If logical subsections are clearly identified inside, we move them to `scenario/<name>/<sub>.yml` and connect them through `include:`. Same as [`docs/destiny/manifest.md -> When tasks/main.yml needs neighbors`](../destiny/manifest.md#when-you-need-neighbors-tasksmainyml).
+
+**When several scenarios need the SAME pieces**, the neighbour moves one level up, to the service level, where the two-level resolve finds it ([`docs/scenario/orchestration.md §6`](../scenario/orchestration.md)): `scenario/<file>.yml` when the whole service shares it, `scenario/_<family>/<file>.yml` (`include: _<family>/<file>.yml`) when one family of scenarios does — `create` and `create_from_souls` sharing provisioning and deployment steps is the standard case. A `_`- or `.`-prefixed directory under `scenario/` is **not** a scenario and never appears in auto-discovery, even if it contains a `main.yml`. Shared **contract sections** (`input:`/`compute:`/`state_changes:`/`validate:`) are a different mechanism — `covenant.yml` + `extends:`, see [`docs/scenario/orchestration.md §6.1`](../scenario/orchestration.md).
 
 ## Reusable named input types - `types.yml`
 

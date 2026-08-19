@@ -1522,6 +1522,9 @@ lint: build
 	done
 	@for f in examples/service/*/scenario/*/main.yml; do \
 		[ -e "$$f" ] || continue; \
+		case "$$(basename $$(dirname "$$f"))" in \
+			_*|.*) echo "skip validate-scenario $$f (shared include bodies, not a scenario)"; continue;; \
+		esac; \
 		svc=$$(echo "$$f" | cut -d/ -f3); \
 		case "$$svc" in \
 			mongo) mods="--modules=community=$(LINT_MODULES_MONGO)";; \

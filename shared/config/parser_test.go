@@ -295,6 +295,18 @@ func hasCode(ds []diag.Diagnostic, code string) bool {
 	return false
 }
 
+// diagWithCode returns the first diagnostic with this code, for tests that must
+// assert on its message — a test that only asserts the code passes whenever ANY
+// rule rejected the input, which is not a guard for the rule it is named after.
+func diagWithCode(ds []diag.Diagnostic, code string) *diag.Diagnostic {
+	for i := range ds {
+		if ds[i].Code == code {
+			return &ds[i]
+		}
+	}
+	return nil
+}
+
 func hasCodeAt(ds []diag.Diagnostic, code, yamlPath string) bool {
 	for _, d := range ds {
 		if d.Code == code && d.YAMLPath == yamlPath {
