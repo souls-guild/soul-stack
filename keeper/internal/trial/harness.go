@@ -184,7 +184,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		ServiceVars: orEmptyMap(c.Fixtures.Vars),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
-		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures)}, // NIM-58
+		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures), Service: trialServiceName(svcManifest)}, // NIM-58
 		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
@@ -275,14 +275,15 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 
 	// assert.state_after — deterministic final incarnation.state: base
 	// fixtures.state + applied in order state_changes operations (mirror
-	// of prod commit, run.go: mergeStateChanges(stateBefore, ops, schema, EvalStateMatch)).
+	// of prod commit, run.go: mergeStateChanges + Pipeline.StateOpEvaluators).
 	// Check is FULL (compareState, like L1): extra key — mismatch.
 	if c.Assert.StateAfter != nil {
 		schema, serr := loadServiceStateSchema(caseFile)
 		if serr != nil {
 			return res, serr
 		}
-		stateAfter, merr := mergeStateChanges(c.Fixtures.State, ops, schema, pipeline.EvalStateMatch, pipeline.EvalStateOpExpr)
+		matchEval, opEval := pipeline.StateOpEvaluators(ctx, in.Incarnation.Service)
+		stateAfter, merr := mergeStateChanges(c.Fixtures.State, ops, schema, matchEval, opEval)
 		if merr != nil {
 			return res, fmt.Errorf("trial: apply state_changes: %w", merr)
 		}
@@ -310,6 +311,17 @@ func serviceRootFor(caseFile string) string {
 	caseDir := filepath.Dir(caseFile)                  // .../tests/<case>
 	scenarioDir := filepath.Dir(filepath.Dir(caseDir)) // .../scenario/<name>
 	return filepath.Dir(filepath.Dir(scenarioDir))     // .../<service-root>
+}
+
+// trialServiceName is the service identity the render pipeline fences on
+// ([ADR-0083] §7). Without it both halves of the fence are inert — the guard and
+// the runtime scan both no-op on an empty service — and L0 would report a scenario
+// green that a real run rejects.
+func trialServiceName(m *config.ServiceManifest) string {
+	if m == nil {
+		return ""
+	}
+	return m.Name
 }
 
 // loadTrialServiceManifest reads `<service-root>/service.yml` of case. Absence
@@ -472,7 +484,7 @@ func compareRenderedTasks(expected []ExpectedTask, got []*render.RenderedTask) [
 			fails = append(fails, fmt.Sprintf("task index %d: module = %q, expected %q", et.Index, rt.Module, et.Module))
 		}
 		if et.Params != nil {
-			if diff := compareParams(et.Index, et.Params, rt.Params, rt.NoLog); diff != "" {
+			if diff := compareParams(et.Index, et.Params, rt.Params); diff != "" {
 				fails = append(fails, diff)
 			}
 		}
@@ -555,7 +567,7 @@ func taskMatches(et ExpectedTask, rt *render.RenderedTask) bool {
 		return false
 	}
 	if len(et.ParamsSubset) > 0 {
-		if diff := compareParams(rt.Index, et.ParamsSubset, rt.Params, rt.NoLog); diff != "" {
+		if diff := compareParams(rt.Index, et.ParamsSubset, rt.Params); diff != "" {
 			return false
 		}
 	}
@@ -563,8 +575,8 @@ func taskMatches(et ExpectedTask, rt *render.RenderedTask) bool {
 }
 
 // describeExpected — human-readable description of presence expectation for
-// mismatch text. Does not print params_subset in full (may carry vault secrets) —
-// only keys, like no_log branch of compareParams.
+// mismatch text. Does not print params_subset in full — only the identifying
+// keys, which is all a reader needs to find the task the expectation missed.
 func describeExpected(et ExpectedTask) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "module=%q", et.Module)
@@ -629,10 +641,12 @@ const presentMarker = "<present>"
 // presentMarker (`<present>`) in expected value weakens check to «key
 // exists, non-empty string» (see presentMarker) — for template_content.
 //
-// noLog — RenderedTask.NoLog flag: params may contain vault-resolved
-// secrets, so on FAIL values are masked (only keys printed),
-// to prevent secret leak to stdout/report.
-func compareParams(idx int, want map[string]any, got *structpb.Struct, noLog bool) string {
+// Values are printed in full on FAIL. The `no_log` branch that used to hide them
+// bought nothing here: trial is offline, so the only plaintext a rendered param
+// can carry is a `fixtures.vault` literal the case author wrote into the same
+// file as the assertion. A production secret never reaches this point — keeper
+// resolves a `vault:` ref against a live Vault, and trial has none.
+func compareParams(idx int, want map[string]any, got *structpb.Struct) string {
 	wantStruct, err := structpb.NewStruct(want)
 	if err != nil {
 		return fmt.Sprintf("task index %d: assert.params invalid: %v", idx, err)
@@ -665,14 +679,11 @@ func compareParams(idx int, want map[string]any, got *structpb.Struct, noLog boo
 	if len(diffs) == 0 {
 		return ""
 	}
-	if noLog {
-		return fmt.Sprintf("task index %d: params mismatch (values hidden, no_log):\n    keys: %v", idx, diffs)
-	}
 	return fmt.Sprintf("task index %d: params mismatch: %v\n    expected: %v\n    got:      %v", idx, diffs, wantMap, gotMap)
 }
 
-// sortedKeys — deterministic list of map keys (for no_log-diff, where
-// values are hidden).
+// sortedKeys — deterministic list of map keys, so a params diff is reported in
+// a stable order.
 func sortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

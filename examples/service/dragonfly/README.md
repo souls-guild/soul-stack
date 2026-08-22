@@ -263,7 +263,7 @@ with the CEL function `vault(...)` in the render phase under a **single** conven
 accounts, including `default_admin`, **and** operator-extra):
 
 ```
-secret/dragonfly/<incarnation.name>/users/<name>#password
+secret/dragonfly/<incarnation.name>/{df_users,system_acl_users}/<name>#password
 ```
 
 There is **no** master `requirepass` secret (the `default_admin` redesign). The path is built

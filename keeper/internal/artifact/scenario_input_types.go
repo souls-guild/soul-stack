@@ -62,6 +62,18 @@ func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte,
 	// call the same one.
 	diags = append(diags, config.ResolveScenarioCovenant(scn, doc, art.LocalDir)...)
 
+	// The own-namespace fence ([ADR-0083] §7). Here because this is the one place a
+	// scenario is parsed with its service manifest in scope — the fence needs the
+	// service NAME, which the scenario file never states. It runs before the
+	// early return below: a scenario with no `input:` is fenced too.
+	//
+	// This sees the main file only; an `include:` body is parsed later, inside
+	// config.ExpandIncludes. The scan over the expanded list runs at
+	// render.Pipeline.Render, which no dispatch path can bypass.
+	if art.Manifest != nil {
+		diags = append(diags, config.ScanOwnNamespaceVault(rel, art.Manifest.Name, scn, scn.Tasks)...)
+	}
+
 	if len(scn.Input) == 0 {
 		return scn, doc, diags, nil
 	}

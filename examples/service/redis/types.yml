@@ -28,7 +28,7 @@ types:
         description: >-
           Redis ACL user name (unique within the users array). Rendered into
           users.acl; password is resolved keeper-side from Vault by the
-          convention secret/redis/<incarnation>/users/<name>#password.
+          convention secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password.
       # FULL ACL permissions string (not an alias): raw Redis ACL directives.
       #
       # pattern is NOT a full Redis parser, but a token-shape filter (re2):

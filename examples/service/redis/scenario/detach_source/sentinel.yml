@@ -86,7 +86,7 @@
     # (no compute.admin_user). source_password is the credential for the EXTERNAL source
     # (from state references).
     username:        "${ 'default_admin' }"
-    password:        "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+    password:        "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
     source_password: "${ compute.source_password }"
     source_tls:      "${ compute.source_tls_ca != '' }"
     source_tls_ca:   "${ compute.source_tls_ca }"
@@ -106,7 +106,7 @@
     addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     # ★ default_admin REDESIGN: LOCAL connection as default_admin (hardcoded name — outside the covenant).
     username: "${ 'default_admin' }"
-    password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+    password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_ca }"
 
@@ -139,9 +139,9 @@
     # The scenario body is OUTSIDE the covenant → hardcode the admin username as
     # 'default_admin'. Without them, connecting to the ACL daemon → NOAUTH.
     username:    "${ 'default_admin' }"
-    password:    "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+    password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
     auth_user:   "${ 'default_admin' }"
-    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+    auth_pass:   "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
     monitor:

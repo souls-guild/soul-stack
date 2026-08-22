@@ -224,6 +224,47 @@ func TestVaultKVVersion_Invalid_Rejected(t *testing.T) {
 	}
 }
 
+// TestVaultKVMount_MultiSegment_Rejected — a mount is not just a prefix. [ADR-0083] §1
+// derives <mount>/<service>/<incarnation>/… and the §7 fence recognises the service's own
+// namespace by finding the service in the first two segments, so a two-segment mount
+// pushes it to the third and disables the fence with no other symptom.
+func TestVaultKVMount_MultiSegment_Rejected(t *testing.T) {
+	for _, m := range []string{"apps/kv", "secret/", "/secret", "..", "kv sec"} {
+		m := m
+		t.Run(m, func(t *testing.T) {
+			src := keeperWithVault(`  addr: "https://v:8200"
+  token: "root"
+  kv_mount: "` + m + `"`)
+			_, _, diags, _ := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+			if !hasCodeAt(diags, "vault_kv_mount_invalid", "$.vault.kv_mount") {
+				dump(t, diags)
+				t.Fatalf("expected vault_kv_mount_invalid on kv_mount=%q", m)
+			}
+		})
+	}
+}
+
+func TestVaultKVMount_SingleSegment_OK(t *testing.T) {
+	for _, m := range []string{"", "secret", "kv-prod", "kv_2"} {
+		m := m
+		t.Run("mount="+m, func(t *testing.T) {
+			body := `  addr: "https://v:8200"
+  token: "root"`
+			if m != "" {
+				body += "\n  kv_mount: \"" + m + "\""
+			}
+			cfg, _, diags, _ := LoadKeeperFromBytes("keeper.yml", keeperWithVault(body), ValidateOptions{})
+			if diag.HasErrors(diags) {
+				dump(t, diags)
+				t.Fatalf("kv_mount=%q should be valid", m)
+			}
+			if cfg.Vault.KVMount != m {
+				t.Errorf("KVMount = %q, want %q", cfg.Vault.KVMount, m)
+			}
+		})
+	}
+}
+
 // The secret (secret_id value) is never set in keeper.yml — only the path/env
 // name. We check that the schema has no field for a plaintext secret_id: an
 // attempt to set it is caught as unknown_key, not silently accepted.

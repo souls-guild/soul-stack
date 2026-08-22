@@ -4,7 +4,7 @@
 #   1. users.acl carries ALL system redis-server users (default_admin/replica/monitoring/
 #      sentinel/haproxy) from vars.system_acl_users with perms 1:1 from service vars + state:'on';
 #   2. operator-extra (app) coexists with the system users in the same file;
-#   3. EACH system user has its OWN vault password secret/redis/<inc>/users/<name>#password
+#   3. EACH system user has its OWN vault password secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password
 #      (the same branch as operator-extra) — no cross-leak;
 #   4. ★ default_admin REDESIGN (2026-06-30): the built-in default renders as `off` (it's NOT
 #      in the .vars.users map), while intra-cluster AUTH runs under the system default_admin —
@@ -27,24 +27,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # Per-user secrets of system users — DIFFERENT values (cross-leak detected by an assert).
-    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user of intra-cluster
-    # AUTH (its password is under the same users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
-    secret/redis/create/users/app:
-      password: app-user-secret-pass
   vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -86,6 +68,24 @@ fixtures:
     cluster_node_timeout: 5000
     users:
       - { name: app, perms: "~app:* +@read +@write", state: "on" }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective:
+        - { name: app, password: app-user-secret-pass }
 
 assert:
   task_present:

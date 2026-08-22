@@ -127,7 +127,7 @@ func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPre
 	if p.Type == "" {
 		return nil
 	}
-	if sn, isStr := value.(*ast.StringNode); isStr && isCELWrapped(sn.Value) {
+	if isCELWrapped(strings.TrimSpace(scalarText(value))) {
 		return nil
 	}
 	if _, isNull := value.(*ast.NullNode); isNull {
@@ -234,6 +234,24 @@ func astMatchesType(declared string, value ast.Node) bool {
 		// catches input_type_unknown); skip the type check.
 		return true
 	}
+}
+
+// scalarText returns the text of a scalar node, "" for anything else. A block
+// scalar (folded `>` / literal `|`) is parsed by goccy as a LiteralNode wrapping a
+// StringNode, so testing only for StringNode misses it — and a `${ … }` expression
+// long enough to need folding is exactly where an author reaches for one. Missing
+// it made the CEL exemption depend on how the expression was WRAPPED, so the same
+// expression passed on one line and failed as param_type_mismatch on three.
+func scalarText(value ast.Node) string {
+	switch n := value.(type) {
+	case *ast.StringNode:
+		return n.Value
+	case *ast.LiteralNode:
+		if n.Value != nil {
+			return n.Value.Value
+		}
+	}
+	return ""
 }
 
 // canonicalType maps docs/input.md synonyms to the canonical plugin-DSL names.

@@ -68,6 +68,12 @@ var unsupportedPatterns = []struct {
 // KVReader (vault() is not registered, see [guardUnsupported]).
 var vaultGuard = regexp.MustCompile(`\bvault\s*\(`)
 
+// generateSecretGuard catches a generate_secret() call — rejected in the passes where
+// the function is not registered ([ADR-0083] §3: migration, flow-control, service
+// vars). Without it the author gets a bare undeclared-reference; with it, a stated
+// reason for a call that would otherwise have produced a marker nobody resolves.
+var generateSecretGuard = regexp.MustCompile(`\bgenerate_secret\s*\(`)
+
 // internalIdentGuard catches identifiers prefixed with `__` in the AUTHOR's
 // expression. The `__` prefix is reserved for internal mechanisms of the CEL layer:
 // the vault() macro expands to `__vault_read(path, __vault_resolver)`, where
@@ -93,11 +99,12 @@ var internalIdentGuard = regexp.MustCompile(`(^|\W)__\w`)
 
 // guardUnsupported returns [ErrUnsupported] if the expression contains a construct
 // outside pilot scope. vaultEnabled=true (Engine with a KVReader) lifts the vault()
-// guard — the function is registered and works. vars is NOT rejected by the guard:
+// guard — the function is registered and works; genSecretEnabled=true (the ordinary
+// scenario/destiny pass) lifts the generate_secret() guard the same way. vars is NOT rejected by the guard:
 // it's declared as a variable and resolved from Vars.Vars (the flat namespace: the
 // service's own vars under the destiny/task locals); an empty map gives the normal
 // no-such-key, not a panic.
-func guardUnsupported(expr string, vaultEnabled bool) error {
+func guardUnsupported(expr string, vaultEnabled, genSecretEnabled bool) error {
 	for _, p := range unsupportedPatterns {
 		if p.re.MatchString(expr) {
 			return &ErrUnsupported{Expr: expr, Feature: p.feature}
@@ -108,6 +115,9 @@ func guardUnsupported(expr string, vaultEnabled bool) error {
 	}
 	if !vaultEnabled && vaultGuard.MatchString(expr) {
 		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}
+	}
+	if !genSecretEnabled && generateSecretGuard.MatchString(expr) {
+		return &ErrUnsupported{Expr: expr, Feature: "generate_secret(...) (only the scenario/destiny render pass can request a secret)"}
 	}
 	return nil
 }

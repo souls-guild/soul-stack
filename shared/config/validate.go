@@ -21,4 +21,21 @@ type ValidateOptions struct {
 	// "checked and clean" stops being indistinguishable from "never checked".
 	// See [ModuleManifestResolver].
 	ModuleManifests ModuleManifestResolver
+
+	// OuterRegisters — register names declared OUTSIDE this file that are in
+	// scope for it: the includer's registers (and its own ancestors'), threaded
+	// down by [ExpandIncludes]. Only an included body ever gets a non-empty set;
+	// a top-level file is validated against its own declarations alone.
+	//
+	// The asymmetry is deliberate. An included body reading a register the
+	// includer declares is safe: a group-dropped include removes the READER, so
+	// nothing can dangle. The reverse — a main file reading a register declared
+	// inside a conditional include — stays rejected, because dropping that group
+	// removes the DECLARATION and leaves a live reference behind (the invariant
+	// render.Pipeline relies on; see include_expand_test.go).
+	//
+	// Seeded into the cross-reference set only, never into the address space:
+	// a name colliding across files is a duplicate_task_address, and that is
+	// validateFlatTaskAddresses' verdict to give, on the flat expanded plan.
+	OuterRegisters map[string]bool
 }

@@ -495,6 +495,12 @@ var deprecatedScenarioKeys = map[string]string{
 var deprecatedTaskKeys = map[string]string{
 	"wait":   "wait: removed (orchestration.md §2); express with retry:+until: on a probe step",
 	"filter": "filter: removed (orchestration.md §4); use where: predicate instead",
+	// Removed by [ADR-0083] §8 rather than deprecated: an author no longer says
+	// which output is secret. The module declares it per field in its manifest
+	// and the platform masks exactly those fields wherever the output is
+	// observable — which is narrower than no_log ever was and cannot be
+	// forgotten on a task.
+	"no_log": "no_log: removed (ADR-0083 §8); a module declares `secret: true` on the output fields it returns, and the platform masks them — delete the key",
 }
 
 // stateChangesKnownKeys — the closed key set of the old map form of `state_changes:`.
@@ -1394,7 +1400,7 @@ func findSequenceValue(m *ast.MappingNode, name string) *ast.SequenceNode {
 // cross-ref inside CEL predicates (`when:`/`changed_when:`/`until:`) are deferred
 // (M1.3/M1.5).
 func semanticValidateScenario(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
-	out := validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks")
+	out := validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks", nil)
 	out = append(out, validateExtendsField(m, root)...)
 	return out
 }

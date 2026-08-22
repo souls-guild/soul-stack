@@ -1,0 +1,27 @@
+name: system-acl-users-default-empty
+description: >
+  A v14 incarnation created before the service's own accounts were declared state -- there is
+  no system_acl_users field. The migration ADDS it as an empty array: the account set is a
+  service-vars fact and migration-CEL cannot read vars. redis_users (operator intent) passes
+  through bit-for-bit, password-free as always.
+
+state_before:
+  redis_type: "sentinel"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  tls:
+    enable: false
+    only: false
+    port: 0
+  persistence: "rdb"
+
+state_after:
+  redis_type: "sentinel"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  system_acl_users: []
+  tls:
+    enable: false
+    only: false
+    port: 0
+  persistence: "rdb"

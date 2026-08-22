@@ -249,17 +249,20 @@ Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.
 | `passage` | `int` | Number Passage staged-render. |
 | `name` | `string` | Task name. |
 | `module` | `string` | Task module (`core.pkg.installed`, ...). |
-| `no_log` | `bool` | `true` → task is marked `no_log:`; `params` and per-host `output`/`error.message` are suppressed - not sent at all. |
-| `params` | `object` (optional) | Rendered operator input parameters of the task, **secret-masked** (secret note below). The key is omitted for `no_log` tasks and tasks without params. |
-| `hosts[]` | `RunTaskHostEntry` | Per-host total: `sid` (FQDN or synthetic `keeper` for step `on: keeper`), `status` (`TASK_STATUS_*`), `output` (register data, optional), `error` (`{code, module, message?}` - only on the failed host; `message` suppressed for `no_log`). |
+| `params` | `object` (optional) | Rendered operator input parameters of the task, **secret-masked** (secret note below). The key is omitted for tasks without params. |
+| `hosts[]` | `RunTaskHostEntry` | Per-host total: `sid` (FQDN or synthetic `keeper` for step `on: keeper`), `status` (`TASK_STATUS_*`), `output` (register data, optional - the fields the module declared `secret: true` are masked in it, [ADR-0083](../../adr/0083-declared-secret-state-fields.md) §8), `error` (`{code, module, message?}` - only on the failed host). |
+
+There is no `no_log` field. It carried the per-task flag that blanked `params`, `output` and
+`error.message` wholesale; [ADR-0083](../../adr/0083-declared-secret-state-fields.md) §8 removed
+the flag, so the operator gets the whole step and the platform masks the declared fields inside it.
 
 **RBAC:** existence-`RequireAction(incarnation, history)` + in-handler inScope predicate (parity RunDetail); incarnation is out of scope/does not exist **or** `apply_id` belongs to another incarnation → single `404 not-found`.
 
 **Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found`, `422 validation-failed` (invalid path-`name`).
 
-> **★ Secret hygiene `params`.** `/tasks` shows **rendered** `params` tasks to operators with `incarnation.history`. The values are masked by the seal-aware mechanism on the write-path (before writing to `apply_run_plan`, `audit.MaskSecretsSealed`; the same layer as `state`/`spec` - [§ Masking state/spec in GET responses](../operator-api.md)) - OR three layers ([templating.md §7.4](../../templating.md)): sealed-provenance (cell whose raw `${…}` read the secret-input of the active scheme / `vault(...)`), vault-ref-marker and regex-last-resort by sensitive-key name (`token`/`secret`/`password`/…); tasks `no_log: true` `params` are not shown at all.
+> **★ Secret hygiene `params`.** `/tasks` shows **rendered** `params` tasks to operators with `incarnation.history`. The values are masked by the seal-aware mechanism on the write-path (before writing to `apply_run_plan`, `audit.MaskSecretsSealed`; the same layer as `state`/`spec` - [§ Masking state/spec in GET responses](../operator-api.md)) - OR three layers ([templating.md §7.4](../../templating.md)): sealed-provenance (cell whose raw `${…}` read the secret-input of the active scheme / `vault(...)`), vault-ref-marker and regex-last-resort by sensitive-key name (`token`/`secret`/`password`/…). A declared secret ([ADR-0083](../../adr/0083-declared-secret-state-fields.md) §1) never renders as plaintext in the first place - the cell holds a `vault:` ref.
 >
-> **Limitation.** A secret entered as a **plaintext constant directly into `params`** under an innocent key name (without `vault(...)` / `${…}` / secret-input), masking **will not catch** - there is no sealed-provenance (there was no expression reading the source secret), and the innocent name is not matchit regex-last-resort. Don't hardcode secrets into `params` - use `vault(...)`, secret-input or `no_log: true`.
+> **Limitation.** A secret entered as a **plaintext constant directly into `params`** under an innocent key name (without `vault(...)` / `${…}` / secret-input), masking **will not catch** - there is no sealed-provenance (there was no expression reading the source secret), and the innocent name is not matchit regex-last-resort. Don't hardcode secrets into `params` - declare the field `type: secret` in `state_schema` ([ADR-0083](../../adr/0083-declared-secret-state-fields.md) §1) or pass it through a secret-input.
 
 #### `GET /v1/runs` - global list of runs
 

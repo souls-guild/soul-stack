@@ -140,6 +140,12 @@ type Engine struct {
 	// soulprint.{self,hosts} (hosts is always empty — the accessor is cut at
 	// compile).
 	flowControl bool
+
+	// genSecret — generate_secret() ([ADR-0083] §3) is registered in this env (only
+	// the ordinary scenario/destiny pass, see [buildEngine]). Immutable after the
+	// constructor; read by [guardUnsupported] to reject the call with a stated reason
+	// in the passes that don't have it, rather than with a bare undeclared-reference.
+	genSecret bool
 }
 
 // Option configures the Engine at build ([New]). Applied before the CEL env is
@@ -223,7 +229,7 @@ var serviceVarsVars = []string{
 // [WithVault] is not meaningful here: service vars are assembled before the input
 // gate and before any secret is resolved.
 func NewServiceVars(opts ...Option) (*Engine, error) {
-	return buildEngine(engineMode{}, serviceVarsVars, opts...)
+	return buildEngine(engineMode{serviceVars: true}, serviceVarsVars, opts...)
 }
 
 // engineMode — mutually exclusive special Engine modes (zero-value = ordinary
@@ -232,6 +238,7 @@ func NewServiceVars(opts ...Option) (*Engine, error) {
 type engineMode struct {
 	migration   bool // [NewMigration], [ADR-019]: only `state` is declared.
 	flowControl bool // [NewFlowControl], [ADR-012(d)]: Soul-side flow-control sandbox.
+	serviceVars bool // [NewServiceVars], [ADR-0082]: a `vars/_stack.yaml` step.
 }
 
 // buildEngine — shared constructor: an env over cel.StdLib() with the declared
@@ -278,6 +285,19 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		envOpts = append(envOpts, mergeEnvOptions()...)
 		envOpts = append(envOpts, defaultEnvOptions()...)
 	}
+	// generate_secret() ([ADR-0083] §3) — a declared secret request, resolved by
+	// `core.state.present`. Registered ONLY in the ordinary scenario/destiny pass,
+	// because that is the only pass whose output reaches that module. In the other
+	// three the request would be a marker nobody ever resolves: inert data that looks
+	// like it did something. Non-registration turns each of those into an
+	// undeclared-reference compile error instead of a silent no-op — migration-CEL is
+	// a pure function of state ([ADR-019]), a Soul evaluating flow control has no
+	// state to write ([ADR-012(d)]), and service vars are resolved once per run,
+	// before the input gate and before any secret exists ([ADR-0082]).
+	genSecret := !mode.migration && !mode.flowControl && !mode.serviceVars
+	if genSecret {
+		envOpts = append(envOpts, secretRequestEnvOptions()...)
+	}
 
 	env, err := cel.NewEnv(envOpts...)
 	if err != nil {
@@ -299,6 +319,7 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		kv:            cfg.kv,
 		migration:     mode.migration,
 		flowControl:   mode.flowControl,
+		genSecret:     genSecret,
 	}, nil
 }
 
@@ -372,7 +393,7 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 		return prg, nil
 	}
 
-	if err := guardUnsupported(expr, e.kv != nil); err != nil {
+	if err := guardUnsupported(expr, e.kv != nil, e.genSecret); err != nil {
 		return nil, err
 	}
 

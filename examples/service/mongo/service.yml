@@ -1,5 +1,5 @@
 name: mongo
-state_schema_version: 1
+state_schema_version: 2
 description: >-
   MongoDB following a unified-service concept (PILOT, standalone). The operator sets SIMPLE
   typed concepts (version, memory, WiredTiger cache, users), and the create scenario
@@ -16,10 +16,16 @@ description: >-
   add_user/remove_user scenarios (users are only provisioned by the plugin-state user from create).
   TLS — pilot=plain (mongo TLS on port 27017 via net.tls.mode — a separate slice).
 
-# state_schema_version = 1 → the migrations/ directory is not required (ADR-019): there is no previous
-# version, migrations will appear on the first breaking schema change. incarnation.state
-# records what has been deployed, so the operator sees the installation and repeated apply is
-# idempotent. Standalone mini-schema (without replica-set/sharding/keyfile — out of PILOT scope).
+# state_schema_version = 2: forward-only migration chain (ADR-019).
+#   - 001_to_002 (migrations/001_to_002.yml): the service's OWN accounts become a declared
+#     state field (NIM-698, [ADR-0083]). Adds system_users — an array of {name} recording
+#     WHICH accounts the service provisioned for itself (default_admin); their roles stay in
+#     service vars (policy), the password is declared `type: secret` so its value lives in
+#     Vault at a DERIVED path. Default [] — migration-CEL cannot read vars (ADR-019 sandbox).
+#     Mirrors redis 014_to_015 / dragonfly 006_to_007.
+# incarnation.state records what has been deployed, so the operator sees the installation and
+# repeated apply is idempotent. Standalone mini-schema (without replica-set/sharding/keyfile
+# — out of PILOT scope).
 #
 # BOUNDARY between the two config representations (as with redis/dragonfly):
 #   - mongo_config (opaque, additionalProperties:true) — the COMPUTED RESULT of translating
@@ -63,9 +69,12 @@ state_schema:
         type: string
 
     # MongoDB users: TYPED array of MongoUser (types.yml, ADR-062).
-    # Populated by create from input.users (also an array of MongoUser); passwords are NOT in state
-    # (keeper-side Vault, ADR-012). ★ MongoDB vs redis: roles — an array of {role, db}, not
-    # a single perms string.
+    # Populated by create from input.users (also an array of MongoUser). The password is
+    # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper
+    # DERIVES from (service, incarnation, mongo_users, name) — no path is written anywhere in
+    # this repo — and never in state. `key: name` says which sibling property is the element's
+    # identity, i.e. the last path segment. ★ MongoDB vs redis: roles — an array of
+    # {role, db}, not a single perms string.
     mongo_users:
       type: array
       items:
@@ -76,6 +85,10 @@ state_schema:
           name:     { type: string }
           database: { type: string }
           state:    { type: string, enum: [present, absent] }
+          password:
+            type: secret
+            key: name
+            label: "MongoDB user password"
           roles:
             type: array
             items:
@@ -85,6 +98,26 @@ state_schema:
               properties:
                 role: { type: string }
                 db:   { type: string }
+    # The service's OWN accounts (PILOT: default_admin only) — the counterpart of
+    # mongo_users, which is operator intent. Only the NAME is state: roles live in service
+    # vars (vars.system_users — policy, not a per-incarnation fact), and the password is
+    # declared `type: secret`, so its value lives in Vault at a path Keeper DERIVES from
+    # (service, incarnation, system_users, name). Written by create, read back through
+    # core.state.present's register — which is why the set is recorded rather than recomputed
+    # from vars: an operator who edits vars after create must not silently re-point an
+    # in-cluster credential.
+    system_users:
+      type: array
+      items:
+        type: object
+        required: [name]
+        additionalProperties: false
+        properties:
+          name: { type: string }
+          password:
+            type: secret
+            key: name
+            label: "MongoDB system account password"
 
 # ★ There are NO destiny dependencies: install + render mongod.conf is done by the scenario INLINE via
 # core modules (core.pkg/core.url/core.file.rendered from scenario-local templates). For

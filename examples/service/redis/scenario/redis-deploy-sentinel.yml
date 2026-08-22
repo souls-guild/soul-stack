@@ -94,11 +94,11 @@
       # there the PURE compute.redis_config remains WITHOUT masterauth — the password does NOT go into
       # incarnation.state (the secret lives in Vault). masterauth — vault()-IN-A-CELL (seal masking,
       # ADR-010 §7.4): the password is masked in logs/OTel/state. admin_user = default_admin
-      # (compute.admin_user); path — secret/redis/<inc>/users/default_admin#password.
+      # (compute.admin_user); path — secret/redis/<inc>/system_acl_users/default_admin#password.
       config: >-
         ${ merge(compute.redis_config, {
              'masteruser': compute.admin_user,
-             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
            }) }
       # ★ SYSTEM + operator-extra (system-ACL-users, design d2 Variant A): the service
       # default_admin/replica/monitoring/sentinel/haproxy from vars.system_acl_users
@@ -107,14 +107,14 @@
       # from vars.system_acl_users like all others: under it runs the intra-cluster AUTH (replaced
       # requirepass-default). Without the system users, replication (replica), sentinel↔redis AUTH
       # (sentinel) and the admin connection (default_admin) would break. Vault password — a NEW path
-      # secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: …}).
+      # secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password. operator-extra: .map(u, {u.name: …}).
       users: >-
         ${ merge(
              merge(default(vars.system_acl_users, {}).map(name, {
                name: {
                  'perms':    vars.system_acl_users[name],
                  'state':    'on',
-                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                }
              })),
              has(input.users)
@@ -122,7 +122,7 @@
                    u.name: {
                      'perms':    u.perms,
                      'state':    u.state,
-                     'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                     'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                    }
                  }))
                : {}
@@ -134,14 +134,14 @@
       # aclfile. System users only (operator-extra is not added into the sentinel-aclfile).
       # ★ REDESIGN default_admin: the former ternary "default → MAIN secret, others →
       # users/<name>" is REMOVED — all system users (incl. default_admin) use the SINGLE branch
-      # secret/redis/<inc>/users/<name>#password. The sentinel daemon connects to
+      # secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password. The sentinel daemon connects to
       # :26379 as default_admin (its password from this branch), to master — auth_user default_admin.
       sentinel_users: >-
         ${ merge(default(vars.system_acl_users_sentinel, {}).map(name, {
              name: {
                'perms':    vars.system_acl_users_sentinel[name],
                'state':    'on',
-               'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+               'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
              }
            })) }
       # Redis modules — the SET is no longer passed (directive "modules ALWAYS ALL"): destiny
@@ -185,7 +185,7 @@
         # (sentinel auth-user/auth-pass <master>). Without auth_user sentinel would go with the
         # built-in default (now off) → NOAUTH while monitoring the master.
         auth_user:   "${ compute.admin_user }"
-        auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+        auth_pass:   "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
         # ★ #7: starting per-master failover timings in sentinel.conf (down-after/
         # failover-timeout). compute.sentinel_directives — a map `sentinel <opt> <master>`
         # → value; the sentinel.conf.tmpl template ranges over .vars.sentinel_config.
@@ -205,7 +205,7 @@
     # ★ REDESIGN default_admin: AUTH as default_admin (requirepass removed). username +
     # its password from the new Vault branch. The community.redis plugin passes username into AUTH.
     username: "${ compute.admin_user }"
-    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
@@ -233,7 +233,7 @@
 #    masterauth) — the plugin sets them AT RUNTIME for the initial REPLICAOF. PERSISTENCE across
 #    restart is provided by the static masteruser/masterauth in redis.conf (apply redis step 1,
 #    master_user/master_auth) — the plugin's CONFIG SET is not saved without CONFIG REWRITE. Password —
-#    secret/redis/<inc>/users/default_admin#password (the same branch as auth_pass/health-PING).
+#    secret/redis/<inc>/system_acl_users/default_admin#password (the same branch as auth_pass/health-PING).
 - name: Make replicas follow the elected master (REPLICAOF)
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
   module: community.redis.replica
@@ -241,7 +241,7 @@
     addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
     username:    "${ compute.admin_user }"
-    password:    "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:         "${ compute.tls_on }"
     tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -287,15 +287,15 @@
     # sentinel.conf carries the aclfile sentinel-users.acl, where default renders `off`, and
     # the connection goes as the SYSTEM default_admin (sentinel set) → ANY connection to :26379
     # requires AUTH as it. ★ REDESIGN default_admin (2026-06-30): username +
-    # secret/redis/<inc>/users/default_admin#password (the former MAIN secret is DROPPED).
+    # secret/redis/<inc>/system_acl_users/default_admin#password (the former MAIN secret is DROPPED).
     # password+username go into redis.Options (parseConnConfig→defaultConnect) — this is the AUTH
     # of the connection. auth_pass/auth_user BELOW are different: credentials for MONITORING the master (command
     # SENTINEL SET/MONITOR <master> auth-user/auth-pass), unrelated to the daemon's own AUTH.
     # Without password/username → NOAUTH on connecting to :26379.
     username:    "${ compute.admin_user }"
-    password:    "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     auth_user:   "${ compute.admin_user }"
-    auth_pass:   "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    auth_pass:   "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     redis_version: "${ compute.redis_version }"
     config:      "${ compute.sentinel_directives }"
     monitor:
@@ -326,5 +326,5 @@
     # default_admin#password (the former main secret is DROPPED). The same pair as the connection AUTH
     # of step 4 (SENTINEL MONITOR to :26379).
     username: "${ compute.admin_user }"
-    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     args: ["PING"]

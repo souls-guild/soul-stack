@@ -47,6 +47,9 @@ func mergeStateChanges(stateBefore map[string]any, ops []render.RenderedOp, sche
 			return nil, fmt.Errorf("state_changes[%d]: verb %q not supported", i, op.Verb)
 		}
 	}
+	// A declared secret never lands in the state record ([ADR-0083] §4): its value
+	// lives in Vault and state carries only the key that addresses it.
+	config.StripDeclaredSecrets(out, schema)
 	return out, nil
 }
 

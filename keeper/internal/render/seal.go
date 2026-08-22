@@ -47,13 +47,18 @@ func (s *SealedSet) Paths() map[string]bool {
 }
 
 // scenarioSealSources builds [cel.SealSources] for a scenario pass: the
-// secret-input set of the active scenario schema. vars/compute transitivity
+// secret-input set of the active scenario schema, plus the registers whose
+// payload carried a declared secret ([ADR-0083] §6, derived by
+// [Pipeline.resolveRegisterSecrets] before any root is built). vars/compute transitivity
 // isn't precomputed in the pilot (vars resolve per-task; secret provenance via
 // vars is still caught because the vars value itself goes through
 // DetectSealed — an extension of this). nil schema → empty set (the detector
 // only catches vault()).
 func scenarioSealSources(in RenderInput) cel.SealSources {
-	return cel.SealSources{SecretInputs: secretInputNames(in.Scenario)}
+	return cel.SealSources{
+		SecretInputs:    secretInputNames(in.Scenario),
+		SealedRegisters: in.sealedRegisters,
+	}
 }
 
 // secretInputNames — names of input parameters declared secret:true in the

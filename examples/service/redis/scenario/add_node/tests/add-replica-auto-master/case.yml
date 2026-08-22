@@ -29,14 +29,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # ★ default_admin REDESIGN (2026-06-30): connecting to nodes as the system default_admin
-  # (PING-gate + CLUSTER MEET + masterauth deploy read its password). The old main
-  # secret secret/redis/<inc>#password is DROPPED — the users/default_admin branch.
-  vault:
-    secret/redis/add_node/users/default_admin:
-      password: default-admin-secret-pass
-  # host-layout — in service vars (v11→v12, Option A): modules_base_url moved out of state,
-  # add_node reads it from there (the new node pulls .so from the same source).
   vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
@@ -50,10 +42,29 @@ fixtures:
     redis_users: []
     redis_hosts: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     new_node_sid: node-9.example.com
     seed_sid: node-1.example.com
     role: replica
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   # GUARD — assert: (new_node != seed, both in roster → that[0] true → render passes,

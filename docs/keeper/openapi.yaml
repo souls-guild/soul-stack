@@ -1788,20 +1788,22 @@ components:
       additionalProperties: false
       properties:
         key:
-          description: element key of the current-state enumerate array (element.name)
+          description: element key of the current-state collection; empty for a scalar secret
           type: string
         secret_id:
-          description: id of the revealable secret (revealable_secrets of the service manifest)
+          description: "id of the declared secret: the state_schema field, or <field>.<property> for a collection"
           type: string
       required:
         - secret_id
-        - key
       type: object
     IncarnationRevealableSecretItem:
       additionalProperties: false
       properties:
+        collection:
+          description: true when reveal needs a key; false for one secret per incarnation
+          type: boolean
         keys:
-          description: allowed keys (element.name of the current state)
+          description: allowed keys of the current state (empty for a scalar secret)
           items:
             type: string
           type:
@@ -1814,12 +1816,13 @@ components:
           description: id of the secret (passed as secret_id on reveal)
           type: string
         state_path:
-          description: state path of the array (tail enumerate, e.g. redis_users)
+          description: top-level state_schema field holding the secret (e.g. redis_users)
           type: string
       required:
         - secret_id
         - label
         - state_path
+        - collection
         - keys
       type: object
     IncarnationRevealableSecretsReply:
@@ -3307,8 +3310,6 @@ components:
           type: string
         name:
           type: string
-        no_log:
-          type: boolean
         params:
           additionalProperties: {}
           type: object
@@ -3323,7 +3324,6 @@ components:
         - passage
         - name
         - module
-        - no_log
         - hosts
       type: object
     RunTaskErrorEntry:
@@ -8851,7 +8851,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/runs/{apply_id}/tasks:
     get:
-      description: Task plan of one apply_id (plan_index/name/module/no_log/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.
+      description: Task plan of one apply_id (plan_index/name/module/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.
       operationId: getIncarnationRunTasks
       parameters:
         - description: incarnation name
@@ -9040,7 +9040,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/secrets/reveal:
     post:
-      description: Resolves the plaintext of a secret declared in the service's revealable_secrets, from Vault. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be in the current-state enumerate array. Audit incarnation.secret_revealed (without the value). Out of scope -> 404.
+      description: "Resolves the plaintext of a secret the service declared as type: secret in its state_schema, from Vault at the derived path. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be present in the current-state collection, and must be empty for a scalar secret. Audit incarnation.secret_revealed (without the value). Out of scope -> 404."
       operationId: incarnationRevealSecret
       parameters:
         - description: incarnation name
@@ -9092,7 +9092,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/secrets/revealable:
     get:
-      description: Discovery of the service's revealable_secrets + keys from the current-state enumerate array. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404.
+      description: "Discovery of the secrets the service declared as type: secret in its state_schema + the keys present in the current state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404."
       operationId: incarnationRevealableSecrets
       parameters:
         - description: incarnation name

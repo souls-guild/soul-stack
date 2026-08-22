@@ -120,7 +120,8 @@ operator is responsible for idempotency. For pilot - single-field command
 > (Output carries only the `ok` flag, but the command error text is the server response). **Not**
 > run through `command` read commands that return secrets (`usersInfo` with
 > `showCredentials`) - their result would have been published in clear text; for this -
-> specialized state/`no_log`. `params.password` itself is masked
+> specialized state, whose output declares the secret fields ([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §8).
+> `params.password` itself is masked
 > and does not go into the command arguments (it only goes into the connection).
 
 | Param | Type | Required/default | Meaning |

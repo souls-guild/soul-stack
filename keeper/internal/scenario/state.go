@@ -243,21 +243,24 @@ func (r *Runner) loadRegisterByHostUpToPassage(ctx context.Context, applyID stri
 // wins (SelectTaskRegistersByApplyID sorts by plan_index ASC, later overwrites
 // earlier).
 //
-// no_log (variant B): a task with NoLog=true doesn't enter nameByIdx, so its
-// register row isn't accumulated into the per-host map and never reaches the
-// state graph (orchestration.md §7). A state_changes.sets referencing such a
-// task's register gets no-such-key — a no_log task's sensitive value never lands
-// in stored incarnation.state. This is source-side protection; masking on GET
-// output is the second layer (defense-in-depth).
+// Every task with a register: enters nameByIdx. The `no_log:` exclusion that used
+// to drop such a task's row wholesale is gone with the key itself ([ADR-0083] §8),
+// and it has no per-field successor here on purpose: this same fold feeds the NEXT
+// Passage's render (loadRegisterByHostUpToPassage), so dropping a field would break
+// the register chain rather than protect it.
+//
+// What stands in its place is narrower and earlier. A declared secret does not
+// travel through a register as plaintext at all — §1 keeps it out of
+// incarnation.state, and §6 turns the value a keeper task writes into a `vault:`
+// ref, sealing the register name that carried it so any state cell reading it is
+// masked on the way out ([ADR-010] §7.4). The protection moved from "drop the row
+// at the source" to "the row never holds the plaintext".
 func buildRegisterByHost(rows []applyrun.TaskRegister, tasks []*render.RenderedTask) map[string]map[string]any {
 	if len(rows) == 0 {
 		return map[string]map[string]any{}
 	}
 	nameByIdx := make(map[int]string, len(tasks))
 	for _, t := range tasks {
-		if t.NoLog {
-			continue
-		}
 		if t.Register != "" {
 			nameByIdx[t.Index] = t.Register
 		}
@@ -350,9 +353,9 @@ func taskAddress(t *render.RenderedTask) (addr string, addressable bool) {
 // Only addresses with ChangedHosts>0 make it into the result (a task unchanged
 // on every host is absent). Order is first appearance of the address (= idx
 // order for non-loop tasks; for a loop-collapsed address, the position of its
-// minimum idx, via keyOrder without sorting). A NoLog task is included in the
-// fold: changed_tasks carries only counts + metadata (name/register/id/module),
-// no register/params payload values — no secret leak from a no_log task here.
+// minimum idx, via keyOrder without sorting). Every task is included in the fold:
+// changed_tasks carries only counts + metadata (name/register/id/module), no
+// register/params payload values — nothing secret can travel this way.
 func buildChangedTasks(
 	tasks []*render.RenderedTask,
 	plans []render.DispatchPlan,
@@ -457,8 +460,8 @@ func buildChangedTasks(
 // deep-copy stateBefore (a commit snapshot doesn't hold a reference to the
 // source map) → sequential application of operations to the intermediate state.
 // matchEval is the CEL evaluator for add's list-dedup match predicate
-// (render.Pipeline.EvalStateMatch); opEval is the CEL evaluator for modify/remove
-// match+patch with the full scenario context (render.Pipeline.EvalStateOpExpr);
+// match+patch with the full scenario context; both come as a bound pair from
+// render.Pipeline.StateOpEvaluators (ctx + the §7 own-namespace fence);
 // schema is the service's state_schema (collection type for materializing a
 // missing field). Empty/nil ops → state unchanged.
 //
@@ -498,6 +501,9 @@ func mergeStateChanges(stateBefore map[string]any, ops []render.RenderedOp, sche
 			return nil, fmt.Errorf("state_changes[%d]: verb %q not supported by the engine", i, op.Verb)
 		}
 	}
+	// A declared secret never lands in the state record ([ADR-0083] §4): its value
+	// lives in Vault and state carries only the key that addresses it.
+	config.StripDeclaredSecrets(out, schema)
 	return out, nil
 }
 

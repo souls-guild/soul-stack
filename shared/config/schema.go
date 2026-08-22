@@ -1121,6 +1121,21 @@ func validateVaultAuth(root *ast.MappingNode, v *KeeperVault, vaultPresent bool)
 		}))
 	}
 
+	// `kv_mount` — one plain path segment, or empty for the default. A mount is
+	// not merely a prefix here: [ADR-0083] §1 derives every declared secret's path
+	// as <mount>/<service>/<incarnation>/…, and the §7 fence recognises a service's
+	// own namespace by finding the service in the FIRST TWO segments. A two-segment
+	// mount ("apps/kv") pushes the service to the third and switches the fence off
+	// silently, which is the one failure this whole feature exists to prevent.
+	if m := v.KVMount; m != "" && !ValidVaultPathSegment(m) {
+		out = append(out, atPath(root, "$.vault.kv_mount", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "vault_kv_mount_invalid",
+			Message: fmt.Sprintf("vault.kv_mount must be a single path segment (letters, digits, %q, %q), got %q", "_", "-", m),
+			Hint:    "leave empty for the default \"secret\" mount, or name one segment without slashes",
+		}))
+	}
+
 	a := &v.Auth
 
 	if a.Method != "" {

@@ -2,7 +2,7 @@
 
 This document is a **normative specification of the delta scenario** on top of the destiny task DSL core. The source of truth when implementing a scenario orchestrator.
 
-**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `async:`, `loop:`, `register:`, `output:`, `no_log:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is. This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
+**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `async:`, `loop:`, `register:`, `output:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is. This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
 
 Any key not described here and not described in [destiny/tasks.md](../destiny/tasks.md) is a scenario validation error.
 
@@ -117,7 +117,7 @@ An applier expands into N destiny tasks, so each of its own keys has to be answe
 | `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
 | `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
 | `vars:` | **On the caller's side, into `apply.input`** - the applier's own `vars:` plus any a `block:` above merged in are resolved in the scenario env, and only the resulting VALUES cross into the destiny, exactly like every other `apply.input` value. NOT inherited by the children: the destiny renders its own locals from its `vars.yml` ([destiny/vars.md](../destiny/vars.md)) and never sees its caller's. |
-| `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` · `no_log:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
+| `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
 | `id:` · `loop:` | **Refused** (`id_unsupported_target` / `loop_unsupported_target`) - both are allowed only on a module task in the pilot; an applier is one of the discriminators they already cover. |
 | `output:` | **Accepted, unread.** Not refused - `output:` is unread on every task type today and belongs to the planned output-contract projection (§2.1.1), not to the class below. |
 
@@ -163,9 +163,8 @@ an applier that adds `onchanges: [df_config]` over that destiny does **not** con
 | `retry:` | Repeats **one** module call; a group has no single call to repeat, and re-running the group is a different operation. | Put `retry:` on the destiny task that can be retried on its own. |
 | `timeout:` | Bounds **one** module call, not the duration of a group. | Put `timeout:` on the destiny tasks that need bounding. |
 | `params:` | Module arguments, and an applier calls no module. `module:`+`apply:` is caught as `task_discriminator_multiple`; a lone `params:` used to slip through. | `apply: { input: { … } }`, checked against the destiny's own `input:` contract. |
-| `no_log:` | Masking a whole group is not implemented: the flag reaches no child, so the output it was written to hide is **logged in full**. Accepting it is a false sense of masking. | Put `no_log:` on the destiny tasks that handle the secret. |
 
-★ These were not simply dropped, which is why refusing beats leaving them: a static-false `when:` collapses the applier into one skip placeholder that **does** copy `changed_when`/`failed_when`/`timeout`/`no_log`/`id` onto itself. The keys were honoured exactly when they could not matter, and ignored whenever they could.
+★ These were not simply dropped, which is why refusing beats leaving them: a static-false `when:` collapses the applier into one skip placeholder that **does** copy `changed_when`/`failed_when`/`timeout`/`id` onto itself. The keys were honoured exactly when they could not matter, and ignored whenever they could.
 
 ★ `vars:` was in this list and left it (NIM-336). It turned out to be the one member that **could** be answered here: `apply.input` renders in the scenario env, so resolving the applier's locals there and letting only the resulting values cross is what every other `apply.input` value already does - isolation is untouched. Refusing it also could not reach the second entrance, where the loss actually showed: a `block:` passes its `vars:` to every descendant (§6.5), that key is written on the block where it is legal, and an offline validator therefore never sees it. Before the fix a module descendant of such a block could read `${ vars.x }` and an `apply:` descendant could not - the render failed there with "no such key", loudly but for no reason the author could act on.
 
@@ -381,6 +380,8 @@ tasks:
 **The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: reference to `soulprint.*` in a compute expression → CEL no-such-key. The consequence is that `compute.<name>` **is the same for all hosts**, so the same value is correctly sent to both `apply: input:` (resolved on the first target host on `SID`) and to `state_changes` (per-RUN, not per-host). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
+
+**`on: keeper` reads it too.** A keeper-side task's `params:` (and its task-level `vars:`) resolve in the same run-level soulprint-free context `compute:` itself is resolved in, one phase later — so `compute.<name>` is readable there, with the same value every other reader sees. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 relies on it: the `core.state.present` task that mints a state field's declared secrets derives the account set from the same compute var `state_changes` records, instead of restating the expression.
 
 **Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` → no-such-key (like `register.*` - §10). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
 
@@ -1131,16 +1132,22 @@ gated by a predicate on always existing data: canon - gate by `input.*`
 with short circuit ternary, **not** `has(register.…)` (see comment at
 `provisioned_*` in redis `covenant.yml`).
 
-**`no_log` does not fall into the state graph.** If the probe task is marked
-`no_log: true` ([destiny/tasks.md](../destiny/tasks.md)), her `register` **not
-is accumulated** into the per-host register-map: scenario-runner upon resolution
-`task_idx → register-name` skips no_log tasks. The consequence is an operation,
-referring to `register.<no_log-task>.*` gets "no such key" (run
-`error_locked`), and the sensitive value from such a task **never
-settles in the stored `incarnation.state`**. This is source protection: the secret is not
-reaches the state physically, and is not masked after the fact. Output masking
-external GET channels (`GET /incarnations`, `/history`) - independent second
-defense-in-depth layer (see [keeper/operator-api.md → Secret masking](../keeper/operator-api.md)).
+**A secret-carrying task DOES fall into the state graph.** Until
+[ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 a `no_log: true` probe had
+its `register` dropped from the per-host register-map, so `register.<task>.*` read
+"no such key" and the value could not reach `incarnation.state`. That source-side drop
+is gone with the key: the same fold feeds the next Passage's render
+([ADR-056](../adr/0056-staged-render-passage.md)), so dropping a row to protect one
+field breaks the register chain for every consumer of that task.
+
+What protects the state instead is that the value is never in it: a declared secret
+lives in Vault and its register carries a `vault:` ref, not plaintext
+([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1), and the register NAME is
+sealed so a `state_changes` entry reading it writes the ref through
+([ADR-010](../adr/0010-templating.md) §7.4, [ADR-0083](../adr/0083-declared-secret-state-fields.md) §6).
+Output masking on the external GET channels (`GET /incarnations`, `/history`) remains
+the independent second defence-in-depth layer (see
+[keeper/operator-api.md → Secret masking](../keeper/operator-api.md)).
 
 #### Transition period (deprecated map form)
 

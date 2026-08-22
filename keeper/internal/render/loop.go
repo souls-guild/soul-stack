@@ -125,7 +125,7 @@ func (p *Pipeline) loopStaticSkip(
 	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
 	if err != nil {
 		// Unresolvable items in a skipped task is NOT an error: emit one placeholder.
-		rt := p.loopSkipPlaceholder(task, startIndex, skip)
+		rt := p.loopSkipPlaceholder(task, startIndex, skip, in.Modules)
 		return []*RenderedTask{rt}, []DispatchPlan{{TaskIndex: startIndex}}, nil
 	}
 
@@ -133,7 +133,7 @@ func (p *Pipeline) loopStaticSkip(
 	plans := make([]DispatchPlan, 0, len(iters))
 	idx := startIndex
 	for range iters {
-		tasks = append(tasks, p.loopSkipPlaceholder(task, idx, skip))
+		tasks = append(tasks, p.loopSkipPlaceholder(task, idx, skip, in.Modules))
 		plans = append(plans, DispatchPlan{TaskIndex: idx})
 		idx++
 	}
@@ -151,15 +151,15 @@ func (p *Pipeline) loopStaticSkip(
 // static-false loop task would be lost on the skip-placeholder, and the
 // final resolveOnChanges/resolveOnFail wouldn't find their sources — a
 // latent requisite loss for a loop task with onchanges:/onfail:.
-func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
+func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct, modules config.ModuleManifestResolver) *RenderedTask {
 	rt := &RenderedTask{
 		Index:          idx,
 		Name:           task.Name,
 		Module:         task.Module.Module,
 		Register:       task.Register,
 		ID:             task.ID,
-		NoLog:          task.NoLog,
 		Timeout:        task.Timeout,
+		SecretOutput:   config.SecretOutputFields(task.Module.Module, modules),
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,
@@ -233,6 +233,7 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 // context is built.
 func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 	return cel.Vars{
+		Ctx:            in.Ctx, // vault() in items/when: cancel/timeout + memo + §7 fence
 		Input:          in.Input,
 		Register:       in.Register,
 		Incarnation:    incarnationVars(in, len(in.Hosts)),

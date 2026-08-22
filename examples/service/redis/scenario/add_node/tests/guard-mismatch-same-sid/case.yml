@@ -19,14 +19,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  # ★ default_admin REDESIGN (2026-06-30): the default_admin vault branch (connecting as the
-  # system admin user). The guard aborts render BEFORE destiny/ADD-NODE — the password isn't
-  # resolved here, but the branch is brought to the new form for consistency with the happy cases.
-  vault:
-    secret/redis/add_node/users/default_admin:
-      password: default-admin-secret-pass
-  # modules_base_url — in service vars (v11→v12, Variant A). The guard aborts render (same-sid),
-  # the layout is here for fixture fidelity (state v12 form without layout keys).
   vars:
     modules_base_url: "https://artifacts.example.com/redis/modules"
   state:
@@ -40,6 +32,12 @@ fixtures:
     redis_users: []
     redis_hosts: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     new_node_sid: node-9.example.com
     seed_sid: node-9.example.com
@@ -48,4 +46,17 @@ fixtures:
 # Render ABORTS with the guard's assert failure: we expect a render error with the message from
 # assert. expect_render_error is mutually exclusive with assert.rendered_tasks (there's no plan —
 # the run never started).
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective: []
 expect_render_error: "add_node guard: new_node_sid/seed_sid must be distinct hosts of the run roster"

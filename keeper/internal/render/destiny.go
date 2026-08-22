@@ -170,6 +170,14 @@ func (p *Pipeline) renderApplyDestiny(
 		Templates:       resolved.Templates, // .tmpl from THIS destiny's own snapshot
 		Ctx:             ctx,                // vault() in destiny params: cancel/timeout for ReadKV
 		destinyIsolated: true,
+		// Modules is carried over, unlike the scenario scope below: it is not
+		// scope, it is the plugin-manifest resolver that says which of a module's
+		// `output:` fields are declared secret ([ADR-0083] §8). A destiny task
+		// runs the same modules as a scenario task, so dropping it would leave
+		// §8 redaction dead inside a destiny — a module output masked on the
+		// scenario path and printed in full on the destiny path.
+		// Guarded by TestRender_ApplyDestiny_SecretOutputStillDerived.
+		Modules: parentIn.Modules,
 		// ServiceVars stays nil ON PURPOSE, and it is load-bearing rather than an
 		// omission: hostVars seeds cel.Vars.Vars from it, resolveTaskVars takes the
 		// task layer's `lower` from that, so a nil here is what stops a destiny's

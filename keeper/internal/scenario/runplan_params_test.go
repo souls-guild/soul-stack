@@ -2,9 +2,9 @@ package scenario
 
 // ★ Secret-critical guard tests for preparing params before persisting to
 // apply_run_plan (maskRunPlanParams, NIM-37 S1b): seal-aware value masking
-// (the same mechanism as status_details/error_summary), transport-key
-// filtering, no_log suppression. A plaintext secret leak into
-// apply_run_plan.params is caught here, before the DB.
+// (the same mechanism as status_details/error_summary) and transport-key
+// filtering. A plaintext secret leak into apply_run_plan.params is caught here,
+// before the DB.
 
 import (
 	"bytes"
@@ -124,16 +124,30 @@ func TestMaskRunPlanParams_TransportFiltered(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_NoLogNil — a no_log task → nil (params aren't
-// stored, symmetric with register_data suppression).
-func TestMaskRunPlanParams_NoLogNil(t *testing.T) {
+// TestMaskRunPlanParams_NoBlanketSuppression — the per-task `no_log:` that used
+// to blank a whole task's params is gone ([ADR-0083] §8), and nothing replaced
+// it at this granularity: params are stored, masked per CELL by the seal.
+//
+// This is the direction that matters. The old switch was all-or-nothing and set
+// by the author: a task they forgot to flag stored every param in full. The seal
+// is derived from the schema, so the cell that carries a secret is masked
+// whether or not anyone declared the task sensitive — and the cells that do not
+// stay readable, which is what makes the stored plan worth reading at all.
+func TestMaskRunPlanParams_NoBlanketSuppression(t *testing.T) {
 	task := &render.RenderedTask{
-		NoLog:  true,
 		Module: "core.exec.run",
-		Params: mustParamsStruct(t, map[string]any{"password": "x"}),
+		Params: mustParamsStruct(t, map[string]any{"cmd": "redis-cli ping"}),
 	}
-	if raw := maskRunPlanParams(task, nil); raw != nil {
-		t.Errorf("no_log params = %s, want nil", raw)
+	raw := maskRunPlanParams(task, nil)
+	if raw == nil {
+		t.Fatal("params = nil, want them stored (no per-task suppression left)")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["cmd"] != "redis-cli ping" {
+		t.Errorf("cmd = %v, want it stored verbatim", got["cmd"])
 	}
 }
 

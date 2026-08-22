@@ -69,7 +69,7 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 			Name:         t.Name,
 			Module:       t.Module,
 			Params:       paramsForHost(t, sid),
-			NoLog:        t.NoLog,
+			SecretOutput: t.SecretOutput,
 			Timeout:      t.Timeout,
 			OnchangesIdx: remapRequisites(t.OnChangesIdx, globalToLocal),
 			OnfailIdx:    remapRequisites(t.OnFailIdx, globalToLocal),

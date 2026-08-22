@@ -25,7 +25,7 @@
 // substitutes after the render phases, ADR-010/ADR-012). Otherwise the linter would
 // reject valid author-written destiny.
 //
-// Keeper-side core (`core.soul`/`core.cloud`/`core.bootstrap`/`core.vault`/`core.choir`, ADR-017/ADR-044/ADR-063)
+// Keeper-side core (`core.soul`/`core.cloud`/`core.bootstrap`/`core.vault`/`core.choir`/`core.state`, ADR-017/ADR-044/ADR-063/ADR-0083)
 // are declared here by the same mechanism: a new `mod_<name>.go` + a line in [coreModules].
 package coremanifest
 
@@ -74,12 +74,13 @@ var coreModules = []schema.Module{
 	// Keeper-side core (ADR-017/ADR-044, on: keeper). State names aligned with the
 	// actual dispatch of keeper-side coremods: core.soul.registered,
 	// core.cloud.created/destroyed, core.bootstrap.issued/delivered,
-	// core.vault.kv-read, core.choir.present/absent.
+	// core.vault.kv-read, core.choir.present/absent, core.state.present.
 	modSoul,
 	modCloud,
 	modBootstrap,
 	modVault,
 	modChoir,
+	modState,
 }
 
 // Registry is an immutable set of "core-module name → declaration".

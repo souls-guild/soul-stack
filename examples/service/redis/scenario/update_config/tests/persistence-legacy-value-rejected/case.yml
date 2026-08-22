@@ -41,14 +41,29 @@ fixtures:
       appendonly:       "no"
     redis_users: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     # Old value from the pre-redesign enum [off,aof,rdb,rdb_aof] — now NOT in the enum.
     persistence: rdb_aof
 
-  vault:
-    secret/redis/update_config/users/default_admin:
-      password: default-admin-secret-pass
-
 # The run aborts at input validation: persistence ∉ enum. The substring is the marker for the
 # enum rejection from ResolveInputValues (shared/config/input_value.go).
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective: []
 expect_render_error: "is not in enum"

@@ -561,3 +561,73 @@ func TestVaultMemo_ErrorsNotCached(t *testing.T) {
 		t.Fatalf("backend calls = %d, want 3 (errors are not cached)", got)
 	}
 }
+
+// A guard bound to ctx rejects the read, and does so on the EVALUATED path — the
+// argument here is an identifier, so nothing static carries the forbidden text.
+func TestVault_PathGuardRejectsEvaluatedPath(t *testing.T) {
+	kv := &stubKV{secrets: map[string]map[string]any{
+		"secret/redis/prod/users/app": {"password": "must-not-surface"},
+	}}
+	e := newVaultEngine(t, kv)
+	ctx := WithVaultPathGuard(context.Background(), func(p string) error {
+		if strings.HasPrefix(p, "secret/redis/") {
+			return errors.New("fenced")
+		}
+		return nil
+	})
+
+	out, err := e.EvalInterpolation("${ vault(vars.p) }", Vars{
+		Ctx:  ctx,
+		Vars: map[string]any{"p": "secret/redis/prod/users/app#password"},
+	})
+	if err == nil {
+		t.Fatalf("eval succeeded past the guard: %v", out)
+	}
+	if !strings.Contains(err.Error(), "fenced") {
+		t.Fatalf("err = %v, want the guard's error", err)
+	}
+	if len(kv.calls) != 0 {
+		t.Fatalf("Vault was read despite the guard: %v", kv.calls)
+	}
+}
+
+// A primed cache is not a way around the guard. The params-ref route
+// (ReadKVMemoized) shares the pass cache and does not consult the guard, so an
+// implementation that short-circuited on a memo hit would hand out exactly the value
+// the guard exists to withhold.
+func TestVault_PathGuardNotBypassedByPrimedMemo(t *testing.T) {
+	kv := &stubKV{secrets: map[string]map[string]any{
+		"secret/redis/prod/users/app": {"password": "must-not-surface"},
+	}}
+	ctx := WithVaultMemo(context.Background())
+	if _, err := ReadKVMemoized(ctx, kv, "secret/redis/prod/users/app"); err != nil {
+		t.Fatalf("priming the memo: %v", err)
+	}
+	ctx = WithVaultPathGuard(ctx, func(string) error { return errors.New("fenced") })
+
+	out, err := newVaultEngine(t, kv).EvalInterpolation("${ vault(vars.p) }", Vars{
+		Ctx:  ctx,
+		Vars: map[string]any{"p": "secret/redis/prod/users/app#password"},
+	})
+	if err == nil {
+		t.Fatalf("a memo hit served a path the guard rejects: %v", out)
+	}
+	if !strings.Contains(err.Error(), "fenced") {
+		t.Fatalf("err = %v, want the guard's error", err)
+	}
+}
+
+// No guard on ctx fences nothing — the offline modes (soul-lint, Trial, unit eval)
+// have no incarnation in scope and so no namespace to compare against.
+func TestVault_NoPathGuardResolvesNormally(t *testing.T) {
+	kv := &stubKV{secrets: map[string]map[string]any{
+		"secret/redis/prod/users/app": {"password": "ok-offline"},
+	}}
+	out, err := newVaultEngine(t, kv).EvalInterpolation("${ vault('secret/redis/prod/users/app#password') }", Vars{})
+	if err != nil {
+		t.Fatalf("eval: %v", err)
+	}
+	if out != "ok-offline" {
+		t.Fatalf("result = %v, want the resolved value", out)
+	}
+}

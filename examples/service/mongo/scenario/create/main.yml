@@ -63,31 +63,59 @@ form:
 
 # ── Run body (INLINE, standalone — no dispatcher/include) ────────────────────
 tasks:
-  # ── Generate passwords in Vault BEFORE any secret reads (core.vault.kv-present) ──
-  # * SERVICE-SIDE SECRET GENERATION (symmetric with redis/dragonfly): the operator does NOT
-  # pre-seed passwords — create generates any missing ones itself, cryptographically random
-  # (generate-if-absent). The keeper-side step (on: keeper, core.vault.kv-present): for each
-  # target reads the path and, if the field is absent — writes a crypto/rand value per
-  # policy; if present — no-op (does NOT overwrite). changed=true only on actual generation.
+  # ── Mint this run's passwords ([ADR-0083] §4) ─────────────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name), mints what is missing and
+  # returns the effective state with every `type: secret` property replaced by its
+  # `vault:` reference. The generated VALUE never leaves the keeper — not into the
+  # register, not into an audit payload, not into `incarnation.state`.
   #
-  # ** PASSAGE INVARIANT: this step MUST run (write to Vault) BEFORE the render phase of tasks
-  # that read the same secrets via ${ vault(...) } (bootstrap default_admin + operator users).
-  # Staged-render model (ADR-056): passage N applies BEFORE render of passage N+1. The step is
-  # `on: keeper` WITHOUT a roster dependency → Stratify keeps it in passage 0; plugin tasks
-  # reading roster (soulprint.self) → passage > 0.
-  #
-  # targets are COMPUTED from the SAME service vars / input as the read-tasks (drift "what we
-  # generate ≡ what we read" = a bug, the user list is NOT hardcoded): system users
-  # (vars.system_users keys — default_admin) + operator-extra input.users. policy
-  # alphanumeric/32 (mongo-password-safe).
-  - name: Ensure mongo passwords exist in Vault (generate if absent)
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the plugin tasks below read
+  # `register.<name>.effective` inside `params:`, which is passage-defining
+  # (shared/config.collectTaskReads) — a real register edge puts every consumer in a
+  # strictly later passage than these two. The former construction leaned on the
+  # vault-emitter and roster axes, neither of which the author could see from the file.
+
+  - name: Mint the password of the service's own admin account
     on: keeper
-    module: core.vault.kv-present
+    module: core.state.present
+    register: system_users
     params:
-      policy:
-        length: 32
-        charset: alphanumeric
-      targets: "${ default(vars.system_users, {}).map(name, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/mongo/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+      key: system_users
+      # compute.system_user_names is the key set of vars.system_users — the SAME source
+      # step 8 reads its roles from, so "what we mint" and "what we read" cannot drift.
+      # generate_secret() evaluates to a request, not a value: it cannot be stringified,
+      # concatenated or logged.
+      set: >-
+        ${ compute.system_user_names.map(name, {
+             'name':     name,
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
+
+  - name: Mint the passwords of the operator MongoDB users
+    on: keeper
+    module: core.state.present
+    register: mongo_users
+    params:
+      key: mongo_users
+      # present, not set: an account that already holds a value keeps it, so a re-run
+      # never rotates a credential a client is already using. An empty input.users is the
+      # legitimate "no operator users" case and needs no `when` guard — an empty
+      # collection is a valid value here (core.vault.kv-present rejected an empty targets
+      # list, which is the only reason the old form carried one).
+      #
+      # ★ database/state are filled with default() the same way state_changes does:
+      # $type-defaults (types.yml MongoUser) reach top-level input fields only, not the
+      # nested fields of array elements, and state_schema requires them.
+      set: >-
+        ${ default(input.users, []).map(u, {
+             'name':     u.name,
+             'database': default(u.database, 'admin'),
+             'state':    default(u.state, 'present'),
+             'roles':    u.roles,
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
 
   # ── 1a. Install MongoDB — BINARY branch (Nexus tarball) ─────────────────────────
   # Static gate (vars.install_method only → isStaticWhen) → render-phase GROUP-DROP: on a
@@ -288,7 +316,7 @@ tasks:
   # attempt fails Unauthorized → the plugin FALLS BACK to a no-auth localhost connection
   # (localhost-exception) and creates the first admin over it. default_admin's roles — from
   # vars.system_users (root in admin). Password —
-  # secret/mongo/<inc>/users/default_admin#password (vault()-in-cell, seal-masking).
+  # secret/mongo/<inc>/system_users/default_admin#password (vault()-in-cell, seal-masking).
   # Idempotent: a repeat create → default_admin already exists → no-op (plugin usersInfo).
   #
   # roles: vars.system_users[compute.admin_user] — an array of {role, db} (mongo model).
@@ -299,7 +327,7 @@ tasks:
     params:
       addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       name:     "${ compute.admin_user }"
       database: admin
       state:    present
@@ -309,7 +337,7 @@ tasks:
   # community.mongo.user for EACH input.users. The connection is ALREADY under default_admin
   # (auth works — admin was created by step 8, localhost-exception is closed). loop over the
   # MongoUser array: name/database/roles/state from the element. Each password —
-  # secret/mongo/<inc>/users/<name>#password. * Gate has(input.users) — the section is
+  # secret/mongo/<inc>/{mongo_users,system_users}/<name>#password. * Gate has(input.users) — the section is
   # optional: without operator users the task doesn't target anything (loop over []).
   # Idempotent (plugin usersInfo: present+exists → no-op, absent+doesn't exist → no-op).
   - name: Create operator MongoDB users
@@ -321,7 +349,7 @@ tasks:
     params:
       addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       name:     "${ item.name }"
       # * default() applied manually: $type-defaults (types.yml MongoUser database/state)
       # are only filled for top-level input fields (mergeInputDefaults), NOT for nested
@@ -334,4 +362,4 @@ tasks:
       # The password of the user being created — from its Vault branch (vault()-in-cell,
       # seal-masking). On state=absent the password isn't used (dropUser), but vault()
       # resolves safely (the secret was generated by the gen step for EVERY operator user).
-      user_password: "${ vault('secret/mongo/' + incarnation.name + '/users/' + item.name + '#password') }"
+      user_password: "${ merge(register.mongo_users.effective.map(r, { r.name: r.password }))[item.name] }"

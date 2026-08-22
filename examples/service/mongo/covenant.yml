@@ -65,7 +65,7 @@ input:
       MongoDB users (array of MongoUser: {name, database, roles, state}). roles — an array
       of {role, db} (exact mongo model). Created via the community.mongo.user plugin
       (createUser); each password is resolved keeper-side from Vault by convention
-      secret/mongo/<incarnation>/users/<name>#password.
+      secret/mongo/<incarnation>/{mongo_users,system_users}/<name>#password.
 
   # ── mongo_settings: passthrough subtrees of mongod.conf ────────────────────────
   # Arbitrary mongod.conf sections (net/storage/systemLog/setParameter/…) on top of
@@ -118,8 +118,15 @@ compute:
   # The body reads compute.admin_user in the plugin calls community.mongo.user/pinged
   # (username/name) and in the Vault path of its password. A literal (not from
   # input/service vars): the system user's name is a service invariant. default_admin's
-  # password — secret/mongo/<inc>/users/default_admin#password.
+  # password — secret/mongo/<inc>/system_users/default_admin#password.
   admin_user: "${ 'default_admin' }"
+  # ── system_user_names: the service's OWN accounts, name list ────────────────
+  # The keys of vars.system_users: the accounts the SERVICE provisions for itself (PILOT:
+  # default_admin), as opposed to mongo_users, which is operator intent. Declared once
+  # because two places must not drift: the `core.state.present` task that mints their
+  # passwords, and the `system_users` state record written by state_changes. roles are NOT
+  # part of it — those stay in service vars (policy), state records only which accounts exist.
+  system_user_names: "${ default(vars.system_users, {}).map(name, name) }"
   # Effective MongoDB version: required enum, ONE for both install methods (binary pulls
   # the binary of this version from Nexus; package pins =version). Declared ONCE (state +
   # plugin + install-URL read it). required guarantees presence → bare input.version.
@@ -214,7 +221,16 @@ state_changes:
   # sysctl_settings: applied host tuning (the same vars.sysctl_settings that goes into the render).
   - set: sysctl_settings
     value: "${ default(vars.sysctl_settings, {}) }"
-  # mongo_users — array of MongoUser (passwords NOT in state, Vault). ★ database/state are
+  # system_users — the service's OWN accounts (compute.system_user_names). state records
+  # WHICH accounts exist; their roles stay in service vars (policy, not state) and their
+  # passwords in Vault at the path derived from this field ([ADR-0083] §1). Without the
+  # record, a later run could not tell a provisioned account from one an operator added to
+  # vars after create, and .../secrets/reveal would have nothing to enumerate.
+  - set: system_users
+    value: "${ compute.system_user_names.map(n, { 'name': n }) }"
+  # mongo_users — array of MongoUser; the `password` property is declared `type: secret`, so
+  # its value lives in Vault and the state engine strips it on the way in ([ADR-0083] §4) —
+  # input.users never carries one anyway. ★ database/state are
   # added MANUALLY via .map: $type-defaults (types.yml MongoUser) are only added at the
   # top-level input, NOT into nested array-element fields — while state_schema.mongo_users
   # requires state (required). roles as-is (state_schema only requires role in the element;

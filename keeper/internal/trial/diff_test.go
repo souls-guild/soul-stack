@@ -1,8 +1,10 @@
 package trial
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -64,9 +66,9 @@ func TestMergeMirror_Trial(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	pl := render.NewPipeline(nil, eng, nil, nil)
-	matchEval := pl.EvalStateMatch
+	matchEval, opEval := pl.StateOpEvaluators(context.Background(), "")
 
-	after, err := mergeStateChanges(mirrorFixture(), mirrorOps(), mirrorSchema(), matchEval, pl.EvalStateOpExpr)
+	after, err := mergeStateChanges(mirrorFixture(), mirrorOps(), mirrorSchema(), matchEval, opEval)
 	if err != nil {
 		t.Fatalf("trial merge: %v", err)
 	}
@@ -122,8 +124,9 @@ func TestMergeVerbsMirror_Trial(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	pl := render.NewPipeline(nil, eng, nil, nil)
+	matchEval, opEval := pl.StateOpEvaluators(context.Background(), "")
 
-	after, err := mergeStateChanges(verbsMirrorFixture(), verbsMirrorOps(), mirrorSchema(), pl.EvalStateMatch, pl.EvalStateOpExpr)
+	after, err := mergeStateChanges(verbsMirrorFixture(), verbsMirrorOps(), mirrorSchema(), matchEval, opEval)
 	if err != nil {
 		t.Fatalf("trial merge: %v", err)
 	}
@@ -151,6 +154,7 @@ func TestPatchClobber_Trial(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	pl := render.NewPipeline(nil, eng, nil, nil)
+	matchEval, opEval := pl.StateOpEvaluators(context.Background(), "")
 	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
 	patchOp := render.RenderedOp{Verb: config.VerbModify, Field: "redis_hosts",
 		Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ input.mem }"}, Context: ctx}
@@ -159,7 +163,7 @@ func TestPatchClobber_Trial(t *testing.T) {
 	beforeMissing := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 	}}
-	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp}, mirrorSchema(), pl.EvalStateMatch, pl.EvalStateOpExpr)
+	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp}, mirrorSchema(), matchEval, opEval)
 	if err != nil {
 		t.Fatalf("★ trial: missing intermediate path must materialize: %v", err)
 	}
@@ -172,7 +176,7 @@ func TestPatchClobber_Trial(t *testing.T) {
 	beforeScalar := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
 	}}
-	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp}, mirrorSchema(), pl.EvalStateMatch, pl.EvalStateOpExpr); err == nil {
+	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp}, mirrorSchema(), matchEval, opEval); err == nil {
 		t.Fatal("★ trial: patch over config=\"string\" must error (synchronized with prod branch)")
 	}
 }
@@ -196,5 +200,69 @@ func TestSetNestedPath_NoSilentClobber(t *testing.T) {
 	}
 	if m2["config"] != "scalar" {
 		t.Errorf("★ original scalar value clobbered: %+v (silent-clobber)", m2)
+	}
+}
+
+// ★ Mirror guard for [ADR-0083] §4 — a DECLARED secret (`type: secret`) never
+// reaches the merged state record. Byte-for-byte identical in scenario and trial
+// (state_test.go ↔ diff_test.go): the two merges must strip the same way, or a
+// Trial preview would show a password the real commit does not store.
+//
+// The `secret: true` field next to it is the OTHER marker ([ADR-010] §7.4) — that
+// value LIVES in state and is masked on the way out. It must survive untouched;
+// stripping it would silently delete an operator's data.
+func secretStripSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"admin_password": map[string]any{"type": "secret"},
+			"tls_key":        map[string]any{"type": "string", "secret": true},
+			"redis_users": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":     map[string]any{"type": "string"},
+						"perms":    map[string]any{"type": "string"},
+						"password": map[string]any{"type": "secret", "key": "name"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestMergeStateChanges_StripsDeclaredSecrets_Trial(t *testing.T) {
+	before := map[string]any{"tls_key": "KEEP-ME"}
+	ops := []render.RenderedOp{
+		{Verb: config.VerbSet, Field: "admin_password", Value: "PLAINTEXT-ADMIN"},
+		{Verb: config.VerbSet, Field: "redis_users", Value: []any{
+			map[string]any{"name": "alice", "perms": "+@read", "password": "PLAINTEXT-ALICE"},
+		}},
+	}
+
+	out, err := mergeStateChanges(before, ops, secretStripSchema(), nil, nil)
+	if err != nil {
+		t.Fatalf("mergeStateChanges: %v", err)
+	}
+	if _, ok := out["admin_password"]; ok {
+		t.Errorf("scalar declared secret survived the merge: %v", out)
+	}
+	users, _ := out["redis_users"].([]any)
+	if len(users) != 1 {
+		t.Fatalf("redis_users = %v", out["redis_users"])
+	}
+	el, _ := users[0].(map[string]any)
+	if _, ok := el["password"]; ok {
+		t.Errorf("collection declared secret survived the merge: %v", el)
+	}
+	if el["name"] != "alice" || el["perms"] != "+@read" {
+		t.Errorf("the addressing properties were damaged: %v", el)
+	}
+	if out["tls_key"] != "KEEP-ME" {
+		t.Errorf("tls_key = %v, want the ADR-010 `secret: true` value left in state", out["tls_key"])
+	}
+	if blob, _ := json.Marshal(out); strings.Contains(string(blob), "PLAINTEXT") {
+		t.Errorf("a plaintext secret is in the committed record: %s", blob)
 	}
 }

@@ -50,7 +50,7 @@ compute:
   # * default_admin REDESIGN (2026-06-30): the CONFIG SET connect to live Redis runs as the
   # system default_admin (requirepass was removed). rotate_tls does NOT extend covenant, so
   # the name is hardcoded here as a literal (like covenant.compute.admin_user, scenario bodies outside
-  # covenant - see covenant.yml). Password - secret/redis/<inc>/users/default_admin#password.
+  # covenant - see covenant.yml). Password - secret/redis/<inc>/system_acl_users/default_admin#password.
   admin_user: "${ 'default_admin' }"
   tls_on:   "${ has(incarnation.state) && has(incarnation.state.tls) && default(incarnation.state.tls.enable, false) }"
   tls_port: "${ compute.tls_on ? string(incarnation.state.tls.port) : '' }"
@@ -102,6 +102,38 @@ state_changes:
          } }
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference. The
+  # reference is resolved once per pass, before any CEL root is built from the register.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element → present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Resolve the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      set: "${ default(incarnation.state.redis_users, []) }"
+
   # 1. GUARD - TLS must be enabled (state.tls.enable=true). The predicate is evaluated
   #    KEEPER-SIDE at render time (incarnation.state is available). false ABORTS render with a
   #    message BEFORE dispatch - earlier and clearer than a connect failure on the host. assert
@@ -158,7 +190,7 @@ tasks:
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         modules_base_url: "${ default(vars.modules_base_url, '') }"
         tls:
@@ -173,14 +205,14 @@ tasks:
         # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE
         # them from users.acl. operator-extra (state.redis_users - an ARRAY of AclUser) goes ON TOP
         # (last-wins). System users aren't in state - they're filled in from service vars on every render.
-        # Vault password from the same branch secret/redis/<inc>/users/<name>#password.
+        # Vault password from the same branch secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password.
         users: >-
           ${ merge(
                merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                has(incarnation.state.redis_users)
@@ -188,7 +220,7 @@ tasks:
                      u.name: {
                        'perms':    u.perms,
                        'state':    u.state,
-                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                       'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                      }
                    }))
                  : {}
@@ -210,7 +242,7 @@ tasks:
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
@@ -221,7 +253,7 @@ tasks:
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
@@ -232,7 +264,7 @@ tasks:
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]

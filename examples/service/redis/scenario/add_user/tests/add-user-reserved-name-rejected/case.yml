@@ -19,6 +19,16 @@ fixtures:
     redis_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+      - { name: haproxy }
+      - { name: monitoring }
+      - { name: replica }
+      - { name: sentinel }
+
   vars:
     # host-layout — in service vars (v11→v12, Variant A). The guard aborts render before the deploy body,
     # layout is here for fixture fidelity (v12 state shape without layout keys).
@@ -37,8 +47,23 @@ fixtures:
       perms: "~* +@all"
       state: "on"
 
-  vault:
-    secret/redis/add_user:
-      password: addusr-redis-pass-16ch
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default_admin-l0-pass }
+        - { name: haproxy, password: haproxy-l0-pass }
+        - { name: monitoring, password: monitoring-l0-pass }
+        - { name: replica, password: replica-l0-pass }
+        - { name: sentinel, password: sentinel-l0-pass }
+    redis_users:
+      effective:
+        - { name: bob, password: bob-l0-pass }
+        - { name: sentinel, password: sentinel-l0-pass }
 
 expect_render_error: "is reserved for a service"

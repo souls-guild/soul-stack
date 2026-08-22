@@ -53,7 +53,12 @@ const vaultEmitterModuleAddr = "core.vault.kv-present"
 // `myvault(` and `obj.vault(` do NOT match: `vault` must be the root identifier, as in
 // the CEL-context grammar). The opening paren is required — it distinguishes a call
 // from the identifier `vault` in another context.
-var reVaultRead = regexp.MustCompile(`(^|[^A-Za-z0-9_.])vault\(`)
+//
+// Whitespace between the identifier and the paren is part of the call: CEL's lexer
+// skips it, so `vault ('secret/x')` reads Vault exactly like `vault('secret/x')`. A
+// pattern that demanded them adjacent let one space walk a path past the [ADR-0083] §7
+// load-time scan and drop a passage-ordering edge.
+var reVaultRead = regexp.MustCompile(`(^|[^A-Za-z0-9_.])vault\s*\(`)
 
 // taskIsVaultEmitter — the task emits the "vault-secrets-generated" signal: it's
 // `core.vault.kv-present` (writes secrets to targets). The address is enough — the

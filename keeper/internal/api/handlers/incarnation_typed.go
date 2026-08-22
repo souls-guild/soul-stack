@@ -1358,16 +1358,15 @@ type RunTaskHostView struct {
 	Error  *RunTaskErrorView
 }
 
-// RunTaskView — plan of one run task (host-invariant name/module/no_log/
-// passage) + per-host results. Params are the task's operator input parameters
-// (NIM-37 S1b), already masked by the seal-aware mechanism on the write path (persistRunPlan);
-// nil for no_log tasks and tasks without params.
+// RunTaskView — plan of one run task (host-invariant name/module/passage) +
+// per-host results. Params are the task's operator input parameters
+// (NIM-37 S1b), already masked by the seal-aware mechanism on the write path
+// (persistRunPlan); nil for tasks without params.
 type RunTaskView struct {
 	PlanIndex int
 	Passage   int
 	Name      string
 	Module    string
-	NoLog     bool
 	Params    map[string]any
 	Hosts     []RunTaskHostView
 }
@@ -1385,8 +1384,9 @@ type RunTasksView struct {
 // run → 404. RBAC — incarnation.history (like RunDetail), NOT audit.read.
 //
 // A task's hosts[] — ONLY hosts with a result in audit (pending hosts are not included,
-// the frontend fills them in). no_log task: output/error.message are suppressed on the write
-// path → not returned. The last task.executed on (plan_index, sid) wins (retry).
+// the frontend fills them in). A module's declared-secret output fields are masked on
+// the write path ([ADR-0083] §8) — the key is present, the value is not. The last
+// task.executed on (plan_index, sid) wins (retry).
 func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunTasksView, error) {
 	var zero RunTasksView
 
@@ -1458,7 +1458,6 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			Passage:   p.Passage,
 			Name:      p.Name,
 			Module:    p.Module,
-			NoLog:     p.NoLog,
 			Params:    runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
 			Hosts:     hosts,
 		})
@@ -1468,8 +1467,8 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 
 // runPlanParams deserializes a task's masked params from the stored jsonb
 // (apply_run_plan.params, NIM-37 S1b) into an object for the DTO. The values are ALREADY masked
-// on the write path (persistRunPlan) — this is read-only. Empty/NULL (a no_log
-// task or a task without params) → nil (omitempty on the wire). Malformed JSON → nil (best-
+// on the write path (persistRunPlan) — this is read-only. Empty/NULL (a task
+// without params) → nil (omitempty on the wire). Malformed JSON → nil (best-
 // effort: one bad row doesn't drop the whole /tasks).
 func runPlanParams(raw []byte) map[string]any {
 	if len(raw) == 0 {

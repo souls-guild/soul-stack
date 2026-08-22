@@ -113,7 +113,7 @@ input:
       DragonFly ACL users (AclUser array: {name, perms, state}). perms — the FULL ACL
       string (Redis ACL syntax, which DragonFly accepts). Rendered into users.acl (destiny
       `dragonfly`); each user's password is resolved keeper-side from Vault by the convention
-      secret/dragonfly/<incarnation>/users/<name>#password.
+      secret/dragonfly/<incarnation>/{df_users,system_acl_users}/<name>#password.
 
   # ── df_settings: passthrough dragonfly.conf flags (KEY→VALUE) ─────────────────
   # Arbitrary DF flags (underscore form) on top of defaults/computations (last-wins). The UI
@@ -300,8 +300,18 @@ compute:
   # monitor/auth, health-PING) — replaced the former DragonFly requirepass. The deploy body reads
   # compute.admin_user in community.redis.* plugin calls (username/auth_user) and in the Vault path
   # for its password. A literal (not from input/service vars): the system user's name is a service invariant, not
-  # an operator choice. default_admin's password — secret/dragonfly/<inc>/users/default_admin#password.
+  # an operator choice. default_admin's password — secret/dragonfly/<inc>/system_acl_users/default_admin#password.
   admin_user: "${ 'default_admin' }"
+  # ── system_acl_names: the service's OWN ACL accounts, name list ─────────────────
+  # The union of vars.system_acl_users ∪ vars.system_acl_users_sentinel keys: the accounts
+  # the SERVICE provisions for itself (default_admin/replica/monitoring/sentinel/haproxy), as
+  # opposed to df_users, which is operator intent. Declared once because two places must not
+  # drift: the `core.state.present` task that mints their passwords, and the
+  # `system_acl_users` state record written by state_changes. perms are NOT part of it -
+  # those stay in service vars (policy), state records only which accounts exist.
+  system_acl_names: >-
+    ${ merge(default(vars.system_acl_users, {}).map(n, { n: 0 })
+             + default(vars.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name) }
   # Effective DragonFly version: package → input.version (required_when=package);
   # binary → vars.binary_version. Declared ONCE (state + plugin read it).
   df_version: "${ input.install_method == 'binary' ? default(vars.binary_version, '') : (has(input.version) ? input.version : '') }"
@@ -434,9 +444,18 @@ state_changes:
     value: "${ int(default(input.replicas_per_master, 0)) }"
   - set: sentinel_quorum
     value: "${ 0 }"
-  # df_users — the AclUser array as-is (passwords are NOT in state, they're in Vault).
+  # df_users - the AclUser array as-is; the `password` property is declared
+  # `type: secret`, so its value lives in Vault and the state engine strips it on the way
+  # in ([ADR-0083] §4) - input.users never carries one anyway.
   - set: df_users
     value: "${ default(input.users, []) }"
+  # system_acl_users - the service's OWN accounts (compute.system_acl_names). state records
+  # WHICH accounts exist; their perms stay in service vars (policy, not state) and their
+  # passwords in Vault at the path derived from this field ([ADR-0083] §1). Without the
+  # record, day-2 could not tell a provisioned account from one an operator added to vars
+  # after create, and .../secrets/reveal would have nothing to enumerate.
+  - set: system_acl_users
+    value: "${ compute.system_acl_names.map(n, { 'name': n }) }"
   # df_hosts empty: state_changes are rendered per-host with soulprint.SELF (AllowHosts=false,
   # orchestration §7.1) — the soulprint.hosts roster is not available. The exact declared roles — in
   # apply.input.sentinel, not in state.
@@ -489,33 +508,55 @@ state_changes:
 
 # ── Run body (INLINE, sentinel-only — no dispatcher/include) ──────────────
 tasks:
-  # ── Generate passwords in Vault BEFORE any secret is read (core.vault.kv-present) ──
-  # ★ SERVICE-GENERATED SECRETS (symmetric with redis 2026-06-28): the operator does NOT pre-seed passwords
-  # in Vault — create GENERATES the missing ones itself, crypto-random (generate-if-absent). A
-  # keeper-side step (on: keeper, core.vault.kv-present): for each target it reads the path and, if
-  # the field is missing — writes a crypto/rand value per policy; if present — no-op (does NOT overwrite, rotation is
-  # a separate scenario). changed=true only on actual generation.
+  # ── Mint this run's ACL passwords ([ADR-0083] §4) ─────────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name), mints what is missing and
+  # returns the effective state with every `type: secret` property replaced by its
+  # `vault:` reference. The generated VALUE never leaves the keeper - not into the
+  # register, not into an audit payload, not into `incarnation.state`.
   #
-  # ★★ PASSAGE INVARIANT: this step MUST execute (write to Vault) BEFORE the render phase of tasks
-  # reading the same secrets via ${ vault(...) } (apply dragonfly + apply redis sentinel +
-  # community.redis.*). The staged-render model (ADR-056): passage N applies BEFORE render of passage
-  # N+1. vault() at render time with a missing secret ABORTS render, so generate MUST be in an
-  # EARLIER passage. The step — `on: keeper` WITHOUT a roster dependency → Stratify keeps it in
-  # passage 0; the deploy's read tasks read the roster (soulprint.hosts/soulprint.self) → passage > 0.
-  #
-  # targets are COMPUTED from the SAME service vars / input as the read tasks (drift "what we generate ≡ what we
-  # read" = a bug, the user list is NOT hardcoded): union of keys system_acl_users ∪
-  # system_acl_users_sentinel (default_admin is in BOTH) + operator-extra input.users. policy
-  # alphanumeric/32 (ACL-safe). ★ WITHOUT the former main secret/dragonfly/<inc>#password — requirepass
-  # was removed (default_admin redesign), the admin account is now default_admin (in the sets).
-  - name: Ensure dragonfly passwords exist in Vault (generate if absent)
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the deploy body reads
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) - a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see from the
+  # file, and both of which had to be re-derived to be trusted.
+
+  - name: Mint the passwords of the service's own ACL accounts
     on: keeper
-    module: core.vault.kv-present
+    module: core.state.present
+    register: system_acl_users
     params:
-      policy:
-        length: 32
-        charset: alphanumeric
-      targets: "${ merge(default(vars.system_acl_users, {}).map(n, { n: 0 }) + default(vars.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/dragonfly/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+      key: system_acl_users
+      # compute.system_acl_names is the union of vars.system_acl_users and
+      # vars.system_acl_users_sentinel - the SAME source the render below reads, so
+      # "what we mint" and "what we read" cannot drift. generate_secret() evaluates to a
+      # request, not a value: it cannot be stringified, concatenated or logged.
+      set: >-
+        ${ compute.system_acl_names.map(name, {
+             'name':     name,
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
+
+  - name: Mint the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: df_users
+    params:
+      key: df_users
+      # present, not set: an account that already holds a value keeps it, so a re-run
+      # never rotates a credential a client is already using. An empty input.users is the
+      # legitimate "no operator-extra" case and needs no `when` guard - an empty
+      # collection is a valid value here (core.vault.kv-present rejected an empty targets
+      # list, which is the only reason the old form carried one).
+      set: >-
+        ${ default(input.users, []).map(u, {
+             'name':     u.name,
+             'perms':    u.perms,
+             'state':    default(u.state, 'on'),
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
 
   # ── provision (ADR-061, Variant A): cloud-create + onboarding BEFORE deploy ─────
   # CONDITIONAL-INCLUDE dragonfly-provision.yml STRICTLY BEFORE size-guard and deploy: with
@@ -588,14 +629,14 @@ tasks:
         config: >-
           ${ merge(compute.df_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         # ★ SYSTEM + operator-extra ACL: system default_admin/replica/monitoring/sentinel/
         # haproxy from vars.system_acl_users FIRST, operator-extra (input.users — an
         # AclUser array) ON TOP (last-wins). ★ default_admin (redesign) is a SYSTEM user with full
         # access (~* &* +@all): intra-cluster AUTH runs under it (replaced requirepass). Without
         # the system users, replication (replica), sentinel↔df AUTH (sentinel), and the admin connection
-        # (default_admin) would break. Vault password — secret/dragonfly/<inc>/users/<name>#password.
+        # (default_admin) would break. Vault password — secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password.
         # operator-extra: .map(u, {u.name: …}).
         users: >-
           ${ merge(
@@ -603,7 +644,7 @@ tasks:
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                has(input.users)
@@ -611,7 +652,7 @@ tasks:
                      u.name: {
                        'perms':    u.perms,
                        'state':    u.state,
-                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                       'password': merge(register.df_users.effective.map(r, { r.name: r.password }))[u.name]
                      }
                    }))
                  : {}
@@ -644,10 +685,10 @@ tasks:
     params:
       addr:     "${ compute.local_addr }"
       # ★ default_admin REDESIGN: AUTH under default_admin (requirepass removed). username + its
-      # password from secret/dragonfly/<inc>/users/default_admin#password. Local UDS without
+      # password from secret/dragonfly/<inc>/system_acl_users/default_admin#password. Local UDS without
       # TLS (not a network path) — tls/tls_ca NOT set even on a TLS instance.
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       args:     ["PING"]
 
   # ── 2b. Sentinel plane via destiny `redis` (sentinel_only-capability, REUSE) ─
@@ -674,7 +715,7 @@ tasks:
   #   the sentinel daemon connects to the DragonFly master as ACL user default_admin (auth_user/
   #   auth_pass in the sentinel block), while connection-AUTH to :26379 itself is as default_admin from
   #   the sentinel set (sentinel_users.default_admin). The old "default → the main secret" ternary is
-  #   REMOVED — all system users go through the SAME branch secret/dragonfly/<inc>/users/<name>#password.
+  #   REMOVED — all system users go through the SAME branch secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password.
   - name: Apply redis destiny in sentinel_only mode (sentinel daemon monitoring the DragonFly master)
     apply:
       destiny: redis
@@ -699,21 +740,21 @@ tasks:
           # (sentinel auth-user/auth-pass <master>). Without auth_user sentinel would connect as the
           # built-in default (now off) → NOAUTH while monitoring the DF master.
           auth_user:   "${ compute.admin_user }"
-          auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+          auth_pass:   "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
           # starting per-master failover timings in sentinel.conf. compute.sentinel_directives
           # is a map `sentinel <opt> <master>` → value; the template ranges over .vars.sentinel_config.
           config:      "${ compute.sentinel_directives }"
         # 2nd aclfile of the sentinel daemon: system users from vars.system_acl_users_sentinel
         # (sentinel commands). ★ default_admin REDESIGN: the old "default → the MAIN secret,
         # others → users/<name>" ternary is REMOVED — all system users (incl. default_admin) go through the SAME
-        # branch secret/dragonfly/<inc>/users/<name>#password. The sentinel daemon connects to :26379 as
+        # branch secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password. The sentinel daemon connects to :26379 as
         # default_admin (its password from this branch), to the DF master as auth_user default_admin.
         sentinel_users: >-
           ${ merge(default(vars.system_acl_users_sentinel, {}).map(name, {
                name: {
                  'perms':    vars.system_acl_users_sentinel[name],
                  'state':    'on',
-                 'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                 'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                }
              })) }
 
@@ -731,7 +772,7 @@ tasks:
   # removed). username (→ CONFIG SET masteruser) + password (→ CONFIG SET masterauth) — the plugin
   # sets them AT RUNTIME for the initial REPLICAOF. PERSISTENCE across a restart is provided by the
   # static masteruser/masterauth in the flagfile (apply dragonfly step 1). Password —
-  # secret/dragonfly/<inc>/users/default_admin#password (the same branch as health-PING).
+  # secret/dragonfly/<inc>/system_acl_users/default_admin#password (the same branch as health-PING).
   - name: Make replicas follow the elected master (REPLICAOF)
     where: "soulprint.self.sid != soulprint.hosts[0].sid"
     module: community.redis.replica
@@ -739,7 +780,7 @@ tasks:
       addr:        "${ compute.local_addr }"
       master_addr: "${ soulprint.hosts[0].network.primary_ip + ':6379' }"
       username:    "${ compute.admin_user }"
-      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
 
   # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel on EVERY host ────
   # addr — the local sentinel (127.0.0.1:26379); monitor.ip — the HOST-INVARIANT address of the
@@ -755,12 +796,12 @@ tasks:
       # ★ CONNECTION-AUTH to the sentinel daemon :26379 (separate from auth_pass — monitoring
       # the master): sentinel.conf carries an aclfile sentinel-users.acl, the built-in default is rendered
       # `off`, connection uses the SYSTEM default_admin (sentinel set, step 2b). ★ default_admin
-      # REDESIGN: username + secret/dragonfly/<inc>/users/default_admin#password (the old
+      # REDESIGN: username + secret/dragonfly/<inc>/system_acl_users/default_admin#password (the old
       # main secret DROPPED). password → redis.Options.Password (connection AUTH). Without it → NOAUTH.
       username:    "${ compute.admin_user }"
-      password:    "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       auth_user:   "${ compute.admin_user }"
-      auth_pass:   "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      auth_pass:   "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       # ★ Version of the sentinel DAEMON (distro redis-sentinel), NOT DragonFly: this param gates
       # version-aware sentinel features of the plugin (versionGE 7.0.0). df_version must NOT be used here —
       # DF and the sentinel daemon are different products with different versions.
@@ -787,10 +828,10 @@ tasks:
       addr: "127.0.0.1:26379"
       # ★ CONNECTION-AUTH: the sentinel daemon is protected by an aclfile (the built-in default is rendered `off`,
       # connection uses the SYSTEM default_admin from the sentinel set). PING without AUTH → NOAUTH. ★ default_admin
-      # REDESIGN: username + secret/dragonfly/<inc>/users/default_admin#password (the old
+      # REDESIGN: username + secret/dragonfly/<inc>/system_acl_users/default_admin#password (the old
       # main secret DROPPED). The same pair as the connection-AUTH of step 4 (SENTINEL MONITOR to :26379).
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       args: ["PING"]
 
   # ── 6. MANDATORY data-plane monitoring (Slice II, ADR-024) ──────────────

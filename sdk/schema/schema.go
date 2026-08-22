@@ -146,9 +146,17 @@ type Input map[string]Param
 // declared with the same shape as [Input] — one description scheme for both ends of
 // the contract, as in destiny (docs/destiny/output.md).
 //
-// Declarative disclosure only: the engine does not yet forward module outputs into
-// `register.<name>.<field>` (that slice is still open in destiny too), so this block
-// documents the contract without changing any gate.
+// Unlike [Input], this block is load-bearing on one field. `secret: true` on an
+// output field is the module's declaration that the value it returns there is a
+// secret ([ADR-0083] §8) — the replacement for the per-task `no_log:` key, and the
+// only signal the platform has, since the module is the only party that knows the
+// shape of what it returns. It drives [config.SecretOutputFields], which masks that
+// field in the task's observable event and seals the whole register against any
+// later cell that reads it. A module author who leaves it unset gets no masking.
+//
+// Granularity is the whole field: masking is whole-cell, so a secret nested one level
+// down is declared by marking what contains it. `secret:` under `items:` is rejected
+// rather than ignored.
 type Output map[string]Param
 
 // ParamType is the closed set of value types a parameter may declare.

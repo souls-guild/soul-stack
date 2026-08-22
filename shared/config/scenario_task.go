@@ -34,7 +34,6 @@ type Task struct {
 	Register    string         `yaml:"register,omitempty"`
 	ID          string         `yaml:"id,omitempty"`
 	Output      map[string]any `yaml:"output,omitempty"`
-	NoLog       bool           `yaml:"no_log,omitempty"`
 	OnChanges   []string       `yaml:"onchanges,omitempty"`
 	OnFail      []string       `yaml:"onfail,omitempty"`
 	Require     any            `yaml:"require,omitempty"` // []string OR "all"
@@ -998,7 +997,7 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 // blockForbiddenKeys — module-specific keys not allowed at the BLOCK level (fail-
 // closed; destiny/tasks.md §6.5 does not mention them on a block). A block invokes no
 // module, so a module-result override (`changed_when`/`failed_when`), one call's
-// retry/timeout/output/no_log, and `params:` (module arguments) are meaningless on
+// retry/timeout/output, and `params:` (module arguments) are meaningless on
 // it. Each key is rejected with code `<key>_on_block_invalid` (symmetric to
 // register_on_block_invalid). `register:` is already rejected separately above.
 //
@@ -1015,7 +1014,6 @@ var blockForbiddenKeys = []string{
 	"retry",
 	"timeout",
 	"output",
-	"no_log",
 	"params",
 	"async",
 }
@@ -1099,7 +1097,7 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 //
 // ★ Not "always dropped", which is why refusing them is the stronger option:
 // when a static `when:` collapses the applier into one skip placeholder,
-// staticSkipPlaceholder copies changed_when/failed_when/timeout/no_log/id onto
+// staticSkipPlaceholder copies changed_when/failed_when/timeout/id onto
 // it. That is the degenerate path — the group does not run — so today the keys
 // are honoured exactly when they cannot matter and ignored whenever they
 // could. Inconsistent silence is worse than plain silence.
@@ -1146,18 +1144,13 @@ var applyForbiddenKeys = []struct{ key, why, hint string }{
 		"params: are module arguments and an applier calls no module — a destiny is parameterised by apply.input, checked against its own input: contract",
 		"move the values into apply: { input: { ... } }",
 	},
-	{
-		"no_log",
-		"masking a whole destiny group is not implemented: the flag reaches no child task, so the output it was written to hide is logged in full",
-		"put no_log: on the destiny tasks that handle the secret",
-	},
 }
 
 // validateApplyForbiddenKeys raises `<key>_on_apply_invalid` for each present
 // key from [applyForbiddenKeys]. Called only when the discriminator is apply.
 //
-// Raised on PRESENCE, like every `<key>_on_block_invalid`: `no_log: false` is
-// equally a statement about a construct that does not answer the key.
+// Raised on PRESENCE, like every `<key>_on_block_invalid`: `retry: {attempts: 0}`
+// is equally a statement about a construct that does not answer the key.
 func validateApplyForbiddenKeys(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	for _, f := range applyForbiddenKeys {

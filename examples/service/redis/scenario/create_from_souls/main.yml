@@ -266,38 +266,55 @@ form:
 # cluster, sentinel; indices don't matter (branches are mutually exclusive by enum). An unknown
 # redis_type is rejected by Keeper's input validation on the enum BEFORE render.
 tasks:
-  # ── Generate passwords in Vault BEFORE any secret reads (core.vault.kv-present) ──
-  # ★ SERVICE-GENERATED SECRETS (same as create): the operator does NOT pre-seed passwords —
-  # this step generates missing ones cryptographically at random (generate-if-absent).
-  # keeper-side (on: keeper), changed=true only on an actual generation; if present — no-op
-  # (does NOT overwrite).
+  # ── Mint this run's ACL passwords ([ADR-0083] §4) ─────────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name), mints what is missing and
+  # returns the effective state with every `type: secret` property replaced by its
+  # `vault:` reference. The generated VALUE never leaves the keeper — not into the
+  # register, not into an audit payload, not into `incarnation.state`.
   #
-  # ★★ PASSAGE INVARIANT: this step MUST execute (write to Vault) BEFORE the render phase of
-  # tasks that read the same secrets via ${ vault(...) }. Staged-render model (ADR-056).
-  # DIFFERENCE FROM create in ordering guarantees: for create, the roster-refresh edge from the
-  # provision body (core.soul.registered refresh_soulprint) pushes deploy read-tasks into a
-  # later passage. HERE there is no provision body -> no roster axis (the passage.go edge is
-  # built ONLY when a refresh emitter is present). Order is kept by an INDEPENDENT
-  # vault-secrets-generated axis (ADR-056 amendment, Variant A): this very step
-  # `core.vault.kv-present` is the vault emitter, and passage.go pushes ANY vault()-reading task
-  # (the same registry of passage-defining fields: where/vars/params/apply.input/output/loop)
-  # into a passage STRICTLY AFTER it, WITHOUT involving the roster axis (see
-  # shared/config/passage_vault.go). The load-bearing invariant (generate STRICTLY before any
-  # vault()-read) is pinned by the guard test redis_create_from_souls_secrets_passage_test.go
-  # (order entirely on the vault axis).
-  #
-  # targets are COMPUTED from the SAME service vars / input as the read-tasks (drift "what we generate
-  # ≡ what we read" = a bug): the main secret/redis/<inc>#password + per-user
-  # union(system_acl_users, system_acl_users_sentinel) WITHOUT default + operator-extra
-  # input.users. policy alphanumeric/32.
-  - name: Ensure redis passwords exist in Vault (generate if absent)
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the deploy bodies read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see from the
+  # file, and both of which had to be re-derived to be trusted.
+
+  - name: Mint the passwords of the service's own ACL accounts
     on: keeper
-    module: core.vault.kv-present
+    module: core.state.present
+    register: system_acl_users
     params:
-      policy:
-        length: 32
-        charset: alphanumeric
-      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + merge(default(vars.system_acl_users, {}).map(n, { n: 0 }) + default(vars.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name).filter(name, name != 'default').map(name, { 'path': 'secret/redis/' + incarnation.name + '/users/' + name, 'field': 'password' }) + (has(input.users) ? input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) : []) }"
+      key: system_acl_users
+      # compute.system_acl_names (covenant) is the union of vars.system_acl_users and
+      # vars.system_acl_users_sentinel — the SAME source the render below reads, so
+      # "what we mint" and "what we read" cannot drift. generate_secret() evaluates to a
+      # request, not a value: it cannot be stringified, concatenated or logged.
+      set: >-
+        ${ compute.system_acl_names.map(name, {
+             'name':     name,
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
+
+  - name: Mint the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      # present, not set: an account that already holds a value keeps it, so a re-run
+      # never rotates a credential a client is already using. An empty input.users is the
+      # legitimate "no operator-extra" case and needs no `when` guard — an empty
+      # collection is a valid value here (core.vault.kv-present rejected an empty targets
+      # list, which is the only reason the old form carried one).
+      set: >-
+        ${ default(input.users, []).map(u, {
+             'name':     u.name,
+             'perms':    u.perms,
+             'state':    default(u.state, 'on'),
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
 
   # ── Version-aware validator for redis_settings directive names (assert) ─────────────────
   # redis_settings — passthrough KEY→VALUE: the input schema accepts ANY key. This assert

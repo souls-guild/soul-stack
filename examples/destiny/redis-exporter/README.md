@@ -51,9 +51,10 @@ and independent of the transport, which is important for a local Sentinel reache
 
 ## Secret boundary
 
-Passwords and web-config hashes are secret inputs. Their render tasks use `no_log: true` and
-write only root-owned `0600` files; neither value appears in the systemd unit, `ExecStart`,
-incarnation state, or task logs. Optional TLS key/cert and the web-config are imported with
+Passwords and web-config hashes are secret inputs. Their render tasks write only root-owned
+`0600` files; neither value appears in the systemd unit, `ExecStart`, incarnation state, or
+task logs. A caller passing a declared secret ([ADR-0083] §1) hands over a `vault:` ref that
+Keeper resolves at render — the plan and the audit trail carry the ref, not the value. Optional TLS key/cert and the web-config are imported with
 systemd `LoadCredential`, so the `DynamicUser` process reads protected runtime copies rather
 than loosening source-file permissions. `extra_args` is non-secret and must never carry a
 password or token.

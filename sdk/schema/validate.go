@@ -326,11 +326,11 @@ func validateStates(modPath string, m Module) []Issue {
 		for _, block := range []struct {
 			key    string
 			params map[string]Param
-		}{{"input", def.Input}, {"output", def.Output}} {
+		}{{blockInput, def.Input}, {blockOutput, def.Output}} {
 			for _, name := range sortedKeys(block.params) {
 				p := block.params[name]
 				pPath := statePath + "." + block.key + "." + name
-				out = append(out, validateParam(pPath, name, p)...)
+				out = append(out, validateParam(pPath, block.key, name, p)...)
 				// `use:` must name a parameter of the SAME block — a replacement
 				// that does not exist sends the author looking for it.
 				if p.Deprecated != nil && p.Deprecated.Use != "" {
@@ -349,7 +349,13 @@ func validateStates(modPath string, m Module) []Issue {
 	return out
 }
 
-func validateParam(path, name string, p Param) []Issue {
+// block is the declaring block, "input" or "output". It decides what
+// `secret: true` MEANS: on input the value arrives as a vault ref and the
+// pattern is what enforces it; on output the module RETURNS the secret, and
+// the marker says the platform must mask that field wherever the output is
+// observable ([ADR-0083] §8). Requiring a ref pattern there would be asking a
+// module to declare that it never returns what it does return.
+func validateParam(path, block, name string, p Param) []Issue {
 	var out []Issue
 	out = append(out, validateVersionField(path+".introduced_in", p.IntroducedIn)...)
 
@@ -371,7 +377,7 @@ func validateParam(path, name string, p Param) []Issue {
 		}
 	}
 
-	if p.Secret {
+	if p.Secret && block == blockInput {
 		// A secret means the value arrives as a vault ref; the pattern is what
 		// enforces it. A secret with no pattern slips past audit too easily.
 		switch p.Pattern {
@@ -424,6 +430,21 @@ func validateParam(path, name string, p Param) []Issue {
 	}
 
 	if p.Items != nil {
+		// `secret:` on the ELEMENT is a shape nothing reads, and staying silent about
+		// it is the failure the key it replaces was retired for ([ADR-0083] §8: an
+		// author writes a marking and gets nothing). The trap is baited by §1 of that
+		// same ADR, which puts `type: secret` inside `items:` next to `key:` for a
+		// state_schema field — a plausible thing to carry over to a manifest, where
+		// the granularity is the whole field: masking here is whole-cell, so a secret
+		// one level down is declared by marking what contains it.
+		if p.Items.Secret {
+			out = append(out, Issue{
+				Level: LevelError, Phase: PhaseSemantic, Path: path + ".items.secret",
+				Code:    "items_secret_not_supported",
+				Message: fmt.Sprintf("parameter %q declares secret on its element type, which nothing reads", name),
+				Hint:    fmt.Sprintf("mark the containing field instead: %s.%s.secret: true", block, name),
+			})
+		}
 		switch p.Type {
 		case List, Array, Map, Object:
 			if p.Items.Type == "" {
@@ -596,3 +617,10 @@ func containsInt32(xs []int32, x int32) bool {
 	}
 	return false
 }
+
+// The two parameter blocks of a state. Named because `secret: true` is read
+// differently in each — see [validateParam].
+const (
+	blockInput  = "input"
+	blockOutput = "output"
+)

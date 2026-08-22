@@ -62,6 +62,13 @@ const maxIncludeDepth = 32
 // (Task.IncludeWhen/IncludeGroupID) — keeper-side render drops the whole group in
 // one include-when evaluation (group-drop, a real exclusion from the plan).
 //
+// Register scope across the include boundary ([ADR-0083] §4): an included body may
+// reference a register the INCLUDER declares (`register.<name>` in params/vars/
+// apply.input/…). Expansion collects the declared register names of each level and
+// threads them down as ValidateOptions.OuterRegisters, so the body's per-file
+// validateTaskRefs sees them. The reverse direction stays rejected — see that
+// field's doc for why the asymmetry is load-bearing for group-drop.
+//
 // Nested conditional include cascade: the effective include-when of a NESTED
 // conditional group = conjunction of ancestors `(<ancestor include-when>) && (<inner include-when>)`.
 // The accumulated ancestor-when is carried down the expansion recursion; the
@@ -70,7 +77,7 @@ const maxIncludeDepth = 32
 // naturally: its conjunctive include-when also evaluates to false.
 func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
 	e := &includeExpander{resolve: resolve}
-	out := e.expand(tasks, nil, "")
+	out := e.expand(tasks, nil, "", nil)
 	// Uniqueness of the subscription address space (register ∪ id) over the FLAT
 	// run list: per-file validateTaskRefs catches a duplicate within one file, but
 	// not between the main file and an expanded include (each file there is
@@ -130,6 +137,36 @@ func collectFlatAddresses(tasks []Task, seen map[string]bool, out *[]diag.Diagno
 	}
 }
 
+// registerScope returns the register names visible to an included body: the
+// inherited outer set plus every `register:` declared at this level (recursively
+// through block:, which shares the plan's flat address space). The result is a
+// fresh map — sibling branches of the expansion must not see each other's
+// additions.
+//
+// Only the includer→included direction is widened. The reverse stays a
+// per-file error: see ValidateOptions.OuterRegisters.
+func registerScope(outer map[string]bool, tasks []Task) map[string]bool {
+	scope := make(map[string]bool, len(outer)+len(tasks))
+	for name := range outer {
+		scope[name] = true
+	}
+	collectDeclaredRegisters(tasks, scope)
+	return scope
+}
+
+// collectDeclaredRegisters fills out with the `register:` names of tasks,
+// recursing into block: children.
+func collectDeclaredRegisters(tasks []Task, out map[string]bool) {
+	for i := range tasks {
+		if tasks[i].Register != "" {
+			out[tasks[i].Register] = true
+		}
+		if tasks[i].Block != nil {
+			collectDeclaredRegisters(tasks[i].Block.Block, out)
+		}
+	}
+}
+
 type includeExpander struct {
 	resolve IncludeResolver
 	diags   []diag.Diagnostic
@@ -145,7 +182,14 @@ type includeExpander struct {
 // paths (for cycle detection and depth); nil at the top level. ancestorWhen is
 // the accumulated include-when of conditional include ancestors (a conjunction
 // for cascading drop); "" at the top level and under unconditional includes.
-func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen string) []Task {
+func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen string, outer map[string]bool) []Task {
+	// scope — the registers an included body may reference: everything declared at
+	// THIS level plus everything inherited from the includer chain. Collected over
+	// the whole level before the splice loop, so an include placed before the task
+	// that declares the register it reads is still legal (resolution goes by name,
+	// not by position — see validateTaskRefs).
+	scope := registerScope(outer, tasks)
+
 	out := make([]Task, 0, len(tasks))
 	for i := range tasks {
 		task := tasks[i]
@@ -161,14 +205,14 @@ func (e *includeExpander) expand(tasks []Task, stack []string, ancestorWhen stri
 		if task.Include == nil {
 			if task.Block != nil {
 				block := *task.Block
-				block.Block = e.expand(task.Block.Block, stack, ancestorWhen)
+				block.Block = e.expand(task.Block.Block, stack, ancestorWhen, scope)
 				task.Block = &block
 			}
 			out = append(out, task)
 			continue
 		}
 
-		expanded, ok := e.expandOne(task, stack, ancestorWhen)
+		expanded, ok := e.expandOne(task, stack, ancestorWhen, scope)
 		if !ok {
 			// Diagnostic already recorded; don't splice the task (nothing to splice).
 			continue
@@ -226,7 +270,7 @@ func stampIncludeGroup(tasks []Task, when string, groupID int) {
 // tasks and carried further down. If `when:` is empty (unconditional include), no
 // group is created, but ancestorWhen is carried further UNCHANGED — a conditional
 // descendant gets the conjunction with the ancestor through its own expansion.
-func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen string) ([]Task, bool) {
+func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen string, outer map[string]bool) ([]Task, bool) {
 	name := task.Include.Include
 
 	if reason := includeModifierReason(task); reason != "" {
@@ -281,13 +325,13 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 		}
 	}
 
-	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{})
+	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{OuterRegisters: outer})
 	if diag.HasErrors(diags) {
 		e.diags = append(e.diags, diags...)
 		return nil, false
 	}
 
-	expanded := e.expand(parsed, append(append([]string(nil), stack...), display), effectiveWhen)
+	expanded := e.expand(parsed, append(append([]string(nil), stack...), display), effectiveWhen, outer)
 	if groupID != 0 {
 		stampIncludeGroup(expanded, effectiveWhen, groupID)
 	}
@@ -318,8 +362,6 @@ func includeModifierReason(task Task) string {
 		return "register:"
 	case len(task.Output) > 0:
 		return "output:"
-	case task.NoLog:
-		return "no_log:"
 	case len(task.OnChanges) > 0:
 		return "onchanges:"
 	case len(task.OnFail) > 0:

@@ -113,15 +113,18 @@ func TestPublishKeeperTaskExecuted_FailedSecretHygiene(t *testing.T) {
 	assertNoSecretKeys(t, p)
 }
 
-// TestPublishKeeperTaskExecuted_NoLogSuppressed — guard: a no_log task carries
-// a suppressed marker without register/output.
-func TestPublishKeeperTaskExecuted_NoLogSuppressed(t *testing.T) {
-	rt := &render.RenderedTask{Index: 0, Module: "core.soul.registered", NoLog: true}
+// TestPublishKeeperTaskExecuted_NoSuppressedMarker — guard: the SSE frame
+// carries no `suppressed` marker. [ADR-0083] §8 removed the per-task `no_log:`
+// that produced it; the frame's secret hygiene now rests on what it omits for
+// EVERY keeper task — no register/output, and no error.message — rather than on
+// a flag an author had to remember.
+func TestPublishKeeperTaskExecuted_NoSuppressedMarker(t *testing.T) {
+	rt := &render.RenderedTask{Index: 0, Module: "core.soul.registered", SecretOutput: []string{"data"}}
 	ev := publishAndCapture(t, "01APPLYNOLOG000000000000000", 0, rt, true, false)
 
 	p := ev.Payload.(map[string]any)
-	if got := p["suppressed"]; got != "no_log" {
-		t.Errorf("suppressed = %v, want no_log", got)
+	if _, present := p["suppressed"]; present {
+		t.Errorf("suppressed = %v, want the marker gone with no_log", p["suppressed"])
 	}
 	assertNoSecretKeys(t, p)
 }

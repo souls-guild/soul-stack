@@ -112,11 +112,11 @@ accepted based on real requests, + `directory` split out of `core.file` by
 [Amendment 2026-07-17](../adr/0015-core-modules-mvp.md)) + `augur` by
 [ADR-025](../adr/0025-augur.md) (read-probe via Augur broker). Table "Soul-side
 core modules" above.
-- **4 Keeper-side core** - `core.soul` / `core.cloud` / `core.vault` by
+- **5 Keeper-side core** - `core.soul` / `core.cloud` / `core.vault` by
 [ADR-017](../adr/0017-keeper-side-core.md)
   + `core.choir` by [ADR-044](../adr/0044-choir.md) (registered if available
 `Deps.ChoirStore`). `core.vault` - one module with two states (`kv-read` +
-`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)).
+`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). `core.state` (`core.state.present`, [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 - the single write of a state field carrying declared secrets; registered when `Deps.Vault` is present).
 "Keeper-side core modules" table above.
 
 Total **23 apply modules** (19 + 4). In `docs/module/core/` - **24 directories**: these

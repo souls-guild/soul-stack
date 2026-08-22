@@ -9,7 +9,7 @@ import (
 
 // RunPlanTask is a row of the "run task plan" (apply_run_plan, migration 096, NIM-37):
 // the host-invariant metadata of one rendered task keyed by its global
-// plan_index. name/module/no_log/passage are the same across all hosts of the
+// plan_index. name/module/passage are the same across all hosts of the
 // run, so they are stored ONCE per (apply_id, plan_index); the per-host
 // status/output is pulled by the /tasks endpoint from audit_log (task.executed).
 type RunPlanTask struct {
@@ -22,15 +22,14 @@ type RunPlanTask struct {
 
 	Name   string
 	Module string
-	NoLog  bool
 
 	// Passage is the Passage index of the staged render (ADR-056); N=1 → 0.
 	Passage int
 
 	// Params is the JSON of the task's operator input parameters (NIM-37 S1b),
 	// already masked by the seal-aware mechanism on the write path
-	// (scenario.persistRunPlan). nil/empty → jsonb NULL: either a no_log task
-	// (params suppressed) or a task without params. Transport-only keys
+	// (scenario.persistRunPlan). nil/empty → jsonb NULL: a task without params, or
+	// one whose every param was a transport key. Transport-only keys
 	// (template_content/render_context) are filtered out before the write. The
 	// store layer does NOT mask values — it only persists/reads them as-is.
 	Params []byte
@@ -39,15 +38,15 @@ type RunPlanTask struct {
 // insertRunPlanSQL is a bulk-upsert of the plan in a single query via unnest
 // arrays (apply_id shared, the remaining columns are parallel arrays). ON
 // CONFLICT DO UPDATE is idempotent: a staged run re-invokes Render per
-// Passage, but the plan (Index/name/module/no_log/passage) is stable — a
+// Passage, but the plan (Index/name/module/passage) is stable — a
 // repeat write is harmless.
 const insertRunPlanSQL = `
-INSERT INTO apply_run_plan (apply_id, plan_index, name, module, no_log, passage, params)
-SELECT $1, u.plan_index, u.name, u.module, u.no_log, u.passage, u.params::jsonb
-FROM unnest($2::int[], $3::text[], $4::text[], $5::bool[], $6::int[], $7::text[])
-     AS u(plan_index, name, module, no_log, passage, params)
+INSERT INTO apply_run_plan (apply_id, plan_index, name, module, passage, params)
+SELECT $1, u.plan_index, u.name, u.module, u.passage, u.params::jsonb
+FROM unnest($2::int[], $3::text[], $4::text[], $5::int[], $6::text[])
+     AS u(plan_index, name, module, passage, params)
 ON CONFLICT (apply_id, plan_index)
-DO UPDATE SET name = EXCLUDED.name, module = EXCLUDED.module, no_log = EXCLUDED.no_log, passage = EXCLUDED.passage, params = EXCLUDED.params
+DO UPDATE SET name = EXCLUDED.name, module = EXCLUDED.module, passage = EXCLUDED.passage, params = EXCLUDED.params
 `
 
 // InsertRunPlan writes the run's task plan (apply_run_plan) in a single
@@ -65,16 +64,14 @@ func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks
 	planIdx := make([]int, len(tasks))
 	names := make([]string, len(tasks))
 	modules := make([]string, len(tasks))
-	noLogs := make([]bool, len(tasks))
 	passages := make([]int, len(tasks))
 	// params is a parallel text[] array (each element is JSON or NULL), cast
-	// to jsonb in SQL. A nil element (no_log / no params) → jsonb NULL.
+	// to jsonb in SQL. A nil element (no params) → jsonb NULL.
 	params := make([]*string, len(tasks))
 	for i, t := range tasks {
 		planIdx[i] = t.PlanIndex
 		names[i] = t.Name
 		modules[i] = t.Module
-		noLogs[i] = t.NoLog
 		passages[i] = t.Passage
 		if len(t.Params) > 0 {
 			s := string(t.Params)
@@ -82,14 +79,14 @@ func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks
 		}
 	}
 
-	if _, err := db.Exec(ctx, insertRunPlanSQL, applyID, planIdx, names, modules, noLogs, passages, params); err != nil {
+	if _, err := db.Exec(ctx, insertRunPlanSQL, applyID, planIdx, names, modules, passages, params); err != nil {
 		return fmt.Errorf("applyrun: insert run plan: %w", err)
 	}
 	return nil
 }
 
 const selectRunPlanByApplyIDSQL = `
-SELECT plan_index, name, module, no_log, passage, params
+SELECT plan_index, name, module, passage, params
 FROM apply_run_plan
 WHERE apply_id = $1
 ORDER BY plan_index ASC
@@ -108,7 +105,7 @@ func SelectRunPlanByApplyID(ctx context.Context, db ExecQueryRower, applyID stri
 	var out []RunPlanTask
 	for rows.Next() {
 		t := RunPlanTask{ApplyID: applyID}
-		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.NoLog, &t.Passage, &t.Params); err != nil {
+		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.Passage, &t.Params); err != nil {
 			return nil, fmt.Errorf("applyrun: run plan scan: %w", err)
 		}
 		out = append(out, t)

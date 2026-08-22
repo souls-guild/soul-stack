@@ -2,7 +2,7 @@ name: add_user
 description: >-
   Add or override a single ACL user on a live Redis without a restart. The
   password is NOT in the input form: the scenario generates it itself into Vault
-  at secret/redis/<incarnation>/users/<name>#password (keeper-side, crypto-random,
+  at secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password (keeper-side, crypto-random,
   only when absent), then renders the full users.acl and applies it to the live
   instance. Re-running for an existing user updates perms/state only and KEEPS
   their password.
@@ -94,46 +94,50 @@ state_changes:
     value: "${ compute.users_new }"
 
 tasks:
-  # ── Generate the new user's password in Vault BEFORE any secret read ──────────
-  # ★ NIM-172: the operator no longer pre-seeds `vault kv put` before every add_user —
-  # the scenario generates the password itself (core.vault.kv-present, on: keeper,
-  # generate-if-absent, crypto/rand per policy; a present field is a no-op). Path is the
-  # SAME convention the render below reads: secret/redis/<inc>/users/<name>#password.
-  # The generated VALUE never leaves the keeper (ADR-010: not in register-output/audit/
-  # logs/OTel — only the path and the field name).
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference.
   #
-  # ★★ SCOPE — ONLY input.user, deliberately NOT default_admin / system users /
-  # already-deployed operator users. Those are the credentials the LIVE instance and its
-  # replicas authenticate with: create generated them, and minting a fresh one here would
-  # either not match the running instance (community.redis.acl AUTHs as default_admin
-  # BEFORE ACL LOAD applies the new file) or silently rotate a working client's password.
-  # A missing one means a broken incarnation and must fail loudly at vault_resolve.
-  #
-  # ★★ RE-RUN SEMANTICS: generate-if-absent, so an add_user re-run on an EXISTING user
-  # upserts perms/state only and KEEPS the password in sync with what clients already
-  # hold. Rotation is not part of add_user: write the new value to the same Vault path
-  # and re-run — kv-present no-ops on a present field, the render picks the new value up
-  # and ACL LOAD applies it.
-  #
-  # ★★ PASSAGE INVARIANT: this step must APPLY before the RENDER of the tasks below that
-  # read the same path via ${ vault(...) } — a missing secret aborts render (vault_resolve).
-  # Unlike create/, add_user has NO provision body → no refresh emitter → the roster axis
-  # is inactive; the order rests ENTIRELY on the vault axis (ADR-056 amendment: a
-  # core.vault.kv-present emitter pushes every later vault()-reading task into a strictly
-  # later Passage), same as create_from_souls. Pinned by
-  # keeper/internal/trial/redis_add_user_secrets_test.go.
-  - name: Generate the new user's password in Vault (if absent)
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. This scenario has no provision
+  # body, so the old form had nothing but the vault-emitter axis to lean on.
+
+  - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.vault.kv-present
+    module: core.state.present
+    register: system_acl_users
     params:
-      # Same policy as create: 32 chars, alphanumeric — redis.conf/users.acl-safe.
-      policy:
-        length: 32
-        charset: alphanumeric
-      # Single-line quoted ${…} (module.params type-check passes the CEL-wrap through for
-      # a StringNode only). register is DELIBERATELY absent — the passage edge is the
-      # vault axis, not register.
-      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name + '/users/' + input.user.name, 'field': 'password' }] }"
+      key: system_acl_users
+      # ★★ DELIBERATELY read-only, never minted here: these are the credentials the LIVE
+      # instance and its replicas already authenticate with (community.redis.acl AUTHs as
+      # default_admin BEFORE ACL LOAD applies the new file). No `password` property on any
+      # element → present-semantics require an EXISTING value, so a broken incarnation
+      # fails loudly instead of being handed a fresh password nothing else knows.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Mint the new operator ACL user's password, keep the rest
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      # ★★ SCOPE — only input.user carries a request. The already-deployed operator users
+      # are passed WITHOUT a `password` property, so present-semantics require their
+      # existing value: a missing one is a broken incarnation and must fail loudly rather
+      # than silently rotating a working client's credential.
+      #
+      # ★★ RE-RUN: mint-if-empty, so re-running add_user for an EXISTING user upserts
+      # perms/state only and KEEPS the password clients already hold. Rotation is not part
+      # of add_user and is not expressible here by design.
+      set: >-
+        ${ compute.users_new.map(u, u.name == input.user.name
+             ? { 'name': u.name, 'perms': u.perms, 'state': u.state,
+                 'password': generate_secret({'length': 32, 'charset': 'alphanumeric'}) }
+             : { 'name': u.name, 'perms': u.perms, 'state': u.state }) }
 
   # 1. Re-render users.acl to disk with the NEW user set (the same mode-agnostic
   #    destiny redis as create/add_node). vars.users is the merged set with per-user
@@ -178,12 +182,12 @@ tasks:
         # cluster/sentinel replicas would hit NOAUTH on PSYNC after a restart. On
         # master nodes the directive is inert (failover-safe). masterauth is
         # vault()-in-cell (seal masking ADR-010 §7.4); admin_user = compute.admin_user;
-        # path is secret/redis/<inc>/users/default_admin#password (the same branch as
+        # path is secret/redis/<inc>/system_acl_users/default_admin#password (the same branch as
         # the users block below).
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         modules_base_url: "${ default(vars.modules_base_url, '') }"
         # ★★ CRITICAL (system-ACL-users d2): the FULL users.acl = SYSTEM users (from
@@ -196,21 +200,21 @@ tasks:
         # holds operator-extra, item 7 of d2). last-wins: operator-extra overrides a
         # same-named system user (but system names are locked by create's validate
         # guard, so there should be no collision). Each one's Vault password is
-        # secret/redis/<inc>/users/<name>#password (the same branch).
+        # secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password (the same branch).
         users: >-
           ${ merge(
                merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                merge(compute.users_new.map(u, {
                  u.name: {
                    'perms':    u.perms,
                    'state':    u.state,
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                   'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                  }
                }))
              ) }
@@ -225,9 +229,9 @@ tasks:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # ★ default_admin REDESIGN (2026-06-30): AUTH as the system default_admin
       # (requirepass dropped). username + its password from the
-      # secret/redis/<inc>/users/default_admin#password branch. The community.redis
+      # secret/redis/<inc>/system_acl_users/default_admin#password branch. The community.redis
       # plugin passes username into AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"

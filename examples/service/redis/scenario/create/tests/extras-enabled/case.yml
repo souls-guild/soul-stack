@@ -25,23 +25,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # Per-user secrets for system users (secret/redis/<inc>/users/<name>#password) -
-    # resolved by keeper-side vault() when topping up system_acl_users into apply.input.users.
-    # star REDESIGN default_admin (2026-06-30): default_admin is the system user
-    # for in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
   vars:
     redis_type: sentinel
     sentinel_master_name: master
@@ -104,6 +87,23 @@ fixtures:
     # single-host sentinel roster (1 host) -> no replicas (size-guard 1+0).
     replicas_per_master: 0
     # No more extras flags in the contract: THP/logrotate/sysctl are unconditional.
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:

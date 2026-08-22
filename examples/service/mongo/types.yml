@@ -8,7 +8,7 @@ types:
   # of such records (input.users). ★ MongoDB vs redis AclUser: mongo does NOT have a
   # single perms string, but an ARRAY of roles {role, db} (the exact mongo model — a
   # user gets a set of named roles, each in a specific DB). The password is resolved
-  # keeper-side from Vault by convention secret/mongo/<incarnation>/users/<name>#password
+  # keeper-side from Vault by convention secret/mongo/<incarnation>/{mongo_users,system_users}/<name>#password
   # (symmetry with redis/dragonfly).
   MongoUser:
     type: object
@@ -23,7 +23,7 @@ types:
         description: >-
           MongoDB username (unique within the users array). Created via
           createUser; the password is resolved keeper-side from Vault by convention
-          secret/mongo/<incarnation>/users/<name>#password.
+          secret/mongo/<incarnation>/{mongo_users,system_users}/<name>#password.
       # database — the DB in whose context the user is created (login DB). Roles
       # without an explicit db inherit it. Default admin (system users). User-defined
       # roles are usually in their own application DB.

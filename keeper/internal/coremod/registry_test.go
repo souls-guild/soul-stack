@@ -12,6 +12,7 @@ import (
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -96,7 +97,7 @@ func (noopChoirStore) IncarnationExists(_ context.Context, _ string) (bool, erro
 	return true, nil
 }
 
-func TestDefault_RegistersAllThree(t *testing.T) {
+func TestDefault_RegistersAllFour(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
 		SoulStore:   noopSoulStore{},
 		PluginHost:  cloud.StubHost{},
@@ -107,7 +108,7 @@ func TestDefault_RegistersAllThree(t *testing.T) {
 	})
 	got := r.Names()
 	sort.Strings(got)
-	want := []string{cloud.Name, soul.Name, vault.Name}
+	want := []string{cloud.Name, soul.Name, vault.Name, coremodstate.Name}
 	sort.Strings(want)
 	if len(got) != len(want) {
 		t.Fatalf("Names = %v, want %v", got, want)

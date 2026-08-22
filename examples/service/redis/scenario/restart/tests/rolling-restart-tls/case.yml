@@ -69,13 +69,17 @@ fixtures:
       tls-ca-cert-file: /etc/redis/tls/ca.crt
       tls-replication:  "yes"
 
-  # Password (secret/redis/restart/users/default_admin#password, incarnation.name == restart;
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
+  # Password (secret/redis/restart/system_acl_users/default_admin#password, incarnation.name == restart;
   # ★ default_admin REDESIGN - connects as the system default_admin, the former secret/redis/
   # <inc>#password is DROPPED) + PEM CA (secret/services/redis/tls#ca, via state.tls.ca_ref -
   # a repeat run resolves it through vault(); the CA branch of the TLS material, not the password - doesn't change).
   vault:
-    secret/redis/restart/users/default_admin:
-      password: default-admin-secret-pass
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
@@ -83,6 +87,14 @@ mocks:
   register:
     redis_role:
       role: slave
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
 
 assert:
   task_present:

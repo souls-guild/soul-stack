@@ -1,5 +1,5 @@
 name: redis
-state_schema_version: 14
+state_schema_version: 15
 description: >-
   Redis following a unified-service concept: ONE service for deployment modes
   (redis_type ∈ sentinel/cluster). Per-host install + rendering redis.conf is done by
@@ -310,13 +310,16 @@ state_schema:
     replicas:        { type: integer }
     sentinel_quorum: { type: integer }
 
-    # Redis ACL users: a TYPED array [{name, perms, state}] (types-epic wave 1b,
-    # ADR-062 AclUser; map→array conversion, migration 005_to_006). name —
+    # Redis ACL users: a TYPED array [{name, perms, state, password}] (types-epic
+    # wave 1b, ADR-062 AclUser; map→array conversion, migration 005_to_006). name —
     # the user name (previously the map key); perms — the full ACL string (Redis ACL
-    # directives verbatim). Populated by create from input.users (also an AclUser array); passwords are NOT
-    # in state (keeper-side Vault, ADR-012). day-2 (add_user/add_node/update_config/
-    # rotate_tls) read the array via .map(u, {u.name: {...}}) → assemble the same
-    # destiny map name→{perms,state,password} as before (the destiny contract hasn't changed).
+    # directives verbatim). Populated by create from input.users (also an AclUser array).
+    # password is declared `type: secret` (ADR-0083 §1): the value lives in Vault at a
+    # path Keeper DERIVES from (service, incarnation, redis_users, name) — no path is
+    # written anywhere in this repo — and never in state. `key: name` says which sibling
+    # property is the element's identity, i.e. the last path segment. Written by
+    # core.state.present, revealed to the operator by .../secrets/reveal, and read back
+    # by day-2 scenarios through that module's register.
     redis_users:
       type: array
       items:
@@ -326,7 +329,33 @@ state_schema:
           name:  { type: string }
           perms: { type: string }
           state: { type: string, enum: [on, off] }
+          password:
+            type: secret
+            key: name
+            label: "Redis user password"
         additionalProperties: false
+    # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/
+    # haproxy) — the counterpart of redis_users, which is operator intent. Only the
+    # NAME is state: perms live in service vars (vars.system_acl_users /
+    # vars.system_acl_users_sentinel — policy, not a per-incarnation fact), and the
+    # password is declared `type: secret`, so its value lives in Vault at a path
+    # Keeper DERIVES from (service, incarnation, system_acl_users, name). Written by
+    # create/create_from_souls, read back by every day-2 scenario through
+    # core.state.present's register — which is why the set is recorded rather than
+    # recomputed from vars: an operator who edits vars after create must not silently
+    # re-point an in-cluster credential.
+    system_acl_users:
+      type: array
+      items:
+        type: object
+        required: [name]
+        additionalProperties: false
+        properties:
+          name: { type: string }
+          password:
+            type: secret
+            key: name
+            label: "Redis system account password"
     # Topology hosts (sid + role). For cluster/sentinel populated by the create scenario
     # (role layout across targeted souls). The exact role of each SID in state — a follow-up.
     redis_hosts:
@@ -387,16 +416,6 @@ destiny:
 # (examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
-
-# Revealable incarnation secrets (NIM-74): an operator with the incarnation.view-secrets
-# permission reveals the plaintext ACL-user password from the State view. enumerate=state.redis_users —
-# the set of allowed keys = element names (element.name); vault_ref — convention
-# secret/redis/<incarnation>/users/<name>#password (the same branch day-2 scenarios use).
-revealable_secrets:
-  - id: user_password
-    label: "Redis user password"
-    enumerate: state.redis_users
-    vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
 
 # Auto-rotation of server TLS (NIM-99): the Reaper rotates expiring certs via the
 # rotate_tls scenario with the redis-server Vault role. No section → rotation off.

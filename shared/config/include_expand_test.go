@@ -591,3 +591,142 @@ func TestExpandIncludes_NoInclude(t *testing.T) {
 		t.Fatalf("len = %d, want 1 (passthrough without include)", len(got))
 	}
 }
+
+// TestExpandIncludes_IncluderRegisterVisibleToBody — the direction the secret
+// design needs ([ADR-0083] §4): a `core.state.present` task in the main file
+// declares `register: system_acl_users`, and the included deploy body reads
+// `${ register.system_acl_users.effective }` in `params:`. Per-file
+// validateTaskRefs would call that unknown; ExpandIncludes threads the includer's
+// declarations down, so it resolves.
+//
+// Guard: it bites on the mutation. Drop the OuterRegisters threading in
+// expandOne (`ValidateOptions{}`) or the seeding loop in validateTaskRefs and the
+// body reports unknown_register_reference again.
+func TestExpandIncludes_IncluderRegisterVisibleToBody(t *testing.T) {
+	files := map[string]string{
+		"deploy.yml": `
+- name: consume the includer's register
+  module: core.cmd.shell
+  params: { cmd: "${ register.system_acl_users.effective[0].password }" }
+`,
+	}
+	root := []Task{
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Include: &IncludeTask{Include: "deploy.yml"}},
+	}
+	got, diags := ExpandIncludes(root, mapResolver(files))
+	if diag.HasErrors(diags) {
+		t.Fatalf("an included body reading the includer's register must lint clean, diagnostics: %v", diags)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+}
+
+// TestExpandIncludes_BodyRegisterStillUnknownInMain — the OTHER direction stays an
+// error, and that is the point. Dropping a conditional include removes the
+// DECLARATION; a main-file reference to it would dangle at render. Widening the
+// scope both ways would silently re-open exactly that hole, so this asserts the
+// widening is one-way.
+func TestExpandIncludes_BodyRegisterStillUnknownInMain(t *testing.T) {
+	mainSrc := `
+- name: reads a register declared only inside the include
+  module: core.cmd.shell
+  params: { cmd: "${ register.probe_done.effective }" }
+- include: cluster.yml
+  when: input.topology == 'cluster'
+`
+	_, diags, _ := LoadDestinyTasksFromBytes("scenario/create/main.yml", []byte(mainSrc), ValidateOptions{})
+	if !hasCode(diags, "unknown_register_reference") {
+		t.Fatalf("a main-file read of an included body's register must stay rejected, diagnostics: %v", diags)
+	}
+}
+
+// TestExpandIncludes_UnknownRegisterInBodyStillCaught — widening the scope must not
+// turn the body into a check-free zone: a name NOTHING declares, at any level, is
+// still an error.
+func TestExpandIncludes_UnknownRegisterInBodyStillCaught(t *testing.T) {
+	files := map[string]string{
+		"deploy.yml": `
+- name: typo
+  module: core.cmd.shell
+  params: { cmd: "${ register.system_acl_usres.effective }" }
+`,
+	}
+	root := []Task{
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Include: &IncludeTask{Include: "deploy.yml"}},
+	}
+	if _, diags := ExpandIncludes(root, mapResolver(files)); !hasCode(diags, "unknown_register_reference") {
+		t.Fatalf("a register no file declares must still be rejected inside an included body, diagnostics: %v", diags)
+	}
+}
+
+// TestExpandIncludes_SiblingIncludeRegisterNotVisible — sibling bodies do not see
+// each other. Both may be conditional, so a reference across them carries the same
+// dangling risk as the main→body direction.
+func TestExpandIncludes_SiblingIncludeRegisterNotVisible(t *testing.T) {
+	files := map[string]string{
+		"a.yml": "- name: emit\n  register: probe_done\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n",
+		"b.yml": "- name: consume\n  module: core.cmd.shell\n  params: { cmd: \"${ register.probe_done.effective }\" }\n",
+	}
+	root := []Task{
+		{Include: &IncludeTask{Include: "a.yml"}},
+		{Include: &IncludeTask{Include: "b.yml"}},
+	}
+	if _, diags := ExpandIncludes(root, mapResolver(files)); !hasCode(diags, "unknown_register_reference") {
+		t.Fatalf("a sibling include's register must not be visible, diagnostics: %v", diags)
+	}
+}
+
+// TestExpandIncludes_RegisterScopeIsTransitive — a nested body sees the WHOLE
+// ancestor chain, not just its immediate includer.
+func TestExpandIncludes_RegisterScopeIsTransitive(t *testing.T) {
+	files := map[string]string{
+		"mid.yml":  "- include: leaf.yml\n",
+		"leaf.yml": "- name: consume\n  module: core.cmd.shell\n  params: { cmd: \"${ register.system_acl_users.effective }\" }\n",
+	}
+	root := []Task{
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Include: &IncludeTask{Include: "mid.yml"}},
+	}
+	if _, diags := ExpandIncludes(root, mapResolver(files)); diag.HasErrors(diags) {
+		t.Fatalf("the register scope must reach a nested body, diagnostics: %v", diags)
+	}
+}
+
+// TestExpandIncludes_CrossFileDuplicateStaysFlatVerdict — the outer set seeds the
+// cross-REFERENCE set only, never the address space. A body that redeclares an
+// includer register is a genuine duplicate, but the verdict belongs to
+// validateFlatTaskAddresses on the expanded plan (which sees both sides and says
+// so); the body's own per-file check must not pre-empt it with a half-view.
+//
+// Guard: seed `addrs` alongside `registers` in validateTaskRefs and the
+// diagnostic changes hands — it arrives from the body with line/col, expansion
+// aborts, and the flat message never appears.
+func TestExpandIncludes_CrossFileDuplicateStaysFlatVerdict(t *testing.T) {
+	files := map[string]string{
+		"deploy.yml": "- name: redeclare\n  register: system_acl_users\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n",
+	}
+	root := []Task{
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Include: &IncludeTask{Include: "deploy.yml"}},
+	}
+	_, diags := ExpandIncludes(root, mapResolver(files))
+	var found bool
+	for _, d := range diags {
+		if d.Code != "duplicate_task_address" {
+			continue
+		}
+		found = true
+		if !strings.Contains(d.Message, "after include expansion") {
+			t.Errorf("cross-file duplicate must be the flat verdict, got %q", d.Message)
+		}
+		if d.Line != 0 {
+			t.Errorf("the flat verdict carries no source coordinates (expansion erased them), got line %d", d.Line)
+		}
+	}
+	if !found {
+		t.Fatalf("a body redeclaring the includer's register must still be a duplicate, diagnostics: %v", diags)
+	}
+}

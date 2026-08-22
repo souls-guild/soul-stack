@@ -2134,13 +2134,11 @@ type fakeLoader struct {
 	// nil → a manifest without lifecycle (both flags default to true, backcompat).
 	lifecycle *config.LifecycleConfig
 
-	// stateSchema — the flat state_schema of the snapshot manifest (seal read-path:
-	// secretSchemaForIncarnation walks it for secret:true). nil → no state_schema.
+	// stateSchema — the flat state_schema of the snapshot manifest. Two readers:
+	// secretSchemaForIncarnation walks it for `secret: true` (seal read-path), and
+	// revealableSecretsFor collects its `type: secret` declarations for the reveal
+	// endpoint ([ADR-0083] §2). nil → no state_schema.
 	stateSchema map[string]any
-
-	// revealableSecrets — the revealable_secrets section of the snapshot manifest (NIM-74):
-	// revealableSecretsFor reads it on the reveal endpoint. nil → no reveal declarations.
-	revealableSecrets []config.RevealableSecret
 
 	loadCalls     int
 	chainCalls    int
@@ -2165,7 +2163,7 @@ func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact
 	return &artifact.ServiceArtifact{
 		Ref:      ref,
 		LocalDir: f.localDir,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema, RevealableSecrets: f.revealableSecrets},
+		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
 	}, nil
 }
 

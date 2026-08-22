@@ -30,7 +30,7 @@
 #       ★ default_admin REDESIGN (2026-06-30): AUTH goes under the system ACL user
 #       default_admin (requirepass removed). After join-external the new nodes connect to
 #       the old cluster with the same username=default_admin + password — all cluster steps read
-#       secret/redis/<inc>/users/default_admin#password (migrate.go holds a SINGLE
+#       secret/redis/<inc>/system_acl_users/default_admin#password (migrate.go holds a SINGLE
 #       username/password for the new nodes AND the source-seed). The B3 pilot migrates onto a cluster of the same
 #       service vars (source == new cluster, same default_admin), so the alignment is
 #       natural. If the operator didn't align it — join will fail on AUTH (outside the
@@ -119,7 +119,7 @@
 # host:port). shards_dest is the destination shard count (int(input.shards)); the plugin
 # runtime-asserts shards_source==shards_dest (the number of old masters is not visible at
 # render time - it's a live topology). ★ default_admin REDESIGN: username=default_admin +
-# password from secret/redis/<inc>/users/default_admin#password (precondition: == the
+# password from secret/redis/<inc>/system_acl_users/default_admin#password (precondition: == the
 # password of the same user in the old cluster); the plugin holds a single
 # username/password for both the new nodes AND the source-seed (migrate.go). tls follows
 # compute.tls_on.
@@ -137,7 +137,7 @@
     shards_dest:  "${ int(input.shards) }"
     source_nodes: "${ input.source.hosts }"
     username:     "${ compute.admin_user }"
-    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:     "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:          "${ compute.tls_on }"
     tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -159,7 +159,7 @@
     action:   failover-takeover
     nodes:    "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     username: "${ compute.admin_user }"
-    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
@@ -183,6 +183,6 @@
     nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     source_nodes: "${ input.source.hosts }"
     username:     "${ compute.admin_user }"
-    password:     "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:     "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:          "${ compute.tls_on }"
     tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"

@@ -988,11 +988,11 @@ func normalizeHexFingerprint(s string) string {
 // shared/audit.BuildTaskExecutedPayload:
 //
 //   {sid, apply_id, task_idx, plan_index, status, passage,
-//    error?:{code, module, message?}, register_data?, suppressed?}
+//    error?:{code, module, message?}, register_data?}
 //
 // where status = keeperv1.TaskStatus.String() (literal "TASK_STATUS_SKIPPED"
-// etc), error.code = TaskError.code (for no_log errors the message is
-// omitted but code and module are kept). Hence per-task FC asserts read
+// etc) and error.code = TaskError.code. The `suppressed` marker is gone with
+// the per-task `no_log:` ([ADR-0083] §8). Hence per-task FC asserts read
 // audit_log, NOT apply_runs.
 //
 // CORRELATION KEY — plan_index (GLOBAL end-to-end task index across the
@@ -1079,8 +1079,9 @@ func (s *Stack) AssertTaskStatus(t *testing.T, applyID, sid string, planIdx, pas
 // payload->'error'->>'code' (see shared/audit.BuildTaskExecutedPayload);
 // apply_runs stores only a composed error_summary TEXT, not a structured code.
 //
-// For no_log tasks error.message is suppressed, but code and module are
-// still stored — this assert works on no_log tasks too.
+// error.message may be absent (the write-path masking of a vault-ref rewrites
+// it, and it was never the assertion subject); code and module are always
+// stored, so this assert holds either way.
 //
 // wantCode — the exact TaskError.code literal, e.g. "flowcontrol.failed_when".
 // If the task has no error (OK/CHANGED/SKIPPED) → error.code is missing → fail.

@@ -742,14 +742,15 @@ func (r *ApplyRunner) launchAsync(runCtx context.Context, flows *asyncFlows, sin
 	}()
 }
 
-// sendTaskEvent stamps the TaskEvent with an echo of RenderedTask.no_log and
-// sends it to sink. The flag travels to Keeper so it can suppress
-// register_data/error.message in the long-lived audit log for no_log tasks,
-// without needing []RenderedTask (this TaskEvent might land on a different
-// Keeper instance, ADR-002). Soul knows no_log from the run plan — it
-// executes the task without logging its params/output.
+// sendTaskEvent stamps the TaskEvent with an echo of
+// RenderedTask.secret_output and sends it to sink. The list travels to Keeper
+// so it can mask exactly those output fields in the long-lived audit log
+// ([ADR-0083] §8) without needing []RenderedTask — this TaskEvent might land on
+// a different Keeper instance than the one that rendered the plan (ADR-002).
+// Soul does not mask on its own: the value is what the next task reads, and the
+// module that produced it is the one that declared which fields are secret.
 func sendTaskEvent(sink EventSink, ev *keeperv1.TaskEvent, task *keeperv1.RenderedTask, passage int32) error {
-	ev.NoLog = task.GetNoLog()
+	ev.SecretOutput = task.GetSecretOutput()
 	// Echoes ApplyRequest.passage (ADR-056): Keeper correlates completion per
 	// (apply_id, sid, passage) and accumulates register for rendering the next
 	// Passage. Single point where every TaskEvent of the run gets this set.

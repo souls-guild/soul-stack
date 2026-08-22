@@ -115,6 +115,48 @@ func WithVaultMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, vaultMemoKey{}, &vaultMemo{m: map[string]map[string]any{}})
 }
 
+// VaultPathGuard vets an ALREADY-EVALUATED vault() path. It exists because the
+// authoring-time scan for a forbidden path (shared/config.ScanOwnNamespaceVault)
+// compares static text, and `vault(vars.p)` names no static segment — the path only
+// exists once CEL has evaluated the argument. A non-nil error rejects the read.
+//
+// The predicate is supplied by the caller rather than implemented here: what counts
+// as forbidden is a property of the manifest layer, and a second copy of that rule
+// living in the engine is a copy free to disagree with the first.
+type VaultPathGuard func(path string) error
+
+// vaultPathGuardKey — ctx key for [VaultPathGuard].
+type vaultPathGuardKey struct{}
+
+// WithVaultPathGuard binds g to ctx for the whole render-pass, alongside the vault
+// memo it rides with ([WithVaultMemo]). A ctx without a guard fences nothing — the
+// offline modes (soul-lint, Trial, direct unit-eval) have no incarnation in scope and
+// so no namespace to fence.
+func WithVaultPathGuard(ctx context.Context, g VaultPathGuard) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if g == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, vaultPathGuardKey{}, g)
+}
+
+// vaultPathGuardFrom returns the guard bound to ctx, or nil.
+func vaultPathGuardFrom(ctx context.Context) VaultPathGuard {
+	g, _ := ctx.Value(vaultPathGuardKey{}).(VaultPathGuard)
+	return g
+}
+
+// ReadKVMemoized is [readKVMemoized] for callers outside this package. The
+// vault-resolve phase (`vault:` refs in params, keeper/internal/render) reads the
+// same secrets in the same render-pass as CEL vault() and must share one cache:
+// two paths caching differently means one of them re-queries Vault for a value the
+// other already holds, and the pass stops being a single point-in-time view.
+func ReadKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]any, error) {
+	return readKVMemoized(ctx, kv, body)
+}
+
 // readKVMemoized reads secret body via kv with dedup within a render-pass. The cache
 // is taken from ctx ([vaultMemoKey], created by [WithVaultMemo]). If there's no cache
 // (ctx without memo) — a direct ReadKV without caching. ReadKV errors are NOT cached: a
@@ -202,6 +244,14 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	res, ok := resolverVal.Value().(*vaultResolver)
 	if !ok || res == nil || res.kv == nil {
 		return types.NewErr("vault(): %v", ErrVaultUnavailable)
+	}
+
+	// Before the memo, not after: a path the guard rejects must never be served from
+	// a cache entry a legitimate read put there.
+	if g := vaultPathGuardFrom(res.ctx); g != nil {
+		if err := g(path); err != nil {
+			return types.NewErr("vault(): %v", err)
+		}
 	}
 
 	body, field, err := splitVaultField(path)

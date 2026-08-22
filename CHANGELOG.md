@@ -16,7 +16,67 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   maintenance and deregister on loopback with explicit `allow_http` and
   `allow_private`.
 
+### Changed
+
+- **A secret is a declared state field; the author never writes a Vault path**
+  ([ADR-0083](docs/adr/0083-declared-secret-state-fields.md), NIM-698). A
+  `state_schema` field carries `type: secret` — on the field for a scalar, or on
+  a property inside `items` next to the `key:` that names the collection's
+  identity — and Keeper derives the path: `<mount>/<service>/<incarnation>/<state-field>/<key>#<property>`
+  for a collection, `<mount>/<service>/<incarnation>/<state-field>#value` for a
+  scalar. Every segment is validated against the
+  [ADR-064](docs/adr/0064-secret-write-path.md) `^[a-zA-Z0-9_-]+$` grammar and
+  fails closed, because `<key>` is operator-influenced data.
+- `generate_secret({"length": 32, "charset": "alphanumeric"})` — a new CEL
+  function returning an opaque `SecretRequest` marker rather than a value, so no
+  plaintext exists at render time. It takes a map because CEL has no keyword
+  arguments.
+- `core.state.present` — the one keeper-side write. It reads the state field,
+  mints only the properties that are missing, writes them to their derived paths
+  and returns the **effective** state in its register, so a second run keeps the
+  first run's password.
+- The keeper register is **unioned into every per-host bucket** instead of being
+  the empty-bucket fallback, so a Soul-side task can read what the keeper-side
+  writer just returned. Duplicate register names were already a load error, so
+  the union is unambiguous.
+- A secret in a register rides as a **`vault:` reference**, not as plaintext,
+  which closes the `apply_task_register` window without adding a purge.
+
+### Removed
+
+- **`revealable_secrets` in `service.yml`.** The reveal endpoints, the
+  `incarnation.view-secrets` right and the `incarnation.secret_revealed` audit
+  event are unchanged — what goes is the author-written `vault_ref`, replaced by
+  the derivation. The `vault_ref_not_service_scoped` diagnostic goes with it: the
+  escalation class it fenced can no longer be expressed.
+- **`no_log:` on a task.** It was all-or-nothing and set by the task author, who
+  had to know the shape of a result the module produces — so it silenced a whole
+  task's diagnostics to hide one field of it. A module now declares
+  `secret: true` per **output field** (a plugin-protocol capability on
+  `ApplyEvent.output`, only-add on the wire), and the platform masks exactly
+  those wherever the output is observable, while the live register keeps the
+  value for the next task. Writing the key is now `unknown_key` with a hint,
+  and `no_log_on_block_invalid` / `no_log_on_apply_invalid` are gone with it.
+
 ### Upgrade notes
+
+- **`type: secret` is breaking, deliberately, with no migration.** Derived paths
+  do not match what existing incarnations wrote by hand, so an incarnation
+  created before this change fails closed on its next day-2 run. This lands
+  before the release.
+- **An author-written path into a service's own namespace is refused**
+  (`vault_path_in_own_namespace`) in all four spellings: `${ vault(...) }`, a
+  `vault:` ref in `params:` or any other value, and the `path:` of
+  `core.vault.kv-read` / `core.vault.kv-present`. At load when the path is written
+  out; on the evaluated path when it is assembled from variables; and on the
+  rendered params, in the keeper dispatcher before `mod.Apply`, for the two
+  `core.vault.*` addresses that reach Vault through a parameter rather than
+  through `vault()`. All four still work **outside** `<mount>/<service>/`, where a
+  cross-namespace read (a shared TLS CA, another service's credential) is real and
+  has no replacement yet.
+- **Migration 116 drops `apply_run_plan.no_log`.** A scenario still carrying
+  `no_log:` does not load; delete the key and let the module declare its own
+  secret output.
 
 Read this before upgrading a cluster that already has roles bound to operators.
 Several changes alter what an existing grant means; some widen it, some narrow

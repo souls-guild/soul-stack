@@ -40,20 +40,31 @@ fixtures:
       - { name: alice, perms: "~* +@all", state: "on" }
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   # New full set: only alice (with NEW perms). bob is removed.
   input:
     users:
       - { name: alice, perms: "~app:* +@read +@write", state: "on" }
 
-  vault:
-    secret/redis/update_users:
-      password: updusr-redis-pass-16ch
-    # * default_admin REDESIGN: a system admin user — password from the users/default_admin branch
-    # (masterauth fill-in in apply.input.config + AUTH community.redis.acl).
-    secret/redis/update_users/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/update_users/users/alice:
-      password: alice-user-secret-pass
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective:
+        - { name: alice, password: alice-user-secret-pass }
+        - { name: bob, password: bob-l0-pass }
 
 assert:
   task_present:

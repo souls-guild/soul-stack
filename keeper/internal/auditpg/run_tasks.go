@@ -17,9 +17,10 @@ import (
 // task.
 //
 // Secret hygiene: register_data/error.message already went through
-// MaskSecrets on the write path (auditpg-writer), and no_log tasks don't
-// carry them at all (BuildTaskExecutedPayload suppresses them) — the reader
-// returns what was written, with no additional masking.
+// MaskSecrets on the write path (auditpg-writer), and a module's declared-secret
+// output fields were replaced with the mask before the payload was built
+// ([ADR-0083] §8) — the reader returns what was written, with no additional
+// masking.
 type TaskExecution struct {
 	SID string
 
@@ -33,11 +34,12 @@ type TaskExecution struct {
 	Status string
 
 	// Output — parsed register_data (JSON object). nil if register_data is
-	// absent (task without register:), suppressed (no_log), or failed to parse.
+	// absent (task without register:) or failed to parse. A declared-secret
+	// field is present with a masked value, not removed ([ADR-0083] §8).
 	Output map[string]any
 
-	// Error — set only on FAILED/TIMED_OUT (nil otherwise). Message is empty
-	// for a no_log task (suppressed on the write path).
+	// Error — set only on FAILED/TIMED_OUT (nil otherwise). Message may be
+	// empty: a module can fail without one.
 	Error *TaskExecutionError
 }
 

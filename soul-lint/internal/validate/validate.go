@@ -169,6 +169,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// compat: block of its own) — so its features are weighed against
 		// `../../service.yml` (ADR-0076(k)).
 		diags = append(diags, scenarioCompatFloorDiags(opts.Path, scn)...)
+		// A Vault path under the service's own derived prefix, in any spelling
+		// ([ADR-0083] §7) — read over the include-expanded list, so a path in a
+		// sibling file is caught offline and not only at render.
+		diags = append(diags, scenarioVaultNamespaceDiags(opts.Path, scn)...)
 	case KindManifest:
 		diags = schemaDocumentDiags(opts.Path, src)
 	default:

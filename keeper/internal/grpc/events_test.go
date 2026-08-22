@@ -263,8 +263,8 @@ func TestHandleTaskEvent_OKDoesNotRecordFailure(t *testing.T) {
 
 // TestHandleTaskEvent_FailedMasksSecretInSummary — a vault-ref in a task's message
 // is masked (MaskSecrets floor) before being written to error_summary, so the secret
-// doesn't leak into the operator-facing reason. This is a floor for all tasks (for no_log —
-// there's additional full suppression in scenario.dispatch).
+// doesn't leak into the operator-facing reason. This is the floor for every task —
+// since [ADR-0083] §8 removed `no_log:`, nothing suppresses a summary wholesale.
 func TestHandleTaskEvent_FailedMasksSecretInSummary(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
@@ -286,30 +286,26 @@ func TestHandleTaskEvent_FailedMasksSecretInSummary(t *testing.T) {
 	}
 }
 
-// TestHandleTaskEvent_NoLogSuppressesAudit — [H]-fix: for a no_log task,
-// register_data (params/output) and error.message (= stderr) do NOT reach the
-// long-lived audit — the root of an arbitrary secret leak past MaskSecrets. What remains
-// is the non-secret sid/apply_id/task_idx/status + error.code/module and the
-// suppressed:"no_log".
-func TestHandleTaskEvent_NoLogSuppressesAudit(t *testing.T) {
+// TestHandleTaskEvent_SecretOutputMaskedInAudit — [ADR-0083] §8: the fields the
+// module declared secret are replaced with the mask INSIDE register_data before
+// the long-lived audit payload is built; everything else the task returned is
+// written as before. The old `no_log:` dropped register_data wholesale, which
+// cost the operator the whole output to protect one field of it.
+func TestHandleTaskEvent_SecretOutputMaskedInAudit(t *testing.T) {
 	aw := &recordingAudit{}
 	h := newTestHandler(t, aw)
 	const secret = "S3cr3t-PlainText-Password"
 
-	rd, err := structpb.NewStruct(map[string]any{"stdout": secret, "rc": float64(1)})
+	rd, err := structpb.NewStruct(map[string]any{"data": secret, "path": "secret/app/cfg", "rc": float64(0)})
 	if err != nil {
 		t.Fatalf("NewStruct: %v", err)
 	}
 	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 		ApplyId:      "01HAPPLY",
 		TaskIdx:      0,
-		Status:       keeperv1.TaskStatus_TASK_STATUS_FAILED,
-		NoLog:        true,
+		Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
+		SecretOutput: []string{"data"},
 		RegisterData: rd,
-		Error: &keeperv1.TaskError{
-			Code: "module.failed", Module: "core.exec.run",
-			Message: "command printed password=" + secret,
-		},
 	})
 
 	got := aw.snapshot()
@@ -320,34 +316,53 @@ func TestHandleTaskEvent_NoLogSuppressesAudit(t *testing.T) {
 
 	blob, _ := json.Marshal(e.Payload)
 	if strings.Contains(string(blob), secret) {
-		t.Errorf("no_log secret leaked into audit payload: %s", blob)
+		t.Errorf("declared-secret output leaked into audit payload: %s", blob)
 	}
-	if _, present := e.Payload["register_data"]; present {
-		t.Errorf("no_log task must not write register_data: %v", e.Payload)
+	rdMap := decodeRegisterData(t, e.Payload)
+	if rdMap["data"] != audit.MaskedValue {
+		t.Errorf("register_data.data = %v, want %q", rdMap["data"], audit.MaskedValue)
 	}
-	if e.Payload["suppressed"] != "no_log" {
-		t.Errorf("payload.suppressed = %v, want \"no_log\"", e.Payload["suppressed"])
+	if rdMap["path"] != "secret/app/cfg" {
+		t.Errorf("non-secret output field lost: %v", rdMap)
 	}
-
-	errMap, ok := e.Payload["error"].(map[string]any)
-	if !ok {
-		t.Fatalf("payload.error type = %T, want map", e.Payload["error"])
+	if _, present := rdMap["rc"]; !present {
+		t.Errorf("non-secret output field lost: %v", rdMap)
 	}
-	if _, present := errMap["message"]; present {
-		t.Errorf("no_log error must not carry 'message' (stderr): %v", errMap)
-	}
-	if errMap["code"] != "module.failed" || errMap["module"] != "core.exec.run" {
-		t.Errorf("error.code/module dropped: %v", errMap)
-	}
-	if e.Payload["status"] != "TASK_STATUS_FAILED" || e.Payload["apply_id"] != "01HAPPLY" {
-		t.Errorf("non-secret status fields lost: %v", e.Payload)
+	if _, present := e.Payload["suppressed"]; present {
+		t.Errorf("suppression marker survived the removal of no_log: %v", e.Payload)
 	}
 }
 
-// TestHandleTaskEvent_NoLogFalseKeepsAudit — regression: with no_log=false, audit
-// is written as before (register_data + error.message are present, no
-// suppressed marker).
-func TestHandleTaskEvent_NoLogFalseKeepsAudit(t *testing.T) {
+// TestHandleTaskEvent_SecretOutputLeavesLiveRegisterIntact — the masking applies to
+// the OBSERVABLE copy. The same *structpb.Struct is the run's live register payload
+// that the next task reads; masking it in place would break the register chain
+// ([ADR-0083] §8, [redactSecretOutput]).
+func TestHandleTaskEvent_SecretOutputLeavesLiveRegisterIntact(t *testing.T) {
+	aw := &recordingAudit{}
+	h := newTestHandler(t, aw)
+	const secret = "S3cr3t-PlainText-Password"
+
+	rd, err := structpb.NewStruct(map[string]any{"data": secret})
+	if err != nil {
+		t.Fatalf("NewStruct: %v", err)
+	}
+	ev := &keeperv1.TaskEvent{
+		ApplyId: "01HAPPLY", TaskIdx: 0,
+		Status:       keeperv1.TaskStatus_TASK_STATUS_OK,
+		SecretOutput: []string{"data"},
+		RegisterData: rd,
+	}
+	h.handleTaskEvent(context.Background(), "host.example.com", "session-1", ev)
+
+	if got := ev.GetRegisterData().GetFields()["data"].GetStringValue(); got != secret {
+		t.Errorf("live register payload was mutated: data = %q, want the plaintext back", got)
+	}
+}
+
+// TestHandleTaskEvent_NoSecretOutputKeepsAudit — regression: a task whose module
+// declares no secret output is audited in full, register_data and error.message
+// included. Nothing is suppressed by default since §8.
+func TestHandleTaskEvent_NoSecretOutputKeepsAudit(t *testing.T) {
 	aw := &recordingAudit{}
 	h := newTestHandler(t, aw)
 
@@ -359,7 +374,6 @@ func TestHandleTaskEvent_NoLogFalseKeepsAudit(t *testing.T) {
 		ApplyId:      "01HAPPLY",
 		TaskIdx:      0,
 		Status:       keeperv1.TaskStatus_TASK_STATUS_FAILED,
-		NoLog:        false,
 		RegisterData: rd,
 		Error: &keeperv1.TaskError{
 			Code: "module.failed", Module: "core.exec.run", Message: "boom",
@@ -368,17 +382,17 @@ func TestHandleTaskEvent_NoLogFalseKeepsAudit(t *testing.T) {
 
 	e := aw.snapshot()[0]
 	if _, present := e.Payload["suppressed"]; present {
-		t.Errorf("no_log=false must not set suppressed: %v", e.Payload)
+		t.Errorf("audit must not carry a suppression marker: %v", e.Payload)
 	}
 	if _, present := e.Payload["register_data"]; !present {
-		t.Errorf("no_log=false must keep register_data: %v", e.Payload)
+		t.Errorf("register_data dropped without a declared secret: %v", e.Payload)
 	}
 	errMap, ok := e.Payload["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("payload.error type = %T, want map", e.Payload["error"])
 	}
 	if errMap["message"] != "boom" {
-		t.Errorf("no_log=false must keep error.message: %v", errMap)
+		t.Errorf("error.message dropped: %v", errMap)
 	}
 }
 
@@ -556,7 +570,7 @@ func collectSSE(t *testing.T, bus *applybus.EventBus, applyID string, publish fu
 
 // TestPublishTaskExecuted_FailedOmitsRawStderr — BUG-3 floor: a failed task
 // does NOT place raw stderr (TaskError.Message) into the SSE payload. Even if message
-// carries a no_log task's plaintext secret that MaskSecrets can't catch by
+// carries a plaintext secret that MaskSecrets can't catch by
 // vault-ref, it's absent from the published frame. The error block only carries code/module.
 func TestPublishTaskExecuted_FailedOmitsRawStderr(t *testing.T) {
 	bus := applybus.NewBus(discardLogger(t))
@@ -1093,7 +1107,7 @@ func TestHandleTaskEvent_NoticesReachAudit(t *testing.T) {
 
 // TestHandleTaskEvent_NoticesReachSSE — the live half, and unlike error.message
 // the SENTENCE travels. That asymmetry is deliberate: error.message is task
-// stderr and may carry a no_log secret, while a notice is rendered from the
+// stderr and may carry a secret, while a notice is rendered from the
 // manifest. A frame saying only "deprecated_param" would send the operator
 // hunting for which param and by when.
 func TestHandleTaskEvent_NoticesReachSSE(t *testing.T) {

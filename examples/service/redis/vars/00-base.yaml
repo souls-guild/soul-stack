@@ -257,7 +257,7 @@ tls_ca_ref:   "secret/services/redis/tls#ca"
 # system_acl_users) and sentinel-users.acl (sentinel daemon, system_acl_users_sentinel).
 #
 # The password for EACH system user — in Vault on the same branch as operator-extra:
-# secret/redis/<incarnation>/users/<name>#password. scenario resolves it keeper-
+# secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password. scenario resolves it keeper-
 # side via vault() in the render phase and adds the system users into apply.input.users ON TOP OF
 # operator-extra (last-wins; see redis-deploy-*.yml, add_user).
 #
@@ -266,7 +266,7 @@ tls_ca_ref:   "secret/services/redis/tls#ca"
 # "default in requirepass": requirepass is DEPRECATED and removed from redis.conf, all authentication
 # (incl. internal: replication/cluster/sentinel/health-PING) goes through default_admin.
 # The community.redis plugin connects with username=default_admin (see deployment bodies). The password for
-# default_admin — secret/redis/<inc>/users/default_admin#password (the shared branch for
+# default_admin — secret/redis/<inc>/system_acl_users/default_admin#password (the shared branch for
 # system users, NOT the former main secret/redis/<inc>#password — that one is DROPPED).
 #
 # ★ default (built-in Redis user): it's NOT in system_acl_users[_sentinel] — it's

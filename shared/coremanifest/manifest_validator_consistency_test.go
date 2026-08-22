@@ -50,6 +50,7 @@ var keeperSideModules = map[string]bool{
 	"core.bootstrap": true,
 	"core.vault":     true,
 	"core.choir":     true,
+	"core.state":     true,
 }
 
 // allRegisteredModules — deterministic list of all registered core modules. Taken

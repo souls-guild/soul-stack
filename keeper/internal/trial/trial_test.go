@@ -943,77 +943,29 @@ assert:
 	}
 }
 
-// vaultNoLogMain is a scenario with vault-ref in params of a task marked
-// no_log: on FAIL the value must not leak into the diff.
-const vaultNoLogMain = `name: create
-input: {}
-tasks:
-  - name: write secret-derived content
-    module: core.file.present
-    no_log: true
-    params:
-      path: /tmp/soul-stack-secret
-      content: "vault:secret/app/cfg#token"
-`
-
-// TestRunCase_FailNoLogMasksSecret checks a task with no_log: true and FAIL by
-// params: the diff masks values (prints only keys), and the raw secret abc123
-// does not appear in Failures.
-func TestRunCase_FailNoLogMasksSecret(t *testing.T) {
-	caseDir := writeScenarioTree(t, vaultNoLogMain, `name: vault no_log fail
-fixtures:
-  vault:
-    "secret/app/cfg":
-      token: abc123
-assert:
-  rendered_tasks:
-    - index: 0
-      module: core.file.present
-      params:
-        path: /tmp/soul-stack-secret
-        content: WRONG
-`)
-
-	results, err := Run(context.Background(), caseDir)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if results[0].Pass {
-		t.Fatalf("expected FAIL on content mismatch")
-	}
-	if len(results[0].Failures) == 0 {
-		t.Fatalf("expected non-empty mismatch list")
-	}
-	for _, f := range results[0].Failures {
-		if strings.Contains(f, "abc123") {
-			t.Fatalf("secret abc123 leaked into no_log task diff: %q", f)
-		}
-	}
-}
-
-// TestCompareParams_NoLogMask is a masking unit test: when noLog=true, diff
-// contains no values, only keys (and conversely when noLog=false).
-func TestCompareParams_NoLogMask(t *testing.T) {
+// TestCompareParams_PrintsValues pins the removal of the `no_log` masking branch
+// ([ADR-0083] §8): a param diff prints both sides. Trial is offline — the only
+// plaintext it can print is a `fixtures.vault` literal from the case file — and a
+// diff that names the key but hides both values is unusable for the developer it
+// is written for.
+func TestCompareParams_PrintsValues(t *testing.T) {
 	got, err := structpb.NewStruct(map[string]any{"content": "abc123"})
 	if err != nil {
 		t.Fatalf("structpb: %v", err)
 	}
 	want := map[string]any{"content": "WRONG"}
 
-	masked := compareParams(0, want, got, true)
-	if masked == "" {
+	diff := compareParams(0, want, got)
+	if diff == "" {
 		t.Fatalf("expected diff (values differ)")
 	}
-	if strings.Contains(masked, "abc123") || strings.Contains(masked, "WRONG") {
-		t.Fatalf("no_log diff must not contain values: %q", masked)
+	if !strings.Contains(diff, "content") {
+		t.Fatalf("diff must name the key: %q", diff)
 	}
-	if !strings.Contains(masked, "content") {
-		t.Fatalf("no_log diff must print keys: %q", masked)
-	}
-
-	open := compareParams(0, want, got, false)
-	if !strings.Contains(open, "abc123") {
-		t.Fatalf("without no_log, diff must show values: %q", open)
+	for _, v := range []string{"abc123", "WRONG"} {
+		if !strings.Contains(diff, v) {
+			t.Fatalf("diff must print %q, got: %q", v, diff)
+		}
 	}
 }
 

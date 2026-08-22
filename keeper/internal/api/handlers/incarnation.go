@@ -162,6 +162,11 @@ type IncarnationHandler struct {
 	// Injected late-binding via [SetVaultReader] (same motive as refs). nil →
 	// RevealSecretTyped returns 404 (secret not revealable — endpoint not configured).
 	vault VaultKVReader
+	// vaultMount — keeper.yml's `vault.kv_mount`, injected alongside the reader.
+	// Reveal derives the path it reads ([ADR-0083] §2), so it must land on the same
+	// mount `core.state.present` wrote to; "" means the default mount, resolved by
+	// [config.EffectiveVaultMount].
+	vaultMount string
 }
 
 // VaultKVReader — narrow read surface of Vault KV for the reveal endpoint (NIM-74):
@@ -237,11 +242,13 @@ func (h *IncarnationHandler) SetRunTasksAuditReader(r RunTaskAuditReader) {
 }
 
 // SetVaultReader late-binds the Vault KV reader for the secret reveal endpoint
-// (NIM-74). A separate setter, not a constructor arg (same motive as
-// [SetServiceRefs]); nil → RevealSecretTyped returns 404 (endpoint not
-// configured). Called once in `keeper run` before the server starts.
-func (h *IncarnationHandler) SetVaultReader(v VaultKVReader) {
+// (NIM-74) together with the KV mount reveal derives its path on ([ADR-0083] §2).
+// A separate setter, not a constructor arg (same motive as [SetServiceRefs]); nil
+// reader → RevealSecretTyped returns 404 (endpoint not configured); mount "" → the
+// default. Called once in `keeper run` before the server starts.
+func (h *IncarnationHandler) SetVaultReader(v VaultKVReader, mount string) {
 	h.vault = v
+	h.vaultMount = mount
 }
 
 // ContextReader returns the handler's DB read surface for the RBAC extractor

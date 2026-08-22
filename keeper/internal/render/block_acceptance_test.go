@@ -60,16 +60,13 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 	}
 
 	// The health-gate block child (community.redis.replica-synced) + restart-master
-	// render params with vault('secret/redis/redis-prod/users/default_admin#password')
-	// (★ default_admin REDESIGN 2026-06-30: restart/main.yml:117,156 — auth under
-	// the system default_admin) — engine built with a fixture KVReader (same pattern as
-	// TestAcceptance_SentinelReplicaExcludesMaster). service vars are not set →
+	// read the default_admin password from register.system_acl_users.effective
+	// ([ADR-0083] §4) — the scenario authors no Vault path any more, so no fixture
+	// KVReader is needed for the password. service vars are not set →
 	// vars.tls_enable is absent → plaintext branch (default false), so
-	// vault(incarnation.state.tls.ca_ref) under compute.tls_on is NOT invoked.
-	engine, err := cel.New(cel.WithVault(stubKV{
-		"secret/redis/redis-prod":                     {"password": "fixture-redis-pass-16+"},
-		"secret/redis/redis-prod/users/default_admin": {"password": "fixture-admin-pass-16+"},
-	}))
+	// vault(incarnation.state.tls.ca_ref) under compute.tls_on is NOT invoked either —
+	// but the construct must still COMPILE, so the engine keeps an (empty) KVReader.
+	engine, err := cel.New(cel.WithVault(stubKV{}))
 	if err != nil {
 		t.Fatalf("cel.New(WithVault): %v", err)
 	}
@@ -83,8 +80,24 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 			host("b.example.com", []string{"redis-prod"}, nil),
 			host("c.example.com", []string{"redis-prod"}, nil),
 		},
-		TaskPassage:   plan.TaskPassage,
-		ActivePassage: 1, // Passage 1 — where the block lives (passage_plan [0 1 1]: probe→block+restart-master).
+		TaskPassage: plan.TaskPassage,
+		// Passage 2 — where the block lives. passage_plan [0 1 2 2]: the keeper-side
+		// core.state.present resolve ([ADR-0083] §4) is passage 0, the probe reads its
+		// register in passage 1, the block + restart-master follow in passage 2.
+		ActivePassage: 2,
+		// [ADR-0083] §4: state carries the account NAMES; the keeper-side
+		// core.state.present task resolves each name's password from the Vault path
+		// derived from (service, incarnation, field, key). Render does not execute
+		// that task, so its register is seeded here — the consumer's post-resolution
+		// view, exactly as an L0 case seeds mocks.register.
+		State: map[string]any{
+			"system_acl_users": []any{map[string]any{"name": "default_admin"}},
+		},
+		KeeperRegister: map[string]any{
+			"system_acl_users": map[string]any{"effective": []any{
+				map[string]any{"name": "default_admin", "password": "fixture-admin-pass-16+"},
+			}},
+		},
 		// Per-host register from Passage 0 (probe redis_role via community.redis.role):
 		// a=master, b/c=slave. Field register.redis_role.role (plugin Output), NOT
 		// .stdout (the shell probe was replaced by community.redis.role, go-redis INFO replication).
@@ -264,19 +277,12 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		node("node-3.example.com", "10.0.0.3"),
 	}
 
-	// apply:input for the sentinel branch pulls vault secrets — engine built with a fixture
-	// KVReader (trial.fixtureVault pattern). ★ default_admin REDESIGN (2026-06-30):
-	// step 1 (auth_pass) and step 2 (PING) read secret/redis/redis/users/default_admin
-	// (in-cluster AUTH under the system default_admin, requirepass removed); steps 3-5
-	// (REPLICAOF/SENTINEL MONITOR/PONG) still read the main secret/redis/redis. Both paths
-	// must resolve, or rendering the deploy body fails at vault_resolve.
-	engine, err := cel.New(cel.WithVault(stubKV{
-		"secret/redis/redis":                     {"password": "fixture-redis-pass-16+"},
-		"secret/redis/redis/users/default_admin": {"password": "fixture-admin-pass-16+"},
-		// Mandatory monitoring (Slice I): apply redis-exporter reads the password of
-		// the monitoring ACL user keeper-side (vault('secret/redis/<inc>/users/monitoring')).
-		"secret/redis/redis/users/monitoring": {"password": "fixture-monitoring-pass-16+"},
-	}))
+	// [ADR-0083] §4: the sentinel branch (auth_pass, PING, REPLICAOF, SENTINEL MONITOR)
+	// and the mandatory redis-exporter apply all read register.system_acl_users.effective
+	// instead of an authored Vault path — the register is seeded below. The engine keeps
+	// a KVReader only so the vault(...) construct still compiles (state.tls.ca_ref, not
+	// taken on this branch).
+	engine, err := cel.New(cel.WithVault(stubKV{}))
 	if err != nil {
 		t.Fatalf("cel.New(WithVault): %v", err)
 	}
@@ -309,6 +315,17 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     redisSentinelResolver{},
+		// The register of the keeper-side core.state.present task that mints the
+		// service's own ACL accounts. Render does not execute it, so its result is
+		// seeded — the consumer's post-resolution view ([ADR-0083] §4).
+		KeeperRegister: map[string]any{
+			"system_acl_users": map[string]any{"effective": []any{
+				map[string]any{"name": "default_admin", "password": "fixture-admin-pass-16+"},
+				map[string]any{"name": "monitoring", "password": "fixture-monitoring-pass-16+"},
+				map[string]any{"name": "replica", "password": "fixture-replica-pass-16+"},
+				map[string]any{"name": "sentinel", "password": "fixture-sentinel-pass-16+"},
+			}},
+		},
 	}
 
 	tasks, plans, err := p.Render(context.Background(), in)

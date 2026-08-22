@@ -399,3 +399,12 @@ tree + the `_`-prefix rule), §6 (one subdirectory in `include:`), §6.1 (one su
 `extends:`), §8 (the open question "service-level location of include targets" is closed),
 [`docs/destiny/tasks.md §4`](../destiny/tasks.md) (the same target grammar reaches destiny
 `include:` through the shared validator; resolution stays inside `tasks/`).
+
+## Amendment 2026-08-19 (NIM-698, [ADR-0083](0083-declared-secret-state-fields.md)): a secret is declared in `state_schema`, and `no_log` is removed
+
+A `state_schema` field may carry **`type: secret`** — scalar, or on a property inside `items` next to the `key:` naming which sibling property is the collection's identity. The value lives in Vault at a path Keeper **derives** from `(service, incarnation, state field, key)`; the author writes no path anywhere. Distinct from the pre-existing `secret: true` marker, which says the value lives in state and is masked on output.
+
+Two grammar consequences for a scenario:
+
+- **`no_log:` is removed from the task grammar**, not deprecated. It was all-or-nothing and set by the task author rather than by the module that knows its own output shape; per-field `secret: true` on module output replaces it ([ADR-0083](0083-declared-secret-state-fields.md) §8).
+- **An author-written path into the service's own namespace `<mount>/<service>/` is an error** in all four spellings — `${ vault(...) }`, a `vault:` ref in `params:`, and the `path:` of `core.vault.kv-read` / `core.vault.kv-present`. All four keep working **outside** that prefix, where the cross-namespace read (a shared TLS CA, another service's credential) has no replacement yet.

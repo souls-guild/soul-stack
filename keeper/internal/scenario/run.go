@@ -306,6 +306,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		aid:         spec.StartedByAID,
 		incarnation: spec.IncarnationName,
 		scenario:    spec.ScenarioName,
+		service:     inc.Service,
 	}, r.deps.InputDenyPaths)
 	effectiveInput, err := config.ResolveInputValuesVault(scn.Input, spec.Input, resolver)
 	if err != nil {
@@ -328,6 +329,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts,
+		// Modules — the plugin-manifest resolver, so a plugin module's declared
+		// secret output fields ([ADR-0083] §8) are derived at render. Same
+		// per-parse snapshot the scenario was parsed with.
+		Modules: r.moduleManifests(ctx),
 		// State — a read-only snapshot of incarnation.state at the run's row-lock
 		// (stateBefore captured under FOR UPDATE). Exposed to scenario-render CEL
 		// as `incarnation.state.<path>` (ADR-009/010, Option A). ONE snapshot:
@@ -582,11 +587,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			abort(reasonSoulCapabilityUnsupported, err)
 			return
 		}
-		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
+		if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, 0, tasks, plans); err != nil {
 			abort("keeper_dispatch_failed", err)
 			return
 		}
-		if err := r.dispatchPlanned(ctx, spec, log, hosts, tasks); err != nil {
+		if err := r.dispatchPlanned(ctx, spec, log, hosts); err != nil {
 			abort("dispatch_failed", err)
 			return
 		}
@@ -717,7 +722,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// Passage with no keeper tasks is a no-op (host-only Passage). N=1 →
 			// one call for passage 0, same behavior as the pre-loop call before
 			// Slice 2 (bit-for-bit).
-			if err := r.dispatchKeeperTasks(ctx, spec, log, p, passageTasks, passagePlans); err != nil {
+			if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, p, passageTasks, passagePlans); err != nil {
 				abort("keeper_dispatch_failed", err)
 				return
 			}
@@ -829,7 +834,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		abort("state_changes_render_failed", err)
 		return
 	}
-	stateAfter, err := mergeStateChanges(stateBefore, renderedOps, art.Manifest.StateSchema, r.deps.Render.EvalStateMatch, r.deps.Render.EvalStateOpExpr)
+	matchEval, opEval := r.deps.Render.StateOpEvaluators(ctx, inc.Service)
+	stateAfter, err := mergeStateChanges(stateBefore, renderedOps, art.Manifest.StateSchema, matchEval, opEval)
 	if err != nil {
 		// A failed operation apply (on_conflict: error / inconsistent collection /
 		// match predicate failed) → error_locked, state is NOT committed
@@ -1517,12 +1523,12 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 
 // persistRunPlan saves the run's ACTIVE Passage's host-invariant task plan
 // (apply_run_plan, NIM-37) for the /tasks read endpoint: one row per
-// plan_index with name/module/no_log/passage + masked params (S1b). Called
+// plan_index with name/module/passage + masked params (S1b). Called
 // PER-PASSAGE from its active render; the t.Passage != activePassage filter
 // drops future Passages' placeholders (staged-render, ADR-056 §c.1), whose
 // compacted indices would diverge from actual execution (H1). Idempotent
 // (insertRunPlanSQL = ON CONFLICT DO UPDATE), passage slices don't overlap by
-// plan_index. name/module/no_log are NOT secret (task address/type), no
+// plan_index. name/module are NOT secret (task address/type), no
 // masking needed; params CAN carry a secret → maskRunPlanParams (seal-aware
 // masking + transport filter) on the write path. sealedPaths is the run's
 // sealed paths (sealed.Paths()) for the same seal-aware masker as
@@ -1545,7 +1551,6 @@ func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*rend
 			PlanIndex: t.Index,
 			Name:      t.Name,
 			Module:    t.Module,
-			NoLog:     t.NoLog,
 			Passage:   t.Passage,
 			Params:    maskRunPlanParams(t, sealedPaths),
 		})
@@ -1572,12 +1577,16 @@ const (
 // (template_content/render_context), runs the rest through seal-aware masking
 // (the same audit.MaskSecretsSealed as status_details/error_summary:
 // run sealed paths + vault-ref + regex-last-resort with an alarm) — a SECOND
-// barrier on top of already-rendered params. A no_log task / no Params /
-// empty remainder → nil (jsonb NULL, symmetric to suppressing register_data
-// for no_log). A marshal error → nil (best-effort: params observability
+// barrier on top of already-rendered params. No Params / empty remainder → nil
+// (jsonb NULL). A marshal error → nil (best-effort: params observability
 // degrades, plan persist doesn't fail).
+//
+// The blanket `no_log:` skip is gone with the key ([ADR-0083] §8). It was the
+// coarse form of what the seal already does per cell and from the schema rather
+// than from the author: a params cell that read a secret source is masked here
+// whether or not anyone remembered to mark the task.
 func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []byte {
-	if t == nil || t.NoLog || t.Params == nil {
+	if t == nil || t.Params == nil {
 		return nil
 	}
 	m := t.Params.AsMap()

@@ -89,7 +89,7 @@
       config: >-
         ${ merge(compute.redis_config, {
              'masteruser': compute.admin_user,
-             'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+             'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
            }) }
       # * SYSTEM + operator-extra (system-ACL-users, design d2 Variant A): service
       # default_admin/replica/monitoring/sentinel/haproxy from vars.system_acl_users
@@ -98,7 +98,7 @@
       # from vars.system_acl_users like all others: intra-cluster AUTH runs under it (replaced
       # requirepass-default - which is removed from redis.conf). Without the system users, replication (replica),
       # cluster MEET/REPLICATE (default_admin) and health-check would break. Vault password -
-      # secret/redis/<inc>/users/<name>#password. operator-extra: .map(u, {u.name: ...}) (name
+      # secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password. operator-extra: .map(u, {u.name: ...}) (name
       # from the u.name field). Both .map calls yield a LIST of single-key maps, merge(list-of-maps)
       # folds them into one map (templating §2.3); argument order = priority.
       users: >-
@@ -107,7 +107,7 @@
                name: {
                  'perms':    vars.system_acl_users[name],
                  'state':    'on',
-                 'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                 'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                }
              })),
              has(input.users)
@@ -115,7 +115,7 @@
                    u.name: {
                      'perms':    u.perms,
                      'state':    u.state,
-                     'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                     'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                    }
                  }))
                : {}
@@ -161,7 +161,7 @@
     # * default_admin REDESIGN: AUTH under default_admin (requirepass removed). username +
     # its password come from the new Vault branch. The community.redis plugin passes username into AUTH.
     username: "${ compute.admin_user }"
-    password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
@@ -201,7 +201,7 @@
     # is set, only serves as a size check of the composition (the plugin fails on a size mismatch).
     topology: "${ has(input.cluster_topology) ? input.cluster_topology : [] }"
     username:           "${ compute.admin_user }"
-    password:           "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:           "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:                "${ compute.tls_on }"
     tls_ca:             "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     tls_cert:           "${ compute.tls_on ? vault(compute.tls_cert_ref) : '' }"

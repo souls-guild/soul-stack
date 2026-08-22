@@ -89,7 +89,7 @@ input:
     pattern: "^[^\\r\\n]+$"
     description: >-
       Redis/ACL password. It is rendered only into this instance's root-owned 0600
-      EnvironmentFile by a no_log task; never into argv, the unit, state, or logs.
+      EnvironmentFile; never into argv, the unit, state, or logs.
 
   redis_user:
     type: string

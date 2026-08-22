@@ -281,7 +281,7 @@ input:
       ACL string (not an alias): Redis ACL directives as-is, e.g. "~* +@all" or
       "~app:* +@read +@write -@dangerous". Rendered into users.acl (destiny `redis`);
       each user's password is resolved keeper-side from Vault by the convention
-      secret/redis/<incarnation>/users/<name>#password.
+      secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password.
 
   # ── redis_settings: passthrough redis.conf directives (KEY→VALUE, #6) ─────────
   # ★ #6 (2026-06-26): additional_properties: true (arbitrary JSON) narrowed to
@@ -463,9 +463,21 @@ compute:
   # path - they DON'T hardcode 'default_admin' in dozens of places. A literal (not
   # from input/service vars): the system user's name is a service invariant, not an
   # operator choice. default_admin's password is
-  # secret/redis/<inc>/users/<admin_user>#password. ★ day-2 bodies (outside covenant)
+  # in `system_acl_users` state, so its password is the derived secret of that field
+  # ([ADR-0083] §1) — no path is written anywhere. ★ day-2 bodies (outside covenant)
   # hardcode 'default_admin' directly (they don't have extends: covenant compute).
   admin_user: "${ 'default_admin' }"
+  # ── system_acl_names: the service's OWN ACL accounts, name list ─────────────────────
+  # The union of vars.system_acl_users ∪ vars.system_acl_users_sentinel keys: the
+  # accounts the SERVICE provisions for itself (default_admin/replica/monitoring/
+  # sentinel/haproxy), as opposed to redis_users, which is operator intent. Declared
+  # once here because two places must not drift: the `core.state.present` task that
+  # mints their passwords, and the `system_acl_users` state record written by
+  # state_changes. perms are NOT part of it — those stay in service vars (policy),
+  # state records only which accounts exist.
+  system_acl_names: >-
+    ${ merge(default(vars.system_acl_users, {}).map(n, { n: 0 })
+             + default(vars.system_acl_users_sentinel, {}).map(n, { n: 0 })).map(name, name) }
   # ── TLS flags: connection_mode enum + service vars parameters (redesign) ────────────
   # TLS intent is connection_mode (an input enum with a default -> always present);
   # port/refs come from service vars (see tls_on/tls_only_on/tls_port/tls_*_ref below).
@@ -824,9 +836,18 @@ state_changes:
            : '' }
 
   # redis_users - a TYPED array of AclUser (wave 1b, map→array). state stores
-  # input.users as-is (an array [{name,perms,state}]); passwords are NOT in state (Vault).
+  # input.users as-is (an array [{name,perms,state}]); the `password` property is
+  # declared `type: secret`, so its value lives in Vault and the state engine strips
+  # it on the way in ([ADR-0083] §4) - input.users never carries one anyway.
   - set: redis_users
     value: "${ default(input.users, []) }"
+  # system_acl_users - the service's OWN accounts (compute.system_acl_names). state
+  # records WHICH accounts exist; their perms stay in service vars (policy, not state)
+  # and their passwords in Vault at the path derived from this field ([ADR-0083] §1).
+  # Without the record, day-2 could not tell a provisioned account from one an operator
+  # added to vars after create, and .../secrets/reveal would have nothing to enumerate.
+  - set: system_acl_users
+    value: "${ compute.system_acl_names.map(n, { 'name': n }) }"
   # redis_hosts is empty in ALL modes: state_changes render per-host with
   # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) - the roster soulprint.hosts
   # is NOT AVAILABLE here (boundary: state is per-run, roles are laid out on the apply side).

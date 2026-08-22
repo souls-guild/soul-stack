@@ -19,12 +19,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
-  # ★ default_admin redesign (2026-06-30): default_admin vault branch (connect as the
-  # system admin user). The guard aborts render BEFORE the REMOVE task — the password isn't
-  # resolved here, but the branch is updated to the new form for consistency with the happy-path case.
-  vault:
-    secret/redis/remove_node/users/default_admin:
-      password: default-admin-secret-pass
   state:
     redis_type: cluster
     redis_version: ""
@@ -36,6 +30,12 @@ fixtures:
     redis_users: []
     redis_hosts: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     remove_node_sid: node-3.example.com
     seed_sid: node-3.example.com
@@ -43,4 +43,15 @@ fixtures:
 # Render ABORTS on the guard assert failure: we expect a render error with the message from
 # the assert. expect_render_error is mutually exclusive with assert.rendered_tasks (there's no plan —
 # the run never started).
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
 expect_render_error: "remove_node guard: remove_node_sid/seed_sid must be distinct hosts of the run roster"

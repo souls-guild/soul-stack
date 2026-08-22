@@ -11,8 +11,9 @@ package scenario
 // (security signal).
 //
 // Per-ref check: has vault_scope? no → reject; path matches scope? no →
-// reject; path in deny-list? yes → reject; else ReadKV. Scope/deny checks are
-// pure (shared/config); this file adds the KV read + audit.
+// reject; path in deny-list? yes → reject; path inside the service's own
+// derived namespace? yes → reject ([ADR-0083] §7); else ReadKV. All four
+// predicates are pure (shared/config); this file adds the KV read + audit.
 
 import (
 	"context"
@@ -34,12 +35,25 @@ type InputVaultReader interface {
 }
 
 // inputVaultAuditCtx is the run's fixed context for the resolution audit
-// event: who (aid), where (incarnation/scenario). Field and path are added
-// inline.
+// event: who (aid), where (incarnation/scenario/service). Field and path are
+// added inline.
+//
+// service is the owner the §7 own-namespace fence compares against, not an
+// audit field: this channel is the one an OPERATOR supplies, so a scope of
+// `secret/*` — legal, and the shape the load-time scan documents itself as
+// unable to see — would otherwise hand an operator a read of the platform's
+// own derived secret through a route none of the three fence layers covered.
+//
+// Unlike the render-side fence, an empty service here is a WIRING BUG rather
+// than a legitimate mode: this resolver only ever exists for a scenario run
+// against an incarnation, and an incarnation always has a service. Both call
+// sites therefore fail closed on it (see the resolver), so a forgotten field
+// refuses the read instead of silently fencing nothing.
 type inputVaultAuditCtx struct {
 	aid         string
 	incarnation string
 	scenario    string
+	service     string
 }
 
 // Errors for input-vault-ref resolution. Messages never carry the resolved
@@ -49,6 +63,8 @@ var (
 	errInputVaultNoScope = errors.New("vault:-ref value in input is forbidden: field has no vault_scope (default-deny)")
 	errInputVaultOutOf   = errors.New("vault:-ref value in input is outside the allowed vault_scope")
 	errInputVaultDenied  = errors.New("vault:-ref value in input points to a forbidden path (deny-list)")
+	errInputVaultOwnNS   = errors.New("vault:-ref value in input addresses the service's own namespace, which the platform derives and owns ([ADR-0083] §7)")
+	errInputVaultNoOwner = errors.New("vault:-ref value in input cannot be resolved: the run has no service identity to fence its own namespace against")
 )
 
 // newInputVaultResolver builds a config.InputVaultResolver for one run.
@@ -98,7 +114,20 @@ func buildInputVaultResolver(ctx context.Context, vc InputVaultReader, w audit.W
 			return nil, fmt.Errorf("input %q: %w", name, errInputVaultDenied)
 		}
 
-		// 4. ReadKV.
+		// 4. own-namespace fence ([ADR-0083] §7), AFTER the floor: an operator
+		//    reading the platform's derived secret back out is the same second
+		//    copy an authored path would be, and vault_scope is set by the
+		//    service author, so it cannot be relied on to exclude the prefix.
+		if ac.service == "" {
+			auditInputVault(ctx, w, ac, name, logical, "denied", "no_service_identity", log)
+			return nil, fmt.Errorf("input %q: %w", name, errInputVaultNoOwner)
+		}
+		if config.PathAddressesOwnNamespace(logical, ac.service) {
+			auditInputVault(ctx, w, ac, name, logical, "denied", "own_namespace", log)
+			return nil, fmt.Errorf("input %q: %w", name, errInputVaultOwnNS)
+		}
+
+		// 5. ReadKV.
 		data, err := vc.ReadKV(ctx, logical)
 		if err != nil {
 			auditInputVault(ctx, w, ac, name, logical, "denied", "read_error", log)

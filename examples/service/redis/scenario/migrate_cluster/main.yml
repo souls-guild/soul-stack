@@ -109,12 +109,15 @@ input:
   # Coordinates and credentials of the EXTERNAL source. password_ref/tls_ca_ref are Vault
   # PATHS (NOT values): the scenario reads them via the author channel
   # ${ vault(input.source.<ref>) } in the render phase (templating.md §2.3/§4). ★
-  # pattern-guard secret/redis/migrate/* — BOTH refs MUST live under this prefix: the
+  # pattern-guard secret/redis-migrate/* — BOTH refs MUST live under this prefix: the
   # operator cannot point vault() at an arbitrary path of their own Keeper token (closes
   # the path-injection caveat in templating.md §4 — a static ban on input-derived vault()
-  # paths). This is NOT vault_scope (that resolves a vault:-VALUE in input keeper-side
-  # BEFORE validation, docs/input.md) — here the operator gives a PATH string, and the
-  # scenario itself reads it (author channel).
+  # paths). The prefix sits OUTSIDE secret/redis/, and must: that namespace is the one the
+  # platform derives this service's own secrets into and refuses an authored path in
+  # ([ADR-0083] §7). The source belongs to someone else, so it does not live there anyway
+  # — the fence only made that explicit. This is NOT vault_scope (that resolves a
+  # vault:-VALUE in input keeper-side BEFORE validation, docs/input.md) — here the operator
+  # gives a PATH string, and the scenario itself reads it (author channel).
   source:
     type: object
     required: true
@@ -131,20 +134,19 @@ input:
         type: string
         # ★ pattern: added `#` to the character class (on top of the spec form
         # [A-Za-z0-9._/-]) — a Vault ref carries a field suffix via `#`
-        # (secret/redis/migrate/oldcluster#password, matching the whole redis convention
-        # secret/redis/<inc>#password); without `#` a valid ref would get rejected. The
-        # anchor ^secret/redis/migrate/ is KEPT — the path-injection guard is not weakened
-        # (the operator is locked into this prefix, cannot point vault() at
+        # (secret/redis-migrate/oldcluster#password); without `#` a valid ref would get
+        # rejected. The anchor ^secret/redis-migrate/ is KEPT — the path-injection guard is
+        # not weakened (the operator is locked into this prefix, cannot point vault() at
         # secret/keeper/*).
-        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        pattern: "^secret/redis-migrate/[A-Za-z0-9._/#-]+$"
         description: >-
           The Vault PATH to the credential password of the EXTERNAL source (NOT the
-          value). Under the strict pattern secret/redis/migrate/* (path-injection guard; a
+          value). Under the strict pattern secret/redis-migrate/* (path-injection guard; a
           `#field` suffix is allowed). The scenario reads it via
           vault(input.source.password_ref) in the render phase; only the resolved value
           ships to the host (ADR-012). Not set → source without AUTH (empty password).
       tls_ca_ref:
-        pattern: "^secret/redis/migrate/[A-Za-z0-9._/#-]+$"
+        pattern: "^secret/redis-migrate/[A-Za-z0-9._/#-]+$"
         type: string
         description: >-
           The Vault PATH to the PEM CA for verifying the TLS certificate of the EXTERNAL
@@ -229,7 +231,7 @@ compute:
   # source_master — the master of the EXTERNAL cluster (hosts[0]), to which the fresh
   # master of the new cluster attaches (REPLICAOF pointed at the external one).
   # source_password/source_tls_ca — the author channel vault() by PATH from operator-input
-  # (input.source.password_ref/tls_ca_ref under the pattern-guard secret/redis/migrate/*;
+  # (input.source.password_ref/tls_ca_ref under the pattern-guard secret/redis-migrate/*;
   # path-injection is closed by the pattern, templating.md §4). password_ref is optional →
   # has()-guard, otherwise '' (source without AUTH); tls_ca is read ONLY when
   # source.tls=true. Resolved keeper-side, the value is masked.
@@ -290,6 +292,56 @@ state_changes:
 # Run body — dispatcher branches by redis_type (CONDITIONAL-INCLUDE, like create).
 # S1 pilot: sentinel is implemented, cluster — the B3 flow (S4-3b).
 tasks:
+  # ── Mint this run's ACL passwords ([ADR-0083] §4) ─────────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name), mints what is missing and
+  # returns the effective state with every `type: secret` property replaced by its
+  # `vault:` reference. The generated VALUE never leaves the keeper — not into the
+  # register, not into an audit payload, not into `incarnation.state`.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the deploy bodies read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see from the
+  # file, and both of which had to be re-derived to be trusted.
+
+  - name: Mint the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # compute.system_acl_names (covenant) is the union of vars.system_acl_users and
+      # vars.system_acl_users_sentinel — the SAME source the render below reads, so
+      # "what we mint" and "what we read" cannot drift. generate_secret() evaluates to a
+      # request, not a value: it cannot be stringified, concatenated or logged.
+      set: >-
+        ${ compute.system_acl_names.map(name, {
+             'name':     name,
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
+
+  - name: Mint the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      # present, not set: an account that already holds a value keeps it, so a re-run
+      # never rotates a credential a client is already using. An empty input.users is the
+      # legitimate "no operator-extra" case and needs no `when` guard — an empty
+      # collection is a valid value here (core.vault.kv-present rejected an empty targets
+      # list, which is the only reason the old form carried one).
+      set: >-
+        ${ default(input.users, []).map(u, {
+             'name':     u.name,
+             'perms':    u.perms,
+             'state':    default(u.state, 'on'),
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
+
   # ── provision (ADR-061, like create): cloud-create + onboarding BEFORE deploy+migration ──
   # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE the cluster/sentinel branch:
   # when enabled=true its steps (a) create VMs, (b) register+wait for onboarding with

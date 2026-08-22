@@ -1,0 +1,22 @@
+name: preserves-existing
+description: >
+  A repeat run over already-migrated state: system_acl_users is present, so the has()-guard
+  keeps it verbatim instead of resetting the record to []. Idempotency of the flat set.
+
+state_before:
+  redis_type: "cluster"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  system_acl_users:
+    - { name: "default_admin" }
+    - { name: "replica" }
+    - { name: "monitoring" }
+
+state_after:
+  redis_type: "cluster"
+  redis_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  system_acl_users:
+    - { name: "default_admin" }
+    - { name: "replica" }
+    - { name: "monitoring" }

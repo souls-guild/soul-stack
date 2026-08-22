@@ -19,6 +19,15 @@ var modVault = schema.Module{
 				"fields": {Type: schema.List, Items: &schema.Param{Type: schema.String}, Description: "Which keys to extract; empty -> the whole secret."},
 				"path":   {Type: schema.String, Required: true, Description: "Vault KV path (mount-relative)."},
 			},
+			// data is the secret itself; path and fields are the audit facts about
+			// it, which are exactly what an operator needs to see when this task
+			// fails ([ADR-0083] §8 — the per-task `no_log` this replaces hid all
+			// three).
+			Output: schema.Output{
+				"data":   {Type: schema.Map, Secret: true, Description: "The extracted keys and their values."},
+				"fields": {Type: schema.List, Items: &schema.Param{Type: schema.String}, Description: "Names of the keys in data, sorted."},
+				"path":   {Type: schema.String, Description: "Echo of the requested Vault KV path."},
+			},
 		},
 	},
 }

@@ -301,7 +301,6 @@ func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 		"retry_on_block_invalid":        "retry: { count: 3 }",
 		"timeout_on_block_invalid":      "timeout: 30s",
 		"output_on_block_invalid":       "output: { x: \"y\" }",
-		"no_log_on_block_invalid":       "no_log: true",
 		"params_on_block_invalid":       "params: { a: 1 }",
 		"async_on_block_invalid":        "async: true",
 	}
@@ -468,7 +467,6 @@ func TestLoadScenarioManifest_ApplyForbiddenKeys(t *testing.T) {
 		"retry_on_apply_invalid":        "retry: { count: 3 }",
 		"timeout_on_apply_invalid":      "timeout: 30s",
 		"params_on_apply_invalid":       "params: { a: 1 }",
-		"no_log_on_apply_invalid":       "no_log: true",
 	}
 	for wantCode, line := range cases {
 		t.Run(wantCode, func(t *testing.T) {
@@ -495,7 +493,6 @@ tasks:
     retry: { count: 3 }
     timeout: 30s
     vars: { v: "x" }
-    no_log: true
     params: { cmd: "true" }
   - apply:
       destiny: redis
@@ -1571,6 +1568,36 @@ tasks:
 	if !found {
 		dump(t, diags)
 		t.Fatalf("expected task-level unknown_key for deprecated wait:")
+	}
+}
+
+// TestLoadScenarioManifest_TaskNoLogRemoved — `no_log:` is gone ([ADR-0083] §8):
+// a module declares `secret: true` on the output fields it returns, and the
+// platform masks exactly those. A surviving key must FAIL rather than be ignored —
+// a scenario that still writes it was written expecting suppression, and silently
+// accepting it would promise a masking the platform no longer performs from that
+// side. It reaches the author as unknown_key WITH the replacement hint, on the
+// task path, both at the top level and inside a block.
+func TestLoadScenarioManifest_TaskNoLogRemoved(t *testing.T) {
+	cases := map[string]string{
+		"$.tasks[0].no_log":          "name: x\ntasks:\n  - module: core.exec.run\n    no_log: true\n    params: { cmd: \"true\" }\n",
+		"$.tasks[0].block[0].no_log": "name: x\ntasks:\n  - block:\n      - module: core.exec.run\n        no_log: true\n        params: { cmd: \"true\" }\n",
+	}
+	for path, src := range cases {
+		path, src := path, src
+		t.Run(path, func(t *testing.T) {
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			found := false
+			for _, d := range diags {
+				if d.Code == "unknown_key" && d.YAMLPath == path && strings.Contains(d.Hint, "ADR-0083") {
+					found = true
+				}
+			}
+			if !found {
+				dump(t, diags)
+				t.Fatalf("expected unknown_key with an ADR-0083 hint at %s", path)
+			}
+		})
 	}
 }
 

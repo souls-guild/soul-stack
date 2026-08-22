@@ -1,6 +1,7 @@
 package scenario
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -29,15 +30,16 @@ func noOpEval(string, map[string]any, map[string]any, bool) (any, error) {
 
 var errInvariant = errors.New("matchEval/opEval must not be called in this test")
 
-// opEvalForTest builds a real render.Pipeline.EvalStateOpExpr (CEL for
-// modify/remove match+patch with the full scenario context + element bindings).
+// opEvalForTest builds a real merge-time opEval (CEL for modify/remove
+// match+patch with the full scenario context + element bindings).
 func opEvalForTest(t *testing.T) render.StateOpEvalFunc {
 	t.Helper()
 	eng, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
-	return render.NewPipeline(nil, eng, nil, nil).EvalStateOpExpr
+	_, opEval := render.NewPipeline(nil, eng, nil, nil).StateOpEvaluators(context.Background(), "")
+	return opEval
 }
 
 func setOp(field string, val any) render.RenderedOp {
@@ -137,14 +139,15 @@ var redisHostsSchema = map[string]any{
 	},
 }
 
-// matchEvalForTest builds a real render.Pipeline.EvalStateMatch (CEL elem/value).
+// matchEvalForTest builds a real merge-time matchEval (CEL elem/value).
 func matchEvalForTest(t *testing.T) render.StateMatchFunc {
 	t.Helper()
 	eng, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
-	return render.NewPipeline(nil, eng, nil, nil).EvalStateMatch
+	matchEval, _ := render.NewPipeline(nil, eng, nil, nil).StateOpEvaluators(context.Background(), "")
+	return matchEval
 }
 
 func addRedisHost(sid, role string, onConflict config.OnConflict) render.RenderedOp {
@@ -508,6 +511,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	p := render.NewPipeline(nil, eng, nil, nil)
+	matchEval, opEval := p.StateOpEvaluators(context.Background(), "")
 	in := render.RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"replicas": []any{"r1", "r2", "r3"}},
@@ -525,7 +529,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 	}}
 	before := map[string]any{"redis_hosts": []any{"r0"}}
 
-	after, err := mergeStateChanges(before, ops, schema, p.EvalStateMatch, p.EvalStateOpExpr)
+	after, err := mergeStateChanges(before, ops, schema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -535,7 +539,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 	}
 
 	// Idempotency: repeating the same ops → length doesn't grow (on_conflict: skip).
-	again, err := mergeStateChanges(after, ops, schema, p.EvalStateMatch, p.EvalStateOpExpr)
+	again, err := mergeStateChanges(after, ops, schema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge2: %v", err)
 	}
@@ -567,6 +571,7 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	p := render.NewPipeline(nil, eng, nil, nil)
+	matchEval, opEval := p.StateOpEvaluators(context.Background(), "")
 	in := render.RenderInput{
 		Scenario: manifest,
 		Input: map[string]any{"changes": map[string]any{
@@ -586,7 +591,7 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 		"bob":   map[string]any{"acl": "+@read", "state": "on"},
 		"carol": map[string]any{"acl": "+@read", "state": "on"},
 	}}
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, p.EvalStateMatch, p.EvalStateOpExpr)
+	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -967,32 +972,44 @@ func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 	}
 }
 
-// Variant B: a task's register with NoLog=true is NOT accumulated into the
-// per-host map — its register name never lands in nameByIdx, so the row is
-// skipped and the sensitive value never reaches the state graph
-// (orchestration.md §7).
-func TestBuildRegisterByHost_NoLogTaskExcluded(t *testing.T) {
+// EVERY task with a register: is accumulated, including one whose module
+// returns a secret. The `no_log:` exclusion that used to drop such a task's row
+// wholesale went with the key ([ADR-0083] §8) and deliberately has no per-field
+// successor here: this same fold feeds the NEXT Passage's render
+// (loadRegisterByHostUpToPassage), so dropping the row would break the register
+// chain rather than protect it — the following task would read nothing where
+// the previous one wrote.
+//
+// The protection moved earlier and got narrower. A declared secret never travels
+// through a register as plaintext: §1 keeps it out of incarnation.state and §6
+// turns the value a keeper task writes into a `vault:` ref, sealing the register
+// name so any state cell reading it is masked on the way out ([ADR-010] §7.4).
+// A reversal that reinstated a drop here would look like extra safety and would
+// actually break the chain.
+func TestBuildRegisterByHost_SecretCarryingTaskIsAccumulated(t *testing.T) {
 	tasks := []*render.RenderedTask{
-		{Index: 0, Register: "plain"},                     // ordinary — accumulated
-		{Index: 1, Register: "secret_probe", NoLog: true}, // no_log - NOT accumulated
+		{Index: 0, Register: "plain"},
+		{Index: 1, Register: "secret_probe", SecretOutput: []string{"data"}},
 	}
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "ok"}},
-		{ApplyID: "a", SID: "host-1", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"stdout": "s3cr3t"}},
+		{ApplyID: "a", SID: "host-1", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"data": "vault:secret/x#value"}},
 	}
 
 	got := buildRegisterByHost(rows, tasks)
 
-	// Ordinary register is intact (variant B doesn't break non-no_log tasks).
 	if v := got["host-1"]["plain"].(map[string]any)["stdout"]; v != "ok" {
 		t.Errorf("host-1.plain.stdout = %v, want ok", v)
 	}
-	// no_log register is absent → a set referencing it gets no-such-key.
-	if _, ok := got["host-1"]["secret_probe"]; ok {
-		t.Errorf("host-1.secret_probe should not exist (no_log task)")
+	probe, ok := got["host-1"]["secret_probe"].(map[string]any)
+	if !ok {
+		t.Fatalf("host-1.secret_probe missing — the next Passage would read nothing where this task wrote")
 	}
-	if len(got["host-1"]) != 1 {
-		t.Errorf("host-1 register keys = %d, want 1 (plain only)", len(got["host-1"]))
+	if probe["data"] != "vault:secret/x#value" {
+		t.Errorf("host-1.secret_probe.data = %v, want the ref stored intact", probe["data"])
+	}
+	if len(got["host-1"]) != 2 {
+		t.Errorf("host-1 register keys = %d, want 2", len(got["host-1"]))
 	}
 }
 
@@ -1190,5 +1207,69 @@ func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 	}
 	if bucket := keeperRegisterBucket(map[string]map[string]any{}); bucket != nil {
 		t.Errorf("keeperRegisterBucket(empty) = %v, want nil", bucket)
+	}
+}
+
+// ★ Mirror guard for [ADR-0083] §4 — a DECLARED secret (`type: secret`) never
+// reaches the merged state record. Byte-for-byte identical in scenario and trial
+// (state_test.go ↔ diff_test.go): the two merges must strip the same way, or a
+// Trial preview would show a password the real commit does not store.
+//
+// The `secret: true` field next to it is the OTHER marker ([ADR-010] §7.4) — that
+// value LIVES in state and is masked on the way out. It must survive untouched;
+// stripping it would silently delete an operator's data.
+func secretStripSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"admin_password": map[string]any{"type": "secret"},
+			"tls_key":        map[string]any{"type": "string", "secret": true},
+			"redis_users": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":     map[string]any{"type": "string"},
+						"perms":    map[string]any{"type": "string"},
+						"password": map[string]any{"type": "secret", "key": "name"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestMergeStateChanges_StripsDeclaredSecrets_Prod(t *testing.T) {
+	before := map[string]any{"tls_key": "KEEP-ME"}
+	ops := []render.RenderedOp{
+		{Verb: config.VerbSet, Field: "admin_password", Value: "PLAINTEXT-ADMIN"},
+		{Verb: config.VerbSet, Field: "redis_users", Value: []any{
+			map[string]any{"name": "alice", "perms": "+@read", "password": "PLAINTEXT-ALICE"},
+		}},
+	}
+
+	out, err := mergeStateChanges(before, ops, secretStripSchema(), nil, nil)
+	if err != nil {
+		t.Fatalf("mergeStateChanges: %v", err)
+	}
+	if _, ok := out["admin_password"]; ok {
+		t.Errorf("scalar declared secret survived the merge: %v", out)
+	}
+	users, _ := out["redis_users"].([]any)
+	if len(users) != 1 {
+		t.Fatalf("redis_users = %v", out["redis_users"])
+	}
+	el, _ := users[0].(map[string]any)
+	if _, ok := el["password"]; ok {
+		t.Errorf("collection declared secret survived the merge: %v", el)
+	}
+	if el["name"] != "alice" || el["perms"] != "+@read" {
+		t.Errorf("the addressing properties were damaged: %v", el)
+	}
+	if out["tls_key"] != "KEEP-ME" {
+		t.Errorf("tls_key = %v, want the ADR-010 `secret: true` value left in state", out["tls_key"])
+	}
+	if blob, _ := json.Marshal(out); strings.Contains(string(blob), "PLAINTEXT") {
+		t.Errorf("a plaintext secret is in the committed record: %s", blob)
 	}
 }

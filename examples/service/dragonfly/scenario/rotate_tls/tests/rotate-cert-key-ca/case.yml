@@ -46,6 +46,12 @@ fixtures:
       tls_replication:  "true"
     df_users: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     # New refs (rotating all three).
     cert_ref: "secret/services/dragonfly/tls-v2#cert"
@@ -53,9 +59,6 @@ fixtures:
     ca_ref:   "secret/services/dragonfly/tls-v2#ca"
 
   vault:
-    # default_admin: the 3 CONFIG SET tls_*_file calls connect as this user (requirepass removed).
-    secret/dragonfly/rotate_tls/users/default_admin:
-      password: dfadmin-rotate-tls-pass
     # Connection CA (state.tls.ca_ref pre-run) — current trust for this run.
     secret/services/dragonfly/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
@@ -64,6 +67,19 @@ fixtures:
       cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-rotate-tls-pass }
+    df_users:
+      effective: []
 
 assert:
   task_present:

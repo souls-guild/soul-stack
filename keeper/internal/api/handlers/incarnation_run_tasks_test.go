@@ -4,8 +4,8 @@ package handlers
 // input (bad name → 422, bad apply_id → 400), the scope gate (deny → 404, an apply_id
 // that isn't ours = EXISTS false → 404), and the core plan-join logic (apply_run_plan) with
 // per-host results from audit (task.executed): grouping by plan_index→sid, last-wins on
-// retry, sorting by sid, no_log → output suppressed, a pending host (present in the plan but
-// without an audit result) excluded. The real SQL scan of the plan/audit is covered in the
+// retry, sorting by sid, declared-secret output arriving already masked ([ADR-0083] §8),
+// a pending host (present in the plan but without an audit result) excluded. The real SQL scan of the plan/audit is covered in the
 // integration store tests; here we test the handler layer: the domain function + join + inScope.
 
 import (
@@ -19,12 +19,11 @@ import (
 )
 
 // planRow — a single apply_run_plan row (column order from selectRunPlanByApplyIDSQL:
-// plan_index/name/module/no_log/passage/params).
+// plan_index/name/module/passage/params).
 type planRow struct {
 	planIndex int
 	name      string
 	module    string
-	noLog     bool
 	passage   int
 	params    []byte
 }
@@ -48,9 +47,8 @@ func (r *runPlanRowsStub) Scan(dest ...any) error {
 	*(dest[0].(*int)) = row.planIndex
 	*(dest[1].(*string)) = row.name
 	*(dest[2].(*string)) = row.module
-	*(dest[3].(*bool)) = row.noLog
-	*(dest[4].(*int)) = row.passage
-	*(dest[5].(*[]byte)) = row.params
+	*(dest[3].(*int)) = row.passage
+	*(dest[4].(*[]byte)) = row.params
 	return nil
 }
 
@@ -131,23 +129,25 @@ func TestRunTasksTyped_EmptyPlan_OK(t *testing.T) {
 
 // TestRunTasksTyped_PlanAuditJoin — the central guard: a 3-task plan is joined with
 // audit results by plan_index→sid. Checks last-wins (retry on host-a), sorting hosts by
-// sid, no_log→output suppressed, a pending task without audit (hosts empty), and that
-// masked params (S1b) are deserialized from jsonb into an object.
+// sid, a declared-secret output field arriving already masked ([ADR-0083] §8), a pending
+// task without audit (hosts empty), and that masked params (S1b) are deserialized from
+// jsonb into an object.
 func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 	db := withPlan(&fakeIncDB{},
-		planRow{planIndex: 0, name: "install", module: "core.pkg.installed", noLog: false, passage: 0, params: []byte(`{"name":"redis","state":"present"}`)},
-		planRow{planIndex: 1, name: "secret", module: "core.exec.run", noLog: true, passage: 0, params: nil},
-		planRow{planIndex: 2, name: "restart", module: "core.service.running", noLog: false, passage: 1, params: []byte(`{"unit":"redis"}`)},
+		planRow{planIndex: 0, name: "install", module: "core.pkg.installed", passage: 0, params: []byte(`{"name":"redis","state":"present"}`)},
+		planRow{planIndex: 1, name: "read credential", module: "core.vault.kv-read", passage: 0, params: []byte(`{"path":"secret/app/cfg"}`)},
+		planRow{planIndex: 2, name: "restart", module: "core.service.running", passage: 1, params: []byte(`{"unit":"redis"}`)},
 	)
 	// execs are ordered chronologically: for (idx0, host-a) the first OK is overwritten
-	// by the later FAILED (retry, last-wins). idx1 is no_log: output is suppressed on the
-	// write path (nil). idx2 has no execs → pending (hosts empty).
+	// by the later FAILED (retry, last-wins). idx1 returns a declared-secret field, masked
+	// on the write path. idx2 has no execs → pending (hosts empty).
 	audit := &fakeRunTasksAudit{execs: []auditpg.TaskExecution{
 		{SID: "host-b", PlanIndex: 0, Status: "TASK_STATUS_CHANGED", Output: map[string]any{"changed": true}},
 		{SID: "host-a", PlanIndex: 0, Status: "TASK_STATUS_OK", Output: map[string]any{"first": true}},
 		{SID: "host-a", PlanIndex: 0, Status: "TASK_STATUS_FAILED",
 			Error: &auditpg.TaskExecutionError{Code: "E_APPLY", Module: "core.pkg.installed", Message: "boom"}},
-		{SID: "host-a", PlanIndex: 1, Status: "TASK_STATUS_OK"}, // no_log → Output nil
+		{SID: "host-a", PlanIndex: 1, Status: "TASK_STATUS_OK",
+			Output: map[string]any{"data": "***MASKED***", "path": "secret/app/cfg"}},
 	}}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	h.SetRunTasksAuditReader(audit)
@@ -162,7 +162,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 
 	// task[0]: 2 hosts, sorted by sid (host-a, host-b); host-a=last FAILED.
 	t0 := v.Tasks[0]
-	if t0.PlanIndex != 0 || t0.Name != "install" || t0.NoLog {
+	if t0.PlanIndex != 0 || t0.Name != "install" {
 		t.Errorf("task0 header = %+v", t0)
 	}
 	// S1b: masked params from jsonb are deserialized into an object.
@@ -193,20 +193,28 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 		t.Errorf("task0 host-b output = %v, want {changed:true}", hb.Output)
 	}
 
-	// task[1]: no_log — output is suppressed (nil), but the task and its host are visible.
+	// task[1]: a secret-carrying task is fully visible — [ADR-0083] §8 masks the declared
+	// field and nothing else. Before §8 this row had NULL params and a nil output, which
+	// cost the operator the whole step to hide one value of it.
 	t1 := v.Tasks[1]
-	if t1.PlanIndex != 1 || !t1.NoLog {
-		t.Errorf("task1 header = %+v, want plan_index=1 no_log=true", t1)
+	if t1.PlanIndex != 1 || t1.Name != "read credential" {
+		t.Errorf("task1 header = %+v, want plan_index=1 name=read credential", t1)
 	}
-	// a no_log task: params are NOT stored (NULL) → nil in the DTO (symmetric with output).
-	if t1.Params != nil {
-		t.Errorf("task1 (no_log) Params = %v, want nil (params are not stored)", t1.Params)
+	if t1.Params == nil || t1.Params["path"] != "secret/app/cfg" {
+		t.Errorf("task1.Params = %v, want {path:secret/app/cfg} (no blanket suppression since §8)", t1.Params)
 	}
 	if len(t1.Hosts) != 1 || t1.Hosts[0].SID != "host-a" {
 		t.Fatalf("task1 hosts = %+v, want [host-a]", t1.Hosts)
 	}
-	if t1.Hosts[0].Output != nil {
-		t.Errorf("task1 (no_log) host output = %v, want nil (suppressed on write-path)", t1.Hosts[0].Output)
+	out := t1.Hosts[0].Output
+	if out == nil {
+		t.Fatalf("task1 host output = nil, want the masked output object")
+	}
+	if out["data"] != "***MASKED***" {
+		t.Errorf("task1 host output.data = %v, want the mask (write-path §8 redaction)", out["data"])
+	}
+	if out["path"] != "secret/app/cfg" {
+		t.Errorf("task1 host output.path = %v, want the non-secret field intact", out["path"])
 	}
 
 	// task[2]: pending — present in the plan, but no audit result → hosts empty.
@@ -228,7 +236,7 @@ func TestRunTasksTyped_PlanAuditJoin(t *testing.T) {
 // the plan row carries already-masked jsonb, only ***MASKED*** appears in the response.
 func TestRunTasksTyped_MaskedParamsFlowThrough(t *testing.T) {
 	db := withPlan(&fakeIncDB{},
-		planRow{planIndex: 0, name: "set password", module: "core.exec.run", noLog: false, passage: 0,
+		planRow{planIndex: 0, name: "set password", module: "core.exec.run", passage: 0,
 			params: []byte(`{"user":"admin","password":"***MASKED***"}`)},
 	)
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)

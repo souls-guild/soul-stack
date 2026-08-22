@@ -9,7 +9,7 @@ description: >-
   The operator supplies ONE AclUser entry (name + perms + state) — the same type as an
   element of the create input.users array (types.yml, ADR-062). perms is validated with the same re2 pattern
   as AclUser in create. The password is NOT in the input contract: it lives in Vault under the convention
-  secret/dragonfly/<incarnation>/users/<name>#password (like create), resolved keeper-side
+  secret/dragonfly/<incarnation>/{df_users,system_acl_users}/<name>#password (like create), resolved keeper-side
   via vault() in the render phase. The scenario merges the new user into the EXPANDED
   incarnation.state.df_users, renders the FULL users.acl to disk (destiny `dragonfly`, the same
   brick as create) and REACTIVATES it via community.redis.acl (ACL LOAD).
@@ -95,6 +95,49 @@ state_changes:
     value: "${ compute.users_new }"
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) - a real register edge puts every
+  # consumer in a strictly later passage than these. The former construction leaned on
+  # the vault-emitter axis, which the author could not see from the file.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element -> present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Mint the new operator ACL user's password, keep the rest
+    on: keeper
+    module: core.state.present
+    register: df_users
+    params:
+      key: df_users
+      # ★★ SCOPE - only input.user carries a request. The already-deployed operator users
+      # are passed WITHOUT a `password` property, so present-semantics require their
+      # existing value: a missing one is a broken incarnation and must fail loudly rather
+      # than silently rotating a working client's credential.
+      #
+      # ★★ RE-RUN: mint-if-empty, so re-running add_user for an EXISTING user upserts
+      # perms/state only and KEEPS the password clients already hold. Rotation is not part
+      # of add_user and is not expressible here by design.
+      set: >-
+        ${ compute.users_new.map(u, u.name == input.user.name
+             ? { 'name': u.name, 'perms': u.perms, 'state': u.state,
+                 'password': generate_secret({'length': 32, 'charset': 'alphanumeric'}) }
+             : { 'name': u.name, 'perms': u.perms, 'state': u.state }) }
+
   # 1. Re-render users.acl to disk with the NEW user set (the same mode-agnostic destiny
   #    `dragonfly` as create). vars.users — the merged set with per-user passwords from Vault (keeper-
   #    side vault(), .tmpl hashes sha256, no plaintext written). We do NOT reactivate dragonfly.conf/TLS —
@@ -121,7 +164,7 @@ tasks:
         config: >-
           ${ merge(incarnation.state.df_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         # ★★ CRITICAL (system-ACL-users): the FULL users.acl = SYSTEM users (from service vars, FIRST) +
         # operator-extra (state.df_users + the new one, compute.users_new — an ARRAY of AclUser — ON TOP).
@@ -130,21 +173,21 @@ tasks:
         # in an operational run. System users (incl. default_admin) are filled in on EVERY render from
         # vars.system_acl_users. last-wins: operator-extra overrides a system user with the same name
         # (system names are locked out by the validate guard — no collision). Each one's Vault password —
-        # secret/dragonfly/<inc>/users/<name>#password.
+        # secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password.
         users: >-
           ${ merge(
                merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                merge(compute.users_new.map(u, {
                  u.name: {
                    'perms':    u.perms,
                    'state':    u.state,
-                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                   'password': merge(register.df_users.effective.map(r, { r.name: r.password }))[u.name]
                  }
                }))
              ) }
@@ -157,6 +200,6 @@ tasks:
     params:
       addr:     "${ compute.local_addr }"
       # ★ default_admin redesign: AUTH as default_admin (requirepass removed). username + its
-      # password from the secret/dragonfly/<inc>/users/default_admin#password branch. UDS without TLS.
+      # password from the secret/dragonfly/<inc>/system_acl_users/default_admin#password branch. UDS without TLS.
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"

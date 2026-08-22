@@ -3,10 +3,12 @@ package render
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 // stubDestinyResolver is an in-memory resolver for apply:destiny unit tests.
@@ -351,3 +353,70 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 
 // block: inside destiny is now SUPPORTED (ADR-009 amendment 2026-06-24) —
 // mechanism guard tests are in destiny_block_test.go.
+
+// fakeModuleManifests — a plugin-manifest resolver over an in-memory table,
+// standing in for the set the keeper resolves from its Sigil grants.
+type fakeModuleManifests map[string]plugin.ModuleDef
+
+func (f fakeModuleManifests) ResolveModule(ns, name string) (plugin.ModuleDef, bool) {
+	m, ok := f[ns+"."+name]
+	return m, ok
+}
+
+// TestRender_ApplyDestiny_SecretOutputStillDerived — [ADR-0083] §8 redaction has to
+// survive the destiny boundary. renderApplyDestiny builds an ISOLATED RenderInput and
+// deliberately drops the caller's scope (ServiceVars, Register, RegisterByHost); Modules
+// is not scope — it is the resolver that says which of a module's `output:` fields are
+// declared secret. Dropping it alongside the scope would leave the very same module
+// masked on the scenario path and printed in full on the destiny path, with nothing in
+// the manifest or the scenario to hint at the difference.
+func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
+	manifests := fakeModuleManifests{
+		"community.redis": plugin.ModuleDef{
+			Name: "redis",
+			States: map[string]plugin.StateDef{
+				"acl-present": {
+					Input:  plugin.Input{"user": {Type: "string", Required: true}},
+					Output: plugin.Output{"password": {Type: "string", Secret: true}, "user": {Type: "string"}},
+				},
+			},
+		},
+	}
+	dst := &ResolvedDestiny{
+		Name: "grant-acl",
+		Tasks: []config.Task{
+			{
+				Name:     "Create the ACL user",
+				Register: "acl",
+				Module:   &config.ModuleTask{Module: "community.redis.acl-present", Params: map[string]any{"user": "app"}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    applyScenario("grant-acl", nil),
+		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "wb-service-redis"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"redis"}, nil)},
+		Destiny:     &stubDestinyResolver{resolved: dst},
+		Modules:     manifests,
+		Sealed:      NewSealedSet(),
+	}
+
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	var found *RenderedTask
+	for _, rt := range tasks {
+		if rt.Module == "community.redis.acl-present" {
+			found = rt
+		}
+	}
+	if found == nil {
+		t.Fatalf("destiny task did not reach the plan: %d tasks rendered", len(tasks))
+	}
+	if got := strings.Join(found.SecretOutput, ","); got != "password" {
+		t.Errorf("SecretOutput = %q, want %q — §8 redaction is dead inside the destiny", got, "password")
+	}
+}

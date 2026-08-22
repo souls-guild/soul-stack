@@ -82,8 +82,15 @@ func TestRedisExporterMultiInstanceIsolation(t *testing.T) {
 				if mode := nestedString(t, params, "mode"); mode != "0600" {
 					t.Fatalf("secret file %s mode = %q, want 0600", path, mode)
 				}
-				if !task.NoLog {
-					t.Fatalf("secret render %s is not no_log", path)
+				// `no_log:` is gone ([ADR-0083] §8). What protects this render is
+				// narrower and does not depend on the author remembering a flag:
+				// the file lands 0600 root-only (asserted above), the password
+				// reaches it only through a Go-template reference resolved on the
+				// host, and maskRunPlanParams drops template_content/render_context
+				// from the stored plan outright. The assertion that bites is that
+				// no credential VALUE is baked into the template text.
+				if content := nestedString(t, params, "template_content"); strings.Contains(content, "change-me-please-32") {
+					t.Fatalf("secret render %s bakes a plaintext password into template_content", path)
 				}
 				if strings.HasPrefix(path, "/etc/default/redis_exporter-") {
 					content := nestedString(t, params, "template_content")
@@ -144,7 +151,7 @@ func TestRedisExporterMultiInstanceIsolation(t *testing.T) {
 	}
 	for _, path := range wantSecretFiles {
 		if !secretFiles[path] {
-			t.Errorf("missing no_log root-only per-instance secret file %s", path)
+			t.Errorf("missing root-only per-instance secret file %s", path)
 		}
 	}
 }
@@ -207,8 +214,11 @@ func TestRedisExporterRedissWebTLS(t *testing.T) {
 
 		case "/etc/redis_exporter/redis-tls/web.yml":
 			webFound = true
-			if !task.NoLog || nestedString(t, params, "mode") != "0600" {
-				t.Fatal("TLS web-config must be a no_log 0600 render")
+			if nestedString(t, params, "mode") != "0600" {
+				t.Fatal("TLS web-config must be a 0600 render")
+			}
+			if content := nestedString(t, params, "template_content"); strings.Contains(content, "$2y$12$abcdefghijklmnopqrstuv") {
+				t.Fatal("TLS web-config bakes a plaintext credential into template_content")
 			}
 		}
 	}

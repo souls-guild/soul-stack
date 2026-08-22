@@ -429,7 +429,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 // === run tasks reply-DTO (run plan + per-host results) — NIM-37 ===
 
 // RunTaskErrorEntry — native error part of a per-host task outcome (FAILED/TIMED_OUT).
-// message omitempty: suppressed for a no_log task (may carry a plaintext secret).
+// message omitempty: a module may fail without one.
 type RunTaskErrorEntry struct {
 	Code    string `json:"code"`
 	Module  string `json:"module"`
@@ -437,8 +437,10 @@ type RunTaskErrorEntry struct {
 }
 
 // RunTaskHostEntry — native element of tasks[].hosts[]: per-host task outcome. output —
-// register_data (omitempty: nil for tasks without register: / no_log). error — only on
-// the failed host (omitempty). status — TASK_STATUS_* (keeperv1.TaskStatus).
+// register_data (omitempty: nil for tasks without register:), with the module's
+// declared-secret output fields already masked on the write path ([ADR-0083] §8).
+// error — only on the failed host (omitempty). status — TASK_STATUS_*
+// (keeperv1.TaskStatus).
 type RunTaskHostEntry struct {
 	SID    string                  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper)"`
 	Status string                  `json:"status" enum:"TASK_STATUS_UNSPECIFIED,TASK_STATUS_OK,TASK_STATUS_CHANGED,TASK_STATUS_SKIPPED,TASK_STATUS_FAILED,TASK_STATUS_TIMED_OUT,TASK_STATUS_CANCELLED"`
@@ -447,16 +449,15 @@ type RunTaskHostEntry struct {
 }
 
 // RunTaskEntry — native element of tasks[]: plan of one task (host-invariant
-// name/module/no_log/passage) + per-host results. params omitempty — masked
-// operator input parameters of the task (NIM-37 S1b, secret masking on the write path);
-// nil for no_log tasks and tasks without params. hosts — only hosts with a result in
+// name/module/passage) + per-host results. params omitempty — masked
+// operator input parameters of the task (NIM-37 S1b, seal-aware masking on the
+// write path); nil for tasks without params. hosts — only hosts with a result in
 // audit (pending hosts not included).
 type RunTaskEntry struct {
 	PlanIndex int                     `json:"plan_index"`
 	Passage   int                     `json:"passage"`
 	Name      string                  `json:"name"`
 	Module    string                  `json:"module"`
-	NoLog     bool                    `json:"no_log"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
 	Hosts     []RunTaskHostEntry      `json:"hosts"`
 }
@@ -486,7 +487,6 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 			Passage:   t.Passage,
 			Name:      t.Name,
 			Module:    t.Module,
-			NoLog:     t.NoLog,
 			Params:    ptrMap(t.Params),
 			Hosts:     hosts,
 		}

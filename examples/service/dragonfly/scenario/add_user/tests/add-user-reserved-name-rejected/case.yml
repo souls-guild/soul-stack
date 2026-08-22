@@ -19,6 +19,12 @@ fixtures:
     df_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   # The operator tries to add a user with the reserved name sentinel.
   input:
     user:

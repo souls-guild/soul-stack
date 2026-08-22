@@ -41,17 +41,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.4 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
   vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -84,4 +73,21 @@ fixtures:
 
 # The run aborts on render: size-guard assert "Guard cluster roster size matches shards
 # and replicas" false (4 != 3*(1+0)). Substring — the message of the assert rule in create/cluster.yml.
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default_admin-l0-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 expect_render_error: "host count must be exactly shards*(1+replicas_per_master)"

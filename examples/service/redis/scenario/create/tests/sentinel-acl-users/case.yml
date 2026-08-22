@@ -14,7 +14,7 @@
 #   2. sentinel mode: NO cluster directives in redis.conf; the sentinel daemon and
 #      sentinel.conf ARE PRESENT (unlike cluster, where they are absent).
 #   3. per-user password is resolved by keeper-side vault() using the convention
-#      secret/redis/<inc>/users/<name>#password. ★ REDESIGN default_admin: the system
+#      secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password. ★ REDESIGN default_admin: the system
 #      default_admin — intra-cluster AUTH (~* &* +@all), its password comes from the same
 #      users/default_admin branch (the old "default → main secret" model was removed). Two
 #      operator users (zeta/alpha) with DIFFERENT passwords: the assert catches resolution and cross-leak.
@@ -45,28 +45,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.2 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # Per-user secrets of system users (union system_acl_users ∪
-    # system_acl_users_sentinel, WITHOUT a built-in default).
-    # ★ REDESIGN default_admin (2026-06-30): default_admin — the system user for
-    # intra-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
-    # Operator-extra secrets — DIFFERENT values: cross-leak is detected by the assert.
-    secret/redis/create/users/zeta:
-      password: zeta-user-secret-pass
-    secret/redis/create/users/alpha:
-      password: alpha-user-secret-pass
   vars:
     # install_method — in service vars (author-context, 2026-06-28): install method is
     # NOT operator-input. compute.install reads default(vars.install_method, 'binary').
@@ -120,6 +98,25 @@ fixtures:
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }
       - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective:
+        - { name: zeta, password: zeta-user-secret-pass }
+        - { name: alpha, password: alpha-user-secret-pass }
 
 assert:
   task_present:

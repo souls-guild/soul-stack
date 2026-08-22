@@ -85,7 +85,8 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 
 	// The Acolyte mirrors the run-goroutine path: an upgrade run loads
 	// upgrade/<slug>/ (recipe.FromUpgrade), a regular run loads scenario/<name>/ (ADR-0068).
-	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade, artifact.SnapshotModuleManifests(ctx, deps.ModuleManifests))
+	modules := artifact.SnapshotModuleManifests(ctx, deps.ModuleManifests)
+	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade, modules)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -134,6 +135,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		aid:         recipeAID(recipe),
 		incarnation: incarnationName,
 		scenario:    recipe.ScenarioName,
+		service:     inc.Service,
 	}, deps.InputDenyPaths)
 	effectiveInput, err := config.ResolveInputValuesVault(scn.Input, recipe.Input, resolver)
 	if err != nil {
@@ -151,6 +153,11 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts, // FULL roster (strategy Y) — caller filters its own SID
+		// Modules — same snapshot the scenario was parsed with, so the Acolyte
+		// derives the SAME RenderedTask.secret_output as the run-goroutine
+		// ([ADR-0083] §8); a divergence here would mask different fields on a
+		// claimed run than on the original.
+		Modules: modules,
 		// State is the incarnation.state snapshot for `incarnation.state.<path>`
 		// (ADR-009/010). The Acolyte (failover-claim) must reproduce EXACTLY the
 		// same params as the run-goroutine: state commits only AFTER a

@@ -421,3 +421,25 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// [ADR-0083] §8 makes `secret:` on an OUTPUT field load-bearing. Its §1 puts
+// `type: secret` inside `items:` for a state_schema field, which is a plausible
+// shape to carry over to a manifest — and one nothing reads. Accepting it silently
+// would reproduce the exact failure the retired `no_log:` was retired for.
+func TestValidate_ItemsSecretIsRejected(t *testing.T) {
+	d := minimalSoulModule()
+	d.Modules[0].States = map[string]State{
+		"present": {Description: "d", Output: Output{"users": {Type: List, Items: &Param{Type: Map, Secret: true}}}},
+	}
+	issues := Validate(d)
+	if !hasCode(issues, "items_secret_not_supported") {
+		t.Fatalf("a marking nothing reads must not pass in silence, got %v", codes(issues))
+	}
+	got := issueWithCode(t, issues, "items_secret_not_supported")
+	if got.Level != LevelError {
+		t.Errorf("level = %v, want an error: a warning still ships an unmasked secret", got.Level)
+	}
+	if !strings.Contains(got.Hint, "output.users.secret") {
+		t.Errorf("hint = %q, want it to name the containing field to mark instead", got.Hint)
+	}
+}

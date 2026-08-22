@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -114,9 +115,10 @@ func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 // context (input.*).
 func TestEvalStateOpExpr_MatchSeesContextAndBinding(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
+	_, opEval := p.StateOpEvaluators(context.Background(), "")
 	ctx := map[string]any{"input": map[string]any{"username": "alice"}}
 
-	res, err := p.EvalStateOpExpr("key == input.username", ctx, map[string]any{"key": "alice"}, true)
+	res, err := opEval("key == input.username", ctx, map[string]any{"key": "alice"}, true)
 	if err != nil {
 		t.Fatalf("EvalStateOpExpr: %v", err)
 	}
@@ -124,13 +126,13 @@ func TestEvalStateOpExpr_MatchSeesContextAndBinding(t *testing.T) {
 		t.Errorf("match (key==input.username, key=alice) = %v, want true", res)
 	}
 
-	res2, _ := p.EvalStateOpExpr("key == input.username", ctx, map[string]any{"key": "bob"}, true)
+	res2, _ := opEval("key == input.username", ctx, map[string]any{"key": "bob"}, true)
 	if res2 != false {
 		t.Errorf("match (key=bob) = %v, want false", res2)
 	}
 
 	// patch value (boolOut=false) — interpolation, native type.
-	val, err := p.EvalStateOpExpr("${ input.username }", ctx, nil, false)
+	val, err := opEval("${ input.username }", ctx, nil, false)
 	if err != nil {
 		t.Fatalf("EvalStateOpExpr patch: %v", err)
 	}

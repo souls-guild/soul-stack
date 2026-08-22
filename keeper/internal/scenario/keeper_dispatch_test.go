@@ -10,11 +10,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // fakeKeeperModule is a keeper-side core-module stub: returns a pre-set
@@ -99,7 +101,7 @@ func TestApplyKeeperTask_Success(t *testing.T) {
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
 	rt := &render.RenderedTask{Index: 0, Module: "core.soul.registered", Params: mustStruct(t, map[string]any{"sid": "n1"})}
-	changed, failed, output, _ := r.applyKeeperTask(context.Background(), RunSpec{}, rt)
+	changed, failed, output, _ := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt)
 	if !changed || failed {
 		t.Fatalf("changed=%v failed=%v, want true/false", changed, failed)
 	}
@@ -115,7 +117,7 @@ func TestApplyKeeperTask_FailedEvent(t *testing.T) {
 	mod := &fakeKeeperModule{final: &pluginv1.ApplyEvent{Failed: true, Message: "invalid coven"}}
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true")
 	}
@@ -126,7 +128,7 @@ func TestApplyKeeperTask_FailedEvent(t *testing.T) {
 
 func TestApplyKeeperTask_UnknownModule(t *testing.T) {
 	r := &Runner{keeperModules: fakeKeeperRegistry{}}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true (module not found in Registry)")
 	}
@@ -138,7 +140,7 @@ func TestApplyKeeperTask_UnknownModule(t *testing.T) {
 func TestApplyKeeperTask_ApplyError(t *testing.T) {
 	mod := &fakeKeeperModule{applyErr: fmt.Errorf("ctx canceled")}
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed || msg != "ctx canceled" {
 		t.Fatalf("failed=%v msg=%q, want true/'ctx canceled'", failed, msg)
 	}
@@ -153,7 +155,7 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 	mod := &fakeKeeperModule{} // final=nil, applyErr=nil → Apply sends nothing
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
-	_, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, &render.RenderedTask{Module: "core.soul.registered"})
+	_, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, &render.RenderedTask{Module: "core.soul.registered"})
 	if !failed {
 		t.Fatalf("failed=false, want true (module sent no final event)")
 	}
@@ -170,9 +172,11 @@ func TestComposeKeeperFailure(t *testing.T) {
 	if got := composeKeeperFailure(rt, "boom"); got != "task 3 core.soul.registered: boom" {
 		t.Fatalf("composeKeeperFailure = %q", got)
 	}
-	rtNoLog := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", NoLog: true}
-	if got := composeKeeperFailure(rtNoLog, "secret leaked"); got != "task 1 core.vault.kv-read: (no_log task failed)" {
-		t.Fatalf("composeKeeperFailure no_log = %q", got)
+	// [ADR-0083] §8: no per-task suppression left — the summary is composed
+	// from whatever the module reported, on every task alike.
+	rtSecret := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", SecretOutput: []string{"data"}}
+	if got := composeKeeperFailure(rtSecret, "boom"); got != "task 1 core.vault.kv-read: boom" {
+		t.Fatalf("composeKeeperFailure with secret_output = %q", got)
 	}
 }
 
@@ -242,8 +246,8 @@ func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 
 // TestEmitKeeperTaskExecuted_FailedStatus — a failed keeper task →
 // task.executed status=TASK_STATUS_FAILED (NOT CHANGED): such a task will
-// NOT land in changed_tasks. error.message is present for non-no_log
-// (masking happens on auditpg's write path).
+// NOT land in changed_tasks. error.message is present (masking happens on
+// auditpg's write path).
 func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
@@ -263,7 +267,7 @@ func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 		t.Fatalf("payload error type = %T, want map", ev.Payload["error"])
 	}
 	if errMap["message"] != "boom from driver" {
-		t.Errorf("error.message = %v, want 'boom from driver' (non-no_log -> message is set)", errMap["message"])
+		t.Errorf("error.message = %v, want 'boom from driver' (message is always set)", errMap["message"])
 	}
 	if errMap["module"] != "core.cloud.created" {
 		t.Errorf("error.module = %v, want core.cloud.created", errMap["module"])
@@ -272,8 +276,9 @@ func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 
 // TestEmitKeeperTaskExecuted_SecretHygiene — a keeper task's task.executed
 // payload does NOT contain register_data/output (keeper tasks may carry a
-// vault-resolved output). A no_log failed task does NOT leak message — it's
-// suppressed with the suppressed:"no_log" marker.
+// vault-resolved output). The exclusion is unconditional: it does not depend on
+// the task declaring anything, which is what [ADR-0083] §8 replaced `no_log:`
+// with.
 func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
@@ -282,9 +287,10 @@ func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 	rtChanged := &render.RenderedTask{Index: 0, Register: "secret_out", Module: "core.vault.kv-read"}
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtChanged, true, false, "", slog.New(slog.DiscardHandler))
 
-	// no_log failed keeper task — message is suppressed.
-	rtNoLog := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", NoLog: true}
-	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtNoLog, false, true, "vault:secret/db plaintext", slog.New(slog.DiscardHandler))
+	// a failed keeper task whose module declares secret output — register_data
+	// still stays out, and the summary is written as the module reported it.
+	rtSecret := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", SecretOutput: []string{"data"}}
+	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtSecret, false, true, "boom", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 2 {
 		t.Fatalf("emitted %d events, want 2", len(aw.events))
@@ -296,16 +302,21 @@ func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 		}
 	}
 
-	noLogPayload := aw.events[1].Payload
-	if noLogPayload["suppressed"] != "no_log" {
-		t.Errorf("no_log payload suppressed = %v, want no_log", noLogPayload["suppressed"])
+	failedPayload := aw.events[1].Payload
+	if _, present := failedPayload["suppressed"]; present {
+		t.Errorf("payload suppressed = %v, want the marker gone with no_log", failedPayload["suppressed"])
 	}
-	errMap, ok := noLogPayload["error"].(map[string]any)
+	for _, forbidden := range []string{"register_data", "output", "params"} {
+		if _, present := failedPayload[forbidden]; present {
+			t.Errorf("failed keeper task.executed payload leaked %q (secret hygiene)", forbidden)
+		}
+	}
+	errMap, ok := failedPayload["error"].(map[string]any)
 	if !ok {
-		t.Fatalf("no_log payload error type = %T, want map", noLogPayload["error"])
+		t.Fatalf("failed payload error type = %T, want map", failedPayload["error"])
 	}
-	if _, present := errMap["message"]; present {
-		t.Errorf("no_log keeper task leaked error.message = %v (must be suppressed)", errMap["message"])
+	if errMap["message"] != "boom" {
+		t.Errorf("error.message = %v, want 'boom' (no per-task suppression)", errMap["message"])
 	}
 }
 
@@ -355,5 +366,44 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 	}
 	if got[0].ID != "vm-web" || got[0].Register != "" {
 		t.Errorf("address = id=%q register=%q, want id=vm-web register empty", got[0].ID, got[0].Register)
+	}
+}
+
+// The §7 fence, post-render half ([ADR-0083]). `core.vault.*` reaches Vault through
+// the module, so neither the CEL guard nor the authoring-time scan sees it when the
+// path arrived as `${ vars.p }`. The module must not be invoked at all.
+func TestApplyKeeperTask_OwnNamespaceVaultParamFenced(t *testing.T) {
+	mod := &fakeKeeperModule{final: &pluginv1.ApplyEvent{Changed: true}}
+	r := &Runner{keeperModules: fakeKeeperRegistry{"core.vault": mod}}
+	spec := RunSpec{ServiceRef: artifact.ServiceRef{Name: "redis"}}
+
+	rt := &render.RenderedTask{Module: "core.vault.kv-read",
+		Params: mustStruct(t, map[string]any{"path": "secret/redis/prod/redis_users/app"})}
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), spec, nil, rt)
+	if !failed {
+		t.Fatal("the task succeeded on a rendered path in the service's own namespace")
+	}
+	if !strings.Contains(msg, config.VaultOwnNamespaceCode) {
+		t.Fatalf("message = %q, want %s", msg, config.VaultOwnNamespaceCode)
+	}
+	if mod.gotState != "" {
+		t.Fatalf("the module was invoked despite the fence (state %q)", mod.gotState)
+	}
+}
+
+// The negative twin: a path outside the prefix reaches the module unchanged.
+func TestApplyKeeperTask_CrossNamespaceVaultParamPasses(t *testing.T) {
+	mod := &fakeKeeperModule{final: &pluginv1.ApplyEvent{Changed: true}}
+	r := &Runner{keeperModules: fakeKeeperRegistry{"core.vault": mod}}
+	spec := RunSpec{ServiceRef: artifact.ServiceRef{Name: "redis"}}
+
+	rt := &render.RenderedTask{Module: "core.vault.kv-read",
+		Params: mustStruct(t, map[string]any{"path": "secret/services/shared/tls"})}
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), spec, nil, rt)
+	if failed {
+		t.Fatalf("the fence fired on a cross-namespace path: %s", msg)
+	}
+	if mod.gotState != "kv-read" {
+		t.Fatalf("module got state %q, want kv-read", mod.gotState)
 	}
 }

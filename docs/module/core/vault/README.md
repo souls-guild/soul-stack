@@ -14,7 +14,10 @@ not on the host (unlike Soul-side core). Starting without `on: keeper` is an err
 validation scenario. Implementation - [`kvread.go`](../../../../keeper/internal/coremod/vault/kvread.go)
 (base module + `kv-read`), [`kvpresent.go`](../../../../keeper/internal/coremod/vault/kvpresent.go)
 (`kv-present`), [`policy.go`](../../../../keeper/internal/coremod/vault/policy.go)
-(password-policy generation).
+(the params form of the policy). The **grammar** itself - alphabets, length bounds,
+validation - lives in [`shared/secretpolicy`](../../../../shared/secretpolicy/policy.go):
+`generate_secret()` ([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §3)
+mints by the same policy, and two parsers would drift.
 
 Why these explicit state when there is an implicit `${ vault(...) }` in CEL: implicit-vault
 cheap for rendering, but **doesn't** leave a separate entry in audit-trail and only
@@ -22,6 +25,16 @@ reads. `kv-read` - explicit form for cases requiring an audit event
 `vault.kv-read` (PCI-DSS, SOC2, compliance-neat code). `kv-present` - write form
 (on-site secret generation), which the CEL resolve does not have at all. implicit
 `${ vault(...) }` remains for the render phase - these are different points.
+
+> **The service's own namespace is fenced** ([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §7).
+> A `path:` of `kv-read` or a `targets[].path` of `kv-present` under `<mount>/<service>/`
+> is refused - at load when it is written out, and post-render when it is assembled by CEL
+> (`config.ScanRenderedVaultParams`, called by the keeper dispatcher before `Apply`).
+> That prefix is derived and owned by the platform: a secret of the service itself is a
+> `state_schema` field with `type: secret`, written by
+> [`core.state.present`](../../../keeper/modules.md#corestatepresent). Both states stay
+> available for every path OUTSIDE the prefix - a shared TLS CA, another service's
+> credential - which is what they are for now.
 
 ---
 
@@ -34,7 +47,7 @@ on the keeper side with an audit event entry.
 
 | Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `path` | string | required | Secret path in Vault, **mount-relative and without the `data/`** segment - the client will substitute `data/` for KV v2 (without it for KV v1). Specify `secret/redis/admin`, not `secret/data/redis/admin` (otherwise the client will build `secret/data/data/redis/admin` and the secret will not be found). The KV mount version (v1/v2) resolves to keeper-side `vault.Client` (autodetection via probe, or override `vault.kv_version`, see [config.md → vault](../../../keeper/config.md#vault)); the module already receives a **flat payload** and works identically on both versions (for v2, the `data.data` wrapper is unpacked by the client before being transferred to the module). |
+| `path` | string | required | Secret path in Vault, **mount-relative and without the `data/`** segment - the client will substitute `data/` for KV v2 (without it for KV v1). Specify `secret/shared/db-admin`, not `secret/data/shared/db-admin` (otherwise the client will build `secret/data/data/shared/db-admin` and the secret will not be found). The path must lie outside the service's own `<mount>/<service>/` prefix - see the fence above. The KV mount version (v1/v2) resolves to keeper-side `vault.Client` (autodetection via probe, or override `vault.kv_version`, see [config.md → vault](../../../keeper/config.md#vault)); the module already receives a **flat payload** and works identically on both versions (for v2, the `data.data` wrapper is unpacked by the client before being transferred to the module). |
 | `fields` | array of string | optional | Which keys to return to `data`. Empty / not specified → entire payload. A requested but missing key is **passed without error** (audit-event has already been spent on reading). |
 
 ## kv-read — capabilities / side-effects
@@ -71,12 +84,12 @@ Plus standard `.changed` (always `false`) / `.failed` DSL cores.
 # Explicit reading of the secret on the keeper side for the sake of audit-event vault.kv-read.
 # on: keeper is required - this is a keeper-side core. fields optional: without it
 # the entire payload will be returned.
-- name: Read DB credentials from Vault (audit-tracked)
+- name: Read the shared DB credentials from Vault (audit-tracked)
   on: keeper
   module: core.vault.kv-read
   register: db_creds
   params:
-    path:   secret/redis/admin
+    path:   secret/shared/db-admin
     fields: [username, password]
 ```
 
@@ -208,41 +221,46 @@ Keeper policy in Vault.
 
 ## kv-present - example
 
-From the redis script `create` ([`examples/service/redis/scenario/create/main.yml`](../../../../examples/service/redis/scenario/create/main.yml),
-first step of the body): generating the Redis master password + per-user ACL passwords **to**
-any reading of these secrets via `${ vault(...) }` in the render phase. policy -
-`alphanumeric` / `length 32` (safe for `requirepass` / ACL directives alphabet:
-special characters would break parsing).
+The redis `create` scenario used to open with this step, generating the master password
+and the per-user ACL passwords before anything read them back through `${ vault(...) }`.
+It no longer does, and it no longer could: those are the service's **own** secrets, so
+they are now `state_schema` fields with `type: secret` minted by `core.state.present`
+([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §1, §4), and
+`secret/redis/<inc>` is exactly the prefix §7 fences. No scenario in `examples/` calls
+`kv-present` any more.
+
+What remains is the case the fence leaves open - guaranteeing a secret **outside** the
+service's own namespace, where nothing derives a path for you:
 
 ```yaml
-# The service itself generates missing passwords (generate-if-absent), the operator does not pre-seed.
-# on: keeper is required. policy is a real YAML map (not a CEL string).
-- name: Ensure redis passwords exist in Vault (generate if absent)
+# A credential shared by several services: no single service owns the path, so no
+# state_schema derives it. on: keeper is required. policy is a real YAML map (not a
+# CEL string), and `targets` is a one-liner CEL-${…} when it is computed.
+- name: Ensure the shared metrics-scrape credential exists
   on: keeper
   module: core.vault.kv-present
   params:
     policy:
       length: 32
       charset: alphanumeric
-    # targets are calculated from the same vars/input as the reading deployment tasks
-    # (drift "what we generate ≡ what we read" = bug): main secret/redis/<inc>#password
-    # + per-user secret/redis/<inc>/users/<name>#password.
-    targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] + ... }"
+    targets:
+      - path: secret/shared/metrics-scrape
+        field: password
+  register: scrape
 ```
 
-> In a real scenario, `targets` is a one-liner CEL-`${…}` (not block-scalar
-> `>-`): module.params type-check skips CEL wrapper for string only
-> scalar; block-scalar would be parsed as a literal and would reject list-param. List
-> users are not hardcoded - compiled from `vars.system_acl_users` ∪
-> `system_acl_users_sentinel` + `input.users`.
+> `targets` computed by CEL must be a one-liner `${…}`, not a block-scalar `>-`:
+> module.params type-check skips the CEL wrapper only for a string scalar, and a
+> block-scalar would be parsed as a literal and rejected as a list-param.
 
-> **Passage-invariant.** This step must be executed (write to Vault) **before**
-> render phases of tasks reading the same secrets via `${ vault(...) }` (model
-> staged-render [ADR-056](../../../adr/0056-staged-render-passage.md)). In redis-create
-> edge generate→read carries roster-axis (refresh-emitter + roster-consumption
-> deployment), and not register - that's why step `register` deliberately does not have (its result
-> no one consumes). The carrier invariant is secured by a guard test
-> `keeper/internal/render/redis_create_secrets_passage_test.go`.
+> **Passage-invariant.** A step that writes to Vault must run **before** the render
+> phase of any task reading the same path through `${ vault(...) }` (staged-render
+> [ADR-056](../../../adr/0056-staged-render-passage.md)) - a render phase resolves what
+> is there at the time, and there is no re-render after a later write. For the service's
+> own secrets that edge is now `core.state.present` → register, guarded by
+> [`keeper/internal/trial/redis_secret_mint_test.go`](../../../../keeper/internal/trial/redis_secret_mint_test.go).
+> For a shared path like the one above the same rule applies, and the ordering is the
+> author's to establish.
 
 ## See also
 
@@ -251,4 +269,5 @@ special characters would break parsing).
 - [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
 - [templating.md](../../../templating.md) - vault-resolve phase and implicit `${ vault(...) }` in CEL.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-0083](../../../adr/0083-declared-secret-state-fields.md) - declared secret state fields; §7 fences the service's own Vault namespace against both states of this module, §4 introduces `core.state.present` as the write that replaces `kv-present` for a service's own secrets.
 - [ADR-017](../../../adr/0017-keeper-side-core.md) - Keeper-side core modules; `kv-read` (explicit vs implicit vault), `kv-present` (amendment 2026-06-28, generate-if-absent + security-invariant).

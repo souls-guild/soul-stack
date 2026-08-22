@@ -210,3 +210,75 @@ func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
 		t.Fatalf("valid await form produced errors: %v", diags)
 	}
 }
+
+// TestCheckParamType_CELInBlockScalar — a `${ … }` expression is exempt from the
+// literal type check however it is WRAPPED. A folded/literal block scalar parses as
+// an ast.LiteralNode, not an ast.StringNode; testing only for the latter made the
+// same expression pass on one line and fail as param_type_mismatch on three, which
+// is how the migrated redis corpus first tripped ([ADR-0083] §4 `set:`).
+//
+// Guard: restrict scalarText to *ast.StringNode and the folded case reports
+// param_type_mismatch again.
+func TestCheckParamType_CELInBlockScalar(t *testing.T) {
+	// core.state.present declares `set` as a list; each source below supplies a CEL
+	// expression, so none of them may be judged structurally.
+	sources := map[string]string{
+		"inline": `
+- name: mint
+  on: keeper
+  module: core.state.present
+  register: users
+  params:
+    key: users
+    set: "${ [{'name': 'a'}] }"
+`,
+		"folded": `
+- name: mint
+  on: keeper
+  module: core.state.present
+  register: users
+  params:
+    key: users
+    set: >-
+      ${ ['a', 'b'].map(n, {
+           'name': n
+         }) }
+`,
+		"literal": `
+- name: mint
+  on: keeper
+  module: core.state.present
+  register: users
+  params:
+    key: users
+    set: |-
+      ${ ['a'].map(n, {'name': n}) }
+`,
+	}
+	for name, src := range sources {
+		t.Run(name, func(t *testing.T) {
+			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+			if hasCode(diags, "param_type_mismatch") {
+				t.Fatalf("a CEL expression must be exempt from the literal type check, diagnostics: %v", diags)
+			}
+		})
+	}
+
+	// The exemption is for CEL only — a real literal of the wrong shape still fails,
+	// in block form as much as inline.
+	bad := `
+- name: mint
+  on: keeper
+  module: core.state.present
+  register: users
+  params:
+    key: users
+    set: >-
+      plain folded text,
+      not an expression
+`
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(bad), ValidateOptions{})
+	if !hasCode(diags, "param_type_mismatch") {
+		t.Fatalf("a folded literal of the wrong type must still be rejected, diagnostics: %v", diags)
+	}
+}

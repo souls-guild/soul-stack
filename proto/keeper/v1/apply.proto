@@ -11,6 +11,11 @@ option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;ke
 // RenderedTask is a task after Keeper-side rendering (CEL and text/template phases
 // already applied, ADR-010, ADR-012(d)). Soul only executes it, never renders.
 message RenderedTask {
+  // no_log (ADR-0083 §8): removed, not renamed — the field number and name are
+  // burned per ADR-012's only-add rule.
+  reserved 4;
+  reserved "no_log";
+
   // Task name from destiny/scenario.
   string name = 1;
 
@@ -20,8 +25,17 @@ message RenderedTask {
   // Module params after render, typed per the module's manifest.
   google.protobuf.Struct params = 3;
 
-  // If true, Soul does not log this task's params and output (DSL core no_log:, see destiny/tasks.md).
-  bool no_log = 4;
+  // secret_output: names of the module's OUTPUT fields declared `secret: true`
+  // in its manifest ([ADR-0083] §8). Soul masks exactly these fields wherever it
+  // makes the task's output observable; the register payload itself is untouched,
+  // or the next task could not read what this one produced. Keeper derives the
+  // list from the manifest at render — the task author declares nothing.
+  //
+  // Replaces the removed `no_log` (field 4), which was all-or-nothing and set by
+  // the author rather than the module that knows its own output shape. Params
+  // are not covered here and do not need to be: their secret provenance is
+  // tracked per cell by the seal ([ADR-010] §7.4) and masked on the write path.
+  repeated string secret_output = 21;
 
   // Per-task hard limit on a single Apply attempt (DSL core timeout:, destiny/tasks.md §9).
   // Format is Soul Stack's `duration` convention (Go-duration "30s"/"5m"/"1h30m",
@@ -345,6 +359,10 @@ message TaskNotice {
 // sub-process finishes). Progress for long-running steps isn't sent in the MVP
 // (post-MVP).
 message TaskEvent {
+  // no_log (ADR-0083 §8): removed. See RenderedTask.
+  reserved 6;
+  reserved "no_log";
+
   string apply_id = 1;
 
   // Task index in ApplyRequest.tasks[].
@@ -358,11 +376,14 @@ message TaskEvent {
   // Populated only when status = FAILED or TIMED_OUT.
   TaskError error = 5;
 
-  // Echo of RenderedTask.no_log — drives keeper-side audit suppression via this
-  // flag (multi-Keeper-safe: the TaskEvent may land on a different instance than
-  // the one holding []RenderedTask). When true, keeper does not write
-  // register_data/error.message to the audit log.
-  bool no_log = 6;
+  // Echo of RenderedTask.secret_output — drives keeper-side masking through this
+  // list (multi-Keeper-safe: the TaskEvent may land on a different instance than
+  // the one holding []RenderedTask). Keeper redacts exactly these fields inside
+  // register_data before it reaches the audit log or a read endpoint.
+  //
+  // Replaces the removed `no_log` (field 6): a task no longer loses its whole
+  // diagnostic payload because one of its fields is a secret.
+  repeated string secret_output = 10;
 
   // passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
   // this task belongs to. Soul returns it unchanged. Keeper accumulates register

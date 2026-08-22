@@ -12,13 +12,6 @@ fixtures:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }
 
-  # Vault: default_admin (bootstrap + admin connect) + appuser (operator user, own password).
-  vault:
-    secret/mongo/create/users/default_admin:
-      password: mongoadmin-create-pass
-    secret/mongo/create/users/appuser:
-      password: appuser-secret-pass
-
   vars:
     install_method: binary
     binary_base_url: "https://nexus.example/mongodb"
@@ -45,10 +38,30 @@ fixtures:
         roles:
           - { role: readWrite, db: appdb }
 
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_users:
+      effective:
+        - { name: default_admin, password: mongoadmin-create-pass }
+    mongo_users:
+      effective:
+        - { name: appuser, password: appuser-secret-pass }
+
 assert:
   task_present:
-    # gen passwords: default_admin + appuser (operator user made it into targets).
-    - module: core.vault.kv-present
+    # the two keeper-side mints ([ADR-0083] §4): the service's own accounts and the
+    # operator users. Each derives its paths from (service, incarnation, field, key).
+    - module: core.state.present
+      params_subset:
+        key: system_users
+    - module: core.state.present
+      params_subset:
+        key: mongo_users
 
     # bootstrap default_admin (localhost-exception).
     - module: community.mongo.user

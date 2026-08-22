@@ -161,7 +161,7 @@ sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 # sentinel-users.acl (sentinel daemon, system_acl_users_sentinel).
 #
 # Password of EVERY system user (incl. default_admin) — in Vault under a SINGLE branch:
-# secret/dragonfly/<incarnation>/users/<name>#password. scenario resolves it keeper-side via
+# secret/dragonfly/<incarnation>/{df_users,system_acl_users}/<name>#password. scenario resolves it keeper-side via
 # vault() and adds the system ones into apply.input.users/sentinel_users.
 #
 # ★ default_admin (default_admin REDESIGN, symmetric to redis 2026-06-30): a SYSTEM user with

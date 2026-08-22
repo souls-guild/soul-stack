@@ -25,25 +25,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
-    # AUTH; masteruser/masterauth of the cluster deploy read its password from the users/default_admin branch.
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
-    secret/redis/create/users/admin:
-      password: admin-user-secret-pass
-    secret/redis/create/users/app:
-      password: app-user-secret-pass
   vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -80,6 +61,25 @@ fixtures:
     users:
       - { name: admin, perms: "allkeys +@all", state: "on" }
       - { name: app, perms: "~app:* +@read -@dangerous", state: "on" }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective:
+        - { name: admin, password: admin-user-secret-pass }
+        - { name: app, password: app-user-secret-pass }
 
 assert:
   # users.acl: system (4, from service vars) + admin (allkeys +@all) + app (fine-grained).

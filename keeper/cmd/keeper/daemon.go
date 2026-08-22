@@ -1137,6 +1137,9 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		CloudUserdata: userdataProvider,
 		Vault:         d.vc,
 		Audit:         d.auditWriter,
+		// `core.state.present` derives its Vault path from the same KV mount the
+		// ADR-064 write path uses (newSecretWriter below).
+		VaultMount: cfg.Vault.KVMount,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
@@ -4596,6 +4599,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		VaultClient:     d.vc,
+		VaultKVMount:    cfg.Vault.KVMount,
 		PushRun:         d.pushRun,
 		PushProviderSvc: d.pushProviderSvc,
 		HeraldSvc:       d.heraldSvc,

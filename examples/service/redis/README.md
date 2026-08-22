@@ -443,7 +443,7 @@ destiny a new additive field `input.sentinel_users` (from
 `vars.system_acl_users_sentinel`); operator-extra is **not** merged in here
 (sentinel access is service-internal). Passwords: `default` → the primary
 `secret/redis/<incarnation>#password`; the rest (`monitoring`/`sentinel`/`haproxy`) →
-the branch `secret/redis/<incarnation>/users/<name>#password`. For the full render
+the branch `secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password`. For the full render
 mechanics see
 [destiny README → System ACL users and the second aclfile](../../destiny/redis/README.md#system-acl-users-and-the-second-aclfile).
 
@@ -920,7 +920,7 @@ touched (separate scenarios exist for those). `state` records the new
 `AclUser` pattern** as in create (blocks day-2 garbage: an invalid ACL string is cut
 off at input validation, never reaching `users.acl`). The password is **not** in the
 input - it lives in Vault under the convention
-`secret/redis/<incarnation>/users/<name>#password`, resolved keeper-side, and the
+`secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password`, resolved keeper-side, and the
 scenario **generates it itself** (no manual `vault kv put` before the run - see
 [★ Password generation and re-runs](#-password-generation-and-re-runs)). Bulk
 editing of the **entire** operator-extra set is a separate scenario
@@ -928,7 +928,7 @@ editing of the **entire** operator-extra set is a separate scenario
 (bulk-replace). Three steps:
 
 0. **generate the password** (`core.vault.kv-present`, `on: keeper`) at
-   `secret/redis/<incarnation>/users/<name>#password` - crypto-random, **only if
+   `secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password` - crypto-random, **only if
    absent** (details below).
 1. **re-render** `users.acl` to disk with the new set: the **system** service users
    (from `vars.system_acl_users`) + operator-extra (`state.redis_users` plus the
@@ -957,7 +957,7 @@ operator had run `vault kv put` for the new user first - a manual step in front 
 most frequent day-2 action.
 
 - **Path** - deterministic, the same convention the render reads:
-  `secret/redis/<incarnation>/users/<name>#password`. `<name>` is `input.user.name`.
+  `secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password`. `<name>` is `input.user.name`.
 - **Value** - `crypto/rand`, 32 characters, `alphanumeric` (redis.conf / `users.acl`-safe).
   It **never** leaves the Keeper: not in the register, audit payload, logs, OTel or the
   UI - only the path and the field name are reported (ADR-010; the rendered cells that
@@ -1101,8 +1101,10 @@ a failover → split-brain. MONITOR is executed by `detach_source` **after**
 `secret/redis/<incarnation>` (keeper-side `vault()`). **The exception** is the
 **external** source's credentials: the operator supplies its Vault **path** (not the
 value) via `input.source.password_ref`, under a strict pattern-guard
-`secret/redis/migrate/*` (the source belongs to someone else - its secret doesn't live
-under our convention). `migrate` **persists** these references in
+`secret/redis-migrate/*` (the source belongs to someone else - its secret doesn't live
+under our convention, and since [ADR-0083](../../../docs/adr/0083-declared-secret-state-fields.md)
+§7 it *cannot*: `secret/redis/` is derived by the platform and an authored path under it
+is refused). `migrate` **persists** these references in
 `state.seeded_from.{source_password_ref, source_tls_ca_ref}` (v10) - so that
 `detach_source` can perform the final offset-gate against the AUTH/TLS source.
 
@@ -1209,7 +1211,7 @@ them keeper-side with the CEL function `vault(...)` in the render phase
 
 - requirepass: `secret/redis/<incarnation.name>#password`;
 - per-user (operator-extra **and** system `replica`/`monitoring`/`sentinel`/`haproxy`):
-  `secret/redis/<incarnation.name>/users/<name>#password`;
+  `secret/redis/<incarnation.name>/{redis_users,system_acl_users}/<name>#password`;
 - the sentinel daemon's `default` user (in `sentinel-users.acl`): the primary
   `secret/redis/<incarnation.name>#password` (shared with redis-server's requirepass).
 

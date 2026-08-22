@@ -49,7 +49,7 @@ import (
 //
 // No keeper tasks for this Passage → no-op (host-only Passage, or a run with no
 // keeper-side tasks at all — ordinary Soul-side path).
-func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
+func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSchema map[string]any, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
 	keeperTasks := keeperTasksOf(tasks, plans, passage)
 	if len(keeperTasks) == 0 {
 		return nil
@@ -79,7 +79,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 	}
 
 	for _, rt := range keeperTasks {
-		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, rt)
+		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, stateSchema, rt)
 		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),
@@ -119,7 +119,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 		}
 
 		// register: of a keeper task accumulates under KeeperTargetSID — same path
-		// as Soul-side accumulateRegister. No register: (rt.Register=="") / no_log →
+		// as Soul-side accumulateRegister. No register: (rt.Register=="") →
 		// not written (loadRegisterByHost wouldn't resolve it anyway). passage is
 		// REQUIRED (Slice 2): FK apply_task_register→apply_runs is the triple
 		// (apply_id, sid, passage) (migration 078) — a Passage P task's register
@@ -146,11 +146,12 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, log *slo
 // uniformly. sid = render.KeeperTargetSID, correlation_id = apply_id (matches
 // the SelectChangedTaskKeys filter).
 //
-// Secret hygiene: register_data/output are NOT put in the payload (keeper tasks
-// may carry vault-resolved output); message only on failure and only for
-// non-no_log tasks (suppressed by the helper for no_log). This is the audit
-// path (changed_tasks/Tiding fold); SSE visibility of keeper-side progress is a
-// separate channel, [Runner.publishKeeperTaskExecuted] (ADR-068 §A2).
+// Secret hygiene: register_data/output are NOT put in the payload at all (keeper
+// tasks may carry vault-resolved output) — which is why the per-field redaction
+// the Soul-side handler does ([ADR-0083] §8) has nothing to redact here. message
+// only on failure. This is the audit path (changed_tasks/Tiding fold); SSE
+// visibility of keeper-side progress is a separate channel,
+// [Runner.publishKeeperTaskExecuted] (ADR-068 §A2).
 //
 // Audit=nil (unit build without audit) → no-op. A write error is only logged:
 // losing the event degrades observability but doesn't fail the run.
@@ -168,7 +169,6 @@ func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, pas
 		// all Passages → correlation key unique between Passages).
 		PlanIndex: rt.Index,
 		Status:    keeperTaskStatus(changed, failed).String(),
-		NoLog:     rt.NoLog,
 		// This task's passage (Slice 2: keeper tasks are stratified by Passage). In
 		// the payload for per-Passage triage; doesn't affect changed_tasks
 		// correlation (that goes by sid/plan_index). 0 for N=1 / Passage-0 tasks.
@@ -217,9 +217,6 @@ func (r *Runner) publishKeeperTaskExecuted(applyID string, passage int, rt *rend
 		"task_status": keeperTaskStatus(changed, failed).String(),
 		"passage":     int32(passage),
 	}
-	if rt.NoLog {
-		payload["suppressed"] = "no_log"
-	}
 	if failed {
 		// keeper-side carries no structured error.code (module returned a
 		// message/gRPC error); code="" is honest, keys code+module mirror
@@ -264,8 +261,12 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 //
 // The run's incarnation travels on the module context (coremod/util runctx):
 // ApplyRequest carries no run context, and a keeper-side module needs the owner
-// to tell its own leftovers from another incarnation's hosts (NIM-170).
-func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
+// to tell its own leftovers from another incarnation's hosts (NIM-170). The
+// service name and the service's `state_schema` ride the same channel, for a
+// module whose Vault path is DERIVED from the run's owner rather than authored
+// ([ADR-0083] §4). stateSchema is the loaded artifact's map, shared not copied —
+// every reader treats it as immutable.
+func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema map[string]any, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
 	base, state, ok := config.SplitModuleAddr(rt.Module)
 	if !ok {
 		return false, true, nil, fmt.Sprintf("invalid keeper-side module address %q (want <namespace>.<module>.<state>)", rt.Module)
@@ -275,11 +276,25 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, rt *render.R
 		return false, true, nil, fmt.Sprintf("unknown keeper-side module %q", rt.Module)
 	}
 
+	// The §7 fence, post-render half ([ADR-0083]): `core.vault.*` reaches Vault
+	// through the module rather than through vault(), so the CEL guard never sees
+	// it, and the load-time scan saw `${ vars.p }` instead of a path. Here the
+	// interpolation is gone.
+	if fdiags := config.ScanRenderedVaultParams(rt.Module, spec.ServiceRef.Name, rt.Params.AsMap()); len(fdiags) > 0 {
+		return false, true, nil, fmt.Sprintf("%s: %s", fdiags[0].Code, fdiags[0].Message)
+	}
+
 	req := &pluginv1.ApplyRequest{
 		State:  state,
 		Params: rt.Params,
 	}
-	sink := newKeeperApplyStream(coremodutil.WithIncarnation(ctx, spec.IncarnationName))
+	// Run scope for the module: incarnation (whose leftovers are whose), plus
+	// service and `state_schema` for a module that DERIVES a Vault path from
+	// (service, incarnation, state field, key) ([ADR-0083] §1).
+	modCtx := coremodutil.WithIncarnation(ctx, spec.IncarnationName)
+	modCtx = coremodutil.WithService(modCtx, spec.ServiceRef.Name)
+	modCtx = coremodutil.WithStateSchema(modCtx, stateSchema)
+	sink := newKeeperApplyStream(modCtx)
 	if err := mod.Apply(req, sink); err != nil {
 		return false, true, nil, err.Error()
 	}
@@ -304,9 +319,15 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, rt *render.R
 // apply_task_register under KeeperTargetSID — same path as Soul-side
 // accumulateRegister (events_taskevent.go). Payload is {changed, failed,
 // timed_out, skipped} + the module's output fields (mirrors selfRegisterData
-// in applyrunner.go). A task without register: or no_log → no-op
-// (loadRegisterByHost wouldn't resolve it into state_changes anyway). Errors
-// are only logged (best-effort, like Soul-side accumulateRegister).
+// in applyrunner.go). A task without register: → no-op (loadRegisterByHost
+// wouldn't resolve it into state_changes anyway). Errors are only logged
+// (best-effort, like Soul-side accumulateRegister).
+//
+// The module's declared-secret output fields ([ADR-0083] §8) are stored HERE
+// unredacted, deliberately and symmetrically with the Soul-side register: this
+// is the value the NEXT task reads through `register.<name>.<field>`, and
+// redacting it would break the chain rather than protect it. Redaction belongs
+// to the observable copies (audit/SSE), which this is not.
 //
 // passage (Slice 2): FK apply_task_register→apply_runs is the triple
 // (apply_id, sid, passage) (migration 078). A Passage P keeper task's register
@@ -315,7 +336,7 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, rt *render.R
 // Otherwise the FK targets (apply_id, keeper, 0), which for P>0 doesn't exist,
 // losing the register and breaking the keeper→keeper Passage P→P+1 chain.
 func (r *Runner) accumulateKeeperRegister(ctx context.Context, applyID string, passage int, rt *render.RenderedTask, changed, failed bool, output map[string]any, log *slog.Logger) {
-	if rt.Register == "" || rt.NoLog {
+	if rt.Register == "" {
 		return
 	}
 	data := map[string]any{
@@ -484,12 +505,10 @@ func keeperTasksOf(tasks []*render.RenderedTask, plans []render.DispatchPlan, pa
 
 // composeKeeperFailure builds the operator-facing failure reason for a keeper
 // task, for apply_runs.error_summary (format `task <idx> <module>: <message>`,
-// mirrors composeTaskErrorSummary on Soul-side). A no_log keeper task →
-// message suppressed (like failureReason).
+// mirrors composeTaskErrorSummary on Soul-side). The message is masked below,
+// not suppressed: the per-task `no_log:` that used to blank it is gone
+// ([ADR-0083] §8).
 func composeKeeperFailure(rt *render.RenderedTask, message string) string {
-	if rt.NoLog {
-		return fmt.Sprintf("task %d %s: (no_log task failed)", rt.Index, rt.Module)
-	}
 	head := fmt.Sprintf("task %d %s", rt.Index, rt.Module)
 	if message == "" {
 		return head

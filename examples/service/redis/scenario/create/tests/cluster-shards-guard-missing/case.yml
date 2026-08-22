@@ -25,9 +25,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
   vars:
     redis_type: cluster
     memory_reserve_percent: 75
@@ -58,4 +55,17 @@ fixtures:
 # The run aborts at input validation: required_when for shards is true (cluster mode),
 # the value was not passed and has no default. The substring is the recognizable form of the
 # required message from requireInputValues (input_value.go), including the required_when predicate itself.
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default_admin-l0-pass }
+    redis_users:
+      effective: []
 expect_render_error: "\"shards\" is required"

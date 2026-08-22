@@ -1,6 +1,6 @@
 # ADR-070. Secret reveal-path — revealing an incarnation's plaintext secret to the operator under an RBAC right
 
-> **Status: accepted, implemented (NIM-74).** The READ twin of [ADR-064](0064-secret-write-path.md) (secret write-path). ADR-064 accepts a plaintext secret **FROM** the operator and writes it to Vault keeper-side; this ADR is the reverse direction: it returns the plaintext **BACK** to the operator under an explicit right. **Amends [ADR-064](0064-secret-write-path.md)** (secret masking: a sanctioned reveal = removing the mask, not a leak) **and [ADR-047](0047-purview.md)** (a new scoped right `incarnation.view-secrets`).
+> **Status: accepted, implemented (NIM-74); amended 2026-08-19 ([ADR-0083](0083-declared-secret-state-fields.md), NIM-698) — the `revealable_secrets` registry below is DELETED, the endpoints and the right stay, and the path is derived. Read the amendment at the end before implementing from this text.** The READ twin of [ADR-064](0064-secret-write-path.md) (secret write-path). ADR-064 accepts a plaintext secret **FROM** the operator and writes it to Vault keeper-side; this ADR is the reverse direction: it returns the plaintext **BACK** to the operator under an explicit right. **Amends [ADR-064](0064-secret-write-path.md)** (secret masking: a sanctioned reveal = removing the mask, not a leak) **and [ADR-047](0047-purview.md)** (a new scoped right `incarnation.view-secrets`).
 
 **Context.** The operator sees in the State view that an incarnation has, say, redis users, but cannot look at their passwords: `state`/`spec` in GET responses are masked ([ADR-064](0064-secret-write-path.md), defense-in-depth in [operator-api.md](../keeper/operator-api.md)), and the values themselves live in Vault by ref. For day-2 (hand a password to a user, check a connection by hand) the operator needs a **sanctioned** way to reveal a concrete value — without removing masking globally and without granting direct access to Vault. The mechanism must be **generic** (a property of any service with secrets in state), not a redis hardcode in the Keeper.
 
@@ -102,3 +102,18 @@ The service manifest is **not a trusted** input in the reveal threat model: the 
 - **[ADR-047](0047-purview.md)** — Purview scoped RBAC; **amends** it with the new right `incarnation.view-secrets` (scope as incarnation mutations, fail-closed 404 outside scope).
 - **[ADR-053](0053-dependency-tiers.md)** — Vault hard-required (reveal reads from it).
 - **[ADR-022](0022-audit-pipeline.md)** — the audit pipeline (the event `incarnation.secret_revealed`).
+
+## Amendment 2026-08-19 (NIM-698, [ADR-0083](0083-declared-secret-state-fields.md)): the registry is deleted — the path is derived from the declaration
+
+**What stays, untouched:** both endpoints (`POST .../secrets/reveal`, discovery `GET .../secrets/revealable`), the right `incarnation.view-secrets` and its fail-closed 404, the audit event `incarnation.secret_revealed` without the value, the positive prefix-allowlist `secret/<service>/<incarnation>/`, the system-floor backstop, and the "authorized disclosure exits past `MaskSecrets`" boundary.
+
+**What goes:** the `revealable_secrets` block in `service.yml`, and with it the author-written `vault_ref`, its `{service}`/`{incarnation}`/`{key}` placeholders and the `id`/`enumerate` pair. The problem was never that the registry was wrong — it was that it was the **fourth** hand-written copy of one path, held in agreement with the scenarios and the docs by a comment rather than by a mechanism. A secret is now declared where its data already lives, as a `state_schema` field carrying `type: secret` ([ADR-0083](0083-declared-secret-state-fields.md) §1), and reveal derives the path from `(service, incarnation, state field, key)`:
+
+- collection — `secret/<service>/<incarnation>/<state-field>/<key>#<property>`, `<key>` read from the sibling property named by `key:`;
+- scalar — `secret/<service>/<incarnation>/<state-field>#value`.
+
+`secret_id` is the declaration address, spelled `<field>` for a scalar and `<field>.<property>` for a collection; the discovery item gains **`collection: bool`** so the UI knows whether a key is required. The load-time diagnostic **`vault_ref_not_service_scoped` is deleted with the field it fenced** — the escalation class it caught cannot be expressed any more.
+
+The deferred singleton case (an admin password that is not a collection member) is **solved**, for free, by the scalar form.
+
+`key` is validated against the [ADR-064](0064-secret-write-path.md) segment grammar `^[a-zA-Z0-9_-]+$`, not the earlier lowercase identifier rule — reveal must accept exactly what `core.state.present` is able to write, or a legally-written secret would be unrevealable. A non-empty `key` on a scalar and an empty one on a collection are both refused and audited (`key_not_expected` / `key_not_in_state`).

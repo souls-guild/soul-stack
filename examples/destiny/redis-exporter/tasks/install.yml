@@ -26,13 +26,12 @@
     owner: root
     group: root
 
-# REDIS_PASSWORD is the only plaintext credential consumed by redis_exporter. The task is
-# no_log and the file is instance-specific, root-owned and 0600. The world-readable unit
-# contains only this path, never the value.
+# REDIS_PASSWORD is the only plaintext credential consumed by redis_exporter. The file is
+# instance-specific, root-owned and 0600. The world-readable unit contains only this path,
+# never the value.
 - name: Render instance EnvironmentFile (root-only secret)
   module: core.file.rendered
   register: redis_exporter_env
-  no_log: true
   params:
     path: "${ '/etc/default/redis_exporter-' + input.instance_name }"
     template: templates/redis_exporter.env.tmpl
@@ -64,7 +63,6 @@
     - name: Render instance web-config (root-only secret)
       module: core.file.rendered
       register: redis_exporter_webconfig
-      no_log: true
       params:
         path: "${ '/etc/redis_exporter/' + input.instance_name + '/web.yml' }"
         template: templates/redis_exporter.web.yml.tmpl

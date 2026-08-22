@@ -3,9 +3,14 @@ package audit
 // TaskExecutedError — the error part of the task.executed payload (populated only on
 // terminals FAILED/TIMED_OUT). Code — the module error code (Soul-side TaskError.code;
 // keeper-side stays empty — keeper modules carry no code). Message — the error text
-// (= module stderr / message): for a no_log task it is NOT set
-// (BuildTaskExecutedPayload suppresses it), otherwise it goes into the payload as is,
-// masking happens on the write path (MaskSecrets in auditpg).
+// (= module stderr / message); it goes into the payload as is, masking happens on the
+// write path (MaskSecrets/MaskSecretsSealed in auditpg).
+//
+// It is no longer dropped for a task the author marked `no_log:` ([ADR-0083] §8 removed
+// that key): a task no longer loses its whole diagnostic payload because one of its
+// output fields holds a credential. What still stands between stderr and a durable row
+// is the write-path masking above, and on operator-SSE the stricter floor that withholds
+// `message` for EVERY failed task (see keeper/internal/grpc.publishTaskExecuted).
 type TaskExecutedError struct {
 	Code    string
 	Module  string
@@ -39,14 +44,13 @@ type TaskExecutedInput struct {
 	// e.g. "TASK_STATUS_CHANGED"). The changed rollup filters by the literal
 	// "TASK_STATUS_CHANGED" — both sides put the same enum name.
 	Status string
-	// NoLog — echo of RenderedTask.no_log: suppresses error.message and register_data
-	// (the root of an arbitrary-secret leak that MaskSecrets by vault-ref doesn't catch).
-	// In the payload a suppressed:"no_log" marker goes instead.
-	NoLog bool
 	// Error — populated only on FAILED/TIMED_OUT (nil otherwise).
 	Error *TaskExecutedError
 	// RegisterData — the serialized register result (Soul-side: protojson of
-	// google.protobuf.Struct). Empty → the key is not set. Suppressed for no_log.
+	// google.protobuf.Struct). Empty → the key is not set. Any field the module
+	// declared `secret: true` is ALREADY replaced with [MaskedValue] by the caller
+	// ([ADR-0083] §8) — the redaction happens on the proto struct, before this string
+	// is built, so no consumer of the payload has to know the field list.
 	// keeper-side puts no register_data in audit at all (secret hygiene) — leaves it empty.
 	RegisterData string
 	// Passage — the staged-render Passage index (ADR-056) the task belongs to (echo of
@@ -55,11 +59,9 @@ type TaskExecutedInput struct {
 	// run before host fan-out → passage=0.
 	Passage int
 	// Notices — advisory findings about a task that ran anyway (echo of
-	// TaskEvent.notices, NIM-237): today a deprecated param. NOT suppressed by no_log,
-	// deliberately — a notice carries manifest metadata (param name, versions, the
-	// replacement's name) and never a param VALUE, so the leak no_log exists to stop
-	// cannot travel this way. Suppressing it would blind the operator precisely on the
-	// tasks that handle secrets.
+	// TaskEvent.notices, NIM-237): today a deprecated param. A notice carries manifest
+	// metadata (param name, versions, the replacement's name) and never a param VALUE,
+	// so it needs no redaction of its own.
 	Notices []TaskExecutedNotice
 }
 
@@ -80,11 +82,11 @@ type TaskExecutedNotice struct {
 // payload by keys sid/task_idx/status, and a shape mismatch between sides would silently
 // zero it out for one of them.
 //
-// no_log suppression (symmetric on both sides): for a no_log task error.message and
-// register_data are NOT set (the root of an arbitrary-secret leak), a suppressed:"no_log"
-// marker goes instead. Secret masking by vault-ref/sensitive-key happens on the write
-// path (MaskSecrets in auditpg); here the payload is assembled "as is" (symmetric to the
-// previous inline handler assembly).
+// Secret masking by vault-ref/sensitive-key happens on the write path (MaskSecrets in
+// auditpg), and per-field redaction of a module's declared-secret output happens in the
+// caller ([ADR-0083] §8, see [TaskExecutedInput.RegisterData]); here the payload is
+// assembled "as is". There is no longer a whole-payload suppression branch — the
+// per-task `no_log:` it implemented was removed with §8.
 func BuildTaskExecutedPayload(in TaskExecutedInput) map[string]any {
 	payload := map[string]any{
 		"sid":      in.SID,
@@ -100,27 +102,18 @@ func BuildTaskExecutedPayload(in TaskExecutedInput) map[string]any {
 		"status":     in.Status,
 		"passage":    in.Passage,
 	}
-	if in.NoLog {
-		payload["suppressed"] = "no_log"
-	}
 	if in.Error != nil {
-		errPayload := map[string]any{
-			"code":   in.Error.Code,
-			"module": in.Error.Module,
+		payload["error"] = map[string]any{
+			"code":    in.Error.Code,
+			"module":  in.Error.Module,
+			"message": in.Error.Message,
 		}
-		// message (stderr) — only for non-no_log: for no_log it may carry a plaintext
-		// secret that MaskSecrets by vault-ref doesn't catch.
-		if !in.NoLog {
-			errPayload["message"] = in.Error.Message
-		}
-		payload["error"] = errPayload
 	}
-	if in.RegisterData != "" && !in.NoLog {
+	if in.RegisterData != "" {
 		payload["register_data"] = in.RegisterData
 	}
-	// notices (NIM-237): set regardless of no_log — see TaskExecutedInput.Notices.
-	// Absent rather than empty when there is nothing to say, so a run with no
-	// deprecations writes the payload it always wrote.
+	// notices (NIM-237): absent rather than empty when there is nothing to say, so a
+	// run with no deprecations writes the payload it always wrote.
 	if len(in.Notices) > 0 {
 		out := make([]map[string]any, 0, len(in.Notices))
 		for _, n := range in.Notices {

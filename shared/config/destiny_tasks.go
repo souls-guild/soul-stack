@@ -87,7 +87,7 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 	}
 	// Cross-task invariants over the whole list (duplicate register, unknown
 	// register references in onchanges/onfail/require). See validateTaskRefs.
-	diags = append(diags, validateTaskRefs(seq, "$")...)
+	diags = append(diags, validateTaskRefs(seq, "$", opts.OuterRegisters)...)
 	// Plugin module params against a resolved manifest (NIM-228) — the same
 	// post-pass the mapping-rooted entry points run.
 	diags = append(diags, validatePluginModuleParams(seq, opts.ModuleManifests)...)

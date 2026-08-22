@@ -581,7 +581,7 @@ func assertAlphabet(t *testing.T, s string, allowed []rune) {
 
 // safeAlphabetRunes reproduces ascii-printable-safe alphabet (0x21..0x7E minus
 // excluded) for assertAlphabet default tests. Keep exclusion list in sync with
-// policy.go::excludedFromSafe.
+// shared/secretpolicy::excludedFromSafe.
 func safeAlphabetRunes() []rune {
 	const excluded = " \"'#\\`$"
 	ex := make(map[byte]bool)

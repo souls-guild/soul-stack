@@ -45,9 +45,10 @@ func TestBuildTaskExecutedPayload_PlanIndexEmitted(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog — error.message is set for a
-// NON-no_log task (masking is on the write-path), code/module present.
-func TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog(t *testing.T) {
+// TestBuildTaskExecutedPayload_ErrorMessage — error.message is always set
+// (masking is on the write path), code/module present. There is no per-task
+// suppression switch any more ([ADR-0083] §8 removed `no_log:`).
+func TestBuildTaskExecutedPayload_ErrorMessage(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_FAILED",
 		Error: &TaskExecutedError{Code: "E1", Module: "core.pkg.installed", Message: "boom"},
@@ -61,37 +62,43 @@ func TestBuildTaskExecutedPayload_ErrorMessageForNonNoLog(t *testing.T) {
 	}
 }
 
-// TestBuildTaskExecutedPayload_NoLogSuppression — a no_log task: error.message and
-// register_data are suppressed, the suppressed:"no_log" marker is present. The root
-// of suppressing an arbitrary secret leak (MaskSecrets by vault-ref won't catch it).
-func TestBuildTaskExecutedPayload_NoLogSuppression(t *testing.T) {
+// TestBuildTaskExecutedPayload_NoSuppressionMarker — the payload builder has no
+// suppression switch left ([ADR-0083] §8 removed `no_log:`): whatever the caller
+// hands over is written. error.message and register_data reach the payload, and
+// the `suppressed` marker that used to stand in their place is gone.
+//
+// This is the load-bearing half of the replacement: masking now happens BEFORE
+// this function is called — per output field from the module manifest
+// (grpc.redactSecretOutput) and per param cell from the seal
+// (audit.MaskSecretsSealed). A builder that dropped fields on its own would hide
+// whether that masking actually ran.
+func TestBuildTaskExecutedPayload_NoSuppressionMarker(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_FAILED",
-		NoLog:        true,
-		Error:        &TaskExecutedError{Module: "core.vault.kv-read", Message: "plaintext secret"},
-		RegisterData: `{"password":"hunter2"}`,
+		Error:        &TaskExecutedError{Module: "core.vault.kv-read", Message: "boom"},
+		RegisterData: `{"data":"` + MaskedValue + `"}`,
 	})
-	if p["suppressed"] != "no_log" {
-		t.Errorf("suppressed = %v, want no_log", p["suppressed"])
+	if _, present := p["suppressed"]; present {
+		t.Errorf("suppressed marker = %v, want it gone with no_log", p["suppressed"])
 	}
-	if _, present := p["register_data"]; present {
-		t.Errorf("register_data leaked for no_log: %v", p["register_data"])
+	if p["register_data"] != `{"data":"`+MaskedValue+`"}` {
+		t.Errorf("register_data = %v, want the caller's already-masked value passed through", p["register_data"])
 	}
 	em, ok := p["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("error type = %T", p["error"])
 	}
-	if _, present := em["message"]; present {
-		t.Errorf("error.message leaked for no_log: %v (must be suppressed)", em["message"])
+	if em["message"] != "boom" {
+		t.Errorf("error.message = %v, want it written (no per-task suppression)", em["message"])
 	}
 	if em["module"] != "core.vault.kv-read" {
-		t.Errorf("error.module = %v, want core.vault.kv-read (module is not suppressed)", em["module"])
+		t.Errorf("error.module = %v, want core.vault.kv-read", em["module"])
 	}
 }
 
-// TestBuildTaskExecutedPayload_RegisterDataForNonNoLog — register_data is set for a
-// NON-no_log task when the value is non-empty (a Soul-side protojson string).
-func TestBuildTaskExecutedPayload_RegisterDataForNonNoLog(t *testing.T) {
+// TestBuildTaskExecutedPayload_RegisterData — register_data is set when the
+// value is non-empty (a Soul-side protojson string).
+func TestBuildTaskExecutedPayload_RegisterData(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
 		RegisterData: `{"changed":true}`,
@@ -108,7 +115,7 @@ func TestBuildTaskExecutedPayload_RegisterDataForNonNoLog(t *testing.T) {
 // Structural barrier: TaskExecutedInput has no Params field (params are rendered
 // Keeper-side and go Soul→ApplyRequest, but are NOT returned back in TaskEvent —
 // the apply.proto TaskEvent message carries only task_idx/status/register_data/
-// error/no_log). The test asserts that even with a maximally filled input no
+// error/secret_output). The test asserts that even with a maximally filled input no
 // payload key equals or contains "param" — a regression (someone adds Params to
 // input and threads it into the payload) is caught here.
 func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
@@ -118,9 +125,8 @@ func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 		{SID: "h", ApplyID: "a", TaskIdx: 1, Status: "TASK_STATUS_FAILED",
 			Error: &TaskExecutedError{Code: "E", Module: "core.pkg.installed", Message: "boom"}},
 		{SID: "h", ApplyID: "a", TaskIdx: 2, Status: "TASK_STATUS_FAILED",
-			NoLog:        true,
-			Error:        &TaskExecutedError{Module: "core.vault.kv-read", Message: "plaintext"},
-			RegisterData: `{"password":"hunter2"}`},
+			Error:        &TaskExecutedError{Module: "core.vault.kv-read", Message: "boom"},
+			RegisterData: `{"password":"` + MaskedValue + `"}`},
 		{SID: "h", ApplyID: "a", TaskIdx: 3, Status: "TASK_STATUS_CHANGED",
 			Notices: []TaskExecutedNotice{{
 				Code: "deprecated_param", Module: "community.redis.present",
@@ -180,30 +186,28 @@ func assertNoParamKeyAt(t *testing.T, path string, m map[string]any) {
 	}
 }
 
-// A no_log task suppresses error.message and register_data because both can
-// carry an arbitrary plaintext secret. Notices must NOT be suppressed with them:
-// they are rendered from the manifest (param name, versions, replacement) and
-// never from task output or input values, so the leak no_log exists to stop
-// cannot travel this way. Suppressing them would blind the operator on exactly
-// the tasks that handle secrets — the ones where a silent contract change is
-// least affordable.
-func TestBuildTaskExecutedPayload_NoticesSurviveNoLog(t *testing.T) {
+// Notices are rendered from the manifest (param name, versions, replacement) and
+// never from task output or input values, so no masking applies to them. They
+// travel beside a register_data whose secret fields the caller already masked —
+// the point of the test is that the two are independent: nothing about a task
+// handling secrets blinds the operator to a contract change on it, which is
+// exactly what the old all-or-nothing `no_log:` did.
+func TestBuildTaskExecutedPayload_NoticesTravelWithMaskedOutput(t *testing.T) {
 	p := BuildTaskExecutedPayload(TaskExecutedInput{
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
-		NoLog:        true,
-		RegisterData: `{"password":"hunter2"}`,
+		RegisterData: `{"password":"` + MaskedValue + `"}`,
 		Notices: []TaskExecutedNotice{{
 			Code: "deprecated_param", Module: "community.redis.present",
 			Param: "address", Message: `param "address" stops working in 0.6.0`,
 		}},
 	})
 
-	if _, leaked := p["register_data"]; leaked {
-		t.Fatal("no_log suppression regressed: register_data reached the payload")
+	if p["register_data"] != `{"password":"`+MaskedValue+`"}` {
+		t.Fatalf("register_data = %v, want the masked value passed through untouched", p["register_data"])
 	}
 	got, ok := p["notices"].([]map[string]any)
 	if !ok || len(got) != 1 {
-		t.Fatalf("notices = %#v, want the one notice to survive no_log", p["notices"])
+		t.Fatalf("notices = %#v, want the one notice present", p["notices"])
 	}
 	if got[0]["param"] != "address" || got[0]["code"] != "deprecated_param" {
 		t.Errorf("notice = %#v, want the param name and code intact", got[0])

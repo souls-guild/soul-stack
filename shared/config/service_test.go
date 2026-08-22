@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -25,8 +26,8 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Name != "redis" {
 		t.Errorf("name: got %q want redis", cfg.Name)
 	}
-	if cfg.StateSchemaVersion != 14 {
-		t.Errorf("state_schema_version: got %d want 14", cfg.StateSchemaVersion)
+	if cfg.StateSchemaVersion != 15 {
+		t.Errorf("state_schema_version: got %d want 15", cfg.StateSchemaVersion)
 	}
 	if len(cfg.Destiny) != 4 {
 		t.Errorf("destiny len: got %d want 4", len(cfg.Destiny))
@@ -154,7 +155,7 @@ lifecycle:
 }
 
 func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
-	cases := []string{"version", "tasks", "steps", "input", "scenarios"}
+	cases := []string{"version", "tasks", "steps", "input", "scenarios", "revealable_secrets"}
 	for _, key := range cases {
 		key := key
 		t.Run(key, func(t *testing.T) {
@@ -172,6 +173,41 @@ func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
 				t.Fatalf("expected unknown_key with hint for deprecated key %q", key)
 			}
 		})
+	}
+}
+
+func TestLoadServiceManifest_RevealableSecretsRetired(t *testing.T) {
+	// The block in the shape an author actually wrote it (ADR-070), not a scalar
+	// stand-in: a nested sequence takes a different route through the reflect-walker
+	// than `key: foo` does, and this is the form every migrating service carries.
+	src := `name: redis
+state_schema_version: 1
+state_schema:
+  type: object
+revealable_secrets:
+  - id: user-password
+    label: "Redis user password"
+    enumerate: state.users
+    vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	var hint string
+	for _, d := range diags {
+		if d.Code == "unknown_key" && d.YAMLPath == "$.revealable_secrets" {
+			hint = d.Hint
+		}
+	}
+	if hint == "" {
+		dump(t, diags)
+		t.Fatal("revealable_secrets must be refused at load with a hint naming the replacement")
+	}
+	// The point of the hint is that it says what to write instead. A generic
+	// "unknown field" leaves the author guessing, so assert on the replacement
+	// itself and not merely on the hint being non-empty.
+	for _, want := range []string{"type: secret", "ADR-0083"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint %q does not name %q", hint, want)
+		}
 	}
 }
 

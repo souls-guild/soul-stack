@@ -433,7 +433,7 @@ func SelectByApplyID(ctx context.Context, db ExecQueryRower, applyID, sid string
 // failed_plan_index ($6) — the GLOBAL end-to-end plan_index of the failed
 // task (across the whole plan, all Passages; ADR-056 §S1 fix Variant B).
 // This is the correlation key to RenderedTask.Index for the failed task's
-// module/action (drift report) and no_log suppression (barrier). task_idx
+// module/action (drift report) and the barrier's failure summary. task_idx
 // ($3) — the LOCAL position within its own Passage's ApplyRequest
 // (informational). COALESCE on BOTH fields under one first-failure
 // condition: they describe the same first failed task, written atomically.
@@ -623,7 +623,7 @@ ORDER BY sid ASC, passage ASC
 // FailedPlanIndex — the GLOBAL end-to-end plan_index of the failed task
 // across the whole plan (all Passages; migration 081, ADR-056 §S1 fix
 // Variant B). The correlation key to RenderedTask.Index for the failed
-// task's module/action (drift report) and no_log suppression (barrier). nil
+// task's module/action (drift report) and the barrier's failure summary. nil
 // under the same conditions as TaskIdx; N=1 → ==TaskIdx.
 //
 // CancelRequested — the cluster-wide Cancel flag (G1, migration 024): any

@@ -273,7 +273,7 @@ func incRunTasksOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/runs/{apply_id}/tasks",
 		Summary:       "Incarnation run tasks (plan + per-host)",
-		Description:   "Task plan of one apply_id (plan_index/name/module/no_log/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
+		Description:   "Task plan of one apply_id (plan_index/name/module/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

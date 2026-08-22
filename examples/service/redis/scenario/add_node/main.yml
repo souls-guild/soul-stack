@@ -46,6 +46,38 @@ input:
 # "pilot topology"). add_node changes the live cluster topology, not the declaration.
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference. The
+  # reference is resolved once per pass, before any CEL root is built from the register.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element → present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Resolve the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      set: "${ default(incarnation.state.redis_users, []) }"
+
   # 1. GUARD — new_node_sid and seed_sid must be in the roster and distinct (assert:,
   #    ADR-009 amendment 2026-06-23; the same mechanism as create's size-guard). The
   #    predicate is evaluated KEEPER-SIDE at RENDER TIME (soulprint.hosts is available
@@ -115,11 +147,11 @@ tasks:
         # default_admin per cluster). Failover-safe: inert on role=master. The scenario
         # body (outside covenant) hardcodes 'default_admin' directly. masterauth — vault()-
         # IN-CELL (seal-masking, ADR-010 §7.4); path —
-        # secret/redis/<inc>/users/default_admin#password.
+        # secret/redis/<inc>/system_acl_users/default_admin#password.
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': 'default_admin',
-               'masterauth': vault('secret/redis/' + incarnation.name + '/users/default_admin#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin']
              }) }
         # Source of Redis module .so files — from service vars (the "modules ALWAYS ALL"
         # directive): the new cluster node pulls the same module set from the same source
@@ -132,7 +164,7 @@ tasks:
         # TOP). WITHOUT the system replica user the new node CANNOT replicate (PSYNC) —
         # the cluster won't accept it as a replica. System users are NOT in state (item 7
         # d2) — added from vars. Vault password from the same
-        # secret/redis/<inc>/users/<name>#password branch. operator-extra:
+        # secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password branch. operator-extra:
         # .map(u, {u.name: …}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
@@ -140,7 +172,7 @@ tasks:
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                has(incarnation.state.redis_users)
@@ -148,7 +180,7 @@ tasks:
                      u.name: {
                        'perms':    u.perms,
                        'state':    u.state,
-                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                       'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                      }
                    }))
                  : {}
@@ -167,7 +199,7 @@ tasks:
     params:
       addr:     "127.0.0.1:6379"
       username: default_admin
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
       args:     ["PING"]
 
   # 4. ADD-NODE — run_once. Endpoints are built from the roster (soulprint.hosts) by SID:
@@ -186,7 +218,7 @@ tasks:
       # default_admin (username → AUTH, requirepass dropped); password from the new Vault
       # path users/default_admin.
       username: default_admin
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
       new_node:
         addr: "${ soulprint.hosts.where(\"sid == input.new_node_sid\")[0].network.primary_ip + ':6379' }"
       seed:

@@ -125,8 +125,37 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// identical reads) hit the cache instead of re-querying Vault. Scoped to
 	// exactly this Render call (one incarnation): the cache lives in ctx, not
 	// on Engine (which is shared across runs).
-	ctx = cel.WithVaultMemo(ctx)
-	in.Ctx = ctx // propagate to CEL vault() (ReadKV cancel/timeout + memo)
+	ctx = WithVaultFence(ctx, in.Incarnation.Service)
+	in.Ctx = ctx // propagate to CEL vault() (ReadKV cancel/timeout + memo + fence)
+
+	// The own-namespace fence ([ADR-0083] §7), runtime half. The load-time half
+	// (artifact.LoadScenarioManifestResolved, soul-lint) sees the MAIN FILE only —
+	// an `include:` body is parsed inside config.ExpandIncludes, after that load
+	// returns. in.Scenario.Tasks here is the expanded list, and every dispatch path
+	// (run / preflight / render_host) passes through this function, so a path
+	// smuggled in through an include is caught before a single Vault read happens.
+	// A caller with no service identity (push, unit eval) scans nothing — the same
+	// condition resolveRegisterSecrets applies, for the same reason. Trial is NOT
+	// such a caller: the L0 harness takes the name from service.yml, so the fence
+	// is live there too.
+	if fdiags := config.ScanOwnNamespaceVault(in.Scenario.Name, in.Incarnation.Service, in.Scenario, in.Scenario.Tasks); len(fdiags) > 0 {
+		return nil, nil, fmt.Errorf("render: %s: %s at %s (%d in this scenario)",
+			fdiags[0].Code, fdiags[0].Message, fdiags[0].YAMLPath, len(fdiags))
+	}
+
+	// A declared secret written by a keeper-side task travels in the register as a
+	// `vault:` reference, not as a value ([ADR-0083] §6). It is resolved here, once
+	// per pass and through the same memo as every other read, before any CEL root
+	// is built from it.
+	keeperReg, sealedReg, kerr := p.resolveRegisterSecrets(ctx, in)
+	if kerr != nil {
+		return nil, nil, kerr
+	}
+	in.KeeperRegister = keeperReg
+	// Two seal sources, resolved provenance and declared provenance — see
+	// secretOutputRegisters for why neither substitutes for the other.
+	in.sealedRegisters = mergeSealedRegisters(sealedReg,
+		secretOutputRegisters(in.Scenario.Tasks, in.Modules))
 
 	// compute: resolved ONCE per run (run-level context, no soulprint — a
 	// host-invariance barrier) before task rendering — the `compute.<name>`
@@ -401,8 +430,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		Module:   task.Module.Module,
 		Register: task.Register,
 		ID:       task.ID,
-		NoLog:    task.NoLog,
 		Timeout:  task.Timeout,
+		// [ADR-0083] §8: derived from the module manifest, never authored.
+		SecretOutput: config.SecretOutputFields(task.Module.Module, in.Modules),
 		// flow-control CEL strings (ADR-012(d)) pass through as-is — Keeper
 		// never evaluates them (they depend on register.* from prior tasks,
 		// known only to Soul). Host-invariant (one predicate text per task);
@@ -853,7 +883,7 @@ func (p *Pipeline) emitStaticWhenSkip(
 		return true, nil
 	}
 
-	*tasks = append(*tasks, p.staticSkipPlaceholder(task, *idx, skip))
+	*tasks = append(*tasks, p.staticSkipPlaceholder(task, *idx, skip, in.Modules))
 	*plans = append(*plans, DispatchPlan{TaskIndex: *idx})
 	*idx++
 	return true, nil
@@ -864,13 +894,12 @@ func (p *Pipeline) emitStaticWhenSkip(
 // flow_context; When/ID/Register/requisites passed through). Module is set
 // when a module task is present (a block node has none → empty
 // Module — placeholder is still valid, just never executed).
-func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
+func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct, modules config.ModuleManifestResolver) *RenderedTask {
 	rt := &RenderedTask{
 		Index:          idx,
 		Name:           task.Name,
 		Register:       task.Register,
 		ID:             task.ID,
-		NoLog:          task.NoLog,
 		Timeout:        task.Timeout,
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
@@ -882,6 +911,7 @@ func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *struct
 	applyConcurrency(rt, task)
 	if task.Module != nil {
 		rt.Module = task.Module.Module
+		rt.SecretOutput = config.SecretOutputFields(rt.Module, modules)
 	}
 	return rt
 }
@@ -916,8 +946,10 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	if in.Scenario == nil {
 		return fmt.Errorf("render: scenario manifest is nil")
 	}
-	ctx = cel.WithVaultMemo(ctx) // per-pass vault() memo (assert pre-flight is its own pass)
-	in.Ctx = ctx                 // assert.that[] may call vault() — propagate cancel/timeout + memo
+	// assert pre-flight is its own pass; assert.that[] may call vault(), so the
+	// context carries cancel/timeout, the memo and the fence.
+	ctx = WithVaultFence(ctx, in.Incarnation.Service)
+	in.Ctx = ctx
 	// compute: available in assert.that[] the same as in params/where (one
 	// resolve, run-level context, no soulprint). Idempotent with
 	// Render/RenderStateOps.
@@ -1102,13 +1134,13 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 		Params:         st,
 		Register:       task.Register,
 		ID:             task.ID,
-		NoLog:          task.NoLog,
 		Timeout:        task.Timeout,
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,
 		onChangesNames: task.OnChanges,
 		onFailNames:    task.OnFail,
+		SecretOutput:   config.SecretOutputFields(task.Module.Module, in.Modules),
 	}
 	applyConcurrency(rt, task)
 	if task.Retry != nil {
@@ -1590,6 +1622,13 @@ func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 		return nil, nil
 	}
 
+	// state_changes is rendered AFTER the barrier, in its own pass — Render's
+	// ctx does not reach here (run.go builds a fresh RenderInput). Without this
+	// the pass would evaluate `${ vault(...) }` in a value/key/match with no §7
+	// guard, which is the one channel that can write a plaintext secret straight
+	// into incarnation.state.
+	in.Ctx = WithVaultFence(in.Ctx, in.Incarnation.Service)
+
 	hosts := sortedHostsBySID(in.Hosts)
 	if len(hosts) == 0 {
 		return nil, nil
@@ -1878,42 +1917,55 @@ func mergeLoop(a, b map[string]any) map[string]any {
 	return out
 }
 
-// EvalStateMatch evaluates the identity match predicate for a list element
-// of an `add` operation (orchestration.md §7, new list form). Bindings:
-// `elem` is the existing collection element, `value` the one being added
-// (already rendered). Both are top-level CEL names (via Vars.Loop, the same
-// mechanism as loop variables). No other scenario context
-// (input/register/…) is available in match: identity is a pure function of
-// elem+value (like migration-CEL is a pure function of state, ADR-019). An
-// empty predicate never reaches here (merge with an empty match compares
-// elements deep-equal, no CEL).
+// StateOpEvaluators returns the pair of merge-time CEL evaluators that
+// mergeStateChanges (scenario/trial) needs, both bound to ctx and to the §7
+// own-namespace fence for service ([WithVaultFence]).
 //
-// The result must be bool (evalBoolExpr). Called by merge per existing
-// element — stateless with respect to Pipeline (cel.Engine is thread-safe).
-func (p *Pipeline) EvalStateMatch(predicate string, elem, value any) (bool, error) {
-	vars := cel.Vars{Loop: map[string]any{"elem": elem, "value": value}}
-	return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
-}
+// The pair is handed out together, and only this way, because merge is the LAST
+// place a scenario can put a value into incarnation.state: a `${ vault(...) }` in
+// a modify patch or a match predicate that ran outside the fence would write the
+// platform's own derived secret into state as plaintext — precisely what
+// `type: secret` exists to prevent. A method on Pipeline evaluating these
+// expressions without a ctx would be that hole with a shorter name, so there
+// isn't one.
+//
+// merge is called once per run and evaluates per element, so the fence's memo is
+// shared across every element of that merge — the same point-in-time view the
+// render pass gets.
+//
+// match — the identity predicate of an `add` element (orchestration.md §7).
+// Bindings: `elem` (the existing element) and `value` (the one being added,
+// already rendered), both top-level CEL names via Vars.Loop. No other scenario
+// context: identity is a pure function of elem+value (as migration-CEL is a pure
+// function of state, ADR-019). An empty predicate never reaches it (merge
+// compares deep-equal without CEL).
+//
+// opEval — modify/remove. Unlike match, expr sees the FULL run context (sctx, the
+// snapshot built by stateContextSnapshot) PLUS the element bindings (binds —
+// elem/key/value), so a modify-match `key == input.username` sees both.
+// boolOut=true → predicate (bool); boolOut=false → patch value (native).
+//
+// Both closures are stateless with respect to Pipeline (cel.Engine is
+// thread-safe).
+func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (StateMatchFunc, StateOpEvalFunc) {
+	ctx = WithVaultFence(ctx, service)
 
-// EvalStateOpExpr is the merge-time CEL evaluator for modify/remove (see
-// [StateOpEvalFunc]). Unlike EvalStateMatch (isolated elem/value for
-// add-dedup), expr here sees the FULL scenario run context (ctx — a
-// snapshot of input/register/incarnation/soulprint.self/vars, built
-// by stateContextSnapshot) PLUS the current element's bindings (binds —
-// elem/key/value). boolOut=true → match predicate
-// (EvalExpression→bool); boolOut=false → patch value
-// (EvalInterpolation→native). So a modify-match `key == input.username`
-// sees both key (the element) and input.* (context).
-//
-// Called by merge (scenario/trial) per matched element; stateless with
-// respect to Pipeline (cel.Engine is thread-safe).
-func (p *Pipeline) EvalStateOpExpr(expr string, ctx, binds map[string]any, boolOut bool) (any, error) {
-	vars := stateOpVars(ctx)
-	vars.Loop = mergeLoop(vars.Loop, binds)
-	if boolOut {
-		return evalBoolExpr(p.cel, "state_changes.match", expr, vars)
+	match := func(predicate string, elem, value any) (bool, error) {
+		vars := cel.Vars{Ctx: ctx, Loop: map[string]any{"elem": elem, "value": value}}
+		return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
 	}
-	return p.cel.EvalInterpolation(expr, vars)
+
+	opEval := func(expr string, sctx, binds map[string]any, boolOut bool) (any, error) {
+		vars := stateOpVars(sctx)
+		vars.Ctx = ctx
+		vars.Loop = mergeLoop(vars.Loop, binds)
+		if boolOut {
+			return evalBoolExpr(p.cel, "state_changes.match", expr, vars)
+		}
+		return p.cel.EvalInterpolation(expr, vars)
+	}
+
+	return match, opEval
 }
 
 // stateOpVars unpacks a flat ctx snapshot (stateContextSnapshot) back into

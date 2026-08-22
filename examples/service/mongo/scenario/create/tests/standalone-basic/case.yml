@@ -13,12 +13,6 @@ fixtures:
         network: { primary_ip: 10.0.0.7 }
         os: { arch: amd64, version: "12" }
 
-  # Vault: default_admin (bootstrap of the first admin via the localhost exception). There is no
-  # main secret/mongo/create#password (auth is via default_admin — redesign symmetric with redis).
-  vault:
-    secret/mongo/create/users/default_admin:
-      password: mongoadmin-create-pass
-
   vars:
     install_method: binary
     binary_base_url: "https://nexus.example/mongodb"
@@ -45,10 +39,26 @@ fixtures:
     version: "8.0.4"
     memory_mb: 2048
 
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_users:
+      effective:
+        - { name: default_admin, password: mongoadmin-create-pass }
+    mongo_users:
+      effective: []
+
 assert:
   task_present:
-    # 1. password generation in Vault (keeper-side) — default_admin.
-    - module: core.vault.kv-present
+    # 1. the keeper-side mint of the service's own accounts ([ADR-0083] §4): the path is
+    #    derived from (service, incarnation, field, key), no case authors one.
+    - module: core.state.present
+      params_subset:
+        key: system_users
 
     # 2. binary-install: mongodb user/group + fetch tarball + mongod + systemd unit.
     - module: core.group.present

@@ -170,6 +170,38 @@ state_changes:
     value: "${ int(default(input.io_threads, default(incarnation.state.io_threads, 0))) }"
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference. The
+  # reference is resolved once per pass, before any CEL root is built from the register.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element → present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Resolve the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      set: "${ default(incarnation.state.redis_users, []) }"
+
   # -- Version-aware validator for redis_settings directive names (assert, #6) ─────────────
   # * qa-gap: update_config accepts redis_settings (passthrough KEY->VALUE) -
   # without a check the operator would silently pass a typo (`maxmemoyr 512mb`) or a directive
@@ -244,7 +276,7 @@ tasks:
         config: >-
           ${ merge(compute.redis_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         modules_base_url: "${ default(vars.modules_base_url, '') }"
         # ** CRITICAL (system-ACL-users d2): this task's redis.conf render also re-renders
@@ -253,7 +285,7 @@ tasks:
         # System ones FIRST, operator-extra (state.redis_users - an ARRAY of AclUser, wave 1b)
         # ON TOP (last-wins). System ones are NOT in state (item 7 d2) - topped up from service vars on
         # every render. The has() guard on state.redis_users is back-compat (incarnations without
-        # operator-extra). Vault password from the same branch secret/redis/<inc>/users/<name>#password.
+        # operator-extra). Vault password from the same branch secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password.
         # operator-extra: .map(u, {u.name: ...}) (name from field u.name, previously the map key).
         users: >-
           ${ merge(
@@ -261,7 +293,7 @@ tasks:
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                has(incarnation.state.redis_users)
@@ -269,7 +301,7 @@ tasks:
                      u.name: {
                        'perms':    u.perms,
                        'state':    u.state,
-                       'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                       'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                      }
                    }))
                  : {}
@@ -292,10 +324,10 @@ tasks:
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # * default_admin REDESIGN (2026-06-30): AUTH under the system default_admin (requirepass
-      # dropped). username + its password come from the branch secret/redis/<inc>/users/default_admin#password.
+      # dropped). username + its password come from the branch secret/redis/<inc>/system_acl_users/default_admin#password.
       # The community.redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       # config - the CLEAN compute.redis_config (WITHOUT the masterauth topup): hot-reload sends CONFIG

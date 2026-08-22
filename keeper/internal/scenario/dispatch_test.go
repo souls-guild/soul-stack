@@ -219,34 +219,14 @@ func TestSplitWaves_Empty(t *testing.T) {
 	}
 }
 
-func TestNoLogIndex(t *testing.T) {
-	tasks := []*render.RenderedTask{
-		{Index: 0, NoLog: false},
-		{Index: 1, NoLog: true},
-		{Index: 2, NoLog: false},
-		{Index: 5, NoLog: true},
-	}
-	got := noLogIndex(tasks)
-	if got[0] || got[2] {
-		t.Errorf("non-no_log tasks ended up in the index: %v", got)
-	}
-	if !got[1] || !got[5] {
-		t.Errorf("no_log tasks are missing: %v", got)
-	}
-	if len(got) != 2 {
-		t.Errorf("len = %d, want 2", len(got))
-	}
-}
-
 func TestFailureReason(t *testing.T) {
 	strp := func(s string) *string { return &s }
 	intp := func(i int) *int { return &i }
 
 	tests := []struct {
-		name  string
-		hs    applyrun.HostStatus
-		noLog map[int]bool
-		want  string
+		name string
+		hs   applyrun.HostStatus
+		want string
 	}{
 		{
 			name: "per-task summary passes through verbatim",
@@ -259,16 +239,17 @@ func TestFailureReason(t *testing.T) {
 			want: "failed",
 		},
 		{
-			name:  "no_log task -> stderr suppressed",
-			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), ErrorSummary: strp("task 2 core.exec.run: secret-password-in-stderr")},
-			noLog: map[int]bool{2: true},
-			want:  "task 2: (no_log task failed)",
-		},
-		{
-			name:  "non-no_log task with a no_log map present -> message visible",
-			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(0), ErrorSummary: strp("task 0 core.pkg.installed: boom")},
-			noLog: map[int]bool{2: true},
-			want:  "task 0 core.pkg.installed: boom",
+			// [ADR-0083] §8 removed the per-task `no_log:` and with it the
+			// noLogByIndex map this function used to consult. A failed task's
+			// summary is now passed through whatever its index: the barrier no
+			// longer decides what an operator may read about a failure. What
+			// stands in its place is the write-path masking that produced the
+			// summary (audit.MaskSecrets / MaskSecretsSealed) plus the
+			// operator-SSE floor, which withholds `message` for EVERY failed
+			// task rather than for the ones an author remembered to flag.
+			name: "a summary is passed through whatever the task index",
+			hs:   applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), ErrorSummary: strp("task 2 core.exec.run: boom")},
+			want: "task 2 core.exec.run: boom",
 		},
 		{
 			name: "cancelled without summary -> status",
@@ -276,35 +257,20 @@ func TestFailureReason(t *testing.T) {
 			want: "cancelled",
 		},
 		{
-			// GUARD (ADR-056 §S1 fix Variant B): under staged/per-host-where the
-			// local TaskIdx != the global FailedPlanIndex. The no_log map is
-			// built from the global RenderedTask.Index. Resolution MUST go by
-			// FailedPlanIndex: the task at global idx=5 is no_log, its stderr
-			// carried a password; local idx=1 is absent from the no_log map.
-			// REVERSAL (resolving by TaskIdx=1) → noLog[1]=false → the password
-			// from ErrorSummary would leak into the operator-facing reason.
-			// Security-relevant.
-			name:  "staged: no_log resolves by global plan_index, not local task_idx",
-			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(1), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.exec.run: secret-password-in-stderr")},
-			noLog: map[int]bool{5: true},
-			want:  "task 5: (no_log task failed)",
-		},
-		{
-			// Symmetric case: global idx=5 is an ordinary task (not no_log),
-			// even though local idx=2 happens to collide with the no_log index
-			// of another task in another Passage. Resolving by
-			// FailedPlanIndex(5) → noLog[5]=false → message is visible.
-			// Reversal (by TaskIdx=2) would falsely suppress an ordinary
-			// task's reason.
-			name:  "staged: an ordinary task is not suppressed by a local task_idx collision",
-			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.pkg.installed: boom")},
-			noLog: map[int]bool{2: true},
-			want:  "task 5 core.pkg.installed: boom",
+			// The staged/per-host-where guard survives the removal in its
+			// remaining half: TaskIdx is LOCAL to a Passage and
+			// FailedPlanIndex is global, and the summary must describe the
+			// task that actually failed. It is written by the producer with
+			// the global index already in it — this asserts the barrier does
+			// not rewrite it from the local one.
+			name: "staged: the summary describes the globally-indexed task",
+			hs:   applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(1), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.exec.run: boom")},
+			want: "task 5 core.exec.run: boom",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := failureReason(tt.hs, tt.noLog); got != tt.want {
+			if got := failureReason(tt.hs); got != tt.want {
 				t.Errorf("failureReason = %q, want %q", got, tt.want)
 			}
 		})
@@ -409,7 +375,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			done, failed := classify(tt.statuses, 0, tt.wantHosts, nil)
+			done, failed := classify(tt.statuses, 0, tt.wantHosts)
 			if tt.wantFail {
 				if failed == nil {
 					t.Fatalf("failed = nil, want non-nil")

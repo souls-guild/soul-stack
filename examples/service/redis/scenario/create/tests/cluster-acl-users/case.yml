@@ -6,7 +6,7 @@
 #   2. cluster directives in redis.conf COEXIST with ACL users - these are different
 #      files (users.acl and redis.conf), both rendered in one run.
 #   3. the per-user password is resolved by keeper-side vault() per the convention
-#      secret/redis/<inc>/users/<name>#password; in users.acl it is written as a HASH
+#      secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password; in users.acl it is written as a HASH
 #      (sha256 in .tmpl), the plaintext password does NOT flow into config redis.conf and does NOT
 #      end up in someone else's key. Two users (zeta/alpha) with DIFFERENT passwords: the assert
 #      catches both the resolve and the absence of cross-leak.
@@ -45,29 +45,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) -
-    # resolved by keeper-side vault() when system_acl_users is merged into apply.input.users.
-    # * default_admin REDESIGN (2026-06-30): default_admin is the system user for intra-cluster
-    # AUTH (PING/cluster-build/masterauth deploy read its password from the same users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
-    # Per-user secrets - DIFFERENT values: cross-leak (one user's password in another's
-    # line) is detected by asserting on the individual values.
-    secret/redis/create/users/zeta:
-      password: zeta-user-secret-pass
-    secret/redis/create/users/alpha:
-      password: alpha-user-secret-pass
   vars:
     redis_type: cluster
     modules_base_url: "https://artifacts.example.com/redis/modules"
@@ -113,6 +90,25 @@ fixtures:
     users:
       - { name: zeta, perms: "~* +@all", state: "on" }
       - { name: alpha, perms: "~app:* +@read +@write", state: "on" }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective:
+        - { name: zeta, password: zeta-user-secret-pass }
+        - { name: alpha, password: alpha-user-secret-pass }
 
 assert:
   # mode-guard (cluster is implemented -> no-op) and size-guard (assert: PASS, not a task)

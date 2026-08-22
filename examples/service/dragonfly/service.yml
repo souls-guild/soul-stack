@@ -1,5 +1,5 @@
 name: dragonfly
-state_schema_version: 6
+state_schema_version: 7
 description: >-
   DragonFly follows a unified-service concept (PILOT, sentinel-only). The operator sets SIMPLE
   typed concepts (memory, ACL users, replicas, TLS), and the create scenario translates
@@ -16,7 +16,7 @@ description: >-
   rotate_tls/destroy/update_config) - NEXT slice AFTER review. No mode dispatcher
   (single mode), no migrations (v1).
 
-# state_schema_version = 6: forward-only migration chain (ADR-019).
+# state_schema_version = 7: forward-only migration chain (ADR-019).
 #   - 001_to_002 (migrations/001_to_002.yml): moves install + host-layout
 #     (conf_dir/data_dir) from state into service vars - install is a read-model with no readers,
 #     layout is read directly by day-2 from service vars (default(vars.<x>, '<default>')). Mirrors
@@ -45,6 +45,12 @@ description: >-
 #     version/sink/sources). ★ sink_auth_ref (the collector token) is NOT written here - the secret lives in Vault (like tls.*_ref).
 #     For existing v5 - a conservative default (version '', sink console, endpoint '', sources []).
 #     ONE flat set with a has()-guard on the object (mirrors redis 013_to_014).
+#   - 006_to_007 (migrations/006_to_007.yml): the service's OWN ACL accounts become a declared
+#     state field (NIM-698, [ADR-0083]). Adds system_acl_users - an array of {name} recording
+#     WHICH accounts the service provisioned for itself (default_admin/replica/monitoring/
+#     sentinel/haproxy); perms stay in service vars (policy), the password is declared
+#     `type: secret` so its value lives in Vault at a DERIVED path. Default [] - migration-CEL
+#     cannot read vars (ADR-019 sandbox). Mirrors redis 014_to_015.
 # incarnation.state records what's deployed so the operator sees the installation and
 # repeated apply stays idempotent. Mini-schema (no cluster/modules/seeded_from - out of
 # PILOT scope; provision-read-model added v2->v4, observability v4->v6 modeled on redis).
@@ -137,8 +143,12 @@ state_schema:
     sentinel_quorum: { type: integer }
 
     # DragonFly ACL users: a TYPED array [{name, perms, state}] (ADR-062
-    # AclUser). Populated by create from input.users (also an AclUser array); passwords are NOT in state
-    # (keeper-side Vault, ADR-012).
+    # AclUser). Populated by create from input.users (also an AclUser array). The password is
+    # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper DERIVES
+    # from (service, incarnation, df_users, name) - no path is written anywhere in this repo -
+    # and never in state. `key: name` says which sibling property is the element's identity, i.e.
+    # the last path segment. Written by core.state.present, revealed to the operator by
+    # .../secrets/reveal, and read back by day-2 scenarios through that module's register.
     df_users:
       type: array
       items:
@@ -148,7 +158,31 @@ state_schema:
           name:  { type: string }
           perms: { type: string }
           state: { type: string, enum: [on, off] }
+          password:
+            type: secret
+            key: name
+            label: "DragonFly user password"
         additionalProperties: false
+    # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/haproxy) -
+    # the counterpart of df_users, which is operator intent. Only the NAME is state: perms live
+    # in service vars (vars.system_acl_users / vars.system_acl_users_sentinel - policy, not a
+    # per-incarnation fact), and the password is declared `type: secret`, so its value lives in
+    # Vault at a path Keeper DERIVES from (service, incarnation, system_acl_users, name).
+    # Written by create, read back by every day-2 scenario through core.state.present's
+    # register - which is why the set is recorded rather than recomputed from vars: an operator
+    # who edits vars after create must not silently re-point an in-cluster credential.
+    system_acl_users:
+      type: array
+      items:
+        type: object
+        required: [name]
+        additionalProperties: false
+        properties:
+          name: { type: string }
+          password:
+            type: secret
+            key: name
+            label: "DragonFly system account password"
     # Topology hosts (sid + role). Populated by the create scenario (role layout across
     # targeted souls). The exact role of each SID in state is a follow-up (same as redis).
     df_hosts:

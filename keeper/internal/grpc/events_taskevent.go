@@ -21,12 +21,17 @@ import (
 // task_idx, error (if any), and register_data (if any). register_data itself
 // is masked by the shared [audit.MaskSecrets] on the write path (auditpg).
 //
-// no_log suppression: for a task with TaskEvent.no_log=true (echoing RenderedTask.no_log,
-// apply.proto), register_data and error.message are NOT written to audit — this is the root of a
-// leak of an arbitrary secret that MaskSecrets can't catch by vault-ref. The payload carries a
-// suppressed:"no_log" marker. Suppression is strictly by the echoed flag, without touching
-// []RenderedTask: on multi-Keeper (ADR-002) this TaskEvent may have arrived at a different
-// instance than the one holding the run-goroutine.
+// Declared-secret output ([ADR-0083] §8): the fields TaskEvent.secret_output names (echoing
+// RenderedTask.secret_output, apply.proto) are replaced with [audit.MaskedValue] INSIDE
+// register_data before the payload is built — the rest of the task's output, and its
+// error.message, are written as before. The decision is strictly by the echoed list, without
+// touching []RenderedTask: on multi-Keeper (ADR-002) this TaskEvent may have arrived at a
+// different instance than the one holding the run-goroutine.
+//
+// This replaces the per-task `no_log:` flag, which dropped register_data and error.message
+// wholesale. Per-field is both narrower and stricter: it is the MODULE that declares which of
+// its outputs is a credential, so a task no longer has to be silenced entirely, and no longer
+// depends on an author remembering to silence it.
 //
 // The TaskStatus enum (including `TASK_STATUS_CANCELLED`) is serialized into the payload
 // via `Status().String()` as a single `status` field — extending the enum
@@ -44,13 +49,6 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 		return
 	}
 
-	// no_log task: register_data (params/output) and error.message (= stderr) are the
-	// root of a leak of an arbitrary secret that MaskSecrets can't catch by
-	// vault-ref. We suppress them in the long-lived audit. The decision is strictly by the echoed
-	// TaskEvent.no_log flag (apply.proto): []RenderedTask is held by the run-goroutine, and this
-	// TaskEvent may have arrived at a different instance on multi-Keeper (ADR-002). The
-	// suppressed:"no_log" marker is set by the helper itself.
-	noLog := ev.GetNoLog()
 	in := audit.TaskExecutedInput{
 		SID:     sid,
 		ApplyID: ev.GetApplyId(),
@@ -61,7 +59,6 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 		// TaskIdx under staged/per-host-where ≠ the global one. N=1 → plan_index==task_idx.
 		PlanIndex: int(ev.GetPlanIndex()),
 		Status:    ev.GetStatus().String(),
-		NoLog:     noLog,
 		Passage:   int(ev.GetPassage()),
 	}
 	if e := ev.GetError(); e != nil {
@@ -79,11 +76,14 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 			Message: n.GetMessage(),
 		})
 	}
-	if rd := ev.GetRegisterData(); rd != nil && !noLog {
+	if rd := ev.GetRegisterData(); rd != nil {
 		// google.protobuf.Struct → JSON via protojson is the only way to
 		// correctly serialize NullValue / NumberValue / nested-Struct.
 		// Bytes go straight into the payload — the auditpg-writer will route them through MaskSecrets.
-		// no_log → we don't write register_data at all (arbitrary secret in output).
+		// The module's declared-secret output fields are redacted first ([ADR-0083] §8):
+		// MaskSecrets catches a `vault:` ref and a sensitive-looking key, neither of which
+		// describes a value a module chose to return in plaintext.
+		rd = redactSecretOutput(rd, ev.GetSecretOutput())
 		if b, err := protojson.Marshal(rd); err != nil {
 			h.logger.Warn("eventstream: register_data marshal failed",
 				slog.String("sid", sid),
@@ -126,12 +126,10 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 // write is a blind append (see applyrun.AppendRunNotices); duplicates across
 // tasks are collapsed on read.
 //
-// NOT suppressed for a no_log task, unlike error_summary and register_data: a
-// notice carries manifest metadata (param name, versions, the replacement's
-// name) and never a param VALUE, so the arbitrary-secret leak no_log exists to
-// stop cannot travel this way. Suppressing it would blind the operator exactly
-// on the tasks that handle secrets — the ones where a silent contract change is
-// least affordable.
+// Never redacted: a notice carries manifest metadata (param name, versions, the
+// replacement's name) and never a param VALUE, so a credential cannot travel this
+// way. Suppressing it would blind the operator exactly on the tasks that handle
+// secrets — the ones where a silent contract change is least affordable.
 //
 // ApplyRunDB=nil (unit build without PG / ad-hoc push) → no-op. Errors are
 // logged and swallowed: a notice is advisory, and losing one must never fail the
@@ -173,13 +171,10 @@ func (h *eventStreamHandler) recordRunNotices(ctx context.Context, sid string, e
 // Masking: error_summary is read externally via barrier/status_details (GET
 // incarnation, unmasked on that channel), so MaskSecrets is applied
 // here, on the write path — vault-ref / secret-shaped values in a task's stderr
-// won't leak. For a no_log task (echoing TaskEvent.no_log, apply.proto), message
-// (= stderr) may carry an arbitrary plaintext secret that MaskSecrets doesn't
-// catch — so the summary is entirely replaced with the neutral "(no_log task failed)"
-// right here, on the write path. This is defense-in-depth: the run-goroutine
-// (scenario.dispatch) does the same, holding []RenderedTask with NoLog, but on
-// multi-Keeper (ADR-002) it may have ended up on a different instance; the floor in dispatch
-// still holds.
+// won't leak. Since [ADR-0083] §8 removed the per-task `no_log:`, that masking is the
+// whole barrier on this channel: the summary is no longer replaced with neutral text
+// for a marked task, because the marking was the author's to remember and cost the
+// operator the reason the run failed.
 //
 // Triggers only on FAILED/TIMED_OUT (TaskError is populated only there, see
 // apply.proto). ApplyRunDB=nil (unit build without PG / ad-hoc push) → no-op.
@@ -197,24 +192,20 @@ func (h *eventStreamHandler) recordTaskFailure(ctx context.Context, sid string, 
 		return
 	}
 
-	// no_log task: error.message (= stderr) may carry an arbitrary plaintext
-	// secret that MaskSecrets can't catch by vault-ref. On the write path (the source of
-	// error_summary) we suppress it with neutral text — defense-in-depth, not
-	// relying on the floor in the run-goroutine (scenario.dispatch), which holds
-	// []RenderedTask and may have ended up on a different instance on multi-Keeper (ADR-002).
-	var summary string
-	if ev.GetNoLog() {
-		summary = fmt.Sprintf("task %d %s: (no_log task failed)", taskIdx, ev.GetError().GetModule())
-	} else {
-		summary = composeTaskErrorSummary(taskIdx, ev.GetError())
-	}
+	// error_summary carries the module's own text. The per-task `no_log:` that used to
+	// replace it with neutral wording is gone ([ADR-0083] §8): silencing a whole task's
+	// diagnostics to hide one field cost the operator the reason the run failed, and it
+	// only ever fired when an author remembered to set it. What stands here instead is
+	// the write-path masking (MaskSecrets/MaskSecretsSealed, applied where this text is
+	// read) plus the operator-SSE floor, which withholds `message` for EVERY failed task.
+	summary := composeTaskErrorSummary(taskIdx, ev.GetError())
 	// passage (ADR-056): the failure reason is written into the (apply_id, sid, passage)
 	// row of this Passage; N=1 → 0. The Soul echoes passage from ApplyRequest.
 	//
 	// plan_index (ADR-056 §S1 fix Variant B): the GLOBAL cross-plan index of the failed
 	// task across the whole plan (= RenderedTask.Index). Written into apply_runs.
-	// failed_plan_index — the correlation key for no_log suppression in the barrier
-	// (dispatch.failureReason). The local taskIdx (the task_idx field) under staged/
+	// failed_plan_index — the correlation key linking the failure to the plan in the
+	// barrier (dispatch.failureReason). The local taskIdx (the task_idx field) under staged/
 	// per-host-where ≠ the global one — it's not fit for correlating with the plan (the same
 	// defect the register channel closed via migration 079). N=1 → plan_index==task_idx.
 	if err := applyrun.RecordTaskFailure(ctx, h.deps.ApplyRunDB, ev.GetApplyId(), sid, int(ev.GetPassage()), taskIdx, int(ev.GetPlanIndex()), summary); err != nil {
@@ -325,25 +316,18 @@ func (h *eventStreamHandler) accumulateRegister(ctx context.Context, sid string,
 // Payload is the SSE contract: snake_case keys, fixed in
 // docs/keeper/mcp-tools.md → § SSE event payloads.
 //
-// Suppressing raw stderr on operator-SSE (BUG-3 floor): the `no_log` flag lives in
-// []RenderedTask on the run-goroutine (scenario.dispatch), NOT in the proto TaskEvent
-// (ADR-012(d)); on multi-Keeper (ADR-002) this TaskEvent may have arrived at a different
-// instance than the one holding the run-goroutine — meaning the grpc layer here doesn't know a
-// task's no_log status. So for a FAILED task, `error.message` (= stderr, which may
-// carry a no_log task's plaintext password, which MaskSecrets can't catch by
-// vault-ref) is NOT placed into SSE at all: the frame only carries code/module for triage.
-// The operator gets the detailed, safe reason via `status_details`/GET
-// (which has no_log suppression + a second MaskSecrets pass, see scenario.failureReason).
-// Symmetric to "(no_log task failed)" in dispatch, but stricter — a floor for all
-// failed tasks, without depending on cross-Keeper propagation of run state.
+// Suppressing raw stderr on operator-SSE (BUG-3 floor): for a FAILED task, `error.message`
+// (= stderr, which may carry a plaintext credential that MaskSecrets can't catch by
+// vault-ref) is NOT placed into SSE at all — the frame only carries code/module for triage.
+// The operator gets the detailed reason via `status_details`/GET, which passes a second
+// MaskSecrets pass (see scenario.failureReason). This is a floor for ALL failed tasks: it
+// does not depend on cross-Keeper propagation of run state, and since [ADR-0083] §8 removed
+// the per-task `no_log:` it is the only stderr barrier on this channel.
 //
 // For NON-failed tasks (ok/changed), `error` is absent (TaskError is populated
 // only on FAILED/TIMED_OUT, see apply.proto); the useful status fields are preserved.
 // The final MaskSecrets pass on the SSE write path (writeSSEEvent) remains as a
 // second barrier for register/state_changes secrets by vault-ref/keys.
-//
-// A no_log task additionally carries a suppressed:"no_log" marker — so the client
-// can see the reason for a "quiet" frame (error without message), instead of treating it as data loss.
 func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEvent) {
 	if h.deps.ApplyBus == nil {
 		return
@@ -357,11 +341,6 @@ func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEv
 		"task_status": ev.GetStatus().String(),
 		// passage (ADR-056): the staged-render Passage index. 0 = the only Passage.
 		"passage": ev.GetPassage(),
-	}
-	// A marker for intentional suppression, for UX (SSE already floors error.message and doesn't
-	// carry register_data; the marker lets the client see the reason for a "quiet" frame).
-	if ev.GetNoLog() {
-		payload["suppressed"] = "no_log"
 	}
 	if e := ev.GetError(); e != nil {
 		// message (stderr) is intentionally not forwarded to SSE: see the doc-comment.

@@ -42,15 +42,24 @@ fixtures:
     df_config:
       maxmemory:        "256mb"
 
-  # Vault: probe connects as default_admin (requirepass removed).
-  vault:
-    secret/dragonfly/restart/users/default_admin:
-      password: dfadmin-restart-pass
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
 
 mocks:
   register:
     df_role:
       role: master
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-restart-pass }
 
 assert:
   task_present:
@@ -66,11 +75,11 @@ assert:
   # restart block + master restart), both with an empty when/id and the same params; the
   # discriminator is the block/task `where` (TargetSIDs), which the task_present presence
   # matcher does NOT see → it would match BOTH (collision).
-  # So master-restart is asserted positionally: index 4 (synth-install[0] (ADR-065,
-  # service.yml::modules[]) + probe[1] + Restart block[2] + replica-synced[3] +
-  # master-restart[4]).
+  # So master-restart is asserted positionally: index 5 (synth-install[0] (ADR-065,
+  # service.yml::modules[]) + core.state.present[1] ([ADR-0083] §4) + probe[2] +
+  # Restart block[3] + replica-synced[4] + master-restart[5]).
   rendered_tasks:
-    - index: 4
+    - index: 5
       module: core.service.restarted
       params:
         name: dragonfly

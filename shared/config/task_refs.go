@@ -68,7 +68,13 @@ import (
 //
 // tasksSeq — the `tasks:` AST node (scenario) or the root sequence (destiny).
 // A nil node → nil (an empty/invalid list is already diagnosed above).
-func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string) []diag.Diagnostic {
+//
+// outer — register names in scope from OUTSIDE this file (the includer chain,
+// threaded by ExpandIncludes; nil for a top-level file). See
+// ValidateOptions.OuterRegisters for why the direction is one-way. It seeds the
+// cross-reference set only: a name that also exists here is a cross-file
+// duplicate, which validateFlatTaskAddresses reports on the flat plan.
+func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string, outer map[string]bool) []diag.Diagnostic {
 	if tasksSeq == nil {
 		return nil
 	}
@@ -80,6 +86,9 @@ func validateTaskRefs(tasksSeq *ast.SequenceNode, pathPrefix string) []diag.Diag
 	// onchanges/onfail/when.
 	addrs := map[string]bool{}
 	registers := map[string]bool{}
+	for name := range outer {
+		registers[name] = true
+	}
 	var dupDiags []diag.Diagnostic
 	collectAddresses(tasksSeq, pathPrefix, addrs, registers, &dupDiags)
 

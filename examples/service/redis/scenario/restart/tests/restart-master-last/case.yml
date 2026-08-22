@@ -36,20 +36,25 @@ fixtures:
   input:
     reason: "restart master for L0"
 
-  # Redis password — probe resolves vault('secret/redis/restart/users/default_admin#password')
-  # (incarnation.name == scenario name == restart). ★ REDESIGN default_admin (2026-06-30):
-  # connects as the system default_admin (username → AUTH), password from the users/default_admin
-  # branch (the former secret/redis/<inc>#password is DROPPED). state is NOT set in the fixture →
-  # has(incarnation.state) false → tls_on false → plaintext connection branch
-  # (the v3 discriminator reads state.tls.enable, not service vars).
-  vault:
-    secret/redis/restart/users/default_admin:
-      password: default-admin-secret-pass
+  # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+  # NAME; each password is a `type: secret` property living in Vault under a derived
+  # path. The day-2 `core.state.present` task resolves THIS list into the register.
+  state:
+    system_acl_users:
+      - { name: default_admin }
 
 mocks:
   register:
     redis_role:
       role: master
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
 
 assert:
   task_present:
@@ -70,11 +75,12 @@ assert:
   # both with empty when/id and the same params; the discriminator is the block/task `where`
   # (TargetSIDs), which the presence matcher does NOT see (taskMatches only looks at
   # module/params_subset/when/id). A bare task_present would match BOTH → collision-fail.
-  # So master-restart stays in positional form (forms coexist): index 4 —
+  # So master-restart stays in positional form (forms coexist): index 5 —
   # master-restart (after synth-install[0] (ADR-065, service.yml::modules[]) +
-  # probe[1] + block Restart[2] + replica-synced[3]).
+  # core.state.present[1] ([ADR-0083] §4) + probe[2] + block Restart[3] +
+  # replica-synced[4]).
   rendered_tasks:
-    - index: 4
+    - index: 5
       module: core.service.restarted
       params:
         name: redis-server

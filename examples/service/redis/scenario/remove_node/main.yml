@@ -26,6 +26,30 @@ input:
       (topology + idempotency) and FORGET. Must differ from remove_node_sid.
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference. The
+  # reference is resolved once per pass, before any CEL root is built from the register.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. The former construction leaned
+  # on the vault-emitter and roster axes, neither of which the author could see.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element → present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
   # 1. GUARD — remove_node_sid and seed_sid must be in the roster and must differ (assert:,
   #    ADR-009 amendment 2026-06-23; same mechanism as the add_node guard). The predicate
   #    is computed KEEPER-SIDE at RENDER time (soulprint.hosts is available there; on Soul it
@@ -54,7 +78,7 @@ tasks:
     params:
       action:   remove-node
       username: default_admin
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/default_admin#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
       node:
         addr: "${ soulprint.hosts.where(\"sid == input.remove_node_sid\")[0].network.primary_ip + ':6379' }"
       seed:

@@ -57,30 +57,14 @@ fixtures:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
   vault:
-    secret/redis/migrate_cluster:
-      password: s3cr3t-redis-pass-migrate
-    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user for
-    # in-cluster AUTH; the plugin's join/failover/forget (community.redis.cluster
-    # username/password) and the joinable deploy's masteruser/masterauth read its
-    # password from the users/default_admin path. migrate.go holds a SINGLE
-    # username/password (== the password of the same user in the source cluster).
-    secret/redis/migrate_cluster/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/migrate_cluster/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/migrate_cluster/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/migrate_cluster/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/migrate_cluster/users/haproxy:
-      password: haproxy-sys-secret-pass
-    # ★ Credentials for the EXTERNAL source under the pattern-guard secret/redis/migrate/*.
+    # ★ Credentials for the EXTERNAL source under the pattern-guard secret/redis-migrate/*.
     # In cluster B3 the source == the new cluster (aligned password), but source.password_ref
     # is still declared in input (required:true in the source section). On the plugin's
     # cluster steps the password is the SHARED secret/redis/migrate_cluster#password (the
     # operator aligned old == new).
-    secret/redis/migrate/oldcluster:
+    secret/redis-migrate/oldcluster:
       password: old-cluster-source-pass
+
   vars:
     # install_method — in service vars (author-context): install method is NOT operator-input
     # (covenant.compute.install reads default(vars.install_method, 'binary')). package
@@ -121,8 +105,25 @@ fixtures:
       hosts:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
-      password_ref: "secret/redis/migrate/oldcluster#password"
+      password_ref: "secret/redis-migrate/oldcluster#password"
       tls: false
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:
@@ -274,5 +275,5 @@ assert:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       detached: true
-      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_password_ref: "secret/redis-migrate/oldcluster#password"
       source_tls_ca_ref: ""

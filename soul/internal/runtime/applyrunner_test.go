@@ -96,16 +96,18 @@ func TestRun_EchoesAttemptInRunResult(t *testing.T) {
 	}
 }
 
-// TestRun_NoLogEchoedToTaskEvent — [H] fix: Soul forwards RenderedTask.NoLog
-// into TaskEvent.NoLog (echo flag for keeper-side audit suppression). Checks
-// both outcomes — success (changed) and failure — the flag carries through in
-// both, and doesn't when the task doesn't set it.
-func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
+// TestRun_SecretOutputEchoedToTaskEvent — Soul forwards
+// RenderedTask.secret_output into TaskEvent.secret_output ([ADR-0083] §8), the
+// list keeper needs to mask the right output fields in the audit log without
+// re-reading the plan (the event may land on a different keeper instance,
+// ADR-002). Checks both outcomes — success (changed) and failure — the echo
+// carries through in both, and stays empty when the module declares nothing.
+func TestRun_SecretOutputEchoedToTaskEvent(t *testing.T) {
 	reg := mapRegistry{
 		"core.exec": &fakeModule{
 			applyFunc: func(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 				if req.GetState() == "fail" {
-					return stream.Send(&pluginv1.ApplyEvent{Failed: true, Message: "secret leaked here"})
+					return stream.Send(&pluginv1.ApplyEvent{Failed: true, Message: "boom"})
 				}
 				return stream.Send(&pluginv1.ApplyEvent{Changed: true})
 			},
@@ -117,8 +119,8 @@ func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
 	err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "apply-1",
 		Tasks: []*keeperv1.RenderedTask{
-			{Name: "no_log task", Module: "core.exec.run", NoLog: true},
-			{Name: "plain task", Module: "core.exec.run", NoLog: false},
+			{Name: "reads a secret", Module: "core.exec.run", SecretOutput: []string{"data", "token"}},
+			{Name: "plain task", Module: "core.exec.run"},
 		},
 	}, sink)
 	if err != nil {
@@ -127,19 +129,20 @@ func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
 	if len(sink.taskEvents) != 2 {
 		t.Fatalf("taskEvents = %d, want 2", len(sink.taskEvents))
 	}
-	if !sink.taskEvents[0].GetNoLog() {
-		t.Errorf("task[0].no_log = false, want true (echoed from RenderedTask)")
+	if got := sink.taskEvents[0].GetSecretOutput(); len(got) != 2 || got[0] != "data" || got[1] != "token" {
+		t.Errorf("task[0].secret_output = %v, want [data token] (echoed from RenderedTask)", got)
 	}
-	if sink.taskEvents[1].GetNoLog() {
-		t.Errorf("task[1].no_log = true, want false")
+	if got := sink.taskEvents[1].GetSecretOutput(); len(got) != 0 {
+		t.Errorf("task[1].secret_output = %v, want empty", got)
 	}
 
-	// failed branch: no_log carries through too (this is the main stderr-leak channel).
+	// failed branch: the echo carries through there too, so a keeper masking the
+	// output of a task that failed mid-write still knows which fields to mask.
 	failSink := &recordingSink{}
 	if err := r.Run(context.Background(), &keeperv1.ApplyRequest{
 		ApplyId: "apply-2",
 		Tasks: []*keeperv1.RenderedTask{
-			{Name: "no_log fail", Module: "core.exec.fail", NoLog: true},
+			{Name: "secret fail", Module: "core.exec.fail", SecretOutput: []string{"data"}},
 		},
 	}, failSink); err != nil {
 		t.Fatalf("Run(fail): %v", err)
@@ -150,8 +153,8 @@ func TestRun_NoLogEchoedToTaskEvent(t *testing.T) {
 	if failSink.taskEvents[0].GetStatus() != keeperv1.TaskStatus_TASK_STATUS_FAILED {
 		t.Fatalf("status = %v, want FAILED", failSink.taskEvents[0].GetStatus())
 	}
-	if !failSink.taskEvents[0].GetNoLog() {
-		t.Errorf("failed task no_log = false, want true")
+	if got := failSink.taskEvents[0].GetSecretOutput(); len(got) != 1 || got[0] != "data" {
+		t.Errorf("failed task secret_output = %v, want [data]", got)
 	}
 }
 

@@ -3,7 +3,7 @@ description: >-
   Replace the entire set of operator ACL users on a live Redis without a restart.
   A user missing from the new set is removed; system service users are not
   touched. Passwords are NOT in the input form: the scenario generates the missing
-  ones itself into Vault at secret/redis/<incarnation>/users/<name>#password
+  ones itself into Vault at secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password
   (keeper-side, crypto-random, only when absent), so a newly added user needs no
   manual seeding. Users already in the set KEEP their password.
 
@@ -85,41 +85,53 @@ state_changes:
     value: "${ input.users }"
 
 tasks:
-  # ── Generate missing passwords of the new set in Vault BEFORE any secret read ──
-  # ★ NIM-172 (symmetric with add_user): the operator no longer pre-seeds `vault kv put` for
-  # every user newly appearing in the set — the scenario generates the missing ones itself
-  # (core.vault.kv-present, on: keeper, generate-if-absent, crypto/rand per policy). Paths use the
-  # SAME convention the render below reads: secret/redis/<inc>/users/<name>#password. The
-  # generated VALUE never leaves the keeper (ADR-010).
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference.
   #
-  # ★★ SCOPE — input.users ONLY, deliberately NOT default_admin / system users: those are the
-  # credentials the LIVE instance and its replicas authenticate with (community.redis.acl AUTHs as
-  # default_admin BEFORE ACL LOAD applies the new file). A missing one means a broken incarnation
-  # and must fail loudly at vault_resolve.
-  #
-  # ★★ RE-RUN SEMANTICS: generate-if-absent, so a user already in the set KEEPS their password —
-  # bulk-replace rewrites perms/state, never the credential. Rotation is not part of update_users:
-  # write the new value to the same Vault path and re-run.
-  #
-  # ★★ EMPTY SET: input.users: [] is the legitimate "remove ALL operator-extra" case, but
-  # kv-present rejects an empty targets list. The static `when` (input-only → evaluated
-  # keeper-side at render, group-drop; same pattern as destroy's cloud-destroyed gate) drops the
-  # step entirely — nothing to generate when the set is empty.
-  #
-  # ★★ PASSAGE INVARIANT: this step must APPLY before the RENDER of the tasks below that read the
-  # same paths via ${ vault(...) }. update_users has no provision body → no refresh emitter → the
-  # order rests ENTIRELY on the vault axis (ADR-056 amendment), same as add_user. Pinned by
-  # keeper/internal/trial/redis_add_user_secrets_test.go.
-  - name: Generate missing passwords of the new ACL user set in Vault
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) — a real register edge puts every
+  # consumer in a strictly later passage than these two. This scenario has no provision
+  # body, so the old form had nothing but the vault-emitter axis to lean on.
+
+  - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    when: "size(input.users) > 0"
-    module: core.vault.kv-present
+    module: core.state.present
+    register: system_acl_users
     params:
-      # Same policy as create/add_user: 32 chars, alphanumeric — redis.conf/users.acl-safe.
-      policy:
-        length: 32
-        charset: alphanumeric
-      targets: "${ input.users.map(u, { 'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password' }) }"
+      key: system_acl_users
+      # ★★ DELIBERATELY read-only, never minted here: these are the credentials the LIVE
+      # instance and its replicas already authenticate with (community.redis.acl AUTHs as
+      # default_admin BEFORE ACL LOAD applies the new file). No `password` property on any
+      # element → present-semantics require an EXISTING value, so a broken incarnation
+      # fails loudly instead of being handed a fresh password nothing else knows.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Mint the missing operator ACL user passwords
+    on: keeper
+    module: core.state.present
+    register: redis_users
+    params:
+      key: redis_users
+      # ★★ SCOPE — input.users only, deliberately NOT the service's own accounts (above).
+      #
+      # ★★ RE-RUN: mint-if-empty, so a user already in the set KEEPS their password —
+      # bulk-replace rewrites perms/state, never the credential.
+      #
+      # ★★ EMPTY SET: `input.users: []` is the legitimate "remove ALL operator-extra"
+      # case. It needs no `when` guard here — an empty collection is a valid value, unlike
+      # core.vault.kv-present's targets, which rejected an empty list and forced the old
+      # form to carry a static group-drop.
+      set: >-
+        ${ input.users.map(u, {
+             'name':     u.name,
+             'perms':    u.perms,
+             'state':    default(u.state, 'on'),
+             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+           }) }
 
   # 1. Re-render users.acl on disk with the NEW user set (the same mode-agnostic
   #    destiny redis as create/add_user/add_node). vars.users is the merged set with per-user
@@ -165,7 +177,7 @@ tasks:
         config: >-
           ${ merge(incarnation.state.redis_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         modules_base_url: "${ default(vars.modules_base_url, '') }"
         # ★★ CRITICAL (system-ACL-users d2): the FULL users.acl = SYSTEM users (from service vars,
@@ -186,14 +198,14 @@ tasks:
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                merge(input.users.map(u, {
                  u.name: {
                    'perms':    u.perms,
                    'state':    u.state,
-                   'password': vault('secret/redis/' + incarnation.name + '/users/' + u.name + '#password')
+                   'password': merge(register.redis_users.effective.map(r, { r.name: r.password }))[u.name]
                  }
                }))
              ) }
@@ -208,9 +220,9 @@ tasks:
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # ★ REDESIGN default_admin (2026-06-30): AUTH as the system default_admin (requirepass
-      # was dropped). username + its password come from the secret/redis/<inc>/users/default_admin#password branch.
+      # was dropped). username + its password come from the secret/redis/<inc>/system_acl_users/default_admin#password branch.
       # The community.redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"

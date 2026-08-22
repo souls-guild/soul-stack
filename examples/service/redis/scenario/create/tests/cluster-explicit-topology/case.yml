@@ -39,21 +39,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.3 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # ★ REDESIGN default_admin (2026-06-30): default_admin is the system user for intra-cluster
-    # AUTH (the cluster-build of the deploy reads its password from the same users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
   vars:
     # install_method is in service vars (author-context, 2026-06-28): the installation method
     # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
@@ -98,6 +83,23 @@ fixtures:
     cluster_topology:
       - [node-2.example.com, node-1.example.com]
       - [node-4.example.com, node-3.example.com]
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   # size-guard PASS (sum form): 4 == sum(2+2). Failure is caught by the size-mismatch case.

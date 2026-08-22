@@ -242,19 +242,40 @@ type RenderInput struct {
 	Sealed *SealedSet
 
 	// KeeperRegister — flat register bucket for keeper-side tasks of PREVIOUS
-	// Passages (keeper→keeper register-chaining, staged-render, ADR-056).
-	// Deliberately ISOLATED from host-register: a keeper task in the active
-	// Passage sees `register.<prev>.*` of keeper tasks from past Passages (e.g.
-	// core.bootstrap.delivered reads register from core.cloud.created) — read
-	// ONLY by [keeperVars]. Host tasks don't get register through it: the
-	// host-fallback ([hostRegister]) stays on the flat [RenderInput.Register] so
-	// a host doesn't accidentally read keeper-register when its per-host bucket
-	// is empty in a mixed Passage. The stage-loop (run.go) pours
-	// keeperRegisterBucket(RegisterByHost) in here before per-passage render of
-	// the active Passage. nil/empty (P0, N=1, non-staged, host-only Passage) →
+	// Passages (keeper→keeper register-chaining, staged-render, ADR-056). A
+	// keeper task in the active Passage sees `register.<prev>.*` of keeper tasks
+	// from past Passages (e.g. core.bootstrap.delivered reads the register of
+	// core.cloud.created). The stage-loop (run.go) pours
+	// keeperRegisterBucket(RegisterByHost) in here before the per-passage render
+	// of the active Passage. nil/empty (P0, N=1, non-staged, host-only Passage) →
 	// keeperVars degrades to the flat Register (backward-compat: trial/push/
 	// others that only set Register see register the same way, bit-for-bit).
+	//
+	// ★ A HOST task reads this bucket too, as a union where its own per-host
+	// bucket wins ([hostRegister], [ADR-0083] §5) — a declared secret is written
+	// by a keeper-side task and consumed by a Soul-side one, so the isolation
+	// ADR-056 Slice 2 introduced would cut that path. What Slice 2 guarded
+	// against was the wholesale FALLBACK (an empty per-host bucket REPLACED by
+	// this one, so `register.<name>` on a host silently resolved to keeper data);
+	// a union with host precedence does not bring that back. Values here may be
+	// `vault:` refs rather than plaintext ([ADR-0083] §6) — [Pipeline.Render]
+	// resolves the run's own namespace before any CEL root is built.
 	KeeperRegister map[string]any
+
+	// Modules — plugin-manifest resolver for this render (NIM-228), used to
+	// derive [RenderedTask.SecretOutput] for a non-core module ([ADR-0083] §8).
+	// Core modules resolve without it. nil is tolerated and is not a silent
+	// pass: the same resolver drives `plugin_params_unchecked` at load, which is
+	// where an author is told the manifest did not resolve. Callers that never
+	// see plugins (trial, push, pre-flight) leave it nil.
+	Modules config.ModuleManifestResolver
+
+	// sealedRegisters — DERIVED inside [Pipeline.Render], not supplied by the
+	// caller (hence unexported): the names of keeper registers whose payload held
+	// a declared secret resolved at the §6 boundary. Feeds
+	// [cel.SealSources.SealedRegisters] so a cell reading `register.<name>.…` is
+	// sealed and masked on the way out.
+	sealedRegisters map[string]bool
 }
 
 // RenderedTask — a task after the Keeper-side CEL render, an intermediate
@@ -300,8 +321,21 @@ type RenderedTask struct {
 	// addresses tasks by task_idx, id is only needed for the Keeper-side
 	// per-task result fold (changed_tasks, T3). Threaded from config.Task.ID
 	// alongside Register.
-	ID    string
-	NoLog bool
+	ID string
+
+	// SecretOutput — names of the module's OUTPUT fields declared `secret: true`
+	// in its manifest ([ADR-0083] §8), sorted. Derived at render from the
+	// manifest by [config.SecretOutputFields] — the task author declares
+	// nothing. Soul echoes the list onto the TaskEvent, and both sides mask
+	// exactly these fields wherever the task's output is observable; the
+	// register payload itself is left intact, or the next task could not read
+	// what this one produced.
+	//
+	// Replaces the removed per-task `no_log:`, which was all-or-nothing and set
+	// by the author rather than by the module that knows its own output shape.
+	// Params are not covered here and do not need to be: their secret
+	// provenance is tracked per cell by the seal ([ADR-010] §7.4, [Sealed]).
+	SecretOutput []string
 	// Timeout — per-task hard limit for one Apply attempt (DSL core timeout:,
 	// destiny/tasks.md §9), Soul Stack `duration` convention (Go duration "30s"
 	// OR `<N>d` suffix); "" = no per-task limit. Format is validated at
@@ -501,14 +535,14 @@ type RenderedOp struct {
 }
 
 // StateMatchFunc — evaluator for the identity match predicate of a list
-// element in an add operation (see [Pipeline.EvalStateMatch]). Passed into
+// element in an add operation (see [Pipeline.StateOpEvaluators]). Passed into
 // merge (scenario/trial) so it doesn't hold its own cel.Engine: the predicate
 // `elem.sid == value.sid` is evaluated per existing element against elem
 // (existing) / value (being added) bindings. Returns a bool "are identical".
 type StateMatchFunc func(predicate string, elem, value any) (bool, error)
 
 // StateOpEvalFunc — CEL evaluator for modify/remove at merge time (see
-// [Pipeline.EvalStateOpExpr]). Unlike [StateMatchFunc] (isolated elem/value for
+// [Pipeline.StateOpEvaluators]). Unlike [StateMatchFunc] (isolated elem/value for
 // add dedup), here the predicate/value sees the FULL run-scenario context (ctx
 // — a snapshot of input/register/incarnation/soulprint.self/vars) PLUS
 // the current collection element's bindings (binds — elem/key/value). Used per

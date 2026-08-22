@@ -101,6 +101,43 @@ Standard JSON Schema draft-07 constructs are supported:
 
 Keeper validates `incarnation.state` against `state_schema` when creating an incarnation and when upgrading to a new version of schema via migration (see [`docs/migrations.md`](../migrations.md)).
 
+#### `type: secret` — a value that lives in Vault, not in state
+
+One Soul Stack extension to the JSON Schema vocabulary: a property declared `type: secret` holds a secret. The value **never** enters `incarnation.state`, and the author writes **no Vault path** — Keeper derives it from `(service, incarnation, state field, key)` ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1):
+
+```yaml
+state_schema:
+  type: object
+  properties:
+    redis_users:                       # collection: one secret per element
+      type: array
+      items:
+        type: object
+        properties:
+          name: { type: string }
+          password:
+            type: secret
+            key: name                  # which sibling identifies the element
+            label: "Redis user password"
+    admin_token:                       # scalar: one secret per incarnation
+      type: secret
+      label: "Admin token"
+```
+
+Derived paths — `<mount>/<service>/<incarnation>/redis_users/<name>#password` and `<mount>/<service>/<incarnation>/admin_token#value`.
+
+- **`key:`** names the sibling property that identifies one element of a collection, and therefore the `<key>` path segment. Required inside an array's `items`, refused on a scalar field, and it must name a sibling of type `string` — its value becomes a path segment.
+- **`label:`** is the optional UI caption in the reveal list.
+- Exactly **two** positions are legal: a top-level property, or a property of a top-level array's `items`. The derived path has one field segment and one optional key segment, so anything deeper is a load error, never a silent skip.
+- The node's grammar is closed to `type` / `key` / `label`. A `minLength:` written beside it would read as enforced and could not be — a value that never enters state never passes state validation.
+- Every path segment is validated against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$` and **fails closed**: `<key>` is operator-influenced data, so a `/` or a `..` in a user's name can never become a segment.
+
+The value is written by the keeper-side module [`core.state.present`](../keeper/modules.md), which mints only what is missing, and read back by the operator through `POST /v1/incarnations/{name}/secrets/reveal` under the `incarnation.view-secrets` right. Inside the service, a task reads it from the `register:` of that same `core.state.present` task, as a `vault:` reference rather than as plaintext.
+
+**Not to be confused with `secret: true`** ([ADR-010](../adr/0010-templating.md) §7.4), which marks a state field whose value *does* live in state and is merely masked on output. `type: secret` is the stronger statement: the value is not there at all.
+
+An author-written Vault path under `<mount>/<service>/` is refused in every spelling — that prefix is derived now, not authored ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §7). Paths outside it are unaffected.
+
 ### Format `destiny[]` and `modules[]`
 
 Each record is an object:

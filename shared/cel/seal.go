@@ -11,7 +11,9 @@ import (
 //     input schema (scenario-input on scenario, destiny-input on destiny);
 //   - vault(...) — a Vault KV read;
 //   - transitively — vars.<x>/compute.<x> whose own value is sealed (their
-//     expressions were already detected on their resolve phase).
+//     expressions were already detected on their resolve phase);
+//   - register.<x> whose payload holds a declared secret the render boundary
+//     resolved out of a `vault:` reference ([ADR-0083] §6).
 //
 // Detection is whole-cell: one expression branch reading a secret is enough to
 // taint the whole cell. Both branches of a ternary like
@@ -32,6 +34,17 @@ type SealSources struct {
 	// cell sealed.
 	SealedVars    map[string]bool
 	SealedCompute map[string]bool
+
+	// SealedRegisters holds the names of registers whose payload carries a
+	// DECLARED secret ([ADR-0083] §6): a keeper-side task registered a `vault:`
+	// reference and the render boundary resolved it to the value. Without this,
+	// `${ register.<name>.effective }` would be an ordinary register read and the
+	// cell holding the password would go unmasked in status_details.
+	//
+	// The whole register is the unit, not the field: the set is built from what
+	// actually resolved, and a cell that reaches into a sealed register at all is
+	// tainted — same whole-cell rule as everywhere else here.
+	SealedRegisters map[string]bool
 }
 
 // vaultMacroName / vaultExpandedName — the names under which vault() appears in
@@ -132,7 +145,8 @@ func selectBaseField(n ast.Expr) (base, field string, ok bool) {
 // source:
 //   - input.<field>, field ∈ SecretInputs;
 //   - vars.<field>, field ∈ SealedVars;
-//   - compute.<field>, field ∈ SealedCompute.
+//   - compute.<field>, field ∈ SealedCompute;
+//   - register.<field>, field ∈ SealedRegisters.
 func readsSecretSelect(base, field string, sources SealSources) bool {
 	switch base {
 	case "input":
@@ -141,6 +155,8 @@ func readsSecretSelect(base, field string, sources SealSources) bool {
 		return sources.SealedVars[field]
 	case "compute":
 		return sources.SealedCompute[field]
+	case "register":
+		return sources.SealedRegisters[field]
 	}
 	return false
 }

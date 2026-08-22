@@ -9,7 +9,8 @@ package secretwrite
 import (
 	"context"
 	"fmt"
-	"regexp"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // Secret domains — first segment of deterministic path secret/<domain>/…
@@ -21,10 +22,10 @@ const (
 // defaultMount is the default KV-mount (matches vault.defaultKVMount).
 const defaultMount = "secret"
 
-// segmentRe matches a safe path segment (domain/entity/field): letters/digits/`_`/`-`.
-// Rejects `.`/`..`/slashes/empty — prevents scope bypass in Vault paths (ParseRef
-// also rejects `..`, here fail-closed at write-path entry).
-var segmentRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// The safe-segment grammar (letters/digits/`_`/`-`; rejects `.`/`..`/slashes/empty)
+// lives in shared/config as [config.ValidVaultPathSegment]: a declared secret field
+// derives its own Vault path ([ADR-0083] §1) and must be checked by the same rule this
+// write path uses, not by a second copy of the regexp.
 
 // VaultWriter is a narrow interface for writing to Vault KV (implemented by
 // vault.Client.WriteKV). Narrowing to an interface enables fakes in unit/guard tests
@@ -91,15 +92,15 @@ func (w *Writer) WriteMap(ctx context.Context, domain, entity, field string, dat
 
 // path builds and validates the deterministic logical path
 // <mount>/<domain>/<entity>/<field>. domain/entity/field must be safe segments
-// (matching segmentRe).
+// (matching [config.ValidVaultPathSegment]).
 func (w *Writer) path(domain, entity, field string) (string, error) {
-	if !segmentRe.MatchString(domain) {
+	if !config.ValidVaultPathSegment(domain) {
 		return "", fmt.Errorf("secretwrite: invalid domain %q", domain)
 	}
-	if !segmentRe.MatchString(entity) {
+	if !config.ValidVaultPathSegment(entity) {
 		return "", fmt.Errorf("secretwrite: invalid entity %q", entity)
 	}
-	if !segmentRe.MatchString(field) {
+	if !config.ValidVaultPathSegment(field) {
 		return "", fmt.Errorf("secretwrite: invalid field %q", field)
 	}
 	return w.mount + "/" + domain + "/" + entity + "/" + field, nil

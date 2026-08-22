@@ -59,7 +59,7 @@
     # secret/redis/<inc>/users/default_admin. master_username/master_password — account
     # of the EXTERNAL source (its requirepass — without an ACL user, source_external).
     username:        "${ compute.admin_user }"
-    password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:        "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:             "${ compute.tls_on }"
     tls_ca:          "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     master_password: "${ compute.source_password }"
@@ -93,7 +93,7 @@
     # ★ default_admin REDESIGN: connect to the LOCAL instance as default_admin (as in step 2).
     # username/password — our users/default_admin account; source_password — the source's account.
     username:        "${ compute.admin_user }"
-    password:        "${ vault('secret/redis/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+    password:        "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     source_password: "${ compute.source_password }"
     lag_threshold:   "${ has(input.verify) ? int(default(input.verify.lag_threshold, 0)) : 0 }"
     skip_checksum:   "${ has(input.verify) ? default(input.verify.skip_checksum, false) : false }"

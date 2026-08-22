@@ -98,6 +98,16 @@ fixtures:
       tls-replication:  "yes"
     redis_users: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+      - { name: haproxy }
+      - { name: monitoring }
+      - { name: replica }
+      - { name: sentinel }
+
   input:
     # New refs (rotating all three).
     cert_ref: "secret/services/redis/tls-v2#cert"
@@ -105,21 +115,6 @@ fixtures:
     ca_ref:   "secret/services/redis/tls-v2#ca"
 
   vault:
-    secret/redis/rotate_tls:
-      password: rot-redis-pass-16chars
-    # ★ default_admin REDESIGN: the CONFIG SET connect runs as default_admin (requirepass
-    # dropped); system users are merged into users.acl on re-render → their passwords
-    # live in Vault under the same secret/redis/<inc>/users/<name>#password branch.
-    secret/redis/rotate_tls/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/rotate_tls/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/rotate_tls/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/rotate_tls/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/rotate_tls/users/haproxy:
-      password: haproxy-sys-secret-pass
     # Connect CA (state.tls.ca_ref pre-run, tls#ca): the current trust on this run.
     secret/services/redis/tls:
       ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
@@ -128,6 +123,23 @@ fixtures:
       cert: "-----BEGIN CERTIFICATE-----\nNEWCERT\n-----END CERTIFICATE-----"
       key:  "-----BEGIN PRIVATE KEY-----\nNEWKEY\n-----END PRIVATE KEY-----"
       ca:   "-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:

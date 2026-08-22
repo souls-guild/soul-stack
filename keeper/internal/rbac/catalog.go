@@ -163,9 +163,10 @@ var AllowedPermissions = map[string]struct{}{
 	"incarnation.bind-member":   {},
 	"incarnation.unbind-member": {},
 	// incarnation.view-secrets — reveals the plaintext value of an
-	// incarnation secret declared in the service's `revealable_secrets`
-	// (NIM-74): POST .../secrets/reveal + discovery GET
-	// .../secrets/revealable. Strictly more privileged than
+	// incarnation secret declared in the service's `state_schema` as a
+	// field with `type: secret` ([ADR-0083] §2; the `revealable_secrets`
+	// registry it replaced is gone): POST .../secrets/reveal + discovery
+	// GET .../secrets/revealable. Strictly more privileged than
 	// `incarnation.get` (unmasking, not reading under the mask). Same
 	// scope selector incarnation/coven/service by path-{name} as other
 	// incarnation mutations. Audited as `incarnation.secret_revealed` (no

@@ -59,16 +59,31 @@ fixtures:
       appendonly:       "no"
     redis_users: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     # Operator delta: passthrough directive with a TYPO (should be maxmemory).
     # validate passes (redis_settings is set); the name gets caught by the assert against catalog[7.2].
     redis_settings:
       maxmemoyr: "512mb"
 
-  vault:
-    secret/redis/update_config:
-      password: upd-redis-pass-16chars
-
 # The run aborts at render: assert "Validate redis_settings directive names..." false
 # (maxmemoyr not in catalog[7.2]). Substring — the assert rule's message (update_config/main.yml).
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default_admin-l0-pass }
+    redis_users:
+      effective: []
 expect_render_error: "unknown redis.conf directive"

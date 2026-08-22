@@ -10,7 +10,7 @@
 # What we assert:
 #   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users carries BOTH
 #      users (alice new + bob preserved) with per-user passwords from Vault (convention
-#      secret/dragonfly/<inc>/users/<name>#password). The password is hashed in .tmpl (outside L0).
+#      secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password). The password is hashed in .tmpl (outside L0).
 #   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, password from vault.
 #   3. state_changes: df_users carries bob+alice (AclUser array, WITHOUT the password — write-model).
 name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
@@ -35,22 +35,32 @@ fixtures:
     df_users:
       - { name: bob, perms: "~app:* +@read", state: "on" }
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     user:
       name: alice
       perms: "~* +@all"
       state: "on"
 
-  # Vault: default_admin (masterauth top-up into flagfile + ACL LOAD-AUTH read it unconditionally) +
-  # per-user passwords for operator-extra. The main secret/dragonfly/add_user#password no longer exists
-  # (requirepass removed — default_admin redesign).
-  vault:
-    secret/dragonfly/add_user/users/default_admin:
-      password: dfadmin-add-user-pass
-    secret/dragonfly/add_user/users/alice:
-      password: alice-user-secret-pass
-    secret/dragonfly/add_user/users/bob:
-      password: bob-user-secret-pass
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-add-user-pass }
+    df_users:
+      effective:
+        - { name: bob, password: bob-user-secret-pass }
+        - { name: alice, password: alice-user-secret-pass }
 
 assert:
   task_present:

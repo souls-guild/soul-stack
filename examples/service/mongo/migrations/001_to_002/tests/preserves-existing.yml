@@ -1,0 +1,16 @@
+name: preserves-existing
+description: >
+  A repeat run over already-migrated state: system_users is present, so the has()-guard
+  keeps it verbatim instead of resetting the record to []. Idempotency of the flat set.
+
+state_before:
+  mongo_version: "7.0.14"
+  system_users:
+    - { name: "default_admin" }
+  memory_mb: 2048
+
+state_after:
+  mongo_version: "7.0.14"
+  system_users:
+    - { name: "default_admin" }
+  memory_mb: 2048

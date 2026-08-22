@@ -30,8 +30,8 @@ type incRevealSecretInput struct {
 
 // IncarnationRevealSecretRequest — the body of POST .../secrets/reveal.
 type IncarnationRevealSecretRequest struct {
-	SecretID string `json:"secret_id" doc:"id of the revealable secret (revealable_secrets of the service manifest)"`
-	Key      string `json:"key" doc:"element key of the current-state enumerate array (element.name)"`
+	SecretID string `json:"secret_id" doc:"id of the declared secret: the state_schema field, or <field>.<property> for a collection"`
+	Key      string `json:"key,omitempty" doc:"element key of the current-state collection; empty for a scalar secret"`
 }
 
 // IncarnationRevealSecretReply — the native 200 body of POST .../secrets/reveal.
@@ -55,7 +55,7 @@ func incRevealSecretOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/secrets/reveal",
 		Summary:       "Reveal plaintext of an incarnation secret",
-		Description:   "Resolves the plaintext of a secret declared in the service's revealable_secrets, from Vault. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be in the current-state enumerate array. Audit incarnation.secret_revealed (without the value). Out of scope -> 404.",
+		Description:   "Resolves the plaintext of a secret the service declared as type: secret in its state_schema, from Vault at the derived path. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be present in the current-state collection, and must be empty for a scalar secret. Audit incarnation.secret_revealed (without the value). Out of scope -> 404.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -91,10 +91,11 @@ type incRevealableSecretsInput struct {
 
 // IncarnationRevealableSecretItem — one item of the discovery response.
 type IncarnationRevealableSecretItem struct {
-	SecretID  string   `json:"secret_id" doc:"id of the secret (passed as secret_id on reveal)"`
-	Label     string   `json:"label" doc:"label for UI"`
-	StatePath string   `json:"state_path" doc:"state path of the array (tail enumerate, e.g. redis_users)"`
-	Keys      []string `json:"keys" doc:"allowed keys (element.name of the current state)"`
+	SecretID   string   `json:"secret_id" doc:"id of the secret (passed as secret_id on reveal)"`
+	Label      string   `json:"label" doc:"label for UI"`
+	StatePath  string   `json:"state_path" doc:"top-level state_schema field holding the secret (e.g. redis_users)"`
+	Collection bool     `json:"collection" doc:"true when reveal needs a key; false for one secret per incarnation"`
+	Keys       []string `json:"keys" doc:"allowed keys of the current state (empty for a scalar secret)"`
 }
 
 // IncarnationRevealableSecretsReply — the native 200 body of GET .../secrets/revealable.
@@ -116,7 +117,7 @@ func incRevealableSecretsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/secrets/revealable",
 		Summary:       "List revealable secrets of an incarnation",
-		Description:   "Discovery of the service's revealable_secrets + keys from the current-state enumerate array. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404.",
+		Description:   "Discovery of the secrets the service declared as type: secret in its state_schema + the keys present in the current state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -145,10 +146,11 @@ func registerHumaIncarnationRevealableSecrets(humaAPI huma.API, incH *handlers.I
 				keys = []string{}
 			}
 			items = append(items, IncarnationRevealableSecretItem{
-				SecretID:  it.SecretID,
-				Label:     it.Label,
-				StatePath: it.StatePath,
-				Keys:      keys,
+				SecretID:   it.SecretID,
+				Label:      it.Label,
+				StatePath:  it.StatePath,
+				Collection: it.Collection,
+				Keys:       keys,
 			})
 		}
 		return &incRevealableSecretsOutput{Body: IncarnationRevealableSecretsReply{Items: items}}, nil

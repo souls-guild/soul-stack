@@ -22,7 +22,7 @@
 #
 # Passwords are resolved KEEPER-SIDE via CEL vault() in the render phase (templating.md
 # §2.3/§4): requirepass — secret/redis/<inc>#password; per-user —
-# secret/redis/<inc>/users/<name>#password. incarnation.name in L0 = the scenario name
+# secret/redis/<inc>/{redis_users,system_acl_users}/<name>#password. incarnation.name in L0 = the scenario name
 # (create). fixtures.vault mocks Vault KV → the plan already has the VALUE (ADR-012).
 name: create translates simple input to merged redis.conf + users.acl
 
@@ -34,29 +34,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.5 }
         os: { arch: amd64 }
-  # Mock Vault KV: requirepass + the app ACL-user password. The secret/-prefix is stripped
-  # by fixtureVault normalization; the #-field is the key inside the secret.
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # Per-user secrets of system users (secret/redis/<inc>/users/<name>#password) —
-    # resolved by keeper-side vault() when merging system_acl_users into apply.input.users.
-    # ★ default_admin REDESIGN (2026-06-30): default_admin is the system user
-    # for intra-cluster AUTH (deploy's auth_pass/PING steps read it via the users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
-    secret/redis/create/users/app:
-      password: app-user-secret-pass
-  # service vars — the translation layer: persistence_presets (data-table),
-  # memory_reserve_percent (OS reserve), redis_config (default-merge substrate).
   vars:
     # install_method — in service vars (author-context, 2026-06-28): the install method
     # is NOT operator-input. compute.install reads default(vars.install_method, 'binary').
@@ -137,6 +114,24 @@ fixtures:
 # include sentinel.yml (sentinel in standalone mode) — task_absent: its tasks are
 # group-dropped (physically absent, conditional-include group-drop), so they don't
 # match — guard "the sentinel daemon does NOT get deployed in standalone".
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective:
+        - { name: app, password: app-user-secret-pass }
 assert:
   task_present:
     # ── destiny redis (standalone) ──────────────────────────────────────────

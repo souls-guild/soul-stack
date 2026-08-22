@@ -116,6 +116,37 @@ state_changes:
          } }
 
 tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) - a real register edge puts every
+  # consumer in a strictly later passage than these. The former construction leaned on
+  # the vault-emitter axis, which the author could not see from the file.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    on: keeper
+    module: core.state.present
+    register: system_acl_users
+    params:
+      key: system_acl_users
+      # No `password` property on any element -> present-semantics require an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      set: "${ default(incarnation.state.system_acl_users, []) }"
+
+  - name: Resolve the passwords of the operator ACL users
+    on: keeper
+    module: core.state.present
+    register: df_users
+    params:
+      key: df_users
+      set: "${ default(incarnation.state.df_users, []) }"
+
   # 1. GUARD — TLS must be enabled (state.tls.enable=true). The predicate is evaluated KEEPER-SIDE
   #    at render time (incarnation.state is available). false BREAKS the render with a message BEFORE dispatch —
   #    earlier and clearer than failing the connection on the host. assert does NOT emit RenderedTask.
@@ -152,7 +183,7 @@ tasks:
         config: >-
           ${ merge(incarnation.state.df_config, {
                'masteruser': compute.admin_user,
-               'masterauth': vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password')
+               'masterauth': merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user]
              }) }
         tls:
           enable:   "${ incarnation.state.tls.enable }"
@@ -164,14 +195,14 @@ tasks:
         # FIRST (default_admin/replica/monitoring/sentinel/haproxy), otherwise rotate_tls WOULD WIPE them
         # from users.acl → break AUTH/replication. operator-extra (state.df_users — an ARRAY of
         # AclUser) goes ON TOP (last-wins). System users are NOT in state — added back from service vars on every
-        # render. Vault password on the same branch secret/dragonfly/<inc>/users/<name>#password.
+        # render. Vault password on the same branch secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password.
         users: >-
           ${ merge(
                merge(default(vars.system_acl_users, {}).map(name, {
                  name: {
                    'perms':    vars.system_acl_users[name],
                    'state':    'on',
-                   'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + name + '#password')
+                   'password': merge(register.system_acl_users.effective.map(s, { s.name: s.password }))[name]
                  }
                })),
                has(incarnation.state.df_users)
@@ -179,7 +210,7 @@ tasks:
                      u.name: {
                        'perms':    u.perms,
                        'state':    u.state,
-                       'password': vault('secret/dragonfly/' + incarnation.name + '/users/' + u.name + '#password')
+                       'password': merge(register.df_users.effective.map(r, { r.name: r.password }))[u.name]
                      }
                    }))
                  : {}
@@ -202,7 +233,7 @@ tasks:
       addr:     "${ compute.local_addr }"
       # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       args:     ["CONFIG", "SET", "tls_cert_file", "${ compute.conf_dir + '/tls/dragonfly.crt' }"]
 
   - name: Re-read the rotated TLS key when it changed (CONFIG SET tls_key_file)
@@ -212,7 +243,7 @@ tasks:
       addr:     "${ compute.local_addr }"
       # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       args:     ["CONFIG", "SET", "tls_key_file", "${ compute.conf_dir + '/tls/dragonfly.key' }"]
 
   - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls_ca_cert_file)
@@ -222,5 +253,5 @@ tasks:
       addr:     "${ compute.local_addr }"
       # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
       username: "${ compute.admin_user }"
-      password: "${ vault('secret/dragonfly/' + incarnation.name + '/users/' + compute.admin_user + '#password') }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       args:     ["CONFIG", "SET", "tls_ca_cert_file", "${ compute.conf_dir + '/tls/ca.crt' }"]

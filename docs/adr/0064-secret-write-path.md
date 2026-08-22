@@ -94,3 +94,9 @@ Operator API Herald/Provider CRUD + OpenAPI (drift-regen) + companion UI (`types
 **Rationale — the path is a location, not a value.** The path of a not-found secret tells the operator WHAT to seed into Vault; there is no value at a non-existent path — nothing to leak. Actionable diagnostics matter more than masking a non-secret. **Masking of the secret VALUE is preserved:** an actually resolved secret is still masked on output (the masking layer is untouched); the transport details of the Vault error are NOT propagated into the text; the values of neighboring fields of the secret are NOT substituted into the text.
 
 **Implementation:** [shared/cel/vault.go](../../shared/cel/vault.go) (`callVault` / `vaultPathHint`) + [keeper/internal/render/vault_resolve.go](../../keeper/internal/render/vault_resolve.go) (`readVaultRef`) — flat form on both resolve paths.
+
+## Amendment 2026-08-19 (NIM-698, [ADR-0083](0083-declared-secret-state-fields.md)): the segment grammar becomes the validator of derived paths
+
+The `secretwrite` segment grammar `^[a-zA-Z0-9_-]+$` gains a second, load-bearing job: it validates every segment of a **derived** secret path `secret/<service>/<incarnation>/<state-field>/<key>` ([ADR-0083](0083-declared-secret-state-fields.md) §1). `<key>` is operator-influenced data — a user's name out of `incarnation.state` — so a `/`, a `.` or a `..` inside it must never become a path segment, and the check **fails closed** rather than sanitising: a gate that normalises its input decides on a path different from the one it was given.
+
+The operator write path in this ADR is untouched. What changes is that a service's own secrets no longer need one: `core.state.present` mints and writes them keeper-side, and the author declares the field instead of a path.

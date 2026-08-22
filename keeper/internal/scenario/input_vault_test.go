@@ -48,7 +48,7 @@ func scopedSecret(scope string) *config.InputSchema {
 }
 
 func ac() inputVaultAuditCtx {
-	return inputVaultAuditCtx{aid: "archon-alice", incarnation: "redis-prod", scenario: "create"}
+	return inputVaultAuditCtx{aid: "archon-alice", incarnation: "redis-prod", scenario: "create", service: "redis"}
 }
 
 // TestInputVaultResolver_InScopeReads — a ref in scope resolves to the field value,
@@ -223,5 +223,76 @@ func requireAuditReason(t *testing.T, aw *fakeAuditWriter, result, reason string
 	}
 	if e.Payload["reason"] != reason {
 		t.Fatalf("reason=%v want %q", e.Payload["reason"], reason)
+	}
+}
+
+// The input channel is the fourth route into Vault and the only one an OPERATOR
+// supplies. It never becomes CEL and never becomes a module param, so none of the
+// three fence layers ([ADR-0083] §7) sees it — and `vault_scope` cannot substitute
+// for the fence: the scope is written by the service author, and the widest legal
+// one (`secret/*`) admits the platform's own derived prefix wholesale.
+func TestInputVaultResolver_OwnNamespaceFenced(t *testing.T) {
+	vc := &fakeVaultReader{data: map[string]map[string]any{
+		"secret/redis/redis-prod/redis_users/app": {"password": "leaked-own-namespace"},
+	}}
+	aw := &fakeAuditWriter{}
+	resolve := vaultTestRunner(vc, aw, nil).newInputVaultResolver(context.Background(), ac(), nil)
+
+	val, err := resolve("admin_password", scopedSecret("secret/*"),
+		"vault:secret/redis/redis-prod/redis_users/app#password")
+	if err == nil {
+		t.Fatalf("the resolver read the platform's own derived secret: %v", val)
+	}
+	if !errors.Is(err, errInputVaultOwnNS) {
+		t.Fatalf("err = %v, want errInputVaultOwnNS", err)
+	}
+	if len(vc.read) != 0 {
+		t.Fatalf("ReadKV was called with %v; the fence must refuse before the read", vc.read)
+	}
+	if len(aw.events) != 1 || aw.events[0].Payload["reason"] != "own_namespace" {
+		t.Fatalf("audit = %+v, want one denied/own_namespace event", aw.events)
+	}
+}
+
+// The negative twin: the fence is on one prefix, not on the channel. A scope-legal
+// path outside the service's namespace still resolves.
+func TestInputVaultResolver_CrossNamespaceStillResolves(t *testing.T) {
+	vc := &fakeVaultReader{data: map[string]map[string]any{
+		"secret/services/shared/tls": {"ca": "shared-ca-pem"},
+	}}
+	resolve := vaultTestRunner(vc, &fakeAuditWriter{}, nil).newInputVaultResolver(context.Background(), ac(), nil)
+
+	val, err := resolve("ca", scopedSecret("secret/*"), "vault:secret/services/shared/tls#ca")
+	if err != nil {
+		t.Fatalf("cross-namespace resolve: %v", err)
+	}
+	if val != "shared-ca-pem" {
+		t.Fatalf("val = %v, want the resolved cross-namespace value", val)
+	}
+}
+
+// Unlike the render-side fence, a missing service identity here is a wiring bug,
+// not a mode: this resolver only exists for a run against an incarnation. Failing
+// closed is what keeps a forgotten field at either call site from turning the
+// fence off in silence — the mutation that no predicate test can catch.
+func TestInputVaultResolver_MissingServiceIdentityRefuses(t *testing.T) {
+	vc := &fakeVaultReader{data: map[string]map[string]any{
+		"secret/services/shared/tls": {"ca": "shared-ca-pem"},
+	}}
+	aw := &fakeAuditWriter{}
+	a := ac()
+	a.service = ""
+	resolve := vaultTestRunner(vc, aw, nil).newInputVaultResolver(context.Background(), a, nil)
+
+	// Not even a cross-namespace path resolves: with no owner in hand there is
+	// nothing to compare against, so there is no safe answer.
+	if _, err := resolve("ca", scopedSecret("secret/*"), "vault:secret/services/shared/tls#ca"); !errors.Is(err, errInputVaultNoOwner) {
+		t.Fatalf("err = %v, want errInputVaultNoOwner", err)
+	}
+	if len(vc.read) != 0 {
+		t.Fatalf("ReadKV was called with %v; the refusal must precede the read", vc.read)
+	}
+	if len(aw.events) != 1 || aw.events[0].Payload["reason"] != "no_service_identity" {
+		t.Fatalf("audit = %+v, want one denied/no_service_identity event", aw.events)
 	}
 }

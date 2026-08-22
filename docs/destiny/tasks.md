@@ -41,7 +41,6 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 | `register:` | string (identifier) | module-task | optional |
 | `id:` | string (identifier) | module-task (pilot) | optional |
 | `output:` | map | module-task | optional |
-| `no_log:` | bool | module-task | optional, default `false` |
 | `onchanges:` | array of register-id | everyone | optional |
 | `onfail:` | array of register-id | everyone | optional |
 | `require:` | array of register-id OR `"all"` | everyone | optional |
@@ -420,7 +419,6 @@ with `action: diagnose` is rejected as unsupported.
     as: user                        # variable name in iteration; default: item
   params:
     command: "redis-cli ACL SETUSER ${ user.name } ${ user.acl }"
-    no_log: true
 ```
 
 ### Fields `loop:`
@@ -659,11 +657,28 @@ A task is considered finally-failed if all `count` attempts failed/timed out (wi
 - **Applies to:** module task.
 - **Semantics:** a hard limit on one attempt (with `retry:` - for each separately: each Apply gets its own `context.WithTimeout`). Upon expiration, the module receives a cancellation signal (host-side gRPC cancel), the attempt is marked TIMED_OUT (`register.<name>.timed_out == true`). With `retry:` TIMED_OUT the attempt is retraced if there are still attempts (see loop semantics above); `until` is not evaluated on a TIMED_OUT attempt.
 
-### `no_log:`
+### `no_log:` — removed ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §8)
 
-- **Type:** bool, default `false`.
-- **Applies to:** module task.
-- **Semantics:** with `true` fields `params:` and `output:` tasks are not written to the apply log, are not saved in the trace, and are masked in the API response. For tasks that leak secrets (passwords, tokens).
+The key is gone from the grammar; writing it is `unknown_key` with a hint. It was
+all-or-nothing and set by the task author, who had to know the shape of a result
+the module produces — so it silenced a whole task's diagnostics to hide one field
+of it, and only when someone remembered to write it.
+
+What replaces it, per channel:
+
+- **`output:` / `register`** — the module declares `secret: true` on the output
+  fields it returns ([module/README.md](../module/README.md)); the platform masks
+  exactly those wherever the output is observable. The live register keeps the
+  value, so the next task still reads it.
+- **`params:`** — masked per cell by the seal derived from the input schema
+  ([ADR-010](../adr/0010-templating.md) §7.4), not from a task flag. A declared
+  secret ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1) never renders
+  as plaintext in the first place: it renders as a `vault:` ref.
+- **`error.message` (stderr)** — no longer suppressed per task. What stands is the
+  write-path masking of vault-refs and the operator-SSE floor, which withholds
+  `message` for **every** failed task. A module that prints its own credential to
+  stderr is covered by neither — which is the reason the declaration belongs on
+  the output field, not on the task.
 
 ### `output:`
 
@@ -838,7 +853,6 @@ The exact template engine is fixed [ADR-010](../adr/0010-templating.md): CEL for
     as: user
   params:
     command: "redis-cli ACL SETUSER ${ user.name } ${ user.acl }"
-    no_log: true
 ```
 
 ## 12. Open Q

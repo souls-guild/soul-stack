@@ -31,21 +31,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
-    # ★ default_admin redesign (2026-06-30): default_admin is the system user for
-    # intra-cluster AUTH (deploy's auth_pass/PING steps read it from the users/<name> branch).
-    secret/redis/create/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/create/users/haproxy:
-      password: haproxy-sys-secret-pass
   vars:
     redis_type: sentinel
     sentinel_master_name: master
@@ -85,4 +70,21 @@ fixtures:
 
 # The run aborts at render: the size-guard assert "Guard sentinel roster size matches
 # replicas" is false (2 != 1+2). Substring — the message of the create/sentinel.yml assert rule.
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 expect_render_error: "roster host count must be exactly 1+replicas_per_master"

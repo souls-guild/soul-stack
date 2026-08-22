@@ -38,11 +38,6 @@ type ServiceManifest struct {
 	Destiny []DependencyRef `yaml:"destiny,omitempty"`
 	Modules []DependencyRef `yaml:"modules,omitempty"`
 
-	// RevealableSecrets — incarnation secrets revealable by the operator via the
-	// reveal endpoint under the incarnation.view-secrets right (NIM-74). Generic:
-	// the service declares what may be revealed; the mechanism is not redis-specific.
-	RevealableSecrets []RevealableSecret `yaml:"revealable_secrets,omitempty"`
-
 	// Lifecycle — optional lifecycle policy for the service's incarnations
 	// (architecture.md → "Service — structure and manifest" § lifecycle:).
 	// A missing block (nil) means both flags default to true (backcompat): create
@@ -177,41 +172,10 @@ type DependencyRef struct {
 	Git  string `yaml:"git,omitempty"`
 }
 
-// RevealableSecret — an entry of the manifest's `revealable_secrets[]` section
-// (NIM-74): declaration of an operator-revealable incarnation secret.
-//
-//   - ID — stable identifier (kebab/snake, unique); the client sends it as
-//     `secret_id` on reveal;
-//   - Label — UI caption;
-//   - Enumerate — state path of an object array (`state.<segment>`); the key is
-//     the element's `name` field (redis AclUser.name convention) — the set of
-//     valid `key`s;
-//   - VaultRef — Vault-path template with `{incarnation}`/`{key}` placeholders
-//     (literal strings.ReplaceAll substitution; both values are validated and
-//     vault.ParseRef strips traversal). Optional `#field` selects a secret field.
-type RevealableSecret struct {
-	ID        string `yaml:"id"`
-	Label     string `yaml:"label"`
-	Enumerate string `yaml:"enumerate"`
-	VaultRef  string `yaml:"vault_ref"`
-}
-
 var (
 	// reServiceName — canonical kebab-case: dash only between alphanumerics, no
 	// trailing/leading/double dash. Symmetric with `reDestinyName`.
 	reServiceName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-
-	// reRevealID — revealable_secrets[] secret id: lowercase identifier with
-	// `-`/`_` separators (no trailing/leading/double). Allows snake_case
-	// (`user_password`) — the reveal contract fixes secret_id in this form.
-	reRevealID = regexp.MustCompile(`^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`)
-
-	// reRevealEnumerate — enumerate form: `state.<segment>[.<segment>…]`
-	// (symmetric with rePrefillFromStatePath).
-	reRevealEnumerate = regexp.MustCompile(`^state(\.[a-z][a-z0-9_]*)+$`)
-
-	// reRevealPlaceholder — a `{…}` placeholder in vault_ref (for validating the set).
-	reRevealPlaceholder = regexp.MustCompile(`\{[^}]*\}`)
 
 	// reDependencyDestinyName — kebab-case single-level destiny name in
 	// `destiny[]`. Same as `reDestinyName` (destiny.go), reused directly — a
@@ -237,6 +201,10 @@ var deprecatedServiceKeys = map[string]string{
 	"steps":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
 	"input":     "input lives in scenario/<name>/main.yml (input:-block per docs/input.md), not service.yml",
 	"scenarios": "scenarios are auto-discovered from scenario/<name>/ directory; do not enumerate them in service.yml",
+	"revealable_secrets": "revealable_secrets: removed (ADR-0083 §1); declare the secret as a `state_schema` field with `type: secret` " +
+		"(plus `key:` inside `items` for a collection, and the optional `label:`) — the Vault path is derived from " +
+		"(service, incarnation, field, key), so there is none left to write. Reveal, the `incarnation.view-secrets` right " +
+		"and the audit event are unchanged",
 }
 
 // schemaValidateService — post-decode checks of ServiceManifest.
@@ -334,6 +302,7 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		})
 	} else {
 		out = append(out, validateStateSchema(root, findInputMapping(root, "state_schema"), "$.state_schema")...)
+		out = append(out, validateSecretFields(root, m.StateSchema, "$.state_schema")...)
 	}
 
 	// 5) destiny[] / modules[] — each entry is valid as `{name, ref}`.
@@ -364,12 +333,6 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 			continue
 		}
 		aliasRef[alias], aliasAt[alias] = dep.Ref, i
-	}
-
-	// 6) revealable_secrets[] — reveal declarations (NIM-74).
-	seenRevealIDs := make(map[string]int, len(m.RevealableSecrets))
-	for i, rs := range m.RevealableSecrets {
-		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
 	}
 
 	// 7) certificate_rotation — optional rotation policy (NIM-99).
@@ -458,110 +421,6 @@ func validateCertificateRotation(root *ast.MappingNode, crt *CertificateRotation
 			}))
 		}
 	}
-	return out
-}
-
-// validateRevealableSecret — checks one `revealable_secrets[]` entry (NIM-74):
-// id (required + reRevealID + unique); enumerate (MVP required + form
-// `state.<segment>`); vault_ref (required + contains `{key}` when enumerate is
-// set + placeholders only `{incarnation}`/`{key}`).
-func validateRevealableSecret(root *ast.MappingNode, idx int, rs RevealableSecret, seen map[string]int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	base := fmt.Sprintf("$.revealable_secrets[%d]", idx)
-
-	if rs.ID == "" {
-		out = append(out, atPath(root, base+".id", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "missing_required_field",
-			Message: fmt.Sprintf("revealable_secrets[%d].id is required", idx),
-			Hint:    "declare a stable id (client passes it as secret_id)",
-		}))
-	} else if !reRevealID.MatchString(rs.ID) {
-		out = append(out, atPath(root, base+".id", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "name_invalid_format",
-			Message: fmt.Sprintf("revealable_secrets[%d].id %q does not match %s", idx, rs.ID, reRevealID),
-			Hint:    "lowercase letters/digits with -/_ separators; must start with letter",
-		}))
-	} else if prev, dup := seen[rs.ID]; dup {
-		out = append(out, atPath(root, base+".id", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "duplicate_id",
-			Message: fmt.Sprintf("revealable_secrets[%d].id %q duplicates revealable_secrets[%d].id", idx, rs.ID, prev),
-			Hint:    "each revealable secret id must be unique within the list",
-		}))
-	} else {
-		seen[rs.ID] = idx
-	}
-
-	if rs.Enumerate == "" {
-		out = append(out, atPath(root, base+".enumerate", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "missing_required_field",
-			Message: fmt.Sprintf("revealable_secrets[%d].enumerate is required", idx),
-			Hint:    "declare enumerate: state.<array> — element .name yields the keys",
-		}))
-	} else if !reRevealEnumerate.MatchString(rs.Enumerate) {
-		out = append(out, atPath(root, base+".enumerate", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "enumerate_invalid_format",
-			Message: fmt.Sprintf("revealable_secrets[%d].enumerate %q must have form state.<segment>", idx, rs.Enumerate),
-			Hint:    "example: state.redis_users",
-		}))
-	}
-
-	if rs.VaultRef == "" {
-		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "missing_required_field",
-			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref is required", idx),
-			Hint:    "example: secret/redis/{incarnation}/users/{key}#password",
-		}))
-		return out
-	}
-	for _, ph := range reRevealPlaceholder.FindAllString(rs.VaultRef, -1) {
-		if ph != "{service}" && ph != "{incarnation}" && ph != "{key}" {
-			out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:    "vault_ref_unknown_placeholder",
-				Message: fmt.Sprintf("revealable_secrets[%d].vault_ref uses unknown placeholder %s", idx, ph),
-				Hint:    "only {service}, {incarnation} and {key} are supported",
-			}))
-		}
-	}
-	// enumerate is set (always in MVP) ⇒ reveal is per-element ⇒ the path MUST carry {key}.
-	if rs.Enumerate != "" && !strings.Contains(rs.VaultRef, "{key}") {
-		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "vault_ref_missing_key",
-			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must contain {key} when enumerate is set", idx),
-			Hint:    "per-element reveal requires {key}, e.g. .../users/{key}#password",
-		}))
-	}
-	// {service} AND {incarnation} are REQUIRED (NIM-74 C1 defense-in-depth): the
-	// path is bound to the secret namespace of exactly this service and this
-	// incarnation (secret/<service>/<incarnation>/…). A static
-	// `secret/keeper/jwt-signing-key` without placeholders is rejected at load;
-	// the runtime allowlist prefix + floor is the 2nd layer.
-	if !strings.Contains(rs.VaultRef, "{service}") || !strings.Contains(rs.VaultRef, "{incarnation}") {
-		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "vault_ref_not_service_scoped",
-			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must contain {service} and {incarnation} (per-service/incarnation scoping)", idx),
-			Hint:    "scope the path, e.g. secret/{service}/{incarnation}/users/{key}#password",
-		}))
-	}
-	// #<field> is REQUIRED: reveal exposes exactly one scalar secret field
-	// (runtime selectRevealField without a field → permanent 404). Caught at load.
-	if i := strings.LastIndexByte(rs.VaultRef, '#'); i < 0 || i == len(rs.VaultRef)-1 {
-		out = append(out, atPath(root, base+".vault_ref", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "vault_ref_missing_field",
-			Message: fmt.Sprintf("revealable_secrets[%d].vault_ref must select a #<field> (single scalar value)", idx),
-			Hint:    "append the KV field, e.g. .../users/{key}#password",
-		}))
-	}
-
 	return out
 }
 
@@ -680,6 +539,24 @@ func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefi
 	}
 
 	out = append(out, validateJSONSchemaNode(node, pathPrefix)...)
+	return out
+}
+
+// validateSecretFields turns the refusals of [CollectSecretFields] into positional
+// diagnostics ([ADR-0083] §1). The rules themselves live there, in a pure function over
+// the decoded schema, because keeper resolves the same declarations at runtime — reveal
+// and `core.state.present` — and a second implementation would drift from this one.
+func validateSecretFields(root *ast.MappingNode, schema map[string]any, pathPrefix string) []diag.Diagnostic {
+	_, issues := CollectSecretFields(schema)
+	out := make([]diag.Diagnostic, 0, len(issues))
+	for _, iss := range issues {
+		out = append(out, atPath(root, pathPrefix+iss.Path, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    iss.Code,
+			Message: iss.Message,
+			Hint:    iss.Hint,
+		}))
+	}
 	return out
 }
 

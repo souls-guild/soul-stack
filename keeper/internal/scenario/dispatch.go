@@ -60,7 +60,6 @@ func (r *Runner) dispatch(ctx context.Context, spec RunSpec, log *slog.Logger, t
 // Passage carries serial:N. N=1 runs call this with passage=0 — the single
 // wave(s) of one Passage, bit-for-bit.
 func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate) error {
-	noLogByIndex := noLogIndex(tasks)
 	perHost := groupByHost(tasks, plans)
 	// Cross-passage requisite gating (ADR-056 R3): per-host resolution of
 	// onchanges/onfail links whose source is in an earlier Passage. nil gate
@@ -95,7 +94,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		// apply_runs rows filtered by passage, so a failed host in the
 		// current wave breaks the barrier immediately (fail-stop) — the next
 		// wave doesn't start.
-		if berr := r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, noLogByIndex, log); berr != nil {
+		if berr := r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log); berr != nil {
 			return berr
 		}
 		if derr != nil {
@@ -131,9 +130,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 // reach a terminal (KEY invariant: the barrier stays in the run-goroutine in
 // Phase 1). wantHosts = number of inserted planned rows.
 //
-// tasks is only needed for noLogIndex (suppress stderr of a failed no_log
-// task in the barrier reason) — no render for SendApply happens here.
-func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, hosts []*topology.HostFacts, tasks []*render.RenderedTask) error {
+// No render for SendApply happens here — the Acolyte that claims the assignment
+// renders the plan itself.
+func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, hosts []*topology.HostFacts) error {
 	if len(hosts) == 0 {
 		// Host resolution upstream (run.go step 3) already rejects an empty
 		// roster (no_hosts). Empty shouldn't reach here; defensive check.
@@ -170,11 +169,10 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 	// Errors are only logged.
 	r.publishSummons(ctx, log)
 
-	noLogByIndex := noLogIndex(tasks)
 	// Acolyte path is non-staged (ADR-056 §S4): planned assignments write
 	// passage 0, the barrier waits on the Passage 0 slice. Staged (N>1) is
 	// rejected for Acolyte in run.go.
-	return r.waitBarrier(ctx, spec.ApplyID, 0, dispatched, noLogByIndex, log)
+	return r.waitBarrier(ctx, spec.ApplyID, 0, dispatched, log)
 }
 
 // publishSummons sends one best-effort Summons signal for planned assignments
@@ -338,16 +336,12 @@ func (r *Runner) warnCrossKeeperDispatch(ctx context.Context, sid string, log *s
 // waitBarrier polls apply_runs.status until all wantHosts of the run reach a
 // terminal status, or ctx is cancelled.
 //
-// noLogByIndex is the set of run task indexes with `no_log: true`; the
-// barrier uses it to suppress stderr of a failed no_log task in the
-// operator-facing reason (BUG-3, see failureReason).
-//
 // Returns:
 //   - nil — all hosts succeeded.
 //   - error — at least one failed/cancelled, or ctx cancelled (timeout/
 //     Cancel/Shutdown). Any non-success terminal fails the run (fail-closed,
 //     §7).
-func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantHosts int, noLogByIndex map[int]bool, log *slog.Logger) error {
+func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantHosts int, log *slog.Logger) error {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 
@@ -368,7 +362,7 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantH
 			return fmt.Errorf("scenario: barrier interrupted: %w", errCancelRequested)
 		}
 
-		done, failed := classify(statuses, passage, wantHosts, noLogByIndex)
+		done, failed := classify(statuses, passage, wantHosts)
 		if failed != nil {
 			return failed
 		}
@@ -406,10 +400,9 @@ func cancelRequested(statuses []applyrun.HostStatus) bool {
 //     Inserts landed yet / poll ran ahead).
 //
 // Failure reason comes from apply_runs.error_summary (filled per-task:
-// `task <idx> <module>: <message>`, BUG-3); stderr is suppressed for a
-// no_log task ([failureReason]). NULL error_summary (dispatch-level failure
-// without a TaskEvent) → falls back to the host status itself.
-func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByIndex map[int]bool) (done bool, failed error) {
+// `task <idx> <module>: <message>`, BUG-3). NULL error_summary (dispatch-level
+// failure without a TaskEvent) → falls back to the host status itself.
+func classify(statuses []applyrun.HostStatus, passage, wantHosts int) (done bool, failed error) {
 	terminal := 0
 	for _, hs := range statuses {
 		// Staged-render (ADR-056): this Passage's barrier only counts
@@ -455,7 +448,7 @@ func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByInd
 			// failed/cancelled. No RunResult will ever arrive for it —
 			// without this branch the barrier would hang until runTimeout.
 			return false, fmt.Errorf("scenario: host %s finished with status %s (%s)",
-				hs.SID, hs.Status, failureReason(hs, noLogByIndex))
+				hs.SID, hs.Status, failureReason(hs))
 		}
 	}
 	return terminal >= wantHosts, nil
@@ -468,26 +461,14 @@ func classify(statuses []applyrun.HostStatus, passage, wantHosts int, noLogByInd
 //   - the host status itself (`failed`/`cancelled`) — if there's no summary
 //     (dispatch-level failure without a TaskEvent).
 //
-// no_log: if the failed task is declared `no_log: true`, its stderr may
-// carry a password — the message is replaced with a neutral
-// `(no_log task failed)`, keeping the `task <idx>` prefix for triage.
-// MaskSecrets already ran on the write path (recordTaskFailure); here the
-// no_log task's message body is fully suppressed.
-//
-// The failed task's lookup in noLogByIndex uses the GLOBAL plan_index
-// (ADR-056 §S1 fix Variant B): noLogByIndex is built from RenderedTask.Index
-// (the global cross-run index), and failed_plan_index carries the same
-// global index (echoing TaskEvent.plan_index). A local task_idx under
-// staged/per-host-where would point at a neighboring task — either failing
-// to suppress a real no_log task's stderr (password leak), or suppressing an
-// ordinary task's reason. Resolution is strictly global; for N=1,
-// plan_index==task_idx, behavior is bit-for-bit identical.
-func failureReason(hs applyrun.HostStatus, noLogByIndex map[int]bool) string {
+// The summary is passed through as written. The per-task `no_log:` that used to
+// replace a marked task's body with neutral text is gone ([ADR-0083] §8) — its
+// masking was already done on the write path (MaskSecrets in recordTaskFailure),
+// and the extra suppression only cost the operator the reason the run failed,
+// on exactly the tasks where a failure is most expensive to misdiagnose.
+func failureReason(hs applyrun.HostStatus) string {
 	if hs.ErrorSummary == nil {
 		return string(hs.Status)
-	}
-	if idx, ok := failedPlanIndex(hs); ok && noLogByIndex[idx] {
-		return fmt.Sprintf("task %d: (no_log task failed)", idx)
 	}
 	return *hs.ErrorSummary
 }
@@ -504,19 +485,6 @@ func failedPlanIndex(hs applyrun.HostStatus) (int, bool) {
 		return *hs.TaskIdx, true
 	}
 	return 0, false
-}
-
-// noLogIndex builds the set of run task indexes with `no_log: true`. Used by
-// the barrier to suppress stderr of a failed no_log task in the
-// operator-facing reason ([failureReason], BUG-3).
-func noLogIndex(tasks []*render.RenderedTask) map[int]bool {
-	out := make(map[int]bool)
-	for _, t := range tasks {
-		if t.NoLog {
-			out[t.Index] = true
-		}
-	}
-	return out
 }
 
 // tasksForPassage selects the RenderedTasks and DispatchPlans belonging to

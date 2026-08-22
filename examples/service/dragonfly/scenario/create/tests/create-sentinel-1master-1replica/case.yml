@@ -39,21 +39,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
-  # Vault: default_admin (in-cluster AUTH + masterauth) + system + (no operator-extra).
-  # The main secret/dragonfly/create#password no longer exists (requirepass removed —
-  # default_admin redesign). The generate step (core.vault.kv-present) does not run in L0
-  # (keeper-side write) — secrets are pre-seeded by the fixture, as before.
-  vault:
-    secret/dragonfly/create/users/default_admin:
-      password: dfadmin-create-pass
-    secret/dragonfly/create/users/replica:
-      password: replica-sys-secret-pass
-    secret/dragonfly/create/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/dragonfly/create/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/dragonfly/create/users/haproxy:
-      password: haproxy-sys-secret-pass
   vars:
     sentinel_master_name: master
     memory_reserve_percent: 75
@@ -83,6 +68,23 @@ fixtures:
     # onto a READY roster of 2 hosts) → include dragonfly-provision.yml targets no one.
     provision:
       enabled: false
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-create-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    df_users:
+      effective: []
 
 assert:
   task_present:

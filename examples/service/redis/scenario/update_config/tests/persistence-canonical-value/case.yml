@@ -51,15 +51,28 @@ fixtures:
       appendonly:       "no"
     redis_users: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     # Delta: a CANONICAL persistence value from the new enum (would have been no-such-key in the old presets).
     persistence: rdb_aof_1sec
 
-  vault:
-    secret/redis/update_config:
-      password: upd-redis-pass-16chars
-    secret/redis/update_config/users/default_admin:
-      password: default-admin-secret-pass
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:

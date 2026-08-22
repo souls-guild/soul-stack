@@ -64,8 +64,8 @@ assert:
         owner: root
         group: root
 
-    # Password leaves the plan/log surface through a no_log render and lands in a
-    # distinct root-owned 0600 EnvironmentFile, not in the unit/argv.
+    # Password lands in a distinct root-owned 0600 EnvironmentFile, not in the
+    # unit/argv.
     - module: core.file.rendered
       params_subset:
         path: /etc/default/redis_exporter-redis

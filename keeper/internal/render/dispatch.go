@@ -143,14 +143,24 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 //
 // register: keeper→keeper chaining (staged render, ADR-056) — a keeper task on
 // the active Passage sees `register.<prev>.*` from keeper tasks of earlier
-// Passages via the ISOLATED [RenderInput.KeeperRegister] channel (the stage
-// loop carries it over into keeperRegisterBucket). The channel is
-// DELIBERATELY separate from flat Register: the host fallback ([hostRegister])
-// stays on Register, so a mixed-Passage host task does NOT read
-// keeper-register when the per-host bucket is empty. Empty (P0, N=1,
-// non-staged, host-only Passage) → falls back to flat Register
-// (backward-compat: trial/push/other callers that only set Register see
-// register the same way, bit-for-bit).
+// Passages via the [RenderInput.KeeperRegister] channel (the stage loop carries
+// it over into keeperRegisterBucket). A keeper task reads ONLY that channel and
+// never the per-host buckets. Empty (P0, N=1, non-staged, host-only Passage) →
+// falls back to flat Register (backward-compat: trial/push/other callers that
+// only set Register see register the same way, bit-for-bit).
+//
+// The reverse direction is no longer closed: since [ADR-0083] §5 a HOST task
+// also reads the keeper bucket, as a union in which its own bucket wins
+// ([hostRegister]). The channel stays one-way here — host register never leaks
+// into a keeper task's roots.
+//
+// compute — [Pipeline.resolveCompute] runs once per run, BEFORE the task loop,
+// in exactly this soulprint-free run-level context, so `compute.<name>` is the
+// same value a Soul-side task sees and nothing about it is per-host. Omitting it
+// here made an author's `compute.x` in a keeper task's params fail at eval with
+// a bare `no such key: x` while soul-lint accepted the file. [ADR-0083] §4 needs
+// it directly: the mint task derives the account set from the same compute the
+// scenario's state_changes writes, so the two cannot drift.
 func keeperVars(in RenderInput) cel.Vars {
 	inc := map[string]any{
 		"name":            in.Incarnation.Name,
@@ -170,6 +180,7 @@ func keeperVars(in RenderInput) cel.Vars {
 		Register:    reg,
 		Incarnation: inc,
 		Vars:        in.ServiceVars,
+		Compute:     in.Compute,
 		Ctx:         in.Ctx,
 	}
 }

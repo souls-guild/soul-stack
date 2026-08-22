@@ -9,7 +9,7 @@ import (
 func TestToProtoTasks(t *testing.T) {
 	params, _ := structpb.NewStruct(map[string]any{"cmd": "echo hi"})
 	tasks := []*RenderedTask{
-		{Index: 0, Name: "echo", Module: "core.exec.run", Params: params, Register: "r", NoLog: true, Timeout: "30s"},
+		{Index: 0, Name: "echo", Module: "core.exec.run", Params: params, Register: "r", SecretOutput: []string{"data"}, Timeout: "30s"},
 	}
 	got := ToProtoTasks(tasks)
 	if len(got) != 1 {
@@ -22,8 +22,8 @@ func TestToProtoTasks(t *testing.T) {
 	if pt.GetParams().GetFields()["cmd"].GetStringValue() != "echo hi" {
 		t.Errorf("params not propagated: %v", pt.GetParams())
 	}
-	if !pt.GetNoLog() {
-		t.Errorf("no_log not propagated")
+	if got := pt.GetSecretOutput(); len(got) != 1 || got[0] != "data" {
+		t.Errorf("secret_output = %v, want [data] ([ADR-0083] §8)", got)
 	}
 	// timeout: must reach the wire form (catches a threading regression —
 	// MAJOR #2: the field was silently dropped before RenderedTask.Timeout).

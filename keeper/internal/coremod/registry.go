@@ -4,7 +4,9 @@
 // Modules (Registry key = base name, author form = base + state in address):
 // `core.soul` (`core.soul.registered`, docs/keeper/modules.md), `core.cloud`
 // (`core.cloud.created`/`core.cloud.destroyed`, ADR-017(a), Plugin.d-pending),
-// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)) and `core.choir`
+// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)), `core.state`
+// (`core.state.present`, [ADR-0083] §4 — the single write of a service state field
+// carrying declared secrets, registered when Deps.Vault is present) and `core.choir`
 // (`core.choir.present`/`core.choir.absent`, ADR-044 — membership changes in
 // Choir of incarnation, registered when Deps.ChoirStore is present). All
 // execute on keeper instance, scenario-runner dispatcher is `on: keeper`.
@@ -21,6 +23,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/sdk/module"
@@ -90,6 +93,14 @@ type Deps struct {
 	// generate-if-absent reads+writes). *vault.Client satisfies both;
 	// kv-read write-path does not call (read-state).
 	Vault vault.VaultWriter
+
+	// VaultMount is the KV mount from keeper.yml (`vault.kv_mount`), used by
+	// `core.state.present` to DERIVE the path of a declared secret ([ADR-0083]
+	// §1). "" means the default mount. A snapshot, not a hot-reload accessor,
+	// deliberately: the mount is one segment of a derived path, so re-reading it
+	// mid-life would orphan every secret already written under the old one. The
+	// ADR-064 write path (secretwrite.NewWriter) snapshots the same value.
+	VaultMount string
 
 	// ChoirStore is choir-CRUD adapter (ADR-044) for `core.choir`:
 	// AddVoice/RemoveVoice on incarnation_choir_voices + incarnation existence
@@ -192,6 +203,14 @@ func Default(d Deps) *Registry {
 		soul.Name:  soulMod,
 		cloud.Name: cloudMod,
 		vault.Name: vault.New(d.Vault, d.Audit),
+	}
+	// `core.state.present` ([ADR-0083] §4) registered only when the Vault client
+	// is present: the module's whole job is to put a declared secret in Vault and
+	// hand back a reference. Without it a step with that address fails with
+	// "unknown keeper-side module" — the same "not configured" signal as choir
+	// and cert.
+	if d.Vault != nil {
+		mods[state.Name] = state.New(d.Vault, d.Audit, d.VaultMount)
 	}
 	// `core.choir` (ADR-044) registered only when ChoirStore present.
 	// nil means build without choir scenarios; step with that module

@@ -309,6 +309,11 @@ type Deps struct {
 	// The production wire-up in `keeper run` passes *vault.Client (the same d.vc).
 	VaultClient handlers.VaultKVReader
 
+	// VaultKVMount — keeper.yml's `vault.kv_mount`, paired with VaultClient. Reveal
+	// derives the path it reads ([ADR-0083] §2) and must land on the mount
+	// `core.state.present` wrote to; "" is the default mount.
+	VaultKVMount string
+
 	// PushRun — the multi-host push orchestrator (Variant C, ADR-004 push-flow +
 	// docs/keeper/push.md). When nil the push.* routes aren't wired (the
 	// SigilSvc/AugurSvc/OracleSvc pattern): keeper starts without SSH plugins, and
@@ -695,7 +700,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// Vault KV reader for the secret reveal endpoint (NIM-74); late-binding. nil →
 	// RevealSecretTyped answers 404 (endpoint not configured).
 	if deps.VaultClient != nil {
-		incH.SetVaultReader(deps.VaultClient)
+		incH.SetVaultReader(deps.VaultClient, deps.VaultKVMount)
 	}
 	soulH := handlers.NewSoulHandlerWithTeardown(deps.SoulDB, deps.RBAC, deps.SoulPresence, deps.SoulTeardown, logger)
 

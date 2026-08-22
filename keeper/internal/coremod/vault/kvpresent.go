@@ -94,7 +94,7 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 			}
 		}
 
-		value, gerr := t.policy.generate()
+		value, gerr := t.policy.Generate()
 		if gerr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("generate secret for %q: %v", t.path, gerr))
 		}

@@ -210,18 +210,44 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 // Source is in.RegisterByHost[sid] (accumulated by previous Passage barriers,
 // threaded through by run.go's stage loop).
 //
-// Backward-compat: if the per-host map is empty for this host (first Passage,
-// N=1 run, or a non-staged path), flat in.Register is returned (empty in the
-// pilot). So an N=1 run sees register=empty exactly as before staged-render
-// (bit-for-bit), and keeper-side/destiny passes (their own register contexts)
-// are unaffected.
+// The KEEPER register is UNIONED into it ([ADR-0083] §5). A keeper-side task is
+// how a service state field carrying declared secrets is written
+// (`core.state.present`), and the Soul-side task that consumes the result — the
+// one that writes users.acl — has to read `register.<name>.effective` off it.
+// The host's own bucket WINS on a name collision: a register name is unique
+// within a scenario, so a collision means something is already wrong, and a
+// host's own probe result is the more specific fact.
+//
+// This deliberately RELAXES the isolation the split channels introduced
+// (ADR-056 Slice 2, [RenderInput.KeeperRegister]). What that split protected
+// against was the FALLBACK: an empty per-host bucket used to be replaced
+// wholesale by the keeper bucket, so `register.<name>` on a host could resolve
+// to a keeper task's data by accident. A union with host precedence does not
+// bring that back — nothing a host produced is shadowed, and a keeper register
+// name a host does not reference is simply unread. The flat in.Register
+// fallback still fires only when BOTH buckets are empty, so a caller that sets
+// Register alone (trial/push) is bit-for-bit unchanged.
+//
+// The values are already secret-safe: a declared secret travels as a `vault:`
+// reference and is resolved into the keeper bucket at the pass boundary
+// ([Pipeline.resolveRegisterSecrets], [ADR-0083] §6), never accumulated as
+// plaintext into apply_task_register.
 func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
+	var own map[string]any
 	if host != nil {
-		if reg := in.RegisterByHost[host.SID]; len(reg) > 0 {
-			return reg
-		}
+		own = in.RegisterByHost[host.SID]
 	}
-	return in.Register
+	if len(own) == 0 && len(in.KeeperRegister) == 0 {
+		return in.Register
+	}
+	out := make(map[string]any, len(in.KeeperRegister)+len(own))
+	for k, v := range in.KeeperRegister {
+		out[k] = v
+	}
+	for k, v := range own {
+		out[k] = v
+	}
+	return out
 }
 
 // buildRenderContext builds the per-host root of the text/template context for

@@ -11,13 +11,13 @@ state_before:
   seeded_from:
     source_endpoints: ["old-1.example.com:6379"]
     detached: true
-    source_password_ref: "secret/redis/migrate/oldcluster#password"
-    source_tls_ca_ref: "secret/redis/migrate/oldcluster#ca"
+    source_password_ref: "secret/redis-migrate/oldcluster#password"
+    source_tls_ca_ref: "secret/redis-migrate/oldcluster#ca"
 
 state_after:
   redis_type: "sentinel"
   seeded_from:
     source_endpoints: ["old-1.example.com:6379"]
     detached: true
-    source_password_ref: "secret/redis/migrate/oldcluster#password"
-    source_tls_ca_ref: "secret/redis/migrate/oldcluster#ca"
+    source_password_ref: "secret/redis-migrate/oldcluster#password"
+    source_tls_ca_ref: "secret/redis-migrate/oldcluster#ca"

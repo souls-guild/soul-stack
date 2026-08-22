@@ -26,11 +26,6 @@ fixtures:
       soulprint:
         network: { primary_ip: 10.0.0.9 }
         os: { arch: amd64 }
-  vault:
-    secret/redis/add_node/users/default_admin:
-      password: default-admin-secret-pass
-  # ★ host-layout is OVERRIDDEN by the operator in service vars (v11→v12): a repeat run must read
-  # EXACTLY these paths (not the defaults), so the new node lands in the same layout as the cluster.
   vars:
     conf_dir: /opt/redis
     data_dir: /srv/redis-data
@@ -46,10 +41,29 @@ fixtures:
     redis_users: []
     redis_hosts: []
 
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
   input:
     new_node_sid: node-9.example.com
     seed_sid: node-1.example.com
     role: master
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:

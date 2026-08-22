@@ -16,4 +16,3 @@ tasks:
     retry:
       count: 3
     timeout: 30s
-    no_log: true

@@ -150,8 +150,17 @@ type RenderedTask struct {
 	Module string `protobuf:"bytes,2,opt,name=module,proto3" json:"module,omitempty"`
 	// Module params after render, typed per the module's manifest.
 	Params *structpb.Struct `protobuf:"bytes,3,opt,name=params,proto3" json:"params,omitempty"`
-	// If true, Soul does not log this task's params and output (DSL core no_log:, see destiny/tasks.md).
-	NoLog bool `protobuf:"varint,4,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
+	// secret_output: names of the module's OUTPUT fields declared `secret: true`
+	// in its manifest ([ADR-0083] §8). Soul masks exactly these fields wherever it
+	// makes the task's output observable; the register payload itself is untouched,
+	// or the next task could not read what this one produced. Keeper derives the
+	// list from the manifest at render — the task author declares nothing.
+	//
+	// Replaces the removed `no_log` (field 4), which was all-or-nothing and set by
+	// the author rather than the module that knows its own output shape. Params
+	// are not covered here and do not need to be: their secret provenance is
+	// tracked per cell by the seal ([ADR-010] §7.4) and masked on the write path.
+	SecretOutput []string `protobuf:"bytes,21,rep,name=secret_output,json=secretOutput,proto3" json:"secret_output,omitempty"`
 	// Per-task hard limit on a single Apply attempt (DSL core timeout:, destiny/tasks.md §9).
 	// Format is Soul Stack's `duration` convention (Go-duration "30s"/"5m"/"1h30m",
 	// or a `<N>d` suffix — see docs/keeper/config.md → "Type conventions"); empty =
@@ -381,11 +390,11 @@ func (x *RenderedTask) GetParams() *structpb.Struct {
 	return nil
 }
 
-func (x *RenderedTask) GetNoLog() bool {
+func (x *RenderedTask) GetSecretOutput() []string {
 	if x != nil {
-		return x.NoLog
+		return x.SecretOutput
 	}
-	return false
+	return nil
 }
 
 func (x *RenderedTask) GetTimeout() string {
@@ -739,11 +748,14 @@ type TaskEvent struct {
 	RegisterData *structpb.Struct `protobuf:"bytes,4,opt,name=register_data,json=registerData,proto3" json:"register_data,omitempty"`
 	// Populated only when status = FAILED or TIMED_OUT.
 	Error *TaskError `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
-	// Echo of RenderedTask.no_log — drives keeper-side audit suppression via this
-	// flag (multi-Keeper-safe: the TaskEvent may land on a different instance than
-	// the one holding []RenderedTask). When true, keeper does not write
-	// register_data/error.message to the audit log.
-	NoLog bool `protobuf:"varint,6,opt,name=no_log,json=noLog,proto3" json:"no_log,omitempty"`
+	// Echo of RenderedTask.secret_output — drives keeper-side masking through this
+	// list (multi-Keeper-safe: the TaskEvent may land on a different instance than
+	// the one holding []RenderedTask). Keeper redacts exactly these fields inside
+	// register_data before it reaches the audit log or a read endpoint.
+	//
+	// Replaces the removed `no_log` (field 6): a task no longer loses its whole
+	// diagnostic payload because one of its fields is a secret.
+	SecretOutput []string `protobuf:"bytes,10,rep,name=secret_output,json=secretOutput,proto3" json:"secret_output,omitempty"`
 	// passage: echo of ApplyRequest.passage (ADR-056): the 0-based Passage index
 	// this task belongs to. Soul returns it unchanged. Keeper accumulates register
 	// per (apply_id, sid, passage): rendering the next Passage reads the previous
@@ -842,11 +854,11 @@ func (x *TaskEvent) GetError() *TaskError {
 	return nil
 }
 
-func (x *TaskEvent) GetNoLog() bool {
+func (x *TaskEvent) GetSecretOutput() []string {
 	if x != nil {
-		return x.NoLog
+		return x.SecretOutput
 	}
-	return false
+	return nil
 }
 
 func (x *TaskEvent) GetPassage() int32 {
@@ -1029,12 +1041,12 @@ var File_keeper_v1_apply_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x82\x05\n" +
+	"\x15keeper/v1/apply.proto\x12\x13soulstack.keeper.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16keeper/v1/common.proto\"\x9e\x05\n" +
 	"\fRenderedTask\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12/\n" +
-	"\x06params\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06params\x12\x15\n" +
-	"\x06no_log\x18\x04 \x01(\bR\x05noLog\x12\x18\n" +
+	"\x06params\x18\x03 \x01(\v2\x17.google.protobuf.StructR\x06params\x12#\n" +
+	"\rsecret_output\x18\x15 \x03(\tR\fsecretOutput\x12\x18\n" +
 	"\atimeout\x18\x05 \x01(\tR\atimeout\x12#\n" +
 	"\ronchanges_idx\x18\x06 \x03(\x05R\fonchangesIdx\x12\x12\n" +
 	"\x04when\x18\a \x01(\tR\x04when\x12!\n" +
@@ -1058,7 +1070,7 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\vrequire_idx\x18\x13 \x03(\x05R\n" +
 	"requireIdx\x12\x1f\n" +
 	"\vrequire_all\x18\x14 \x01(\bR\n" +
-	"requireAll\"\xd4\x01\n" +
+	"requireAllJ\x04\b\x04\x10\x05R\x06no_log\"\xd4\x01\n" +
 	"\fApplyRequest\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x127\n" +
 	"\x05tasks\x18\x02 \x03(\v2!.soulstack.keeper.v1.RenderedTaskR\x05tasks\x12#\n" +
@@ -1071,18 +1083,19 @@ const file_keeper_v1_apply_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x16\n" +
 	"\x06module\x18\x02 \x01(\tR\x06module\x12\x14\n" +
 	"\x05param\x18\x03 \x01(\tR\x05param\x12\x18\n" +
-	"\amessage\x18\x04 \x01(\tR\amessage\"\xf9\x02\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"\x95\x03\n" +
 	"\tTaskEvent\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x12\x19\n" +
 	"\btask_idx\x18\x02 \x01(\x05R\ataskIdx\x127\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x1f.soulstack.keeper.v1.TaskStatusR\x06status\x12<\n" +
 	"\rregister_data\x18\x04 \x01(\v2\x17.google.protobuf.StructR\fregisterData\x124\n" +
-	"\x05error\x18\x05 \x01(\v2\x1e.soulstack.keeper.v1.TaskErrorR\x05error\x12\x15\n" +
-	"\x06no_log\x18\x06 \x01(\bR\x05noLog\x12\x18\n" +
+	"\x05error\x18\x05 \x01(\v2\x1e.soulstack.keeper.v1.TaskErrorR\x05error\x12#\n" +
+	"\rsecret_output\x18\n" +
+	" \x03(\tR\fsecretOutput\x12\x18\n" +
 	"\apassage\x18\a \x01(\x05R\apassage\x12\x1d\n" +
 	"\n" +
 	"plan_index\x18\b \x01(\x05R\tplanIndex\x129\n" +
-	"\anotices\x18\t \x03(\v2\x1f.soulstack.keeper.v1.TaskNoticeR\anotices\"\xd0\x01\n" +
+	"\anotices\x18\t \x03(\v2\x1f.soulstack.keeper.v1.TaskNoticeR\anoticesJ\x04\b\x06\x10\aR\x06no_log\"\xd0\x01\n" +
 	"\tRunResult\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x1e.soulstack.keeper.v1.RunStatusR\x06status\x12<\n" +

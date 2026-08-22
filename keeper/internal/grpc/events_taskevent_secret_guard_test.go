@@ -10,6 +10,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // Security guard invariant (security audit, low/secrets): RenderedTask.Params and
@@ -19,34 +20,42 @@ import (
 //
 // Structural foundation of the invariant: TaskEvent (Soul→Keeper, apply.proto) does NOT
 // carry params at all — the keeper-side handler physically cannot forward them.
-// And a no_log task's register_data/error.message (the only remaining channel for
-// an arbitrary secret that MaskSecrets can't catch by vault-ref) are suppressed
-// by the payload shape before writing. These tests verify both facts at the handler→
-// audit/SSE.
+// Register output is the one channel that does carry module-produced values, and the
+// fields a module declared secret are masked there per field ([ADR-0083] §8) before
+// either channel sees the payload. These tests verify both facts at the handler→
+// audit/SSE boundary.
 
-// TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels — a no_log task
-// with a secret in register_data AND in error.message: neither the audit payload nor the SSE frame
-// carries plaintext. audit gets a suppressed:"no_log" marker instead; SSE
-// never publishes register, and error has no message.
-func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T) {
+// TestHandleTaskEvent_SecretOutputNeverReachesObservableChannels — a task whose
+// module declared `password` a secret output ([ADR-0083] §8) returns it in
+// register_data and fails with the same value in stderr. Neither observable channel
+// carries the register plaintext: audit writes the field masked (the rest of the
+// output survives), and SSE never publishes register_data at all, nor `message` for
+// a failed task.
+//
+// What this test does NOT claim: that error.message is stripped. §8 stopped
+// suppressing it per task — the barriers left on it are the write-path
+// MaskSecrets/MaskSecretsSealed (applied in auditpg, past this fake writer) and the
+// SSE floor asserted below. A module that prints its own credential to stderr is
+// covered by neither, which is why the declaration is on the OUTPUT field.
+func TestHandleTaskEvent_SecretOutputNeverReachesObservableChannels(t *testing.T) {
 	const secret = "S3cr3t-PlainText-Password"
 
 	aw := &recordingAudit{}
 	bus := applybus.NewBus(discardLogger(t))
 	h := newTestHandlerWithBusAudit(t, aw, bus)
 
-	rd, err := structpb.NewStruct(map[string]any{"password": secret})
+	rd, err := structpb.NewStruct(map[string]any{"password": secret, "path": "secret/app/cfg"})
 	if err != nil {
 		t.Fatalf("structpb: %v", err)
 	}
 	ev := &keeperv1.TaskEvent{
-		ApplyId: "01HAPPLY",
-		TaskIdx: 0,
-		Status:  keeperv1.TaskStatus_TASK_STATUS_FAILED,
-		NoLog:   true,
+		ApplyId:      "01HAPPLY",
+		TaskIdx:      0,
+		Status:       keeperv1.TaskStatus_TASK_STATUS_FAILED,
+		SecretOutput: []string{"password"},
 		Error: &keeperv1.TaskError{
 			Code: "module.failed", Module: "core.vault.kv-read",
-			Message: "leaked " + secret,
+			Message: "write rejected",
 		},
 		RegisterData: rd,
 	}
@@ -58,30 +67,41 @@ func TestHandleTaskEvent_NoLogSecretNeverReachesObservableChannels(t *testing.T)
 		t.Fatal("no SSE event published")
 	}
 
-	// Audit channel: the payload carries neither the secret nor the register key.
+	// Audit channel: the declared field is masked, the rest of the output is intact.
 	auditEvents := aw.snapshot()
 	if len(auditEvents) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(auditEvents))
 	}
 	auditBlob, _ := json.Marshal(auditEvents[0].Payload)
 	if strings.Contains(string(auditBlob), secret) {
-		t.Errorf("no_log secret leaked into audit payload: %s", auditBlob)
+		t.Errorf("declared-secret output leaked into audit payload: %s", auditBlob)
 	}
-	if _, present := auditEvents[0].Payload["register_data"]; present {
-		t.Errorf("no_log task must not carry register_data in audit: %v", auditEvents[0].Payload)
+	rdMap := decodeRegisterData(t, auditEvents[0].Payload)
+	if rdMap["password"] != audit.MaskedValue {
+		t.Errorf("register_data.password = %v, want %q", rdMap["password"], audit.MaskedValue)
 	}
-	if auditEvents[0].Payload["suppressed"] != "no_log" {
-		t.Errorf("no_log marker missing in audit: %v", auditEvents[0].Payload)
+	if rdMap["path"] != "secret/app/cfg" {
+		t.Errorf("non-secret output field lost from audit: %v", rdMap)
 	}
 
-	// SSE channel: the frame carries neither the secret, register, nor error.message.
+	// The live payload is untouched — the next task reads what this one produced.
+	if got := ev.GetRegisterData().GetFields()["password"].GetStringValue(); got != secret {
+		t.Errorf("live register payload was mutated: password = %q", got)
+	}
+
+	// SSE channel: no register_data, no stderr for a failed task.
 	sseBlob, _ := json.Marshal(sseEv.Payload)
 	if strings.Contains(string(sseBlob), secret) {
-		t.Errorf("no_log secret leaked into SSE frame: %s", sseBlob)
+		t.Errorf("declared-secret output leaked into SSE frame: %s", sseBlob)
 	}
 	ssePayload, _ := sseEv.Payload.(map[string]any)
 	if _, present := ssePayload["register_data"]; present {
 		t.Errorf("SSE frame must never carry register_data: %v", ssePayload)
+	}
+	if errMap, ok := ssePayload["error"].(map[string]any); ok {
+		if _, present := errMap["message"]; present {
+			t.Errorf("SSE floor broken: a failed task published stderr: %v", errMap)
+		}
 	}
 }
 
@@ -150,4 +170,19 @@ func newTestHandlerWithBusAudit(t *testing.T, aw *recordingAudit, bus *applybus.
 		t.Fatalf("deps validate: %v", err)
 	}
 	return newEventStreamHandler(deps, discardLogger(t))
+}
+
+// decodeRegisterData returns the audit payload's register_data, which travels as
+// the protojson text of the register Struct rather than a nested map.
+func decodeRegisterData(t *testing.T, payload map[string]any) map[string]any {
+	t.Helper()
+	raw, ok := payload["register_data"].(string)
+	if !ok {
+		t.Fatalf("audit register_data type = %T, want string (§8 masks the field, it does not drop the block)", payload["register_data"])
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("register_data is not JSON: %v (%q)", err, raw)
+	}
+	return out
 }

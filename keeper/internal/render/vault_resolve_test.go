@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
 // TestResolveVaultRefs_NoRefs — params without vault refs pass through with no
@@ -152,5 +153,72 @@ func assertResolveVaultActionable(t *testing.T, errText, path string) {
 	}
 	if !strings.Contains(got, path) {
 		t.Fatalf("path %q disappeared after masking: %q", path, got)
+	}
+}
+
+// countingKV counts ReadKV calls per path.
+type countingKV struct {
+	secrets map[string]map[string]any
+	calls   map[string]int
+}
+
+func (c *countingKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
+	c.calls[path]++
+	d, ok := c.secrets[path]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return d, nil
+}
+
+// TestResolveVaultRefs_SharesRenderPassMemo — the guard for the asymmetry NIM-698
+// closes: the vault-resolve phase must use the SAME per-render-pass cache as CEL
+// vault(), so N params referencing one path cost one ReadKV. Without the memo this
+// counts 3.
+func TestResolveVaultRefs_SharesRenderPassMemo(t *testing.T) {
+	kv := &countingKV{
+		secrets: map[string]map[string]any{
+			"secret/redis/inc/users/admin": {"password": "p", "tls": "t"},
+		},
+		calls: map[string]int{},
+	}
+	ctx := cel.WithVaultMemo(context.Background())
+	params := map[string]any{
+		"a":      "vault:secret/redis/inc/users/admin#password",
+		"b":      "vault:secret/redis/inc/users/admin#tls",
+		"nested": map[string]any{"c": "vault:secret/redis/inc/users/admin#password"},
+	}
+	out, err := resolveVaultRefs(ctx, kv, params)
+	if err != nil {
+		t.Fatalf("resolveVaultRefs: %v", err)
+	}
+	if out["a"] != "p" || out["b"] != "t" {
+		t.Fatalf("resolved = %v", out)
+	}
+	if got := kv.calls["secret/redis/inc/users/admin"]; got != 1 {
+		t.Errorf("ReadKV calls = %d, want 1 (vault-resolve must share the CEL render-pass memo)", got)
+	}
+}
+
+// TestResolveVaultRefs_NoMemoStillResolves — without WithVaultMemo on ctx
+// (soul-lint / Trial / unit-eval) the phase degrades to a plain ReadKV rather than
+// failing: the cache is an optimization, not a result contract.
+func TestResolveVaultRefs_NoMemoStillResolves(t *testing.T) {
+	kv := &countingKV{
+		secrets: map[string]map[string]any{"secret/x": {"f": "v"}},
+		calls:   map[string]int{},
+	}
+	out, err := resolveVaultRefs(context.Background(), kv, map[string]any{
+		"a": "vault:secret/x#f",
+		"b": "vault:secret/x#f",
+	})
+	if err != nil {
+		t.Fatalf("resolveVaultRefs: %v", err)
+	}
+	if out["a"] != "v" || out["b"] != "v" {
+		t.Fatalf("resolved = %v", out)
+	}
+	if got := kv.calls["secret/x"]; got != 2 {
+		t.Errorf("ReadKV calls = %d, want 2 (no memo bound)", got)
 	}
 }

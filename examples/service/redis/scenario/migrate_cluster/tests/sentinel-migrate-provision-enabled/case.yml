@@ -42,24 +42,11 @@ fixtures:
         network: { primary_ip: 10.0.0.1 }
         os: { arch: amd64 }
   vault:
-    secret/redis/redis-prod:
-      password: s3cr3t-redis-pass-migrate
-    # * default_admin REDESIGN (2026-06-30): default_admin — the system user for
-    # in-cluster AUTH (auth_pass/PING deploy steps read it via the users/<name> branch).
-    secret/redis/redis-prod/users/default_admin:
-      password: default-admin-secret-pass
-    secret/redis/redis-prod/users/replica:
-      password: replica-sys-secret-pass
-    secret/redis/redis-prod/users/monitoring:
-      password: monitoring-sys-secret-pass
-    secret/redis/redis-prod/users/sentinel:
-      password: sentinel-sys-secret-pass
-    secret/redis/redis-prod/users/haproxy:
-      password: haproxy-sys-secret-pass
-    # * External source account under the pattern-guard secret/redis/migrate/*. Read via
+    # * External source account under the pattern-guard secret/redis-migrate/*. Read via
     # the authored channel vault(input.source.password_ref) — password_ref is set below in input.
-    secret/redis/migrate/oldcluster:
+    secret/redis-migrate/oldcluster:
       password: old-cluster-source-pass
+
   vars:
     # install_method — in service vars (author-context): install method is NOT operator-input
     # (covenant.compute.install reads default(vars.install_method, 'binary')). package
@@ -116,7 +103,7 @@ fixtures:
       hosts:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
-      password_ref: "secret/redis/migrate/oldcluster#password"
+      password_ref: "secret/redis-migrate/oldcluster#password"
       tls: false
     # verify omitted -> lag_threshold default 0, skip_checksum default false.
 
@@ -132,6 +119,20 @@ mocks:
       hosts:
         - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default-admin-secret-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    redis_users:
+      effective: []
 
 assert:
   task_present:
@@ -286,5 +287,5 @@ assert:
         - "10.9.0.1:6379"
         - "10.9.0.2:6379"
       detached: false
-      source_password_ref: "secret/redis/migrate/oldcluster#password"
+      source_password_ref: "secret/redis-migrate/oldcluster#password"
       source_tls_ca_ref: ""

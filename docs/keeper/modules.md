@@ -15,7 +15,7 @@ Launching Soul-side core module with `on: keeper` - validation error; and vice v
 
 ## Registration and dispatch at (`base` + `state`)
 
-Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.cert`. State comes from the last segment of the task address.
+Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.state`, `core.cert`. State comes from the last segment of the task address.
 
 When executing a keeper-side task (`keeper/internal/scenario/keeper_dispatch.go`), the address `module: <namespace>.<module>.<state>` is divided by the function `config.SplitModuleAddr` (a single parser for both sides, the same as the Soul-side runtime) into a pair `(base, state)`:
 
@@ -31,13 +31,14 @@ Author-form examples → parsing:
 | `core.bootstrap.issued` / `core.bootstrap.delivered` | `core.bootstrap` | `issued` / `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
+| `core.state.present` | `core.state` | `present` |
 | `core.cert.registered` / `core.cert.issued` | `core.cert` | `registered` / `issued` |
 
-Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified. `core.bootstrap` is present when either its Postgres issuer or its delivery dependencies exist; production always wires the issuer. An unavailable state fails explicitly (`issuer not configured` / `dialer not configured`) instead of borrowing dependencies from another state.
+Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified, `core.state` only when the Vault client is. `core.bootstrap` is present when either its Postgres issuer or its delivery dependencies exist; production always wires the issuer. An unavailable state fails explicitly (`issuer not configured` / `dialer not configured`) instead of borrowing dependencies from another state.
 
 ### Audit-trace and per-task alerting
 
-Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-side handler `TaskEvent`): `sid = keeper` (address of the keeper-target of the run), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` - name `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / otherwise `TASK_STATUS_OK`). Thanks to this, **task:-Tiding subscription also works for keeper-side addresses** (`on: keeper`): a keeper task with the address `register ∪ id` (including `provision_vm` with `id:` without `register:`) ends up in `changed_tasks` of the terminal event `incarnation.run_completed` and is matched by the task selector ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)). Secret hygiene: keeper-side `task.executed` carries only address + status (without `register_data`/output); `error.message` - only on failure and only for non-`no_log` tasks. Operator-SSE keeper-side does not broadcast progress.
+Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-side handler `TaskEvent`): `sid = keeper` (address of the keeper-target of the run), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` - name `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / otherwise `TASK_STATUS_OK`). Thanks to this, **task:-Tiding subscription also works for keeper-side addresses** (`on: keeper`): a keeper task with the address `register ∪ id` (including `provision_vm` with `id:` without `register:`) ends up in `changed_tasks` of the terminal event `incarnation.run_completed` and is matched by the task selector ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)). Secret hygiene: keeper-side `task.executed` carries only address + status (without `register_data`/output); `error.message` - only on failure (nothing suppresses it per task since [ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 removed `no_log:`; the write-path vault-ref masking still applies). Operator-SSE keeper-side does not broadcast progress.
 
 ### The context of `params:` is `incarnation.state`, but not `soulprint`
 
@@ -315,6 +316,41 @@ Explicit reading of the secret from Vault KV (v1/v2, mount version is determined
 Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
+
+## `core.state.present`
+
+The single write of a service state field that carries **declared secrets** ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.state`; state `present` comes from the address suffix. Registered only when the Vault client is configured (`Deps.Vault`), the same pattern as `core.choir` / `core.cert` - otherwise the step fails with "unknown keeper-side module".
+
+`present` and not `set` is the whole point. On a property declared `type: secret` in the service `state_schema`, an existing Vault value is **kept** and the incoming request discarded. An incidental re-render must not rotate a live credential, so deliberate rotation is not expressible here by design (its own decision, its own ticket - NIM-700).
+
+### Parameters (`params:`)
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `key` | string | yes | The **top-level** property of the service `state_schema` this task writes. Not a path, not a nested field - a name that is not a top-level property is an error. |
+| `set` | any | yes | The proposed value of that field. Secret properties may hold a `SecretRequest` produced by [`generate_secret()`](../templating.md#23-registered-cel-functions-starting-minimum); everything else is ordinary data. |
+
+The **service** and **incarnation** of the run are not parameters - they travel on the module context, like `core.cloud`'s incarnation, because they are two segments of a derived path and an author must not be able to name them. Both missing is a **failure, not a default**: the owner is what makes the path unforgeable, so the module fails closed rather than derive a path with an empty segment. The same applies to an unavailable `state_schema`.
+
+A `SecretRequest` sitting in a position no declared property claims is an **error**, checked before anything is written. A request nobody resolves would travel on into `incarnation.state` as ordinary data and look like a password was asked for when nothing minted one.
+
+### Output contract (`output:` module)
+
+| Key | Meaning |
+|---|---|
+| `key` | The state field this task wrote, echoed for diagnostics. |
+| `effective` | **The effective state** - what is stored now, existing values included, not what the caller proposed - with every secret property replaced by its `vault:` reference. This is what consumers read: `${ register.<name>.effective }`. |
+| `generated` | The derived Vault paths whose secret this run **minted**, sorted, flat form (`<mount>/<service>/…#<field>`, no `vault:` prefix). Paths, never values. |
+
+*A generator's output is a candidate, a writer's output is the truth.* Only the writer knows which value won a `present` resolution, so only the writer can be quoted - a consumer that re-derives the value from its own `generate_secret()` call would configure the target with a password the writer discarded. `changed=true` exactly when `generated` is non-empty, so a second run of an unchanged field is OK, not CHANGED. That is the whole of what the module does - it writes Vault, and the state field itself is still written by the run's `state_changes`, so a change to the field's non-secret content is not this task's change to report. `onchanges:` hung off this register therefore fires on **minting**, not on the field's content moving.
+
+A secret in the register rides as a **reference**, not as plaintext ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §6) - which is why plaintext never reaches `apply_task_register` and needs no purge. The render boundary resolves the reference for the cell that consumes it, and the seal detector marks such a register (`SealSources.SealedRegisters`) so the consuming cell is masked in `status_details`.
+
+### Security
+
+Derived, never authored: [`shared/config.SecretField`](../../shared/config/secret_field.go) builds the path from (service, incarnation, state field, key) and every segment is checked against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$`, **failing closed** - `<key>` is operator-influenced data, so a `/`, a `.` or a `..` inside a user's name must never become a path segment. The corollary is the fence: an author-written path under `<mount>/<service>/` is refused in every spelling ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §7, [templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum)).
+
+The audit event is `vault.kv-present`, **reused rather than renamed**: the fact recorded is the one that module already records - a secret was ensured present at these paths - and splitting one fact across two names would leave an operator having to filter on both. Written only when something was minted, payload `{paths, state_field, service, incarnation}`, no values. Every failure is a failed **event** rather than a gRPC error, so the run enters `onfail` / `error_locked` like any other task.
 
 ## `core.cert.registered` / `core.cert.issued`
 

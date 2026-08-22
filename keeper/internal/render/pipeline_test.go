@@ -903,6 +903,50 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 	}
 }
 
+// TestRender_OnKeeper_ComputeReadable — a keeper-side task reads `compute.<name>`
+// in params. resolveCompute runs once per run, BEFORE the task loop, in the same
+// soulprint-free run-level context a keeper task renders in, so there is nothing
+// per-host about the value and nothing to import; leaving it out of keeperVars only
+// produced an eval-time `no such key: <name>` that soul-lint did not predict.
+//
+// [ADR-0083] §4 depends on this directly: the `core.state.present` task that mints a
+// state field's declared secrets derives the account set from the same compute var
+// the scenario's state_changes writes, so "what we mint" and "what we record" cannot
+// drift. Mutation: drop `Compute: in.Compute` from keeperVars and this fails at
+// eval with `no such key: acl_names`.
+func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "k",
+		Compute: config.ComputeBlock{
+			{Name: "acl_names", Value: "${ ['default_admin', 'replica'] }"},
+		},
+		Tasks: []config.Task{
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.state.present", Params: map[string]any{
+				"key": "system_acl_users",
+				"set": "${ compute.acl_names.map(n, { 'name': n }) }",
+			}}},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	set := tasks[0].Params.GetFields()["set"].GetListValue().GetValues()
+	if len(set) != 2 {
+		t.Fatalf("params.set = %v, want 2 elements from compute.acl_names", set)
+	}
+	first := set[0].GetStructValue().GetFields()["name"].GetStringValue()
+	if first != "default_admin" {
+		t.Fatalf("params.set[0].name = %q, want default_admin", first)
+	}
+}
+
 // TestRender_OnKeeper_StateReadable — a keeper-side task reads incarnation.state.<path>
 // in params: pre-run snapshot (RenderInput.State), symmetric with Soul-side. Unblocks
 // core.cloud.destroyed (on: keeper) reading incarnation.state.provisioned_*.

@@ -15,9 +15,6 @@ fixtures:
       primary_ip: 10.0.0.5
     os:
       arch: amd64
-  vault:
-    secret/redis/create:
-      password: s3cr3t-redis-pass-create
   vars:
     redis_type: sentinel
     memory_reserve_percent: 75
@@ -50,4 +47,22 @@ fixtures:
 
 # The run aborts on validate: rule "name is reserved for a system user" is false.
 # Substring — the rule's message (create/main.yml validate).
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: default_admin-l0-pass }
+        - { name: haproxy, password: haproxy-l0-pass }
+        - { name: monitoring, password: monitoring-l0-pass }
+        - { name: replica, password: replica-l0-pass }
+        - { name: sentinel, password: sentinel-l0-pass }
+    redis_users:
+      effective:
+        - { name: replica, password: replica-l0-pass }
 expect_render_error: "reserved for a system user"

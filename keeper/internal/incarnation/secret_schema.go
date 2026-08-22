@@ -3,6 +3,7 @@ package incarnation
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // The declarative secret layer for an incarnation's `state` ([ADR-010] §7.4,
@@ -103,10 +104,21 @@ func CollectStateSchemaSecrets(schema map[string]any, path string, set audit.Sec
 	}
 }
 
-// isSecretNode reports whether the JSON-schema node carries `secret: true`.
+// isSecretNode reports whether the JSON-schema node is a secret leaf: the older
+// `secret: true` marker ([ADR-010] §7.4 — the value LIVES in state and is masked on the
+// way out), or `type: secret` ([ADR-0083] §1 — the value lives in Vault and never in
+// state at all).
+//
+// The second is belt and braces rather than the mechanism: nothing writes a declared
+// secret into state, so the path is normally empty and the mask is inert. It is here so
+// that a value arriving there by some other route — an old snapshot, a migration, a bug
+// — is masked instead of printed.
 func isSecretNode(schema map[string]any) bool {
-	b, _ := schema["secret"].(bool)
-	return b
+	if b, _ := schema["secret"].(bool); b {
+		return true
+	}
+	t, _ := schema["type"].(string)
+	return t == config.SecretTypeName
 }
 
 // mapWithoutSecret is a shallow copy of a schema node without the `secret` key, so
