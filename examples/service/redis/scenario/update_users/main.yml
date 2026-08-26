@@ -120,7 +120,7 @@ tasks:
              'name':     u.name,
              'perms':    u.perms,
              'state':    default(u.state, 'on'),
-             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+             'password': generate_secret({'length': 32})
            }) }
 
   # 1. Re-render users.acl on disk with the NEW user set (the same mode-agnostic

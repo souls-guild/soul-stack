@@ -968,7 +968,9 @@ most frequent day-2 action.
 
 - **Path** - deterministic, the same convention the render reads:
   `secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password`. `<name>` is `input.user.name`.
-- **Value** - `crypto/rand`, 32 characters, `alphanumeric` (redis.conf / `users.acl`-safe).
+- **Value** - `crypto/rand`, 32 characters from the default alphabet
+  (`ascii-printable-safe` - printable ASCII minus what breaks redis.conf/`users.acl`).
+  `users.acl` never receives the password itself: the template renders its SHA-256.
   It **never** leaves the Keeper: not in the register, audit payload, logs, OTel or the
   UI - only the path and the field name are reported (ADR-010; the rendered cells that
   *read* it are sealed/masked). It is not written to `state` either.

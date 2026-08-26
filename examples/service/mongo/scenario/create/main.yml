@@ -90,7 +90,7 @@ tasks:
       value: >-
         ${ compute.system_user_names.map(name, {
              'name':     name,
-             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+             'password': generate_secret({'length': 32})
            }) }
 
   - name: Mint the passwords of the operator MongoDB users
@@ -114,7 +114,7 @@ tasks:
              'database': default(u.database, 'admin'),
              'state':    default(u.state, 'present'),
              'roles':    u.roles,
-             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+             'password': generate_secret({'length': 32})
            }) }
 
   # ── 1a. Install MongoDB — BINARY branch (Nexus tarball) ─────────────────────────

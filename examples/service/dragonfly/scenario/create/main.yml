@@ -420,7 +420,7 @@ tasks:
       value: >-
         ${ compute.system_acl_names.map(name, {
              'name':     name,
-             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+             'password': generate_secret({'length': 32})
            }) }
 
   - name: Mint the passwords of the operator ACL users
@@ -439,7 +439,7 @@ tasks:
              'name':     u.name,
              'perms':    u.perms,
              'state':    default(u.state, 'on'),
-             'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
+             'password': generate_secret({'length': 32})
            }) }
 
   # ── provision (ADR-061, Variant A): cloud-create + onboarding BEFORE deploy ─────

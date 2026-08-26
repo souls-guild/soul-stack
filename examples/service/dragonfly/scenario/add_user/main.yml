@@ -128,7 +128,7 @@ tasks:
       value: >-
         ${ compute.users_new.map(u, u.name == input.user.name
              ? { 'name': u.name, 'perms': u.perms, 'state': u.state,
-                 'password': generate_secret({'length': 32, 'charset': 'alphanumeric'}) }
+                 'password': generate_secret({'length': 32}) }
              : { 'name': u.name, 'perms': u.perms, 'state': u.state }) }
 
   # 1. Re-render users.acl to disk with the NEW user set (the same mode-agnostic destiny

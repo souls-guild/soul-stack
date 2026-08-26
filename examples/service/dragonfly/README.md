@@ -153,9 +153,9 @@ on **every** render, otherwise a re-render would wipe `replica`/`sentinel` and b
 body is inline. Steps:
 
 1. **generate-if-absent** (`core.vault.kv-present`, `on: keeper`) - create itself generates
-   missing passwords cryptographically at random (32 alphanumeric) for all system + operator-extra
-   accounts. Ordering invariant: the write to Vault happens **before** the render phase of tasks
-   that read the same secrets via `${ vault(...) }` (ADR-056);
+   missing passwords cryptographically at random (32 characters from the default alphabet)
+   for all system + operator-extra accounts. Ordering invariant: the write to Vault happens
+   **before** the render phase of tasks that read the same secrets via `${ vault(...) }` (ADR-056);
 2. **cloud-provision** (conditional, when `provision.enabled` - see below);
 3. **size-guard** - render-time `assert: size(soulprint.hosts) == 1 + replicas_per_master`
    (keeper-side, aborts the render before install; `validate` won't work - it needs `soulprint.hosts`);
