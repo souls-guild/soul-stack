@@ -173,6 +173,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		// ([ADR-0083] §7) — read over the include-expanded list, so a path in a
 		// sibling file is caught offline and not only at render.
 		diags = append(diags, scenarioVaultNamespaceDiags(opts.Path, scn)...)
+		// Two elements of one literal collection addressing the same declared
+		// secret ([ADR-0083] §1) — read over the include-expanded list, against
+		// the state_schema of `../../service.yml`.
+		diags = append(diags, scenarioSecretKeyDiags(opts.Path, scn)...)
 	case KindManifest:
 		diags = schemaDocumentDiags(opts.Path, src)
 	default:

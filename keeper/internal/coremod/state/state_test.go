@@ -424,6 +424,180 @@ func TestSecret_RejectsUnsafeKey(t *testing.T) {
 	}
 }
 
+// TestSecret_Collection_RefusalOnALaterElementWritesNothing: the collection is
+// accepted or refused WHOLE (NIM-705).
+//
+// Every refusal below is decidable from the element alone, so deciding it while
+// already minting used to leave the earlier elements' secrets live in Vault with
+// nothing referencing them — the run aborts before the capture, so no state row and
+// no operator ever learns the paths exist. The offending element is deliberately the
+// LAST one: with the refusal made per element, elements 0 and 1 are already written
+// by the time it is reached.
+func TestSecret_Collection_RefusalOnALaterElementWritesNothing(t *testing.T) {
+	cases := []struct {
+		name string
+		last map[string]any
+	}{
+		{"unsafe key", map[string]any{"name": "../../keeper", "password": marker(t, map[string]any{})}},
+		{"missing key", map[string]any{"perms": "+@read", "password": marker(t, map[string]any{})}},
+		{"non-string key", map[string]any{"name": 7, "password": marker(t, map[string]any{})}},
+		{"literal secret", map[string]any{"name": "carol", "password": "hunter2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fv := newFakeVault(nil)
+			fs := newFakeStore()
+			m := coremodstate.New(fv, nil, "secret").WithStore(fs)
+
+			ev := apply(t, m, runScope(collectionSchema()), map[string]any{
+				"field": "redis_users",
+				"value": []any{
+					map[string]any{"name": "alice", "password": marker(t, map[string]any{})},
+					map[string]any{"name": "bob", "password": marker(t, map[string]any{})},
+					tc.last,
+				},
+			})
+			if !ev.GetFailed() {
+				t.Fatal("the collection was accepted")
+			}
+			if fv.writes != 0 {
+				t.Errorf("WriteKV calls = %d, want 0 -- elements before the bad one were minted", fv.writes)
+			}
+			// The counter alone would pass an implementation mutating the store by
+			// another route; assert on what the store actually holds.
+			if len(fv.store) != 0 {
+				t.Errorf("vault holds %v, want nothing", fv.store)
+			}
+			if len(fs.state) != 0 {
+				t.Errorf("state = %v, want nothing captured", fs.state)
+			}
+		})
+	}
+}
+
+// TestSecret_Collection_UnmintableElementWritesNothing: a refusal only a Vault READ
+// can make must also leave the collection unwritten (NIM-705).
+//
+// Element [1] asks for nothing and has nothing stored, so it cannot be referenced --
+// the same refusal a scalar gets. Deciding that while walking the elements one by
+// one means element [0] is already live in Vault when the run dies, before the
+// capture: the orphan this ticket is about, reached by a route no amount of
+// value-level validation can foresee.
+func TestSecret_Collection_UnmintableElementWritesNothing(t *testing.T) {
+	fv := newFakeVault(nil)
+	fs := newFakeStore()
+	m := coremodstate.New(fv, nil, "secret").WithStore(fs)
+
+	ev := apply(t, m, runScope(collectionSchema()), map[string]any{
+		"field": "redis_users",
+		"value": []any{
+			map[string]any{"name": "alice", "password": marker(t, map[string]any{})},
+			map[string]any{"name": "bob", "perms": "+@read"},
+		},
+	})
+	if !ev.GetFailed() {
+		t.Fatalf("the collection was accepted: %v", effectiveList(t, ev))
+	}
+	if fv.writes != 0 {
+		t.Errorf("WriteKV calls = %d, want 0 -- alice was minted before bob was refused", fv.writes)
+	}
+	if len(fv.store) != 0 {
+		t.Errorf("vault holds %v, want nothing", fv.store)
+	}
+	if len(fs.state) != 0 {
+		t.Errorf("state = %v, want nothing captured", fs.state)
+	}
+}
+
+// TestSecret_Collection_RefusesDuplicateKeys: two elements addressing one declared
+// secret with the same key derive the SAME Vault path (NIM-704).
+//
+// Left alone the run succeeds and looks right: the first element mints, the second
+// finds a value already there and keeps it (present-semantics), and both come back
+// holding the same reference. Two accounts on one credential, and neither the state,
+// the register nor the audit event says so. So the assertion is that the run FAILS
+// and names both positions -- not that the second element minted a second time.
+func TestSecret_Collection_RefusesDuplicateKeys(t *testing.T) {
+	fv := newFakeVault(nil)
+	fs := newFakeStore()
+	m := coremodstate.New(fv, nil, "secret").WithStore(fs)
+
+	ev := apply(t, m, runScope(collectionSchema()), map[string]any{
+		"field": "redis_users",
+		"value": []any{
+			map[string]any{"name": "alice", "perms": "+@read", "password": marker(t, map[string]any{})},
+			map[string]any{"name": "bob", "password": marker(t, map[string]any{})},
+			map[string]any{"name": "alice", "perms": "+@write", "password": marker(t, map[string]any{})},
+		},
+	})
+	if !ev.GetFailed() {
+		t.Fatalf("the collection was accepted: %v", effectiveList(t, ev))
+	}
+	for _, want := range []string{"[2]", "[0]", "alice"} {
+		if !strings.Contains(ev.GetMessage(), want) {
+			t.Errorf("message does not name %q: %s", want, ev.GetMessage())
+		}
+	}
+	// The refusal is made before the first write, so even the elements that were
+	// fine are not in Vault -- the run failed, so it wrote nothing (NIM-705).
+	if fv.writes != 0 {
+		t.Errorf("WriteKV calls = %d, want 0", fv.writes)
+	}
+	if len(fv.store) != 0 {
+		t.Errorf("vault holds %v, want nothing", fv.store)
+	}
+	if len(fs.state) != 0 {
+		t.Errorf("state = %v, want nothing captured", fs.state)
+	}
+}
+
+// TestSecret_Collection_DuplicateKeyIsPerDeclaredSecret: what must be unique is the
+// (key, property) pair the path is derived from, not the element's identity.
+//
+// Two properties of one element may be addressed by DIFFERENT `key:` siblings, and
+// then the same text legitimately appears as a key twice -- once per declared
+// secret, deriving two different paths. A check keyed on the element rather than on
+// the declared secret would refuse this.
+func TestSecret_Collection_DuplicateKeyIsPerDeclaredSecret(t *testing.T) {
+	schema := map[string]any{
+		"properties": map[string]any{
+			"accounts": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name":     map[string]any{"type": "string"},
+						"alias":    map[string]any{"type": "string"},
+						"password": map[string]any{"type": "secret", "key": "name"},
+						"token":    map[string]any{"type": "secret", "key": "alias"},
+					},
+				},
+			},
+		},
+	}
+	fv := newFakeVault(nil)
+	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
+
+	ev := apply(t, m, runScope(schema), map[string]any{
+		"field": "accounts",
+		"value": []any{
+			map[string]any{"name": "alice", "alias": "ops", "password": marker(t, map[string]any{}), "token": marker(t, map[string]any{})},
+			map[string]any{"name": "ops", "alias": "alice", "password": marker(t, map[string]any{}), "token": marker(t, map[string]any{})},
+		},
+	})
+	if ev.GetFailed() {
+		t.Fatalf("failed: %s", ev.GetMessage())
+	}
+	for _, path := range []string{
+		"secret/wb-service-redis/redis-prod/accounts/alice",
+		"secret/wb-service-redis/redis-prod/accounts/ops",
+	} {
+		if len(fv.store[path]) != 2 {
+			t.Errorf("vault %s = %v, want both a password and a token", path, fv.store[path])
+		}
+	}
+}
+
 // TestPresent_RequiresRunScope: without the run's owner the derived path would have
 // an empty segment. Fail rather than build one.
 func TestSecret_RequiresRunScope(t *testing.T) {

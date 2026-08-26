@@ -420,30 +420,43 @@ func collectionClaims(sc resolveScope, n int) map[string]bool {
 
 // resolveCollection handles a field whose ELEMENTS carry secrets: `set` is a list
 // of objects, each addressed by the declared `key:` sibling.
+//
+// Two passes, and the order is the point ([planCollection]): NOTHING is written
+// until the whole collection has been accepted.
 func (m *Module) resolveCollection(ctx context.Context, sc resolveScope, items []any) (any, []string, error) {
-	var generated []string
-	out := make([]any, 0, len(items))
-	for i, raw := range items {
-		elem, ok := raw.(map[string]any)
-		if !ok {
-			return nil, nil, fmt.Errorf("param %q%s: expected an object, got %T", stateop.ParamValue, sc.at(i), raw)
+	plan, err := planCollection(sc, items)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Read pass. Every remaining refusal is made here -- an element left empty
+	// whose value was never minted, an unusable policy -- so the commit below cannot
+	// abort a half-written collection over something a read already knew.
+	var mp mintPlan
+	resolved := make([][]resolvedSecret, len(plan))
+	for i, pe := range plan {
+		resolved[i] = make([]resolvedSecret, len(sc.secrets))
+		for j, s := range sc.secrets {
+			rs, err := m.resolveSecret(ctx, sc, s, pe.keys[j], pe.intents[j], sc.at(i)+"."+s.Property, &mp)
+			if err != nil {
+				return nil, nil, err
+			}
+			resolved[i][j] = rs
 		}
-		eff := make(map[string]any, len(elem))
-		for k, v := range elem {
+	}
+	if err := mp.commit(ctx, m.Vault); err != nil {
+		return nil, nil, err
+	}
+
+	var generated []string
+	out := make([]any, 0, len(plan))
+	for i, pe := range plan {
+		eff := make(map[string]any, len(pe.elem))
+		for k, v := range pe.elem {
 			eff[k] = v
 		}
-		for _, s := range sc.secrets {
-			key, err := elementKey(elem, s, sc.at(i))
-			if err != nil {
-				return nil, nil, err
-			}
-			path := sc.at(i) + "." + s.Property
-			ref, minted, err := m.present(ctx, sc, s, key, elem[s.Property], path)
-			if err != nil {
-				return nil, nil, err
-			}
-			eff[s.Property] = ref
-			if minted != "" {
+		for j, s := range sc.secrets {
+			eff[s.Property] = resolved[i][j].ref
+			if minted := resolved[i][j].minted; minted != "" {
 				generated = append(generated, minted)
 			}
 		}
@@ -452,97 +465,228 @@ func (m *Module) resolveCollection(ctx context.Context, sc resolveScope, items [
 	return out, generated, nil
 }
 
+// plannedElement is one accepted collection element: the element itself and —
+// index-parallel to sc.secrets — the key addressing each of its declared secrets
+// and what the author asked for there.
+type plannedElement struct {
+	elem    map[string]any
+	keys    []string
+	intents []secretIntent
+}
+
+// planCollection validates the WHOLE collection before anything is written.
+//
+// Every refusal it makes is a property of the value alone — the element's shape,
+// the key's grammar, the request's syntax — so none of it needs a Vault round-trip
+// to decide. Deciding it inside the mint loop instead meant a bad element N aborted
+// the run with elements 0..N-1 already written, and the run dies before the capture:
+// live secrets in Vault that no state row references and no operator was told about
+// (NIM-705).
+//
+// What that buys is bounded, and the bound is worth stating: a refusal made by
+// [Module.resolve] writes nothing, but [Module.Apply] still refuses twice AFTER the
+// writes — the audit write, and [stateop.Merge] inside the capture — so an orphan is
+// reachable there. The audit event carrying the derived paths is written first, so
+// that window leaves a trail; the Merge one does not.
+//
+// This is the same reason [noStrayMarkers] runs collection-wide in [resolve].
+//
+// The pass also enforces what only a whole-collection view can see: two elements
+// must not derive the SAME path. The keys addressing one declared secret are
+// therefore unique within the collection, or the run fails before it writes
+// (NIM-704) — the alternative is the first element minting and the second silently
+// keeping that value, two accounts on one credential and nothing saying so.
+//
+// Unique WITHIN THE COLLECTION is all it can say, and what it is handed is one
+// whole collection: `add`/`append` hand over a single element, so one whose key
+// already addresses a STORED element is accepted and produces exactly the harm
+// above. Closing that needs the stored collection read here and its survival
+// through the merge predicted — a decision, not an omission.
+//
+// The one route that does judge stored elements is `present` over a field that
+// already has a value: [Module.Apply] resolves the STORED collection there, so a
+// collection already corrupted that way fails every later `present` on it. Loud is
+// the right end of that trade — the message names both positions — but the run it
+// fails is not the run that caused it.
+func planCollection(sc resolveScope, items []any) ([]plannedElement, error) {
+	out := make([]plannedElement, 0, len(items))
+	// One key set per declared secret, not one for the element: two secrets of the
+	// same element may be addressed by DIFFERENT `key:` siblings, and what must be
+	// distinct is the (key, property) pair the path is derived from.
+	seen := make([]map[string]int, len(sc.secrets))
+	for j := range seen {
+		seen[j] = make(map[string]int, len(items))
+	}
+	for i, raw := range items {
+		elem, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("param %q%s: expected an object, got %T", stateop.ParamValue, sc.at(i), raw)
+		}
+		pe := plannedElement{
+			elem:    elem,
+			keys:    make([]string, len(sc.secrets)),
+			intents: make([]secretIntent, len(sc.secrets)),
+		}
+		for j, s := range sc.secrets {
+			key, err := elementKey(elem, s, sc.at(i))
+			if err != nil {
+				return nil, err
+			}
+			if first, dup := seen[j][key]; dup {
+				return nil, fmt.Errorf("param %q%s.%s: %q already addresses %q at %s -- both elements derive the same Vault path, so the second would keep the first one's secret and two accounts would share one credential",
+					stateop.ParamValue, sc.at(i), s.Key, key, s.Property, sc.at(first))
+			}
+			seen[j][key] = i
+			intent, err := requestedSecret(sc, s, elem[s.Property], sc.at(i)+"."+s.Property)
+			if err != nil {
+				return nil, err
+			}
+			pe.keys[j], pe.intents[j] = key, intent
+		}
+		out = append(out, pe)
+	}
+	return out, nil
+}
+
 // resolveScalar handles a field that IS one secret: one value for the whole
 // incarnation, no key.
 func (m *Module) resolveScalar(ctx context.Context, sc resolveScope, s config.SecretField, value any) (any, []string, error) {
-	ref, minted, err := m.present(ctx, sc, s, "", value, "")
+	intent, err := requestedSecret(sc, s, value, "")
 	if err != nil {
 		return nil, nil, err
 	}
-	if minted == "" {
-		return ref, nil, nil
+	var mp mintPlan
+	rs, err := m.resolveSecret(ctx, sc, s, "", intent, "", &mp)
+	if err != nil {
+		return nil, nil, err
 	}
-	return ref, []string{minted}, nil
+	if err := mp.commit(ctx, m.Vault); err != nil {
+		return nil, nil, err
+	}
+	if rs.minted == "" {
+		return rs.ref, nil, nil
+	}
+	return rs.ref, []string{rs.minted}, nil
 }
 
-// present is the read-or-write itself, for one secret. It returns the `vault:`
-// reference the register carries, and the derived path when a value was minted
-// ("" when the existing one was kept).
+// secretIntent is what one declared property asks for, decided WITHOUT touching
+// Vault so the decision can be made for the whole collection before the first
+// write. mint false means the value must already exist.
+type secretIntent struct {
+	mint   bool
+	policy secretpolicy.Policy
+}
+
+// requestedSecret classifies one declared property's requested value.
 //
-// The declared property accepts exactly two things: a secret request, or nothing
-// at all. A literal string is refused — a plaintext password written into a task
-// param has already travelled through render and the run's diagnostics by the
-// time it gets here, which is the leak this ADR closes.
-func (m *Module) present(ctx context.Context, sc resolveScope, s config.SecretField, key string, requested any, at string) (string, string, error) {
+// The property accepts exactly two things: a secret request, or nothing at all. A
+// literal string is refused — a plaintext password written into a task param has
+// already travelled through render and the run's diagnostics by the time it gets
+// here, which is the leak this ADR closes.
+func requestedSecret(sc resolveScope, s config.SecretField, requested any, at string) (secretIntent, error) {
 	switch policy, isMarker, err := secretpolicy.FromMarker(requested); {
 	case err != nil:
-		return "", "", fmt.Errorf("param %q%s: %w", stateop.ParamValue, at, err)
+		return secretIntent{}, fmt.Errorf("param %q%s: %w", stateop.ParamValue, at, err)
 	case isMarker && sc.noMint:
 		// Defensive: state carries no markers (a stray one is refused before the
 		// write, a claimed one is replaced by its reference), but one that did arrive
 		// here must not mint for a value nobody proposed.
-		return m.requireExisting(ctx, sc, s, key, at)
+		return secretIntent{}, nil
 	case isMarker:
-		return m.mintIfEmpty(ctx, sc, s, key, policy)
+		return secretIntent{mint: true, policy: policy}, nil
 	case requested == nil:
 		// Nothing requested: the value must already exist, or there is nothing to
 		// reference.
-		return m.requireExisting(ctx, sc, s, key, at)
+		return secretIntent{}, nil
 	default:
-		return "", "", fmt.Errorf("param %q%s: %q is declared `type: secret` -- its value is minted by generate_secret() and never written literally", stateop.ParamValue, at, s.Property)
+		return secretIntent{}, fmt.Errorf("param %q%s: %q is declared `type: secret` -- its value is minted by generate_secret() and never written literally", stateop.ParamValue, at, s.Property)
 	}
 }
 
-// mintIfEmpty reads the derived path and writes a new value only when the field
-// is absent or empty. `present`, not `set`.
-func (m *Module) mintIfEmpty(ctx context.Context, sc resolveScope, s config.SecretField, key string, policy secretpolicy.Policy) (string, string, error) {
+// resolvedSecret is one declared property after Vault has been read: the `vault:`
+// reference the register carries, and the derived path of the value it staged for
+// minting ("" when a value was already there).
+type resolvedSecret struct {
+	ref    string
+	minted string
+}
+
+// mintPlan is the set of writes a resolve decided on, one entry per Vault path.
+//
+// Two declared secrets can land on the SAME path -- a collection addressed by two
+// different `key:` siblings puts one element's property under another element's key
+// -- and a KV write replaces the whole entry, so the fields have to be merged here.
+// Resolving each one against its own read and writing them one after the other
+// would drop every field but the last.
+type mintPlan struct {
+	order []string
+	data  map[string]map[string]any
+}
+
+// stage records one minted field, merged onto whatever is already staged for that
+// path, or onto the entry as Vault holds it.
+func (p *mintPlan) stage(path string, payload map[string]any, field string, value any) {
+	entry, staged := p.data[path]
+	if !staged {
+		entry = make(map[string]any, len(payload)+1)
+		for k, v := range payload {
+			entry[k] = v
+		}
+		if p.data == nil {
+			p.data = make(map[string]map[string]any, 1)
+		}
+		p.data[path] = entry
+		p.order = append(p.order, path)
+	}
+	entry[field] = value
+}
+
+// commit performs the staged writes. It refuses nothing: what is left here is
+// Vault's own failure, the one thing no earlier pass can rule out.
+func (p *mintPlan) commit(ctx context.Context, vault VaultKV) error {
+	for _, path := range p.order {
+		if err := vault.WriteKV(ctx, path, p.data[path]); err != nil {
+			// WriteKV does not put values in its error text (vault.Client
+			// invariant); neither does this -- path only.
+			return fmt.Errorf("vault write %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// resolveSecret reads the derived path and decides what has to happen there,
+// staging a mint rather than performing it. `present`, not `set`: a value already
+// in Vault is kept.
+//
+// Separating the decision from the write is what lets a collection refuse element N
+// with elements 0..N-1 still unwritten. A property left empty whose value was never
+// minted is the case that matters -- it is a refusal only a read can make, so
+// [planCollection] cannot make it, and made inline it aborted the run with the
+// earlier elements already live in Vault, unreferenced by any state row (NIM-705).
+func (m *Module) resolveSecret(ctx context.Context, sc resolveScope, s config.SecretField, key string, in secretIntent, at string, mp *mintPlan) (resolvedSecret, error) {
 	path, ref, err := m.derive(s, sc, key)
 	if err != nil {
-		return "", "", err
+		return resolvedSecret{}, err
 	}
 	payload, err := m.readPath(ctx, path)
 	if err != nil {
-		return "", "", fmt.Errorf("vault read %q: %w", path, err)
+		return resolvedSecret{}, fmt.Errorf("vault read %q: %w", path, err)
 	}
 	if fieldPresent(payload, s.VaultField()) {
-		return ref, "", nil
+		return resolvedSecret{ref: ref}, nil
 	}
-	value, err := policy.Generate()
-	if err != nil {
-		return "", "", fmt.Errorf("generate secret for %q: %w", path, err)
-	}
-	// Read-merge-write: a neighbouring field of the same KV entry must survive.
-	data := make(map[string]any, len(payload)+1)
-	for k, v := range payload {
-		data[k] = v
-	}
-	data[s.VaultField()] = value
-	if err := m.Vault.WriteKV(ctx, path, data); err != nil {
-		// WriteKV does not put values in its error text (vault.Client invariant);
-		// neither does this — path only.
-		return "", "", fmt.Errorf("vault write %q: %w", path, err)
-	}
-	return ref, path + "#" + s.VaultField(), nil
-}
-
-// requireExisting resolves a property left empty by the author: the reference is
-// only meaningful if something already minted the value.
-func (m *Module) requireExisting(ctx context.Context, sc resolveScope, s config.SecretField, key, at string) (string, string, error) {
-	path, ref, err := m.derive(s, sc, key)
-	if err != nil {
-		return "", "", err
-	}
-	payload, err := m.readPath(ctx, path)
-	if err != nil {
-		return "", "", fmt.Errorf("vault read %q: %w", path, err)
-	}
-	if !fieldPresent(payload, s.VaultField()) {
+	if !in.mint {
 		if sc.noMint {
-			return "", "", fmt.Errorf("state field %q%s: %q is stored but was never minted in Vault -- core.state.present keeps the stored value and cannot mint one for it", sc.field, at, s.Property)
+			return resolvedSecret{}, fmt.Errorf("state field %q%s: %q is stored but was never minted in Vault -- core.state.present keeps the stored value and cannot mint one for it", sc.field, at, s.Property)
 		}
-		return "", "", fmt.Errorf("param %q%s: %q has no value yet and none was requested -- set it to generate_secret({…})", stateop.ParamValue, at, s.Property)
+		return resolvedSecret{}, fmt.Errorf("param %q%s: %q has no value yet and none was requested -- set it to generate_secret({…})", stateop.ParamValue, at, s.Property)
 	}
-	return ref, "", nil
+	value, err := in.policy.Generate()
+	if err != nil {
+		return resolvedSecret{}, fmt.Errorf("generate secret for %q: %w", path, err)
+	}
+	mp.stage(path, payload, s.VaultField(), value)
+	return resolvedSecret{ref: ref, minted: path + "#" + s.VaultField()}, nil
 }
 
 // derive builds the Vault path and the reference for one secret. Both come from

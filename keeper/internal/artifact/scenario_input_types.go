@@ -72,6 +72,10 @@ func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte,
 	// render.Pipeline.Render, which no dispatch path can bypass.
 	if art.Manifest != nil {
 		diags = append(diags, config.ScanOwnNamespaceVault(rel, art.Manifest.Name, scn, scn.Tasks)...)
+		// Same window, same limitation: a duplicate key in a LITERAL collection of
+		// the main file ([ADR-0083] §1). What an `include:` body carries, and what
+		// only exists once CEL has run, is refused by the module at apply.
+		diags = append(diags, config.ScanDuplicateSecretKeys(rel, art.Manifest.StateSchema, scn.Tasks)...)
 	}
 
 	if len(scn.Input) == 0 {
