@@ -1,6 +1,6 @@
 # Post-apply expectations for hello-world::create.
 #
-# state_changes.sets in scenario:
+# the capture steps in scenario:
 #   greeting_file: /tmp/soul-stack-hello
 # → incarnation.state.greeting_file must become /tmp/soul-stack-hello.
 #

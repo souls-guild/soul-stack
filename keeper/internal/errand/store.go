@@ -12,7 +12,7 @@
 // travels through applybus channel `apply:<errand_id>` (cluster-bridge).
 //
 // State invariant: Errand does NOT mutate incarnation.state (ADR-033 §4).
-// No ApplyRunDB, no state_changes, no barrier here — only its own
+// No ApplyRunDB, no state capture, no barrier here — only its own
 // `errands` table with two terminal transitions (running → terminal).
 package errand
 

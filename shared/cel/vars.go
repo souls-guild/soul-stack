@@ -64,7 +64,7 @@ type Vars struct {
 	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
 	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
 	// soulprint), available in CEL as `compute.<name>`. Scope — apply.input AND
-	// state_changes (host-invariant by construction). nil/empty ⇒ `compute.<name>`
+	// keeper-side task params (host-invariant by construction). nil/empty ⇒ `compute.<name>`
 	// gives the normal no-such-key. NOT passed into the destiny pass (isolation:
 	// destiny sees the result only via apply.input).
 	Compute map[string]any

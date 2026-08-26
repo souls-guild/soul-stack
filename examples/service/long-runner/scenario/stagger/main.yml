@@ -12,12 +12,6 @@ description: >-
   hosts finish; state is committed once (single-winner) after the last host
   completes.
 
-state_changes:
-  - set: last_run
-    value: "stagger"
-  - set: runner_marker
-    value: /tmp/long-runner-done.txt
-
 tasks:
   - name: Staggered sleep per host then write done marker
     # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
@@ -35,3 +29,17 @@ tasks:
         sleep $SECS;
         echo "done after $SECS s on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-done.txt;
         true
+
+  - name: Record which scenario ran last
+    on: keeper
+    module: core.state.set
+    params:
+      field: last_run
+      value: "stagger"
+
+  - name: Record the marker file this scenario writes
+    on: keeper
+    module: core.state.set
+    params:
+      field: runner_marker
+      value: /tmp/long-runner-done.txt

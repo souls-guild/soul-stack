@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
-	"sort"
 	"sync"
 	"time"
 
@@ -952,7 +951,7 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	in.Ctx = ctx
 	// compute: available in assert.that[] the same as in params/where (one
 	// resolve, run-level context, no soulprint). Idempotent with
-	// Render/RenderStateOps.
+	// Render.
 	computed, cerr := p.resolveCompute(in)
 	if cerr != nil {
 		return cerr
@@ -1083,7 +1082,9 @@ func assertMessage(task config.Task) string {
 // locally in the scenario-runner, which doesn't evaluate flow-control
 // predicates (when/changed_when/failed_when) yet — the fields are passed
 // through as CEL strings for RenderedTask symmetry, but the MVP keeper
-// executor ignores them (like Soul did before integrating them). register:
+// executor ignores them (like Soul did before integrating them). The one
+// spelling NOT passed through silently is a register-/soulprint-reading
+// `when:` — [guardKeeperWhen] rejects it ([ADR-0084] F-D). register:
 // is passed through — the keeper executor accumulates this task's register
 // under KeeperTargetSID.
 func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task config.Task, idx int) (*RenderedTask, error) {
@@ -1092,6 +1093,17 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	}
 	if task.Loop != nil {
 		return nil, fmt.Errorf("%w: loop: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+	}
+	// block: on a keeper task. The keeper branch of the Render loop runs BEFORE
+	// the block branch, so a block carrying `on: keeper` never reaches
+	// renderBlockTask - it lands here with Module == nil. Without this check the
+	// next line dereferences it and the render panics.
+	//
+	// Moving the key down to the block's children is not a workaround: renderBlockTask
+	// fans a child out through resolveTargets, which refuses `on: keeper` outright.
+	// Blocks and keeper tasks are disjoint at both levels - the keeper tasks go flat.
+	if task.Block != nil {
+		return nil, fmt.Errorf("%w: block: on a keeper-side task (task[%d] %q) - a keeper task cannot live in a block; write it flat, in the scenario's own task list", ErrUnsupportedDSL, idx, task.Name)
 	}
 	// async: is Soul-side task concurrency (ADR-0075): the flag rides
 	// RenderedTask to a Soul runner, and a keeper task never reaches one. It
@@ -1102,6 +1114,9 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	// unknown-register check.
 	if task.Async {
 		return nil, fmt.Errorf("%w: async: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+	}
+	if err := guardKeeperWhen(task, idx); err != nil {
+		return nil, err
 	}
 
 	resolved, err := resolveVaultRefs(ctx, p.vault, task.Module.Params)
@@ -1187,33 +1202,21 @@ func flowControlEngine() (*cel.Engine, error) {
 // (input/vars/incarnation), and its false outcome is the same on
 // every host of the run.
 //
-// Reuses the canonical parsers (no regex duplication):
-//   - config.ExtractRegisterRefs (shared/config/task_refs.go) — register
-//     refs; any register.<name> (except register.self, which has no gating
-//     semantics in when) makes when register-dependent → not static;
-//   - reFlowControlSoulprint (guardFlowControlHostInvariant) — soulprint is
-//     host-variant (soulprint.self), excluded from "static".
+// The rule itself lives in [config.IsStaticPredicate] and this is a thin alias
+// over it, deliberately not a second copy: the same line is drawn offline by
+// soul-lint (a conditional include's `when:`, an applier's `when:`, and
+// `when_on_keeper_dynamic_unsupported`), and a render that decided "static" by
+// its own reimplementation could accept what the linter refuses, or refuse
+// mid-render what the linter accepted. Empty when → false (no predicate —
+// nothing for Keeper to evaluate; the task is unconditional, goes through the
+// normal params-render path). A mixed when (register+input) → not static (it
+// has a register ref) — stays Soul-side.
 //
-// Empty when → false (no predicate — nothing for Keeper to evaluate; the
-// task is unconditional, goes through the normal params-render path). A
-// mixed when (register+input) → not static (has a register ref) — stays
-// Soul-side.
+// Bracket form register["x"] is not detected (ExtractRegisterRefs is dot-form
+// only, mirroring checkPredicateRefs in the config validator); latent in
+// practice, a probe register is always written in dot form.
 func isStaticWhen(when string) bool {
-	// Assumption: register dependence is only detected via dot form
-	// register.<name> (ExtractRegisterRefs). Bracket form register["x"] in
-	// when is unsupported — mirrors checkPredicateRefs in the config
-	// validator. Latent for when in practice (probe-register is always dot
-	// form).
-	if when == "" {
-		return false
-	}
-	if len(config.ExtractRegisterRefs(when)) != 0 {
-		return false
-	}
-	if reFlowControlSoulprint.MatchString(when) {
-		return false
-	}
-	return true
+	return config.IsStaticPredicate(when)
 }
 
 // evalStaticWhen evaluates a static when: Keeper-side, through the same
@@ -1562,363 +1565,8 @@ func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	return nil
 }
 
-// RenderStateChanges renders a scenario's `state_changes` into a
-// field→value map for committing set operations (orchestration.md §7.1).
-// Compatibility: returns the same flat map as before — a projection of ONLY
-// the set operations (both the old map form `sets:` and the new list form
-// `- set:`). add operations aren't in this projection: they need ordered
-// application against intermediate state (see [Pipeline.RenderStateOps] /
-// scenario.mergeStateChanges). Kept for the trial assertion
-// `assert.state_changes` (field→value) and existing state-merge unit tests.
-//
-// Implemented on top of RenderStateOps: renders the whole ordered list, then
-// projects the set operations into a map (later entries overwrite earlier
-// ones on the same field).
-func (p *Pipeline) RenderStateChanges(in RenderInput) (map[string]any, error) {
-	ops, err := p.RenderStateOps(in)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]any, len(ops))
-	for i := range ops {
-		if ops[i].Verb == config.VerbSet {
-			out[ops[i].Field] = ops[i].Value
-		}
-	}
-	return out, nil
-}
-
-// RenderStateOps renders a scenario's ordered `state_changes` operation
-// list (orchestration.md §7, the new list form) into []RenderedOp with
-// Keeper-side values already computed. Called after the barrier (run.go),
-// separately from Render.
-//
-// CEL context: input/incarnation/soulprint.self + this host's register
-// (slice 2: register from the run's probe tasks, in.RegisterByHost[sid]);
-// vars/state/soulprint.hosts belong to the future full grammar, not
-// available in pilot.
-//
-// Cross-host folding is last-wins by SID order: each operation's Value
-// (and, for map-add, Key) is evaluated on every host in SID order, the
-// later one overwrites the earlier (determinism, output.md). The
-// list-dedup match predicate is NOT evaluated here — it's passed through as
-// a string and applied at merge time per existing element (depends on each
-// state element, not on the host).
-//
-// Two StateChanges forms:
-//   - list form (IsList): operations from sc.Ops in declaration order;
-//   - map form (DEPRECATED): sc.Sets → set operations (order is
-//     nondeterministic, but set field-overwrite semantics don't depend on
-//     order — last-wins per field).
-//
-// nil/empty block → nil. Empty in.Hosts → nil (nothing to evaluate against;
-// caller run.go already rejects a run with no hosts).
-func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
-	if in.Scenario == nil {
-		return nil, fmt.Errorf("render: scenario manifest is nil")
-	}
-	sc := in.Scenario.StateChanges
-	if sc == nil {
-		return nil, nil
-	}
-
-	// state_changes is rendered AFTER the barrier, in its own pass — Render's
-	// ctx does not reach here (run.go builds a fresh RenderInput). Without this
-	// the pass would evaluate `${ vault(...) }` in a value/key/match with no §7
-	// guard, which is the one channel that can write a plaintext secret straight
-	// into incarnation.state.
-	in.Ctx = WithVaultFence(in.Ctx, in.Incarnation.Service)
-
-	hosts := sortedHostsBySID(in.Hosts)
-	if len(hosts) == 0 {
-		return nil, nil
-	}
-
-	// compute: resolved the same way as in Render (once, run-level context,
-	// no soulprint) — RenderStateOps is called separately after the barrier
-	// (run.go) with the same RenderInput but no preceding Render pass.
-	// Idempotent: if the caller already populated in.Compute, resolveCompute
-	// returns it unchanged. So `compute.<name>` in state_changes gets the
-	// SAME value as in apply.input (compute removes that drift risk).
-	computed, cerr := p.resolveCompute(in)
-	if cerr != nil {
-		return nil, cerr
-	}
-	in.Compute = computed
-
-	if sc.IsList {
-		return p.renderStateOpsList(in, hosts, sc.Ops)
-	}
-	return p.renderStateOpsLegacy(in, hosts, sc.Sets)
-}
-
-// renderStateOpsLegacy renders the old map form `sets:` into set operations.
-// Each field is a CEL expression, last-wins across hosts. Field names are
-// sorted deterministically for a stable operation order (set semantics
-// don't depend on order, but determinism matters for logs/diffing).
-func (p *Pipeline) renderStateOpsLegacy(in RenderInput, hosts []*topology.HostFacts, sets map[string]string) ([]RenderedOp, error) {
-	if len(sets) == 0 {
-		return nil, nil
-	}
-	fields := make([]string, 0, len(sets))
-	for f := range sets {
-		fields = append(fields, f)
-	}
-	sort.Strings(fields)
-
-	out := make([]RenderedOp, 0, len(fields))
-	for _, field := range fields {
-		var val any
-		for _, h := range hosts {
-			v, err := p.cel.EvalInterpolation(sets[field], stateChangesVars(in, h))
-			if err != nil {
-				return nil, fmt.Errorf("render: state_changes.sets.%s (host %s): %w", field, h.SID, err)
-			}
-			val = v // last-wins by SID
-		}
-		out = append(out, RenderedOp{Verb: config.VerbSet, Field: field, Value: val})
-	}
-	return out, nil
-}
-
-// renderStateOpsList renders the new list form: each operation in order.
-//
-//   - set/add: Value (arbitrary YAML with CEL cells) and map-add Key render
-//     per-host last-wins; the list-dedup Match is passed through as a
-//     string (merge-time);
-//   - modify/remove: Match/Patch pass through AS-IS (evaluated merge-time
-//     per element — they depend on each state element). A per-run snapshot
-//     of the scenario context (Context, last-wins by SID) is attached to
-//     the RenderedOp — needed merge-time because match `key ==
-//     input.username` / patch `${ input.acl }` need the full sets context
-//     (ADR-057 §b);
-//   - foreach: render-time fan-out — iterate the CEL collection's elements,
-//     render each nested do operation with the `as` name bound. Expands
-//     into N RenderedOp entries (element count × do-operation count).
-func (p *Pipeline) renderStateOpsList(in RenderInput, hosts []*topology.HostFacts, ops []config.StateChange) ([]RenderedOp, error) {
-	out := make([]RenderedOp, 0, len(ops))
-	for i := range ops {
-		op := ops[i]
-		if op.Verb == config.VerbForeach {
-			expanded, err := p.renderForeach(in, hosts, op, i, nil)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, expanded...)
-			continue
-		}
-		ro, err := p.renderOneStateOp(in, hosts, op, i, nil)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, ro)
-	}
-	return out, nil
-}
-
-// renderOneStateOp renders ONE non-foreach operation (set/add/modify/remove).
-// loopBind is the current foreach iteration's binding (`as` name → element),
-// nil outside foreach; it's mixed into the CEL context of every
-// value/key/patch/match cell.
-func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, loopBind map[string]any) (RenderedOp, error) {
-	ro := RenderedOp{Verb: op.Verb, Field: op.Field, Match: op.Match, OnConflict: op.OnConflict, Expect: op.Expect}
-
-	// modify/remove: Match/Patch are evaluated merge-time per element. Here
-	// we only take a per-run scenario-context snapshot (last-wins by SID) —
-	// the foreach binding substitution into Patch strings is render-time,
-	// see renderForeach.
-	if op.Verb == config.VerbModify || op.Verb == config.VerbRemove {
-		ctx := p.stateContextSnapshot(in, hosts, loopBind)
-		ro.Context = ctx
-		if op.Verb == config.VerbModify {
-			patch, err := patchMapFromAny(op.Patch)
-			if err != nil {
-				return RenderedOp{}, fmt.Errorf("render: state_changes[%d] modify %q: %w", idx, op.Field, err)
-			}
-			ro.Patch = patch
-		}
-		// foreach binding in match/patch is resolved merge-time via Context
-		// (loopBind is folded into the snapshot), match/patch stay strings. A
-		// match using an `as` name (e.g. `elem.sid == replica`) sees replica
-		// from Context.
-		return ro, nil
-	}
-
-	// set/add: Value (recursive CEL) + map-add Key — per-host last-wins.
-	var val any
-	var key string
-	for _, h := range hosts {
-		vars := stateChangesVars(in, h)
-		vars.Loop = mergeLoop(vars.Loop, loopBind)
-		v, err := renderValue(p.cel, op.Value, vars, fmt.Sprintf("state_changes[%d].value", idx))
-		if err != nil {
-			return RenderedOp{}, fmt.Errorf("render: state_changes[%d] %s %q (host %s): %w", idx, op.Verb, op.Field, h.SID, err)
-		}
-		val = v // last-wins by SID
-		if op.Key != "" {
-			kv, kerr := p.cel.EvalInterpolation(op.Key, vars)
-			if kerr != nil {
-				return RenderedOp{}, fmt.Errorf("render: state_changes[%d].key %q (host %s): %w", idx, op.Key, h.SID, kerr)
-			}
-			key = fmt.Sprint(kv)
-		}
-	}
-	ro.Value = val
-	ro.Key = key
-	// add inside foreach: the list-dedup match predicate may reference the
-	// `as` name (ADR-057 add_replicas example: `match: "elem == sid"`). A
-	// pure add-match (EvalStateMatch) only sees elem/value; to resolve `sid`
-	// merge-time, attach the foreach binding as Context — merge picks the
-	// context-aware evaluator when Context != nil (findListMatch). Outside
-	// foreach, Context=nil → the original pure add-match elem/value.
-	if op.Verb == config.VerbAdd && len(loopBind) > 0 {
-		ro.Context = loopBind
-	}
-	return ro, nil
-}
-
-// renderForeach expands a foreach at render time: evaluates the CEL
-// collection op.In, iterates its elements (list → as=element; map →
-// as=key/value record), and renders every do operation for each element
-// with the as-name bound. Expands into N×M RenderedOp (N elements × M do
-// operations).
-//
-// Binding shape (ADR-057 §3, FIXED):
-//   - foreach over a LIST → `as`=the element as-is. For a list of scalars,
-//     `${replica}` yields the scalar; for a list of objects,
-//     `${replica.sid}` reads an object field.
-//   - foreach over a MAP → `as`={key, value} record: `${change.key}` is the
-//     record's key, `${change.value.acl}` a field of the value. Mirrors the
-//     register map (sid→payload) and the migration-DSL foreach over a map.
-//
-// The op.In collection is evaluated ONCE (host-invariant in pilot: foreach
-// over input.*/vars.* is shared run context; foreach over
-// soulprint.self.* would be host-variant and isn't supported here — falls
-// back to the last host's snapshot by SID, same as the rest of the
-// last-wins folding). nestedBind is the outer foreach's binding (nesting is
-// grammar-forbidden, but the parameter exists for symmetry).
-func (p *Pipeline) renderForeach(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, nestedBind map[string]any) ([]RenderedOp, error) {
-	// The collection is evaluated in the last host's context by SID (last-wins).
-	last := hosts[len(hosts)-1]
-	vars := stateChangesVars(in, last)
-	vars.Loop = mergeLoop(vars.Loop, nestedBind)
-	collVal, err := p.cel.EvalInterpolation(op.In, vars)
-	if err != nil {
-		return nil, fmt.Errorf("render: state_changes[%d].foreach %q: %w", idx, op.In, err)
-	}
-
-	binds, err := foreachBindings(op.As, collVal)
-	if err != nil {
-		return nil, fmt.Errorf("render: state_changes[%d].foreach %q: %w", idx, op.In, err)
-	}
-
-	out := make([]RenderedOp, 0, len(binds)*len(op.Do))
-	for _, bind := range binds {
-		merged := mergeLoop(nestedBind, bind)
-		for di := range op.Do {
-			sub := op.Do[di]
-			ro, derr := p.renderOneStateOp(in, hosts, sub, idx, merged)
-			if derr != nil {
-				return nil, fmt.Errorf("render: state_changes[%d].foreach.do[%d]: %w", idx, di, derr)
-			}
-			out = append(out, ro)
-		}
-	}
-	return out, nil
-}
-
-// foreachBindings builds per-iteration `as`-name bindings from the
-// evaluated collection. list → as=element; map → as={key, value} record
-// (ADR-057 §3). Map iteration order is deterministic (sorted keys) for
-// reproducible state commits. Not list/not map (scalar/nil) → error:
-// foreach requires a collection.
-func foreachBindings(asName string, coll any) ([]map[string]any, error) {
-	switch c := coll.(type) {
-	case []any:
-		out := make([]map[string]any, 0, len(c))
-		for _, elem := range c {
-			out = append(out, map[string]any{asName: elem})
-		}
-		return out, nil
-	case map[string]any:
-		keys := make([]string, 0, len(c))
-		for k := range c {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		out := make([]map[string]any, 0, len(c))
-		for _, k := range keys {
-			// as=key/value record: .key (string) + .value (the entry's value).
-			out = append(out, map[string]any{asName: map[string]any{"key": k, "value": c[k]}})
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("foreach: expression yielded %T, expected list or map", coll)
-	}
-}
-
-// patchMapFromAny coerces an arbitrary YAML patch value into map[string]any
-// (element path → CEL/literal). nil → empty map (no-op merge). Non-map →
-// error (the config validator already rejects this, defense in depth).
-func patchMapFromAny(v any) (map[string]any, error) {
-	if v == nil {
-		return map[string]any{}, nil
-	}
-	m, ok := v.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("patch must be a map path->value, got %T", v)
-	}
-	return m, nil
-}
-
-// stateContextSnapshot builds a per-run scenario-context snapshot
-// (last-wins by SID) as a flat map for merge-time evaluation of
-// modify/remove match/patch. Contains input/register/incarnation/self/
-// vars plus the folded-in foreach binding (loopBind). Uses the last
-// host's context by SID — register/self are host-variant, last-wins
-// (output.md, mirrors set/add).
-func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFacts, loopBind map[string]any) map[string]any {
-	last := hosts[len(hosts)-1]
-	vars := stateChangesVars(in, last)
-	ctx := map[string]any{}
-	putIfSet := func(name string, m map[string]any) {
-		if m != nil {
-			ctx[name] = m
-		}
-	}
-	putIfSet("input", vars.Input)
-	putIfSet("register", vars.Register)
-	putIfSet("incarnation", vars.Incarnation)
-	putIfSet("vars", vars.Vars)
-	putIfSet("compute", vars.Compute)
-	if vars.SoulprintSelf != nil {
-		ctx["soulprint"] = map[string]any{"self": vars.SoulprintSelf}
-	}
-	for k, v := range loopBind {
-		ctx[k] = v
-	}
-	return ctx
-}
-
-// mergeLoop merges two loop bindings (outer + current) into a new map. The
-// current one (b) wins over the outer (a) on name collisions. nil arguments
-// are safe.
-func mergeLoop(a, b map[string]any) map[string]any {
-	if len(a) == 0 && len(b) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(a)+len(b))
-	for k, v := range a {
-		out[k] = v
-	}
-	for k, v := range b {
-		out[k] = v
-	}
-	return out
-}
-
 // StateOpEvaluators returns the pair of merge-time CEL evaluators that
-// mergeStateChanges (scenario/trial) needs, both bound to ctx and to the §7
+// stateop.Merge and the trial mirror need, both bound to ctx and to the §7
 // own-namespace fence for service ([WithVaultFence]).
 //
 // The pair is handed out together, and only this way, because merge is the LAST
@@ -1933,16 +1581,18 @@ func mergeLoop(a, b map[string]any) map[string]any {
 // shared across every element of that merge — the same point-in-time view the
 // render pass gets.
 //
-// match — the identity predicate of an `add` element (orchestration.md §7).
+// match — the identity predicate of an `add` element ([ADR-0084] §"add").
 // Bindings: `elem` (the existing element) and `value` (the one being added,
 // already rendered), both top-level CEL names via Vars.Loop. No other scenario
 // context: identity is a pure function of elem+value (as migration-CEL is a pure
 // function of state, ADR-019). An empty predicate never reaches it (merge
 // compares deep-equal without CEL).
 //
-// opEval — modify/remove. Unlike match, expr sees the FULL run context (sctx, the
-// snapshot built by stateContextSnapshot) PLUS the element bindings (binds —
-// elem/key/value), so a modify-match `key == input.username` sees both.
+// opEval — modify/remove. Same bindings plus `key`/`value` for a map element.
+// The run context is deliberately NOT here: a capture step's `match:`/`patch:` is
+// an ordinary module param, so whatever it needs from `input.*`/`register.*` was
+// already interpolated render-side and reaches merge as a literal. What is left
+// to evaluate per element depends only on the element.
 // boolOut=true → predicate (bool); boolOut=false → patch value (native).
 //
 // Both closures are stateless with respect to Pipeline (cel.Engine is
@@ -1952,57 +1602,18 @@ func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (State
 
 	match := func(predicate string, elem, value any) (bool, error) {
 		vars := cel.Vars{Ctx: ctx, Loop: map[string]any{"elem": elem, "value": value}}
-		return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
+		return evalBoolExpr(p.cel, "core.state.add.match", predicate, vars)
 	}
 
-	opEval := func(expr string, sctx, binds map[string]any, boolOut bool) (any, error) {
-		vars := stateOpVars(sctx)
-		vars.Ctx = ctx
-		vars.Loop = mergeLoop(vars.Loop, binds)
+	opEval := func(expr string, binds map[string]any, boolOut bool) (any, error) {
+		vars := cel.Vars{Ctx: ctx, Loop: binds}
 		if boolOut {
-			return evalBoolExpr(p.cel, "state_changes.match", expr, vars)
+			return evalBoolExpr(p.cel, "core.state.match", expr, vars)
 		}
 		return p.cel.EvalInterpolation(expr, vars)
 	}
 
 	return match, opEval
-}
-
-// stateOpVars unpacks a flat ctx snapshot (stateContextSnapshot) back into
-// cel.Vars for merge-time evaluation of modify/remove. Mirrors
-// stateChangesVars, but the source is an already-built per-run snapshot
-// (host resolution happened render-side), not topology. soulprint.self
-// comes from the nested soulprint map.
-func stateOpVars(ctx map[string]any) cel.Vars {
-	asMap := func(k string) map[string]any {
-		m, _ := ctx[k].(map[string]any)
-		return m
-	}
-	v := cel.Vars{
-		Input:       asMap("input"),
-		Register:    asMap("register"),
-		Incarnation: asMap("incarnation"),
-		Vars:        asMap("vars"),
-		Compute:     asMap("compute"),
-	}
-	if sp, ok := ctx["soulprint"].(map[string]any); ok {
-		if self, ok := sp["self"].(map[string]any); ok {
-			v.SoulprintSelf = self
-		}
-	}
-	// foreach binding (as-name) sits in ctx as a top-level key — move it into Loop.
-	loop := map[string]any{}
-	for k, val := range ctx {
-		switch k {
-		case "input", "register", "incarnation", "vars", "compute", "soulprint":
-			continue
-		}
-		loop[k] = val
-	}
-	if len(loop) > 0 {
-		v.Loop = loop
-	}
-	return v
 }
 
 // guardPilotDSL rejects task keys outside pilot scope with an explicit
@@ -2084,6 +1695,39 @@ func guardApplierWhen(task config.Task, idx int) error {
 		return nil
 	}
 	return fmt.Errorf("%w: when: %q on an apply task (task[%d] %q) reads register/soulprint - an applier's condition is decided Keeper-side, before its destiny is rendered; use where: for a host-variant condition, or onchanges:/onfail: to depend on a source's outcome",
+		ErrUnsupportedDSL, task.When, idx, task.Name)
+}
+
+// guardKeeperWhen rejects a `when:` on an `on: keeper` task that reads
+// `register.*` or `soulprint.*` ([ADR-0084] F-D). Fail-closed,
+// [ErrUnsupportedDSL].
+//
+// A static `when:` never reaches here, for the same reason it never reaches
+// [guardApplierWhen]: emitStaticWhenSkip runs at the top of the task loop,
+// BEFORE the IsKeeperTask branch, and settles it — false gates the task off,
+// true renders it normally. That form works and stays bit-for-bit.
+//
+// The other form was accepted and then dropped on the floor. `when:` is a
+// Soul-side predicate: it rides RenderedTask to a Soul runner, which evaluates
+// it in its own flow-control sandbox (soulcompat.go negotiates
+// CapabilityFlowControl over exactly this field) — and a keeper task never
+// reaches a Soul. Nothing in the keeper executor reads `When`. So the file said
+// the step was conditional and the step ran regardless; since [ADR-0084] the
+// step that runs regardless is the one that writes state, which is why review is
+// not a sufficient backstop for it.
+//
+// The condition belongs inside the value instead: a `${ cond ? a : b }` is
+// evaluated at render, in the keeper env, where a PREVIOUS keeper task's
+// register is bound (keeperVars/KeeperRegister — a host task's register is
+// not). A step that must not run at all belongs on the Soul side, where `when:`
+// is evaluated. soul-lint raises the same finding offline
+// (`when_on_keeper_dynamic_unsupported`), so an author normally sees it before
+// a run exists.
+func guardKeeperWhen(task config.Task, idx int) error {
+	if task.When == "" || isStaticWhen(task.When) {
+		return nil
+	}
+	return fmt.Errorf("%w: when: %q on a keeper-side task (task[%d] %q) reads register/soulprint - `when:` is evaluated Soul-side and a keeper task never reaches a Soul, so the predicate would be ignored and the task would run anyway; put the condition inside the value (${ cond ? a : b }, which sees a previous keeper task's register), or move the step to the Soul side",
 		ErrUnsupportedDSL, task.When, idx, task.Name)
 }
 

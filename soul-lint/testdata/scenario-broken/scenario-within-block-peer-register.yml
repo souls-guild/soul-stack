@@ -1,5 +1,4 @@
 name: within-block-peer-register
-state_changes: {}
 tasks:
   - name: Rolling restart group
     serial: 1

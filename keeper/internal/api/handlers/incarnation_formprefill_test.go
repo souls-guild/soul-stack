@@ -56,7 +56,7 @@ func allowAllScope(*incarnation.Incarnation) bool { return true }
 // TestFormPrefill_ResolvesDeclaredPaths — the basic happy path: declared
 // prefill_from_state paths resolve from incarnation.state into {values}.
 func TestFormPrefill_ResolvesDeclaredPaths(t *testing.T) {
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n" +
 		"  redis_version: { type: string, prefill_from_state: state.redis_version }\n" +
 		"  max_memory: { type: string, prefill_from_state: state.config.max_memory }\n"
@@ -81,7 +81,7 @@ func TestFormPrefill_ResolvesDeclaredPaths(t *testing.T) {
 // TestFormPrefill_UncoveredPathOmitted — a field whose prefill path is absent from
 // the current state is OMITTED (not a null value, not an error).
 func TestFormPrefill_UncoveredPathOmitted(t *testing.T) {
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n" +
 		"  redis_version: { type: string, prefill_from_state: state.redis_version }\n" +
 		"  missing: { type: string, prefill_from_state: state.not_in_state }\n"
@@ -105,7 +105,7 @@ func TestFormPrefill_UncoveredPathOmitted(t *testing.T) {
 // if its name matches a state key — does NOT land in values (the client does not
 // supply the path, arbitrary state access is impossible).
 func TestFormPrefill_PathWhitelist(t *testing.T) {
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n" +
 		"  redis_version: { type: string, prefill_from_state: state.redis_version }\n" +
 		"  secret_token: { type: string }\n" // NO prefill_from_state → not whitelisted
@@ -131,7 +131,7 @@ func TestFormPrefill_PathWhitelist(t *testing.T) {
 // is marked secret in state_schema is EXCLUDED from prefill entirely (pre-filling a
 // mask is useless). A non-secret field stays.
 func TestFormPrefill_SecretExcluded(t *testing.T) {
-	scenarioYAML := "name: rotate\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: rotate\ntasks: []\n" +
 		"input:\n" +
 		"  admin_token: { type: string, secret: true, prefill_from_state: state.admin_token }\n" +
 		"  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
@@ -164,7 +164,7 @@ func TestFormPrefill_SecretExcluded(t *testing.T) {
 // TestFormPrefill_OutOfScope404 — out of RBAC scope → 404 (do not reveal existence,
 // parity with GetTyped).
 func TestFormPrefill_OutOfScope404(t *testing.T) {
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
 	h := formPrefillHandler(map[string]any{"redis_version": "7.2.4"}, scenarioYAML, nil)
 
@@ -184,7 +184,7 @@ func TestFormPrefill_OutOfScope404(t *testing.T) {
 
 // TestFormPrefill_NilScope404 — a nil predicate → fail-closed 404.
 func TestFormPrefill_NilScope404(t *testing.T) {
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
 	h := formPrefillHandler(map[string]any{"redis_version": "7.2.4"}, scenarioYAML, nil)
 
@@ -196,7 +196,7 @@ func TestFormPrefill_NilScope404(t *testing.T) {
 // TestFormPrefill_NoPrefillFields — a schema without prefill_from_state → empty
 // values (not an error).
 func TestFormPrefill_NoPrefillFields(t *testing.T) {
-	scenarioYAML := "name: restart\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: restart\ntasks: []\n" +
 		"input:\n  reason: { type: string }\n"
 	h := formPrefillHandler(map[string]any{"redis_version": "7.2.4"}, scenarioYAML, nil)
 
@@ -218,7 +218,7 @@ func TestFormPrefill_NoPrefillFields(t *testing.T) {
 // across versions) → a version-craft vector for returning sensitive fields.
 func TestFormPrefill_SchemaPinnedToServiceVersion(t *testing.T) {
 	const wantVersion = "v2.0.0" // different from the fakeResolver default ("v1")
-	scenarioYAML := "name: update_config\nstate_changes: {}\ntasks: []\n" +
+	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
 	stateSchema := map[string]any{
 		"type":       "object",

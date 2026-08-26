@@ -136,7 +136,7 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 // in its register ([ADR-0083] §6) and returns the resolved bucket. The source map
 // is not mutated: the same RenderInput is rendered again per passage and per retry.
 //
-// Why the register carries references at all: `core.state.present` writes the secret
+// Why the register carries references at all: `core.state.*` writes the secret
 // to Vault and hands back `vault:<path>#<field>`, so the plaintext never enters
 // `apply_task_register` (which is durable and only reaped by age) and never reaches
 // an audit payload. The consumer still needs the VALUE — the Soul-side task that
@@ -247,8 +247,8 @@ func walkRegisterValue(ctx context.Context, vc KVReader, v any, service, incarna
 // served that value without the guard ever being consulted. One constructor makes
 // the pair impossible to split by accident.
 //
-// The memo is per-PASS, not per-run: Render, EvalAsserts and RenderStateOps each
-// take their own. `core.state.present` mints a secret between the render pass and
+// The memo is per-PASS, not per-run: Render and EvalAsserts each
+// take their own. `core.state.*` mints a secret between the render pass and
 // the state-op pass, and a read carried across that boundary would serve the
 // pre-mint value.
 //

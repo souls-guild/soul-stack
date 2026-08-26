@@ -78,7 +78,7 @@ Reference: exact formats, behavior, parameters. The source of truth is here (and
 | Document | What is it / for whom |
 |---|---|
 | [destiny/](destiny/README.md) | Destiny index folder: format `destiny.yml` and `tasks/main.yml`, task fields, `input:`/`output:`, molecule-style tests. |
-| [scenario/](scenario/README.md) | Scenario index folder: orchestration layer (`on:` / `where:` / `apply:`, probe-idiom, barrier / state-commit), border with destiny. The task DSL core is in [destiny/tasks.md](destiny/tasks.md). |
+| [scenario/](scenario/README.md) | Scenario index folder: orchestration layer (`on:` / `where:` / `apply:`, probe-idiom, the cross-host barrier, `core.state.<verb>` state capture), border with destiny. The task DSL core is in [destiny/tasks.md](destiny/tasks.md). |
 | [templating.md](templating.md) | **Regulatory template engine spec** ([ADR-010](adr/0010-templating.md)): CEL for YAML expressions (marker `${ … }`), Go text/template for files `.tmpl`, sprig allowlist, security model, render phases, `core.file.rendered`. |
 | [migrations.md](migrations.md) | **Regulatory spec state_schema migration DSL** ([ADR-019](adr/0019-state-migration-dsl.md)): flat `rename`/`set`/`delete`/`move` + CEL + `foreach`, forward-only, sandbox, atomicity with one PG transaction, test layout. |
 | [soul/soulprint.md](soul/soulprint.md) | Soulprint typed schema ([ADR-018](adr/0018-soulprint-typed.md)): fields `SoulprintFacts`, canonical CEL form `soulprint.self.<path>`, virtual projection `covens`. |

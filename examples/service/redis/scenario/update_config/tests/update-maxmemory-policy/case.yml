@@ -11,7 +11,7 @@
 #      password from vault (masked on output, resolved value in the plan),
 #      rewrite=false (redis.conf from step 1 is the source of truth for the file; NIM-53), config carries
 #      the recomputed merged config.
-#   3. state_changes: redis_config ≡ the config passed into hot-reload (one compute,
+#   3. state_after: redis_config ≡ the config passed into hot-reload (one compute,
 #      no drift); maxmemory_policy = volatile-lru (namedfield read-model).
 #
 # Idempotency (render level): the merge is deterministic (sorted keys in the
@@ -63,7 +63,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
@@ -73,7 +73,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -149,7 +149,7 @@ assert:
           appendonly: "no"
 
   # DRIFT-GUARD: state.redis_config ≡ the config passed into hot-reload (one compute).
-  state_changes:
+  state_after:
     redis_config:
       maxmemory: "768mb"
       maxmemory-policy: volatile-lru

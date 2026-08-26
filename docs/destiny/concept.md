@@ -48,7 +48,7 @@ Service `tasks:` ↔ destiny `tasks:` - different entities with the same name (s
 |---|---|---|---|
 | **Level** | one host | one cluster | one operation (verb) |
 | **Knows about other hosts?** | no | yes (via `on:`/`where:` and `soulprint.where`) | no |
-| **Writes state to the database?** | no | yes (`state_changes`) | no |
+| **Writes state to the database?** | no | yes (a `core.state.<verb>` step) | no |
 | **Parameterizable?** | yes (`input:`) | yes (`input:`) | yes (`params:` steps) |
 | **Task DSL** | [tasks.md](tasks.md) | same core + orchestration delta ([scenario/orchestration.md](../scenario/orchestration.md)) | — |
 | **Isolation / `module:`** | isolated, sees only `input:` | border - recommendation, `module:` allowed ([ADR-009](../adr/0009-scenario-dsl.md)) | — |

@@ -10,7 +10,7 @@
    - implements the marker interface `ErrandReadSafe` in sdk/module/ (by analogy with PlanReadSafe from ADR-031(f), default-deny).
    Any other module → reject BEFORE the call with error code `errand_module_not_allowed`.
 3. **Sync/Async — hybrid.** POST /v1/souls/{sid}/exec blocks up to timeout_seconds (default 30s, server-cap 300s). On cap → 202 + errand_id + Location: /v1/errands/{errand_id} + continuation in a background goroutine. GET /v1/errands/{errand_id} — async polling.
-4. **State invariant.** **Errand does NOT mutate incarnation.state.** Structurally: (a) whitelist (shell/exec do not write to state; ErrandReadSafe modules declare read-safe semantics); (b) the Errand runner does NOT aggregate state_changes and does NOT send a RunResult (instead — a separate ErrandResult); (c) the Incarnation is not touched at all (no apply_id in apply_runs, no state-commit by the Keeper).
+4. **State invariant.** **Errand does NOT mutate incarnation.state.** Structurally: (a) whitelist (shell/exec do not write to state; ErrandReadSafe modules declare read-safe semantics); (b) the Errand runner does NOT send a RunResult (instead — a separate ErrandResult), and since [ADR-0084](0084-explicit-state-capture.md) retired the `state_changes` aggregate the write point is a keeper-side `core.state.<verb>` task, which an Errand never dispatches — it runs host-side modules only; (c) the Incarnation is not touched at all (no apply_id in apply_runs, no state-commit by the Keeper).
 5. **RBAC — its own area `errand.*`.** Permissions: `errand.run` / `errand.cancel` (post-MVP) / `errand.list`. Selectors: `host=<sid>` / `coven=<label>`; bare — unrestricted scope.
 
 **Contract.**

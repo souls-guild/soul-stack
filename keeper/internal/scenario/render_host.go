@@ -34,11 +34,10 @@ var errHostDestroyed = errors.New("scenario: RenderForHost: host removed by clou
 // per-host/full-roster dialect. A single-host render (in.Hosts=[host]) would
 // silently diverge from the old path — run_once wouldn't dedupe (the task
 // would land on every host instead of one), soulprint.hosts/.where and
-// incarnation.host_count would collapse to a one-host roster, cross-host
-// state_changes.sets would lose neighbors. The set of full-roster dependencies
-// is open-ended, so instead of ad hoc guards, the Acolyte reproduces the full
-// roster EXACTLY like the old path and filters its own SID via
-// groupByHost(tasks, plans)[sid] on the caller side.
+// incarnation.host_count would collapse to a one-host roster. The set of
+// full-roster dependencies is open-ended, so instead of ad hoc guards, the
+// Acolyte reproduces the full roster EXACTLY like the old path and filters its
+// own SID via groupByHost(tasks, plans)[sid] on the caller side.
 //
 // Cost of Y (ADR-027 trade-offs): each of N claims renders the full roster —
 // O(N²) per-host CEL + N per-host vault resolves per run vs. O(N) on the old

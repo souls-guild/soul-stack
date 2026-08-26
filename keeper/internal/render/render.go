@@ -121,11 +121,10 @@ type IncarnationMeta struct {
 // (cross-task chaining within Render is future work).
 //
 // RegisterByHost — per-host register-context accumulated from the run's
-// TaskEvents AFTER the barrier (sid → register-name → payload). Used only by
-// [Pipeline.RenderStateChanges] (`sets: ${ register.<task>.<field> }`, slice 2);
-// the Render phase doesn't read it (there register is cross-task chaining,
-// future work). Empty/nil — a run with no register: tasks (sets with no
-// register references).
+// TaskEvents AFTER the barrier (sid → register-name → payload). Read by the
+// render of the NEXT Passage (staged-render, ADR-056), which is how
+// `${ register.<task>.<field> }` reaches a later task's params. Empty/nil — a run
+// whose earlier Passages registered nothing.
 //
 // Hosts — the run's roster (resolved by topology.Resolver): connected souls of
 // the incarnation with last-reported soulprint. Pipeline applies per-task
@@ -159,19 +158,20 @@ type RenderInput struct {
 	// State — snapshot of incarnation.state at the moment the run's row-lock is
 	// acquired (run.go: stateBefore = inc.State under FOR UPDATE). Read-only:
 	// projected into CEL as `incarnation.state.<path>` (incarnationVars),
-	// available in params/where/apply-input AND in the state_changes context;
-	// eval does NOT mutate it (CEL reads, doesn't write — Variant A,
-	// ADR-009/010). INVARIANT across all staged-render passages: renderIn is
-	// reused on P>0 with the same State, so `incarnation.state.*` is identical
-	// on P0 and P1+ (= pre-run stateBefore, NOT an intermediate state_changes
-	// result). nil → the `state` key isn't declared (push/trial without State:
+	// available in params/where/apply-input, including the params of a
+	// `core.state.<verb>` capture; eval does NOT mutate it (CEL reads, doesn't
+	// write — Variant A, ADR-009/010). INVARIANT WITHIN a Passage. A plan that
+	// captures state has run.go re-read it at each Passage boundary ([ADR-0084]),
+	// so `incarnation.state.*` on P+1 sees what a capture on P wrote; a plan with
+	// no capture keeps the pre-run stateBefore for every Passage. nil → the
+	// `state` key isn't declared (push/trial without State:
 	// `incarnation.state.x` = no-such-key, backward-compat).
 	State map[string]any
 
 	// Ctx — request-scoped run context, threaded into the CEL vault() function
 	// ([ADR-017]) for ReadKV cancellation/timeout. Set by [Pipeline.Render] from
-	// its ctx argument and by the [Pipeline.RenderStateChanges] caller (run.go);
-	// inherited by the child destiny pass (renderApplyDestiny). nil ⇒ vault()
+	// its ctx argument (run.go sets it on RenderInput); inherited by the child
+	// destiny pass (renderApplyDestiny). nil ⇒ vault()
 	// reads with context.Background() (cel.Vars.Ctx semantics).
 	Ctx context.Context
 
@@ -191,9 +191,8 @@ type RenderInput struct {
 	// 2026-06-23): name→value, computed ONCE per run in the run-level context
 	// (input/register/incarnation/vars — WITHOUT soulprint, a structural
 	// host-invariance barrier). Filled by [Pipeline.resolveCompute] at the start
-	// of [Pipeline.Render] and [Pipeline.RenderStateOps]; placed into every
-	// per-host context (hostVars) and into the state_changes context
-	// (stateChangesVars) as `compute.<name>`. NOT forwarded in the isolated
+	// of [Pipeline.Render]; placed into every per-host context (hostVars) and into
+	// the keeper-side context (keeperVars) as `compute.<name>`. NOT forwarded in the isolated
 	// destiny pass (renderApplyDestiny) — destiny sees the compute result only
 	// via apply.input (ADR-009 V2). nil ⇒ `compute.<name>` is a plain
 	// no-such-key (scenario without compute:, bit-for-bit backward-compat).
@@ -486,40 +485,30 @@ type RenderedTask struct {
 	RenderContextBySID map[string]*structpb.Struct
 }
 
-// RenderedOp — one `state_changes` operation after the Keeper-side CEL render
-// (value/key/match already computed, cross-host last-wins fold applied). An
-// ordered list of these operations is returned by [Pipeline.RenderStateOps];
-// scenario.mergeStateChanges / the trial mirror apply them to incarnation.state
-// (orchestration.md §7, the new list-form state_changes grammar).
+// RenderedOp — one `core.state.<verb>` capture after the Keeper-side CEL render
+// (params already interpolated). Built by stateop.BuildOp from the dispatched
+// task's params; stateop.Merge / the trial mirror apply it to incarnation.state
+// ([ADR-0084]).
 //
 // Verb distinguishes how it applies:
 //   - VerbSet — overwrite Field with Value;
 //   - VerbAdd — idempotently add Value into the Field collection (map: by Key;
 //     list: dedup by the Match predicate). OnConflict (skip|replace|error) —
 //     policy for an identity collision;
+//   - VerbAppend — append Value to the Field list without a dedup check;
 //   - VerbModify — patch ALL elements of Field matching Match. Patch — a map of
 //     path-in-element → CEL/literal, threaded through AS A TEMPLATE (not
 //     evaluated): merge computes it per matched element via [StateOpEvalFunc]
-//     (elem/key/value bindings + the scenario Context);
-//   - VerbRemove — delete ALL elements of Field matching Match.
-//
-// foreach never reaches RenderedOp — it's expanded in the render phase into N
-// RenderedOp (per collection element, with the as-name binding already
-// substituted into Value/Patch/Match).
+//     (elem/key/value bindings);
+//   - VerbRemove — delete ALL elements of Field matching Match;
+//   - VerbUnset — delete Field outright.
 //
 // Match/Patch are threaded through AS A STRING/TEMPLATE: merge evaluates them
-// per element (Keeper doesn't evaluate them ahead of time — they depend on each
-// state element). Value (and, for map, Key) are already cross-host folded
-// last-wins by SID.
+// per element (Keeper cannot evaluate them ahead of time — they depend on each
+// state element). Everything else was interpolated by the ordinary param render
+// before the task was dispatched.
 //
-// Context — a per-RUN snapshot of the scenario context (input/register/
-// incarnation/soulprint.self/vars), last-wins by SID (output.md).
-// Needed at merge time to evaluate modify-Match/Patch and remove-Match, which
-// see the full sets context on top of the element bindings (ADR-057 §b). nil
-// for set/add (their Value/Key are already computed render-side; add-Match is a
-// pure function of elem+value, see [StateMatchFunc]).
-//
-// Expect — optional match-cardinality assert for modify/remove (ADR-057 §c).
+// Expect — optional match-cardinality assert for modify/remove ([ADR-0084]).
 // ""/any = no assert.
 type RenderedOp struct {
 	Verb       config.StateVerb
@@ -529,9 +518,8 @@ type RenderedOp struct {
 	Match      string
 	OnConflict config.OnConflict
 
-	Patch   map[string]any
-	Expect  config.Expect
-	Context map[string]any
+	Patch  map[string]any
+	Expect config.Expect
 }
 
 // StateMatchFunc — evaluator for the identity match predicate of a list
@@ -542,14 +530,13 @@ type RenderedOp struct {
 type StateMatchFunc func(predicate string, elem, value any) (bool, error)
 
 // StateOpEvalFunc — CEL evaluator for modify/remove at merge time (see
-// [Pipeline.StateOpEvaluators]). Unlike [StateMatchFunc] (isolated elem/value for
-// add dedup), here the predicate/value sees the FULL run-scenario context (ctx
-// — a snapshot of input/register/incarnation/soulprint.self/vars) PLUS
-// the current collection element's bindings (binds — elem/key/value). Used per
-// matched element: match predicate → bool (boolOut=true), patch value → any
-// (boolOut=false). This way a modify-match `key == input.username` sees both
-// key (the element) and input.* (the context).
-type StateOpEvalFunc func(expr string, ctx, binds map[string]any, boolOut bool) (any, error)
+// [Pipeline.StateOpEvaluators]). Like [StateMatchFunc] it sees only the current
+// collection element's bindings (binds — elem, or key/value for a map element):
+// a capture step's `match:`/`patch:` is an ordinary module param, so anything it
+// needed from the run context was interpolated render-side. Used per matched
+// element: match predicate → bool (boolOut=true), patch value → any
+// (boolOut=false).
+type StateOpEvalFunc func(expr string, binds map[string]any, boolOut bool) (any, error)
 
 // DispatchPlan — which hosts a task targets after resolving `on:`+`where:`.
 // TaskIndex refers to RenderedTask.Index. TargetSIDs — a slice sorted by SID

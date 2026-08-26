@@ -13,7 +13,7 @@ import (
 // InputSchemaMap (with requiredKind set correctly via UnmarshalYAML).
 func schemaFromInput(t *testing.T, inputYAML string) InputSchemaMap {
 	t.Helper()
-	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
+	body := "name: t\ndescription: d\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
 	scn, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifestFromBytes: %v\n---\n%s", err, body)
@@ -789,7 +789,7 @@ func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" +
+			body := "name: t\ndescription: d\ntasks: []\ninput:\n" +
 				indentBlock("f:\n  type: string\n  required_when: \""+tc.expr+"\"\n", "  ")
 			_, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
 			if err != nil {
@@ -811,7 +811,7 @@ func TestRequiredWhen_InvalidCELRejectedAtSchema(t *testing.T) {
 // TestRequiredWhen_EmptyStringRejectedAtSchema — an empty required_when is rejected (a
 // meaningless predicate → the "never required" footgun).
 func TestRequiredWhen_EmptyStringRejectedAtSchema(t *testing.T) {
-	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" +
+	body := "name: t\ndescription: d\ntasks: []\ninput:\n" +
 		indentBlock("f:\n  type: string\n  required_when: \"\"\n", "  ")
 	_, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
 	if err != nil {

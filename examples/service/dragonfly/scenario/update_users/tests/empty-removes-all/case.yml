@@ -3,7 +3,7 @@
 # replaces state.df_users ENTIRELY with an empty set:
 #   1. users.acl renders WITHOUT operator-extra (system users would be merged in from service vars —
 #      here vars.system_acl_users is not set → vars.users = {} empty);
-#   2. state_changes.df_users = [] (operator-extra wiped).
+#   2. state_after.df_users = [] (operator-extra wiped).
 # Proves that bulk-replace lets you remove all operator-extra users with an empty array (system
 # users outside state — remain via merge-in from service vars on every render, see main.yml).
 name: update_users with empty input removes all operator-extra users
@@ -30,7 +30,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
@@ -40,7 +40,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -83,6 +83,6 @@ assert:
         username: default_admin
         password: dfadmin-update-users-pass
 
-  # state_changes: df_users = [] (operator-extra wiped entirely).
-  state_changes:
+  # state_after: df_users = [] (operator-extra wiped entirely).
+  state_after:
     df_users: []

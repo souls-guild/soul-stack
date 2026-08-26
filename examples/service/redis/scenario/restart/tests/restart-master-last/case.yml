@@ -38,7 +38,7 @@ fixtures:
 
   # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
   # NAME; each password is a `type: secret` property living in Vault under a derived
-  # path. The day-2 `core.state.present` task resolves THIS list into the register.
+  # path. The day-2 `core.state.set` task resolves THIS list into the register.
   state:
     system_acl_users:
       - { name: default_admin }
@@ -48,7 +48,7 @@ mocks:
     redis_role:
       role: master
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -77,7 +77,7 @@ assert:
   # module/params_subset/when/id). A bare task_present would match BOTH → collision-fail.
   # So master-restart stays in positional form (forms coexist): index 5 —
   # master-restart (after synth-install[0] (ADR-065, service.yml::modules[]) +
-  # core.state.present[1] ([ADR-0083] §4) + probe[2] + block Restart[3] +
+  # core.state.set[1] ([ADR-0083] §4) + probe[2] + block Restart[3] +
   # replica-synced[4]).
   rendered_tasks:
     - index: 5

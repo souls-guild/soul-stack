@@ -33,7 +33,7 @@ func regInput(keeper map[string]any) RenderInput {
 	}
 }
 
-// TestResolveRegisterSecrets_OwnNamespace — the ref a `core.state.present` task
+// TestResolveRegisterSecrets_OwnNamespace — the ref a `core.state.set` task
 // produced for this run's own service+incarnation resolves to the value, at every
 // depth, and through the render-pass memo (one ReadKV for a repeated path).
 func TestResolveRegisterSecrets_OwnNamespace(t *testing.T) {

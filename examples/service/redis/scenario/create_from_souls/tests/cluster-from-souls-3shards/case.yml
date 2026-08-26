@@ -87,7 +87,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -137,7 +137,7 @@ assert:
               # ★ default_admin REDESIGN: replica->master AUTH (masteruser/masterauth) arrives as
               # REGULAR config directives (the cluster deploy body fills them in via vault()-in-cell).
               # The password comes from the users/default_admin branch; it's NOT in
-              # state_changes.redis_config (the secret lives in Vault, not in incarnation.state).
+              # state_after.redis_config (the secret lives in Vault, not in incarnation.state).
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -187,7 +187,7 @@ assert:
       params_subset:
         name: redis-sentinel
 
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     redis_config:
@@ -202,8 +202,11 @@ assert:
       cluster-node-timeout: "5000"
     redis_users: []
     redis_hosts: []
-    # ★ provision read-model: ALWAYS the conservative default; create_from_souls
-    # doesn't spin up VMs (difference from create).
-    provisioned_vm_ids: []
-    provisioned_sids: []
-    provisioned_provider: ""
+
+  # ★ The three cloud-provision fields are ABSENT, not empty: their capture steps live in
+  # redis-provision.yml, which create_from_souls does not include at all (unlike create).
+  # Nothing writes them, so they never enter state ([ADR-0084] F-B).
+  state_absent:
+    - provisioned_vm_ids
+    - provisioned_sids
+    - provisioned_provider

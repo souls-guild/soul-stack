@@ -10,6 +10,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/stateop"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -24,7 +25,7 @@ func noMatch(string, any, any) (bool, error) {
 
 // noOpEval — stub StateOpEvalFunc for tests without modify/remove. A call
 // means a test bug (set/add must never invoke opEval).
-func noOpEval(string, map[string]any, map[string]any, bool) (any, error) {
+func noOpEval(string, map[string]any, bool) (any, error) {
 	return nil, errInvariant
 }
 
@@ -46,11 +47,11 @@ func setOp(field string, val any) render.RenderedOp {
 	return render.RenderedOp{Verb: config.VerbSet, Field: field, Value: val}
 }
 
-func TestMergeStateChanges_EmptyNoop(t *testing.T) {
+func TestMergeOps_EmptyNoop(t *testing.T) {
 	before := map[string]any{"users": []any{"alice"}, "count": float64(1)}
 
 	// Empty ops → state unchanged (deep-copy).
-	after, err := mergeStateChanges(before, nil, nil, noMatch, noOpEval)
+	after, err := stateop.Merge(before, nil, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -68,13 +69,13 @@ func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 	}
 }
 
-func TestMergeStateChanges_AppliesSets(t *testing.T) {
+func TestMergeOps_AppliesSets(t *testing.T) {
 	before := map[string]any{"existing": "keep", "count": float64(1)}
 	ops := []render.RenderedOp{
 		setOp("greeting_file", "/tmp/soul-stack-hello"), // new field
 		setOp("count", float64(42)),                     // overwrite existing
 	}
-	after, err := mergeStateChanges(before, ops, nil, noMatch, noOpEval)
+	after, err := stateop.Merge(before, ops, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -97,8 +98,8 @@ func TestMergeStateChanges_AppliesSets(t *testing.T) {
 	}
 }
 
-func TestMergeStateChanges_NilBefore(t *testing.T) {
-	after, err := mergeStateChanges(nil, nil, nil, noMatch, noOpEval)
+func TestMergeOps_NilBefore(t *testing.T) {
+	after, err := stateop.Merge(nil, nil, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestMergeStateChanges_NilBefore(t *testing.T) {
 	}
 
 	// nil before + non-empty set → state comes from the set op.
-	after, err = mergeStateChanges(nil, []render.RenderedOp{setOp("x", "y")}, nil, noMatch, noOpEval)
+	after, err = stateop.Merge(nil, []render.RenderedOp{setOp("x", "y")}, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -119,8 +120,9 @@ func TestMergeStateChanges_NilBefore(t *testing.T) {
 	}
 }
 
-// --- Guard tests for the new state_changes grammar (add + on_conflict). The
-// pattern is replicated (modify/remove in the next batch), so the cost of a mistake multiplies. ---
+// --- Guard tests for the collection verbs (add + on_conflict). The pattern is
+// replicated (modify/remove in the next batch), so the cost of a mistake
+// multiplies. ---
 
 // redisHostsSchema — a redis-cluster state_schema fragment (redis_hosts is an
 // array). The source of collection-type materialization for add into a
@@ -160,16 +162,16 @@ func addRedisHost(sid, role string, onConflict config.OnConflict) render.Rendere
 	}
 }
 
-// TestMergeStateChanges_AddNewSID_Grows — add of a new SID grows redis_hosts
+// TestMergeOps_AddNewSID_Grows — add of a new SID grows redis_hosts
 // by 1 (★ closes a latent bug: the old appends form was ignored, redis_hosts
 // never grew).
-func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
+func TestMergeOps_AddNewSID_Grows(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 	}}
 	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictSkip)}
 
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -187,17 +189,17 @@ func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddExistingSID_Idempotent — ★ MAIN INVARIANT: add of an
+// TestMergeOps_AddExistingSID_Idempotent — ★ MAIN INVARIANT: add of an
 // existing SID with on_conflict=skip (default) → NO-OP, length unchanged
 // ("add if absent"). Idempotency for a repeated add_replica run.
-func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
+func TestMergeOps_AddExistingSID_Idempotent(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 		map[string]any{"sid": "host-b", "role": "replica"},
 	}}
 	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictSkip)}
 
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -207,29 +209,29 @@ func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddExistingSID_ErrorBlocks — on_conflict=error on an
+// TestMergeOps_AddExistingSID_ErrorBlocks — on_conflict=error on an
 // existing element → error (run.go maps it to error_locked, state NOT committed).
-func TestMergeStateChanges_AddExistingSID_ErrorBlocks(t *testing.T) {
+func TestMergeOps_AddExistingSID_ErrorBlocks(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
 	}}
 	ops := []render.RenderedOp{addRedisHost("host-b", "replica", config.OnConflictError)}
 
-	_, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	_, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err == nil {
 		t.Fatal("* expected an error (on_conflict=error on existing) - state must not be committed")
 	}
 }
 
-// TestMergeStateChanges_AddReplaceExisting — on_conflict=replace overwrites
+// TestMergeOps_AddReplaceExisting — on_conflict=replace overwrites
 // the existing element with the new value (length unchanged).
-func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
+func TestMergeOps_AddReplaceExisting(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
 	}}
 	ops := []render.RenderedOp{addRedisHost("host-b", "primary", config.OnConflictReplace)}
 
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -242,14 +244,14 @@ func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddMaterializesFromSchema — add into a MISSING field:
+// TestMergeOps_AddMaterializesFromSchema — add into a MISSING field:
 // the collection materializes with the right type from state_schema
 // (redis_hosts: array → list).
-func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
+func TestMergeOps_AddMaterializesFromSchema(t *testing.T) {
 	before := map[string]any{"redis_version": "7.2"} // redis_hosts absent
 	ops := []render.RenderedOp{addRedisHost("host-a", "primary", config.OnConflictSkip)}
 
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -262,9 +264,9 @@ func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddMapByKey — add into a map collection by key
+// TestMergeOps_AddMapByKey — add into a map collection by key
 // (redis_users): object materialization from schema, idempotency by key.
-func TestMergeStateChanges_AddMapByKey(t *testing.T) {
+func TestMergeOps_AddMapByKey(t *testing.T) {
 	addUser := func(key string, oc config.OnConflict) render.RenderedOp {
 		return render.RenderedOp{
 			Verb: config.VerbAdd, Field: "redis_users", Key: key,
@@ -273,7 +275,7 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 	}
 	before := map[string]any{} // redis_users absent
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -286,7 +288,7 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 	}
 
 	// Repeating the same key (skip) → no-op (map length unchanged).
-	after2, err := mergeStateChanges(after, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after2, err := stateop.Merge(after, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge2: %v", err)
 	}
@@ -297,27 +299,28 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 
 // --- Guard tests for modify/remove/expect (new verbs, ADR-057). ---
 
-// modifyHostsOp builds a modify op on redis_hosts (list of objects) with a
-// precomputed Context (input/vars) for merge-time CEL.
-func modifyHostsOp(match string, patch map[string]any, ctx map[string]any, expect config.Expect) render.RenderedOp {
+// modifyHostsOp builds a modify op on redis_hosts (list of objects). Under
+// [ADR-0084] match/patch are ordinary module params, so by merge time they are
+// literals — there is no run context left to precompute.
+func modifyHostsOp(match string, patch map[string]any, expect config.Expect) render.RenderedOp {
 	return render.RenderedOp{
 		Verb: config.VerbModify, Field: "redis_hosts",
-		Match: match, Patch: patch, Context: ctx, Expect: expect,
+		Match: match, Patch: patch, Expect: expect,
 	}
 }
 
-// TestMergeStateChanges_ModifyAllByPredicate — ★ modify of ALL elements
+// TestMergeOps_ModifyAllByPredicate — ★ modify of ALL elements
 // matching the predicate (3 replicas role→standby) → all 3 changed, primary untouched.
-func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
+func TestMergeOps_ModifyAllByPredicate(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 		map[string]any{"sid": "host-b", "role": "replica"},
 		map[string]any{"sid": "host-c", "role": "replica"},
 		map[string]any{"sid": "host-d", "role": "replica"},
 	}}
-	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, nil, "")
+	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, "")
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -340,14 +343,14 @@ func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ModifyEmptyMatch_Noop — empty match → no-op (not an error).
-func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
+// TestMergeOps_ModifyEmptyMatch_Noop — empty match → no-op (not an error).
+func TestMergeOps_ModifyEmptyMatch_Noop(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 	}}
-	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, nil, "")
+	op := modifyHostsOp("elem.role == 'replica'", map[string]any{"role": "${ 'standby' }"}, "")
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("* empty-match modify should be a no-op, not an error: %v", err)
 	}
@@ -356,20 +359,19 @@ func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ModifyNestedPatch — ★ a dotted-path patch (config.x) →
+// TestMergeOps_ModifyNestedPatch — ★ a dotted-path patch (config.x) →
 // the nested field is updated, SIBLING fields stay intact (merge, not overwrite).
-func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
+func TestMergeOps_ModifyNestedPatch(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{
 			"sid": "host-a", "role": "primary",
 			"config": map[string]any{"maxmemory": "256mb", "appendonly": "yes"},
 		},
 	}}
-	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
 	op := modifyHostsOp("elem.sid == 'host-a'",
-		map[string]any{"config.maxmemory": "${ input.mem }"}, ctx, "")
+		map[string]any{"config.maxmemory": "${ '512mb' }"}, "")
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -386,21 +388,21 @@ func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ModifyMapByKey — modify of a map collection
+// TestMergeOps_ModifyMapByKey — modify of a map collection
 // (redis_users): match sees key/value, patch merges into the entry's value.
-func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
+func TestMergeOps_ModifyMapByKey(t *testing.T) {
 	before := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read", "state": "on"},
 		"bob":   map[string]any{"acl": "+@read", "state": "on"},
 	}}
-	ctx := map[string]any{"input": map[string]any{"username": "alice", "acl": "+@all", "state": "off"}}
+	// The literals are what render leaves behind after interpolating
+	// `${ input.* }` into the task's params ([ADR-0084]).
 	op := render.RenderedOp{
 		Verb: config.VerbModify, Field: "redis_users",
-		Match:   "key == input.username",
-		Patch:   map[string]any{"acl": "${ input.acl }", "state": "${ input.state }"},
-		Context: ctx,
+		Match: "key == 'alice'",
+		Patch: map[string]any{"acl": "${ '+@all' }", "state": "${ 'off' }"},
 	}
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -410,13 +412,13 @@ func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
 		t.Errorf("alice was not patched: %+v", alice)
 	}
 	if users["bob"].(map[string]any)["acl"] != "+@read" {
-		t.Errorf("bob affected (did not match key == input.username): %+v", users["bob"])
+		t.Errorf("bob affected (did not match key == 'alice'): %+v", users["bob"])
 	}
 }
 
-// TestMergeStateChanges_RemoveAllByPredicate — remove of all matches; others
+// TestMergeOps_RemoveAllByPredicate — remove of all matches; others
 // untouched. remove with an empty match → no-op.
-func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
+func TestMergeOps_RemoveAllByPredicate(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 		map[string]any{"sid": "host-b", "role": "replica"},
@@ -424,7 +426,7 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	}}
 	op := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'"}
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -434,7 +436,7 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	}
 
 	// empty match (no replicas) → no-op.
-	noop, err := mergeStateChanges(after, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	noop, err := stateop.Merge(after, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("* remove empty-match should be a no-op: %v", err)
 	}
@@ -443,16 +445,15 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_RemoveMapByKey — remove from a map collection by a key predicate.
-func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
+// TestMergeOps_RemoveMapByKey — remove from a map collection by a key predicate.
+func TestMergeOps_RemoveMapByKey(t *testing.T) {
 	before := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read"},
 		"bob":   map[string]any{"acl": "+@read"},
 	}}
-	ctx := map[string]any{"input": map[string]any{"username": "bob"}}
-	op := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_users", Match: "key == input.username", Context: ctx}
+	op := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_users", Match: "key == 'bob'"}
 
-	after, err := mergeStateChanges(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(before, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -465,22 +466,21 @@ func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ExpectOne — ★ expect: one matching 2 elements → error
+// TestMergeOps_ExpectOne — ★ expect: one matching 2 elements → error
 // (state NOT committed); matching 1 → ok.
-func TestMergeStateChanges_ExpectOne(t *testing.T) {
+func TestMergeOps_ExpectOne(t *testing.T) {
 	twoReplicas := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
 		map[string]any{"sid": "host-c", "role": "replica"},
 	}}
 	tooMany := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'", Expect: config.ExpectOne}
-	if _, err := mergeStateChanges(twoReplicas, []render.RenderedOp{tooMany}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
+	if _, err := stateop.Merge(twoReplicas, []render.RenderedOp{tooMany}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
 		t.Fatal("* expect: one matched 2 - expected an error (error_locked, state not committed)")
 	}
 
 	// Matched exactly one → ok.
-	ctx := map[string]any{"input": map[string]any{"sid": "host-b"}}
-	one := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid", Expect: config.ExpectOne, Context: ctx}
-	after, err := mergeStateChanges(twoReplicas, []render.RenderedOp{one}, redisHostsSchema, noMatch, opEvalForTest(t))
+	one := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == 'host-b'", Expect: config.ExpectOne}
+	after, err := stateop.Merge(twoReplicas, []render.RenderedOp{one}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("* expect: one matching 1 should be ok: %v", err)
 	}
@@ -489,21 +489,53 @@ func TestMergeStateChanges_ExpectOne(t *testing.T) {
 	}
 }
 
-// TestForeachListAdd_GrowsByN — ★ foreach over a list (add N) end-to-end via
-// render→merge: RenderStateOps expands foreach into N adds, mergeStateChanges
-// grows the collection by N. Idempotent via on_conflict (a repeat doesn't duplicate).
-func TestForeachListAdd_GrowsByN(t *testing.T) {
+// buildOps crosses the seam [ADR-0084] opened: op construction moved out of
+// render into the dispatched module, so a render→merge test has to build the ops
+// itself. It goes through [stateop.OpsFromPlan] — the same entry the L0 harness
+// uses — rather than reassembling the loop, because a local copy would skip
+// [stateop.CheckParams] and green-light a param combination the keeper refuses at
+// dispatch. Only the Vault/store work of the real module is missing.
+func buildOps(t *testing.T, tasks []*render.RenderedTask) []render.RenderedOp {
+	t.Helper()
+	ops, err := stateop.OpsFromPlan(tasks)
+	if err != nil {
+		t.Fatalf("OpsFromPlan: %v", err)
+	}
+	return ops
+}
+
+// TestStateAddTasks_GrowByN — ★ the successor to the deleted `foreach` op
+// ([ADR-0084] F-C): a capture is an ordinary task, so N captures are N tasks.
+// Render interpolates each one's params on its own, the module turns each into
+// one op, and the merge composes them in plan order — the collection grows by N
+// and a repeat is idempotent through on_conflict: skip.
+//
+// ⚠ `loop:` does NOT yet reach here: renderKeeperTask rejects it
+// (pipeline.go:1092-1094, pinned by TestRender_LoopOnKeeperTaskRejected). Until that
+// lifts, a capture over a runtime-sized collection has to be written out, which
+// is the one thing `foreach` could express and this cannot.
+func TestStateAddTasks_GrowByN(t *testing.T) {
+	capture := func(name, value string) config.Task {
+		return config.Task{
+			Name: name,
+			On:   "keeper",
+			Module: &config.ModuleTask{
+				Module: "core.state.add",
+				Params: map[string]any{
+					"field":       "redis_hosts",
+					"value":       value,
+					"match":       "elem == value",
+					"on_conflict": "skip",
+				},
+			},
+		}
+	}
 	manifest := &config.ScenarioManifest{
 		Name: "add_replicas",
-		StateChanges: &config.StateChanges{
-			IsList: true,
-			Ops: []config.StateChange{{
-				Verb: config.VerbForeach, In: "${ input.replicas }", As: "sid",
-				Do: []config.StateChange{{
-					Verb: config.VerbAdd, Field: "redis_hosts",
-					Value: "${ sid }", Match: "elem == sid", OnConflict: config.OnConflictSkip,
-				}},
-			}},
+		Tasks: []config.Task{
+			capture("Record replica 1", "${ input.replicas[0] }"),
+			capture("Record replica 2", "${ input.replicas[1] }"),
+			capture("Record replica 3", "${ input.replicas[2] }"),
 		},
 	}
 	eng, err := cel.New()
@@ -518,10 +550,11 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 		Incarnation: render.IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
-	ops, err := p.RenderStateOps(in)
+	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("RenderStateOps: %v", err)
+		t.Fatalf("Render: %v", err)
 	}
+	ops := buildOps(t, tasks)
 
 	// list of scalars schema.
 	schema := map[string]any{"type": "object", "properties": map[string]any{
@@ -529,41 +562,51 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 	}}
 	before := map[string]any{"redis_hosts": []any{"r0"}}
 
-	after, err := mergeStateChanges(before, ops, schema, matchEval, opEval)
+	after, err := stateop.Merge(before, ops, schema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	hosts := after["redis_hosts"].([]any)
 	if len(hosts) != 4 {
-		t.Fatalf("* redis_hosts len = %d, want 4 (r0 + 3 foreach-add)", len(hosts))
+		t.Fatalf("* redis_hosts len = %d, want 4 (r0 + 3 captures)", len(hosts))
 	}
 
 	// Idempotency: repeating the same ops → length doesn't grow (on_conflict: skip).
-	again, err := mergeStateChanges(after, ops, schema, matchEval, opEval)
+	again, err := stateop.Merge(after, ops, schema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge2: %v", err)
 	}
 	if len(again["redis_hosts"].([]any)) != 4 {
-		t.Errorf("* repeated foreach-add is not idempotent: len = %d, want 4", len(again["redis_hosts"].([]any)))
+		t.Errorf("* repeated capture is not idempotent: len = %d, want 4", len(again["redis_hosts"].([]any)))
 	}
 }
 
-// TestForeachMapModify_PerEntryBinding — ★ foreach over a map (modify N
-// users): each entry is patched with ITS OWN value (change.key/change.value
-// binding), end-to-end render→merge.
-func TestForeachMapModify_PerEntryBinding(t *testing.T) {
+// TestStateModifyTasks_PerEntryLiteral — ★ each capture patches ITS OWN entry.
+// Render interpolates `${ input.* }` into each task's params separately, so by
+// merge time every predicate and patch is a literal that names one element. That
+// is what makes taking the run context out of the merge-time scope safe
+// ([ADR-0084]): a shared evaluation is the thing that could confuse two entries,
+// and there is no longer a shared scope to confuse.
+func TestStateModifyTasks_PerEntryLiteral(t *testing.T) {
+	patchUser := func(name, keyExpr, aclExpr string) config.Task {
+		return config.Task{
+			Name: name,
+			On:   "keeper",
+			Module: &config.ModuleTask{
+				Module: "core.state.modify",
+				Params: map[string]any{
+					"field": "redis_users",
+					"match": "key == '" + keyExpr + "'",
+					"patch": map[string]any{"acl": aclExpr},
+				},
+			},
+		}
+	}
 	manifest := &config.ScenarioManifest{
 		Name: "update_acl",
-		StateChanges: &config.StateChanges{
-			IsList: true,
-			Ops: []config.StateChange{{
-				Verb: config.VerbForeach, In: "${ input.changes }", As: "change",
-				Do: []config.StateChange{{
-					Verb: config.VerbModify, Field: "redis_users",
-					Match: "key == change.key",
-					Patch: map[string]any{"acl": "${ change.value.acl }"},
-				}},
-			}},
+		Tasks: []config.Task{
+			patchUser("Patch alice", "alice", "${ input.changes.alice.acl }"),
+			patchUser("Patch bob", "bob", "${ input.changes.bob.acl }"),
 		},
 	}
 	eng, err := cel.New()
@@ -581,29 +624,30 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 		Incarnation: render.IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
-	ops, err := p.RenderStateOps(in)
+	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
-		t.Fatalf("RenderStateOps: %v", err)
+		t.Fatalf("Render: %v", err)
 	}
+	ops := buildOps(t, tasks)
 
 	before := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read", "state": "on"},
 		"bob":   map[string]any{"acl": "+@read", "state": "on"},
 		"carol": map[string]any{"acl": "+@read", "state": "on"},
 	}}
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEval, opEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEval, opEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	users := after["redis_users"].(map[string]any)
 	if users["alice"].(map[string]any)["acl"] != "+@all" {
-		t.Errorf("* alice.acl = %v, want +@all (own binding)", users["alice"])
+		t.Errorf("* alice.acl = %v, want +@all (own capture)", users["alice"])
 	}
 	if users["bob"].(map[string]any)["acl"] != "+@write" {
-		t.Errorf("* bob.acl = %v, want +@write (own binding)", users["bob"])
+		t.Errorf("* bob.acl = %v, want +@write (own capture)", users["bob"])
 	}
 	if users["carol"].(map[string]any)["acl"] != "+@read" {
-		t.Errorf("carol affected (not in input.changes): %v", users["carol"])
+		t.Errorf("carol affected (no capture names it): %v", users["carol"])
 	}
 	// state field intact (patch touches only acl, merge not overwrite).
 	if users["alice"].(map[string]any)["state"] != "on" {
@@ -611,11 +655,11 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 	}
 }
 
-// stateMirrorFixture/stateMirrorOps/stateMirrorExpected — ★ a shared fixture
-// for the anti-drift check between prod merge (this test) and trial merge
-// (trial.TestMergeMirror_* in diff_test.go). Both sides apply an IDENTICAL
-// input against an IDENTICAL expectation; if the mergeStateChanges bodies
-// (a duplicate) diverge, one of the two tests fails.
+// stateMirrorFixture/stateMirrorOps/stateMirrorExpected — the end-to-end shape
+// of one commit: a set and an add over a populated fixture, pinned to an exact
+// expected state. It was one half of an anti-drift pair against the trial-side
+// duplicate of the merge; the duplicate is gone ([ADR-0084] F-C, trial merges
+// through [stateop.Merge]), and what is left is a plain regression pin.
 func stateMirrorFixture() map[string]any {
 	return map[string]any{
 		"redis_version": "7.2",
@@ -637,9 +681,9 @@ func stateMirrorOps() []render.RenderedOp {
 // deterministic comparison regardless of map key order).
 const stateMirrorExpectedJSON = `{"redis_version":"7.4","redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
-// TestMergeStateChanges_MirrorProd — the prod side of the anti-drift check.
-func TestMergeStateChanges_MirrorProd(t *testing.T) {
-	after, err := mergeStateChanges(stateMirrorFixture(), stateMirrorOps(), redisHostsSchema, matchEvalForTest(t), noOpEval)
+// TestMergeOps_MirrorProd — the prod side of the anti-drift check.
+func TestMergeOps_MirrorProd(t *testing.T) {
+	after, err := stateop.Merge(stateMirrorFixture(), stateMirrorOps(), redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -649,12 +693,9 @@ func TestMergeStateChanges_MirrorProd(t *testing.T) {
 	}
 }
 
-// verbsMirrorFixture/verbsMirrorOps/verbsMirrorExpectedJSON — ★ anti-drift
-// check for the NEW modify/remove verbs (foreach is expanded in render → merge
-// receives ready-made add/modify/remove). Duplicated byte-for-byte in
-// trial.TestMergeVerbsMirror_* (diff_test.go): a divergence between the
-// applyModifyOp/applyRemoveOp bodies would split Trial from prod. The modify
-// context (input.*) is precomputed (as the render side does).
+// verbsMirrorFixture/verbsMirrorOps/verbsMirrorExpectedJSON — the same pin for
+// the modify/remove verbs. Predicates and patches arrive as literals: render
+// interpolated the task's params before the module built the op ([ADR-0084]).
 func verbsMirrorFixture() map[string]any {
 	return map[string]any{
 		"redis_users": map[string]any{
@@ -670,24 +711,21 @@ func verbsMirrorFixture() map[string]any {
 }
 
 func verbsMirrorOps() []render.RenderedOp {
-	modifyCtx := map[string]any{"input": map[string]any{"username": "alice", "acl": "+@all"}}
-	removeCtx := map[string]any{"input": map[string]any{"sid": "host-c"}}
 	return []render.RenderedOp{
 		// modify map by key: alice.acl → +@all (state intact).
-		{Verb: config.VerbModify, Field: "redis_users", Match: "key == input.username",
-			Patch: map[string]any{"acl": "${ input.acl }"}, Context: modifyCtx},
+		{Verb: config.VerbModify, Field: "redis_users", Match: "key == 'alice'",
+			Patch: map[string]any{"acl": "${ '+@all' }"}},
 		// remove list by sid: host-c removed (expect: one).
-		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid",
-			Expect: config.ExpectOne, Context: removeCtx},
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == 'host-c'",
+			Expect: config.ExpectOne},
 	}
 }
 
-// verbsMirrorExpectedJSON — must match trial.verbsMirrorExpectedJSON.
 const verbsMirrorExpectedJSON = `{"redis_users":{"alice":{"acl":"+@all","state":"on"},"bob":{"acl":"+@read","state":"on"}},"redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
 // TestMergeVerbsMirror_Prod — the prod side of the new-verbs anti-drift check.
 func TestMergeVerbsMirror_Prod(t *testing.T) {
-	after, err := mergeStateChanges(verbsMirrorFixture(), verbsMirrorOps(), redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(verbsMirrorFixture(), verbsMirrorOps(), redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -700,17 +738,17 @@ func TestMergeVerbsMirror_Prod(t *testing.T) {
 // --- Guard tests for coverage gaps (ADR-057): composition within a block,
 // scalar lists, empty collections, patch clobber. ---
 
-// TestMergeStateChanges_Composition_SetThenAdd — ★ set creates a collection,
+// TestMergeOps_Composition_SetThenAdd — ★ set creates a collection,
 // and an add into it in the SAME block sees the intermediate state (ops apply
 // in order against the intermediate result, ADR-057 §e). Deterministic order.
-func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
+func TestMergeOps_Composition_SetThenAdd(t *testing.T) {
 	before := map[string]any{} // redis_hosts absent
 	ops := []render.RenderedOp{
 		{Verb: config.VerbSet, Field: "redis_hosts", Value: []any{}}, // create an empty list
 		addRedisHost("host-a", "primary", config.OnConflictSkip),     // add sees the created list
 		addRedisHost("host-b", "replica", config.OnConflictSkip),
 	}
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -723,19 +761,18 @@ func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_Composition_AddThenRemove — ★ add X → remove X by match
+// TestMergeOps_Composition_AddThenRemove — ★ add X → remove X by match
 // within one block: the element ends up absent (remove sees add's result).
 // Intermediate state is visible to the following op.
-func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
+func TestMergeOps_Composition_AddThenRemove(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 	}}
-	removeCtx := map[string]any{}
 	ops := []render.RenderedOp{
-		addRedisHost("host-b", "replica", config.OnConflictSkip),                                           // +host-b
-		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == 'host-b'", Context: removeCtx}, // -host-b
+		addRedisHost("host-b", "replica", config.OnConflictSkip),                       // +host-b
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == 'host-b'"}, // -host-b
 	}
-	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
+	after, err := stateop.Merge(before, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -745,10 +782,10 @@ func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ScalarList_ModifyRemove — modify/remove over a list
+// TestMergeOps_ScalarList_ModifyRemove — modify/remove over a list
 // of scalars (elem=scalar): remove works by a predicate over the scalar;
 // modify (a dotted-path patch) produces a CLEAR error, not a panic.
-func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
+func TestMergeOps_ScalarList_ModifyRemove(t *testing.T) {
 	scalarSchema := map[string]any{"type": "object", "properties": map[string]any{
 		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	}}
@@ -757,8 +794,8 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 	}
 
 	// remove over a scalar list by an elem predicate — works.
-	rm := render.RenderedOp{Verb: config.VerbRemove, Field: "tags", Match: "elem == 'b'", Context: map[string]any{}}
-	after, err := mergeStateChanges(before(), []render.RenderedOp{rm}, scalarSchema, noMatch, opEvalForTest(t))
+	rm := render.RenderedOp{Verb: config.VerbRemove, Field: "tags", Match: "elem == 'b'"}
+	after, err := stateop.Merge(before(), []render.RenderedOp{rm}, scalarSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("remove over scalar-list: %v", err)
 	}
@@ -769,26 +806,26 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 
 	// modify (dotted-path patch) over a scalar element — a clear error, not a panic.
 	mod := render.RenderedOp{Verb: config.VerbModify, Field: "tags", Match: "elem == 'a'",
-		Patch: map[string]any{"x": "${ 'y' }"}, Context: map[string]any{}}
-	if _, err := mergeStateChanges(before(), []render.RenderedOp{mod}, scalarSchema, noMatch, opEvalForTest(t)); err == nil {
+		Patch: map[string]any{"x": "${ 'y' }"}}
+	if _, err := stateop.Merge(before(), []render.RenderedOp{mod}, scalarSchema, noMatch, opEvalForTest(t)); err == nil {
 		t.Fatal("* modify of a scalar element via a dotted patch should error (patch only applies to an object)")
 	}
 }
 
-// TestMergeStateChanges_RemoveAll_EmptyNotNil — ★ removing ALL elements yields
+// TestMergeOps_RemoveAll_EmptyNotNil — ★ removing ALL elements yields
 // an EMPTY collection ([]any{} / map{}), NOT nil: a following add must see
 // the empty collection and materialize into it, not crash on nil.
-func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
+func TestMergeOps_RemoveAll_EmptyNotNil(t *testing.T) {
 	// list: remove-all → []any{} (not nil), then add into it grows by 1.
 	beforeList := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "replica"},
 		map[string]any{"sid": "host-b", "role": "replica"},
 	}}
 	ops := []render.RenderedOp{
-		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'", Context: map[string]any{}},
+		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.role == 'replica'"},
 		addRedisHost("host-c", "primary", config.OnConflictSkip),
 	}
-	after, err := mergeStateChanges(beforeList, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
+	after, err := stateop.Merge(beforeList, ops, redisHostsSchema, matchEvalForTest(t), opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -805,11 +842,11 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 		"alice": map[string]any{"acl": "+@read"},
 	}}
 	opsMap := []render.RenderedOp{
-		{Verb: config.VerbRemove, Field: "redis_users", Match: "true == true", Context: map[string]any{}},
+		{Verb: config.VerbRemove, Field: "redis_users", Match: "true == true"},
 		{Verb: config.VerbAdd, Field: "redis_users", Key: "bob",
 			Value: map[string]any{"acl": "+@all"}, OnConflict: config.OnConflictSkip},
 	}
-	afterMap, err := mergeStateChanges(beforeMap, opsMap, redisHostsSchema, noMatch, opEvalForTest(t))
+	afterMap, err := stateop.Merge(beforeMap, opsMap, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("merge map: %v", err)
 	}
@@ -825,23 +862,22 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_PatchClobber_MissingVsExistingScalar — ★ QA
+// TestMergeOps_PatchClobber_MissingVsExistingScalar — ★ QA
 // observation: patching the nested path config.maxmemory.
 //   - MISSING intermediate path (no config) → materialize a map (ADR-057 §f);
 //   - EXISTING non-map intermediate node (config="string") → ERROR, not a
 //     silent clobber (data loss is unsafe).
-func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
-	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
+func TestMergeOps_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 	patchOp := func() render.RenderedOp {
 		return render.RenderedOp{Verb: config.VerbModify, Field: "redis_hosts",
-			Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ input.mem }"}, Context: ctx}
+			Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ '512mb' }"}}
 	}
 
 	// missing → materialize config as a map.
 	beforeMissing := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"}, // config absent
 	}}
-	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t))
+	after, err := stateop.Merge(beforeMissing, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("* a missing intermediate path should materialize, not error: %v", err)
 	}
@@ -854,38 +890,18 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 	beforeScalar := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
 	}}
-	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
+	if _, err := stateop.Merge(beforeScalar, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t)); err == nil {
 		t.Fatal("* patch config.maxmemory over config=\"string\" should error (silent clobber is unsafe), not silently overwrite")
 	}
 }
 
-// TestSetNestedPath_ProdNoSilentClobber — the prod side of the
-// setNestedPath unit guard (mirrors trial.TestSetNestedPath_NoSilentClobber):
-// missing gets created, an existing non-map → error without mutation.
-func TestSetNestedPath_ProdNoSilentClobber(t *testing.T) {
-	m := map[string]any{}
-	if err := setNestedPath(m, "config.maxmemory", "256mb"); err != nil {
-		t.Fatalf("setNestedPath missing: %v", err)
-	}
-	if m["config"].(map[string]any)["maxmemory"] != "256mb" {
-		t.Errorf("config was not materialized: %+v", m)
-	}
-	m2 := map[string]any{"config": "scalar"}
-	if err := setNestedPath(m2, "config.maxmemory", "256mb"); err == nil {
-		t.Fatal("* setNestedPath over config=\"scalar\" should return an error")
-	}
-	if m2["config"] != "scalar" {
-		t.Errorf("* scalar value clobbered: %+v", m2)
-	}
-}
-
-// TestMergeStateChanges_AddConflictReason_NoSecretLeak — ★ BUG-3 (security): add
+// TestMergeOps_AddConflictReason_NoSecretLeak — ★ BUG-3 (security): add
 // into a map with key=a resolved secret + on_conflict:error. The error
 // reason (which ends up unmasked in incarnation.status_details.error —
 // audit.MaskSecrets only catches `vault:` refs, not plaintext values) must
 // NOT contain the key's value — only the collection field name. Same for a
 // list add-conflict (resolved value/elem).
-func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
+func TestMergeOps_AddConflictReason_NoSecretLeak(t *testing.T) {
 	const secret = "s3cr3t-vault-resolved-value"
 
 	// map add-conflict: key is already resolved to a secret (as after render `${ vault(...) }`).
@@ -894,7 +910,7 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 	}}
 	mapOp := render.RenderedOp{Verb: config.VerbAdd, Field: "redis_users", Key: secret,
 		Value: map[string]any{"acl": "+@all"}, OnConflict: config.OnConflictError}
-	_, err := mergeStateChanges(beforeMap, []render.RenderedOp{mapOp}, redisHostsSchema, noMatch, noOpEval)
+	_, err := stateop.Merge(beforeMap, []render.RenderedOp{mapOp}, redisHostsSchema, noMatch, noOpEval)
 	if err == nil {
 		t.Fatal("expected an error (on_conflict=error on an existing key)")
 	}
@@ -909,7 +925,7 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 	beforeList := map[string]any{"redis_hosts": []any{secret}}
 	listOp := render.RenderedOp{Verb: config.VerbAdd, Field: "redis_hosts",
 		Value: secret, OnConflict: config.OnConflictError}
-	_, err = mergeStateChanges(beforeList, []render.RenderedOp{listOp}, redisHostsSchema, matchEvalForTest(t), noOpEval)
+	_, err = stateop.Merge(beforeList, []render.RenderedOp{listOp}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err == nil {
 		t.Fatal("expected an error (on_conflict=error on an existing element)")
 	}
@@ -1104,19 +1120,6 @@ func TestBuildRegisterByHost_PerHostDifferentWhere_NoMismatch(t *testing.T) {
 	}
 }
 
-func TestDeepCopyMap(t *testing.T) {
-	src := map[string]any{
-		"nested": map[string]any{"k": "v"},
-		"list":   []any{float64(1), float64(2)},
-	}
-	cp := deepCopyMap(src)
-	nested := cp["nested"].(map[string]any)
-	nested["k"] = "changed"
-	if src["nested"].(map[string]any)["k"] != "v" {
-		t.Errorf("deep copy is not deep: original mutated")
-	}
-}
-
 func TestStartedByPtr(t *testing.T) {
 	if startedByPtr("") != nil {
 		t.Errorf("startedByPtr(\"\") != nil")
@@ -1210,10 +1213,9 @@ func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 	}
 }
 
-// ★ Mirror guard for [ADR-0083] §4 — a DECLARED secret (`type: secret`) never
-// reaches the merged state record. Byte-for-byte identical in scenario and trial
-// (state_test.go ↔ diff_test.go): the two merges must strip the same way, or a
-// Trial preview would show a password the real commit does not store.
+// ★ Guard for [ADR-0083] §4 — a DECLARED secret (`type: secret`) never reaches
+// the merged state record. The trial preview runs the same merge, so it cannot
+// show a password the real commit does not store.
 //
 // The `secret: true` field next to it is the OTHER marker ([ADR-010] §7.4) — that
 // value LIVES in state and is masked on the way out. It must survive untouched;
@@ -1239,7 +1241,7 @@ func secretStripSchema() map[string]any {
 	}
 }
 
-func TestMergeStateChanges_StripsDeclaredSecrets_Prod(t *testing.T) {
+func TestMergeOps_StripsDeclaredSecrets_Prod(t *testing.T) {
 	before := map[string]any{"tls_key": "KEEP-ME"}
 	ops := []render.RenderedOp{
 		{Verb: config.VerbSet, Field: "admin_password", Value: "PLAINTEXT-ADMIN"},
@@ -1248,9 +1250,9 @@ func TestMergeStateChanges_StripsDeclaredSecrets_Prod(t *testing.T) {
 		}},
 	}
 
-	out, err := mergeStateChanges(before, ops, secretStripSchema(), nil, nil)
+	out, err := stateop.Merge(before, ops, secretStripSchema(), nil, nil)
 	if err != nil {
-		t.Fatalf("mergeStateChanges: %v", err)
+		t.Fatalf("stateop.Merge: %v", err)
 	}
 	if _, ok := out["admin_password"]; ok {
 		t.Errorf("scalar declared secret survived the merge: %v", out)

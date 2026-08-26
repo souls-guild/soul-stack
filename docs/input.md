@@ -29,7 +29,7 @@ The schema (`default`/`required`/`type`/`pattern`/…) describes **what** the va
 
 Where it happens:
 
-- **scenario** — Keeper when starting the script (scenario-runner before render). Effective input goes to both `${ input.<name> }` tasks and `state_changes.sets`.
+- **scenario** — Keeper when starting the script (scenario-runner before render). Effective input goes into `${ input.<name> }` everywhere the run renders it — a task's `params:`, and the `params:` of a `core.state.<verb>` capture step ([ADR-0084](adr/0084-explicit-state-capture.md)), which is a task like any other.
 - **destiny / module manifest** - where the block is validated (see the table "Where it is used"). `apply: input:` destiny defaults are resolved in an isolated destiny render pass.
 
 > **Empty lines.** An empty line `""` for `type: string` without `allow_empty: true` is treated at this step as "no value passed" (see ["Empty lines"](#empty-lines)): `default` is applied or `required` error is raised.
@@ -57,7 +57,7 @@ The fallback literal is selected by the `type` parameter (`''` / `{}` / `[]` / `
 
 > **Short form is `default(x, y)`.** A pure value-or-default over a select-chain is written via the CEL function [`default(x, y)`](templating.md): `default(input.config, {})` ≡ `has(input.config) ? input.config : {}`, `int(default(vars.tls_port, 7379))` ≡ `int(has(vars.tls_port) ? vars.tls_port : 7379)`. Equivalent, without a greedy crash on a missing key (macro is expanded into the same has() ternary in the compile phase). Applies to optional-without-default `input.*` and optional `vars.*`. The conditional construction of map (`has(x) ? {key: x} : {}`) and calculated fallback (`has(x) ? <arithmetic> : ...`) under `default()` **do not fall under** - an explicit ternary remains there.
 
-> **Guard is needed EVERYWHERE where optional-without-default input** is read - not only in `params:`/`apply: input:` tasks, but also in **`state_changes.sets`** (and in any other CEL expressions `state_changes`). This is a frequent source of a hidden bug: tasks may not read the parameter (or read through guard), but `state_changes.sets` fixes it to `incarnation.state` directly - an unprotected link there drops the rendering of sets already AFTER successfully apply on the hosts, translating incarnation to `error_locked`. L0-test (soul-trial) renders `state_changes` along with tasks, so it catches such a case without a separate assertion.
+> **Guard is needed EVERYWHERE where optional-without-default input** is read - not only in `params:`/`apply: input:` of an ordinary task, but also in the `params:` of a `core.state.<verb>` capture step ([ADR-0084](adr/0084-explicit-state-capture.md)). This is a frequent source of a hidden bug: the tasks may not read the parameter at all (or read it through a guard), while the capture writes it into `incarnation.state` directly - an unprotected reference there aborts the run at the capture's own Passage, after everything in the earlier Passages has already applied to the hosts, translating the incarnation to `error_locked`. A capture is a task, so the L0 test (soul-trial) renders it with the rest of the plan and catches such a case without a separate assertion.
 
 > **When guard is NOT needed.** The parameter with `default` or with `required: true` after the merge phase is always present in the effective input (see "Resolving values ​​in runtime") - for it `${ input.<name> }` is written directly, without a guard.
 
@@ -149,7 +149,7 @@ input:
 | Source of value | static literal from schema | current `incarnation.state` |
 | Gets into effective input | **yes** (if the parameter is not passed) | **no** - UI tooltip only |
 
-`default` is "what to fill in if the operator is silent" (part of the effective input). `prefill_from_state` is "what to show the operator on the form as a starting point"; it is **not** included in the resolution of values ​​(`${ input.<name> }`, `state_changes`). Therefore, `incarnation.state` does not flow through `prefill_from_state` into effective input - this is a structural guarantee, not a convention.
+`default` is "what to fill in if the operator is silent" (part of the effective input). `prefill_from_state` is "what to show the operator on the form as a starting point"; it is **not** included in the resolution of values ​​(`${ input.<name> }`, a capture's `params:`). Therefore, `incarnation.state` does not flow through `prefill_from_state` into effective input - this is a structural guarantee, not a convention.
 
 ## Reusable named types: `types:` + `$type`
 

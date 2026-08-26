@@ -116,7 +116,7 @@ core modules" above.
 [ADR-017](../adr/0017-keeper-side-core.md)
   + `core.choir` by [ADR-044](../adr/0044-choir.md) (registered if available
 `Deps.ChoirStore`). `core.vault` - one module with two states (`kv-read` +
-`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). `core.state` (`core.state.present`, [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 - the single write of a state field carrying declared secrets; registered when `Deps.Vault` is present).
+`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). `core.state` (`core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset` - one state per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb, the write point of a service state field; registered when `Deps.Vault` is present. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 for the declared-secret rule, [ADR-0084](../adr/0084-explicit-state-capture.md) for the verbs and the step-time capture).
 "Keeper-side core modules" table above.
 
 Total **23 apply modules** (19 + 4). In `docs/module/core/` - **24 directories**: these

@@ -6,7 +6,7 @@ package handlers
 // permission.
 //
 // The service authors NO Vault path. The location comes from
-// [config.SecretField.VaultPath] — the same derivation `core.state.present` writes
+// [config.SecretField.VaultPath] — the same derivation `core.state.*` writes
 // through — so reveal and write cannot disagree about where a value lives, which is
 // what the old hand-written `revealable_secrets[].vault_ref` could not guarantee.
 //
@@ -93,7 +93,7 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 		return zero, incProblem(problem.TypeValidationFailed, "field 'secret_id' must match "+reRevealSecretID.String())
 	}
 	// Empty is legal — a scalar secret has no element to address. A non-empty key
-	// must be a safe path segment: the SAME rule core.state.present applies when it
+	// must be a safe path segment: the SAME rule core.state.* applies when it
 	// writes, so a value stored under a given key is revealable under it.
 	if key != "" && !config.ValidVaultPathSegment(key) {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'key' must be a Vault path segment (letters, digits, `_` and `-`)")
@@ -328,7 +328,7 @@ func (h *IncarnationHandler) revealableSecretsFor(ctx context.Context, inc *inca
 // nil (fail-closed, no panic).
 //
 // Keys are filtered by [config.ValidVaultPathSegment] — the same rule
-// core.state.present applies on write, so discovery never advertises a key reveal
+// core.state.* applies on write, so discovery never advertises a key reveal
 // would reject — and deduped (a duplicate in state doesn't produce duplicates in
 // discovery or in the check set).
 func enumerateStateKeys(state map[string]any, f config.SecretField) []string {

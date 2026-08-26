@@ -522,15 +522,22 @@ gated on their own `redis_type`, and the enum guarantees exactly one branch matc
 the footgun "unimplemented mode = a silent green no-op" is structurally impossible (a
 value outside the enum never reaches render).
 
-After a successful apply, Keeper records `state_changes` (ADR-009 §7.1, ADR-057):
+The run records what it deployed with `core.state.set` steps at the tail of the body
+([ADR-0084](../../../docs/adr/0084-explicit-state-capture.md)) - one step per field, so
+the value is in Postgres/Vault the moment it is known rather than at the end of the run:
 `redis_type`, `redis_version`, `redis_config` (the same `compute.redis_config` that
 went to render - a single source of truth; for cluster, plus `cluster-*` directives,
 except the host-variant `cluster-announce-ip`, which is not written to state),
-`redis_users` (from `input.users`), `redis_hosts = []`, `redis_sentinel`
-(`{master_name, quorum}` in sentinel mode; otherwise an empty object) + the named
-read-model fields
-(`tls`/`install`/`persistence`/`memory_mb`/`maxmemory_policy`/`modules`/`modules_base_url`/`conf_dir`/`data_dir`/`sysctl_settings`
-+ counts `shards`/`replicas`/`sentinel_quorum`).
+`redis_hosts = []`, `redis_sentinel` (`{master_name, quorum, master_settings, settings}`
+in sentinel mode; otherwise an empty object) + the named read-model fields
+(`tls`/`connection_mode`/`persistence`/`memory_mb`/`maxmemory_policy`/`io_threads`/`modules`/`sysctl_settings`/`monitoring`/`logging`
++ counts `shards`/`replicas`/`sentinel_quorum`). `redis_users` and `system_acl_users`
+are captured earlier, by the minting steps at the head of the body
+([ADR-0083](../../../docs/adr/0083-declared-secret-state-fields.md) §4).
+
+The steps are local to each scenario: `covenant.yml` carries the `input`/`compute`/
+`validate` contract, not tasks, so `create`, `create_from_souls` and `migrate_cluster`
+each write their own capture set from the same shared `compute.*` values.
 
 #### `create` (cluster mode)
 
@@ -717,11 +724,14 @@ there is no duplicate.
    wouldn't yet be in the roster).
 
 On success, the cluster/sentinel branch rolls out the redis role onto the now-online
-hosts. `state_changes` writes `provisioned_vm_ids` (from `register.provision.vm_ids`),
-`provisioned_sids` (Keeper ids of the created Souls), and `provisioned_provider` (from
-`input.provision.provider`) - **only** on the provision path (guarded by
-`input.provision`, not `has(register.provision)`); on a non-provision run they stay
-`[]` / `[]` / `''`.
+hosts. Three `core.state.set` steps inside the provision body itself - between the
+`core.cloud.created` step that fills `register.provision` and the steps that consume it -
+write `provisioned_vm_ids` (from `register.provision.vm_ids`), `provisioned_sids` (SID of
+each created VM) and `provisioned_provider`. They live there rather than at the end of the
+run because a capture must precede every consumer of its register
+([ADR-0084](../../../docs/adr/0084-explicit-state-capture.md)). On a non-provision run the
+include is dropped whole, so no step writes them and the three fields stay **absent**;
+every reader (`destroy`, the migrations) defaults them.
 
 **Teardown - scenario [`destroy`](#destroy-teardown-cloud-provisioned-vm).** Tearing
 down provisioned VMs is implemented as a separate **lifecycle** scenario
@@ -1192,7 +1202,7 @@ with `create` as bootstrap).
   (depends only on `incarnation.*`) → a render-phase **group-drop**: with an empty
   `provisioned_vm_ids` the task never physically enters the plan. Teardown without a
   cloud call goes through cleanly.
-- **★ `state_changes` are intentionally absent:** `destroy` is terminal - the
+- **★ state capture is intentionally absent:** `destroy` is terminal - the
   incarnation is deleted (`auto_destroy`), so clearing `provisioned_*` in state would be
   pointless (state goes away together with the incarnation).
 

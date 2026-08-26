@@ -11,7 +11,7 @@ import "fmt"
 //
 //	{"__secret_request": {"length": 32, "allowed_chars": "abc…"}}
 //
-// `core.state.present` recognises the key on a property declared `type: secret` and
+// `core.state.*` recognises the key on a property declared `type: secret` and
 // mints a value only when the field is empty ([ADR-0083] §4). Anywhere else the map
 // is inert data.
 //

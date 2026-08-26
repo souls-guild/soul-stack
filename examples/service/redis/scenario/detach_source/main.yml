@@ -64,28 +64,12 @@ compute:
          'sentinel failover-timeout '         + compute.sentinel_master_name: string(int(default(default(incarnation.state.redis_sentinel, {}).failover_timeout_ms, 60000)))
        } }
 
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# Mark the source detached: seeded_from.detached := true (source_endpoints
-# IS PRESERVED — a historical record of "where we migrated from"). ★ seeded_from is a scalar
-# OBJECT, not a collection, so ADR-057's `modify` (a match predicate over collection
-# ELEMENTS) doesn't apply to it — an object field patch is expressed via a full `set`:
-# merge() the old object with {detached: true} (shallow last-wins, templating.md §2.3) —
-# preserves source_endpoints (and any future seeded_from fields), changes only detached.
-# The seeded_from object is guaranteed on v9 incarnations (migration 008_to_009), BUT with an EMPTY
-# source_endpoints for those that never went through migrate_cluster (the migration gives every v9
-# {source_endpoints:[], detached:false}). detach is an ordinary maintenance scenario (no runnable:false),
-# an operator can run it on a freshly-created incarnation — the assert-guard
-# in sentinel.yml (size(source_endpoints) >= 1) cuts that off; it never reaches this merge.
-state_changes:
-  - set: seeded_from
-    value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"
-
 # The run body — dispatcher branches on incarnation.state.redis_type. S1 pilot: sentinel
 # is implemented, cluster is a fail-closed stub (S4). when on state.redis_type —
 # a mode gate (like the create dispatcher on input.redis_type, but the source is state).
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference. The
@@ -99,16 +83,23 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
-      # No `password` property on any element → present-semantics require an EXISTING
+      field: system_acl_users
+      # No `password` property on any element → secret resolution requires an EXISTING
       # value: an account whose secret was never minted fails loudly here, rather than
       # the live instance being handed a freshly generated one it does not know.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - include: cluster.yml
     when: "incarnation.state.redis_type == 'cluster'"
   - include: sentinel.yml
     when: "incarnation.state.redis_type == 'sentinel'"
+
+  - name: Record that the seed source is detached
+    on: keeper
+    module: core.state.set
+    params:
+      field: seeded_from
+      value: "${ merge(incarnation.state.seeded_from, {'detached': true}) }"

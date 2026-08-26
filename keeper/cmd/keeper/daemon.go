@@ -52,6 +52,7 @@ import (
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	coremodsoul "github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
@@ -1137,9 +1138,12 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		CloudUserdata: userdataProvider,
 		Vault:         d.vc,
 		Audit:         d.auditWriter,
-		// `core.state.present` derives its Vault path from the same KV mount the
+		// `core.state.*` derives its Vault path from the same KV mount the
 		// ADR-064 write path uses (newSecretWriter below).
 		VaultMount: cfg.Vault.KVMount,
+		// The capture write itself ([ADR-0084]): `core.state.*` commits the field
+		// at the step, so it needs the pool the end-of-run commit used to own.
+		StateStore: coremodstate.NewPGStore(d.pool),
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

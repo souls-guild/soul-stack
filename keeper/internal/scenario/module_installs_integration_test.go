@@ -123,7 +123,6 @@ func TestIntegration_ModuleInstallSynthesis(t *testing.T) {
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := moduleServiceRepo(t, `name: create
-state_changes: {}
 tasks:
   - name: Use the echo plugin
     module: community.echo.run
@@ -175,7 +174,6 @@ func TestIntegration_ModuleInstallTakeover_NoDuplicate(t *testing.T) {
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := moduleServiceRepo(t, `name: create
-state_changes: {}
 tasks:
   - name: Operator installs the plugin explicitly
     module: core.module.installed
@@ -227,7 +225,6 @@ func TestIntegration_RenderForHost_SynthesisParity(t *testing.T) {
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := moduleServiceRepo(t, `name: create
-state_changes: {}
 tasks:
   - name: Use the echo plugin
     module: community.echo.run
@@ -296,7 +293,6 @@ func TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir(t *testing.T) {
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := moduleServiceRepo(t, `name: create
-state_changes: {}
 tasks:
   - name: noop create
     module: core.exec.run
@@ -304,7 +300,6 @@ tasks:
       cmd: "true"
 `, map[string]string{
 		"scenario/to_v2/main.yml": `name: to_v2
-state_changes: {}
 tasks:
   - name: from scenario dir
     module: core.file.absent
@@ -313,7 +308,6 @@ tasks:
 `,
 		"upgrade/to_v2/main.yml": `name: to_v2
 from: ["v1"]
-state_changes: {}
 tasks:
   - name: from upgrade dir
     module: core.file.present

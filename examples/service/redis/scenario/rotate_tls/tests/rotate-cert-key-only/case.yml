@@ -15,7 +15,7 @@
 #      (CACERT, NOT a bundle) — GUARD for the branch "no CA-rollover doesn't turn into a bundle":
 #      compareParams = reflect.DeepEqual by value → a bundle string would NOT match a single one.
 #      changed=true (force) is REMOVED (task_absent, onchanges idempotency).
-#   4. state_changes: cert_ref/key_ref = NEW (tls-v2), *ONLY ca_ref = OLD (tls#ca).
+#   4. state_after: cert_ref/key_ref = NEW (tls-v2), *ONLY ca_ref = OLD (tls#ca).
 #
 # * IDEMPOTENCY (guard invariant, identical to rotate-cert-key-ca). reload is gated by
 # onchanges:[tls_certs] instead of force changed:true: re-read SSL_CTX ONLY when the PEM
@@ -47,7 +47,7 @@ fixtures:
   # * cert+key-only case: input rotates cert_ref/key_ref (tls-v2), while ca_ref is NOT set →
   # compute.ca_ref = state.tls.ca_ref (tls#ca), compute.tls_ca = SINGLE current CA
   # (has(input.ca_ref)=false → no concatenation). CA material does not change: ca.crt is
-  # rendered with the current CA (CACERT) and ca_ref in state_changes stays the old one.
+  # rendered with the current CA (CACERT) and the captured ca_ref stays the old one.
   state:
     redis_type: sentinel
     redis_version: "7.2.4"
@@ -72,7 +72,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
       - { name: haproxy }
@@ -97,7 +97,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -273,9 +273,9 @@ assert:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
-  # state_changes: cert_ref/key_ref NEW (tls-v2); *ONLY ca_ref OLD (tls#ca — not rotated);
+  # state_after: cert_ref/key_ref NEW (tls-v2); *ONLY ca_ref OLD (tls#ca — not rotated);
   # enable/only/port unchanged.
-  state_changes:
+  state_after:
     tls:
       enable:   true
       only:     false

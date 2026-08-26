@@ -67,7 +67,6 @@ state_schema:
 `)
 	write("scenario/restart/main.yml", `name: restart
 description: probe role (p0, no serial) then rolling serial:1 act on replicas (p1)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run

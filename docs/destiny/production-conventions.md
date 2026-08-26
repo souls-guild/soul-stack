@@ -188,7 +188,7 @@ Any artifact downloaded from the network:
 
 Reason - the service `vars` and `input` for day-2 are **incomplete**:
 
-- `create` accepts the operator's `input` (for example `input.tls`, `input.memory_mb`), **translates** it into an expanded configuration and writes it to `incarnation.state` (`state_changes`, [ADR-057](../adr/0057-state-changes-crud-verbs.md)). This `input` is only available at the time `create` - day-2-run does not see it.
+- `create` accepts the operator's `input` (for example `input.tls`, `input.memory_mb`), **translates** it into an expanded configuration and writes it to `incarnation.state` (a `core.state.<verb>` capture step, [ADR-0084](../adr/0084-explicit-state-capture.md); the verbs are [ADR-057](../adr/0057-state-changes-crud-verbs.md)'s). This `input` is only available at the time `create` - day-2-run does not see it.
 - The operator on `create` supplies `input`, which a scenario merges OVER the service `vars` (for example `input.tls.port`/`input.tls.ca_ref` over `vars.tls_*`). A day-2 scenario looking at `vars` will see **the author's underlay**, and not the actually deployed one - this leads to desynchronization "the scenario thinks one thing, but the host thinks another."
 
 Therefore, the day-2 scenario takes the detailed fact (whether TLS is enabled, on what port the service is listening, what ACL users are set up, what is the topology of the shards) from `incarnation.state` - the only place where *what is actually applied* is recorded. The service `vars`/`input` on day-2 are used only for things that **fundamentally do not belong in `state` (for example, secrets - see below).

@@ -301,4 +301,4 @@ go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/destroy/tests
 The [`monitoring-observability`](scenario/create/tests/monitoring-observability/case.yml) case
 checks that the plan includes the unconditional `apply: destiny node-exporter` and
 `apply: destiny vector` (steps 6/7) with the versions/sources from service vars, and that the
-`monitoring`/`logging` read-model made it into `state_changes`.
+`monitoring`/`logging` read-model made it into the state captures.

@@ -32,9 +32,14 @@ var ErrVarCycle = errors.New("render: var_cycle")
 // The dependency graph is built via engine.VarRefs on each string value (AST
 // walk, not regex): `${ vars.X }` → edge current-var → X. A reference to a name
 // absent from raw → [ErrVarUnknownRef] (eager, even for an unused var). A cycle →
-// [ErrVarCycle] with a trace. Non-string values pass through as literals (CEL only
-// touches strings, symmetric with renderValue/resolveCompute); they contribute no
-// edges.
+// [ErrVarCycle] with a trace. Non-string values pass through as literals and
+// contribute no edges: a `${ … }` nested INSIDE a map or list var is not resolved,
+// it survives as its own text ([destiny/vars.md] §"Valid value types"). This is
+// NOT what renderValue does to `params:` — that one descends and evaluates every
+// string it finds — so an author who wants an interpolated collection writes the
+// whole var as one CEL expression rather than a YAML literal with cells in it.
+//
+// [destiny/vars.md]: docs/destiny/vars.md
 //
 // ISOLATION (CRITICAL): var→var reaches its own layer and the layers BELOW it,
 // never sideways or upward. `lower` carries the already-resolved layers this one

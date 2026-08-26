@@ -10,8 +10,8 @@ description: >-
   Keeper render -> apply gRPC -> Soul Apply -> RunResult -> apply_runs success.
 
 # state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
-# state_changes fix what the scenario has deployed, so the contract test can
-# validate incarnation.state after a successful apply.
+# The scenario's core.state.set steps fix what it has deployed, so the contract
+# test can validate incarnation.state after a successful apply.
 state_schema:
   type: object
   required: [nginx_package, nginx_service, nginx_config_managed]

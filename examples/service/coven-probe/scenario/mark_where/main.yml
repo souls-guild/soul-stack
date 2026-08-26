@@ -7,12 +7,6 @@ description: >-
   the file is applied only to cluster-a. cluster-c outside on: doesn't
   participate at all.
 
-state_changes:
-  - set: marker_file
-    value: /tmp/coven-marker-where.txt
-  - set: last_target
-    value: "on=a,b where=ta-*"
-
 tasks:
   - name: Write marker only on ta-* hosts (where over coven a+b)
     on: ["cluster-a", "cluster-b"]
@@ -22,3 +16,17 @@ tasks:
       path: /tmp/coven-marker-where.txt
       mode: "0644"
       content: "marked-by mark_where filtered=ca-only\n"
+
+  - name: Record the marker file this scenario writes
+    on: keeper
+    module: core.state.set
+    params:
+      field: marker_file
+      value: /tmp/coven-marker-where.txt
+
+  - name: Record which coven scenario ran last
+    on: keeper
+    module: core.state.set
+    params:
+      field: last_target
+      value: "on=a,b where=ta-*"

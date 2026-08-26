@@ -1232,7 +1232,7 @@ func TestEmbed_PurgeArchivesFunctions(t *testing.T) {
 }
 
 // TestEmbed_ApplyTaskRegisterTable -- sanity on 022: accumulator of register data
-// for run tasks (state_changes slice 2) with composite PK (apply_id, sid, task_idx)
+// for run tasks, with composite PK (apply_id, sid, task_idx)
 // and CASCADE FK to apply_runs(apply_id, sid).
 func TestEmbed_ApplyTaskRegisterTable(t *testing.T) {
 	b, err := FS.ReadFile("022_create_apply_task_register.up.sql")

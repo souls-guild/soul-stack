@@ -31,7 +31,7 @@ Author-form examples → parsing:
 | `core.bootstrap.issued` / `core.bootstrap.delivered` | `core.bootstrap` | `issued` / `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
-| `core.state.present` | `core.state` | `present` |
+| `core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset` | `core.state` | the address suffix, one per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb |
 | `core.cert.registered` / `core.cert.issued` | `core.cert` | `registered` / `issued` |
 
 Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified, `core.state` only when the Vault client is. `core.bootstrap` is present when either its Postgres issuer or its delivery dependencies exist; production always wires the issuer. An unavailable state fails explicitly (`issuer not configured` / `dialer not configured`) instead of borrowing dependencies from another state.
@@ -42,9 +42,47 @@ Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-
 
 ### The context of `params:` is `incarnation.state`, but not `soulprint`
 
-Keeper-side task is executed on the keeper itself - it has no hosts. Therefore, `params:` are rendered in a **run-level** context (once per run, not per-host): `input.*` / `vars.*` / `incarnation.*` / `register.*` are available (from previous keeper tasks), but **not** `soulprint.self` / `soulprint.hosts` - access to them in `params` keeper task gives the standard CEL error `no such key` (there are no host facts, and this is correct: the keeper step operates with registries, not facts of a specific VM).
+Keeper-side task is executed on the keeper itself - it has no hosts. Therefore, `params:` are rendered in a **run-level** context (once per run, not per-host): `input.*` / `vars.*` / `incarnation.*` / `register.*` are available (from previous keeper tasks), but **not** `soulprint.self` / `soulprint.hosts` - access to them in `params` keeper task fails the render (there are no host facts, and this is correct: the keeper step operates with registries, not facts of a specific VM). The two fail differently: `soulprint.self.<path>` gives the standard CEL `no such key`, while `soulprint.hosts` is refused by name - `construct soulprint.hosts (scenario-only; not available in destiny pass) not yet implemented (pilot)`.
 
 In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-only **pre-run snapshot** `incarnation.state` (the same `stateBefore` for row-lock runs, symmetrically for Soul-side tasks). The snapshot is invariant within the run (fixed once, does not accumulate between passages). This allows the keeper-side task to read facts written by the previous run: for example, `core.cloud.destroyed` in the teardown scenario `destroy` takes `provider`/`vm_ids`/`sids` from `incarnation.state.provisioned_*` written by the create run through `core.cloud.created` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). If the incarnation does not yet have a state (push/trial without it) - `incarnation.state.<x>` gives `no such key`; defend reading `default(incarnation.state.<path>, …)` where fact may be missing.
+
+### Flow control on a keeper-side task
+
+A keeper-side task is executed by the keeper's own scenario runner, which walks the plan in order and evaluates no flow-control predicate. Everything a Soul-side runner answers - `when:` / `changed_when:` / `failed_when:` / `onchanges:` / `onfail:` / `retry:`+`until:` - rides the `RenderedTask` for symmetry and is read by nobody keeper-side. The keys whose being dropped would change what actually runs are therefore refused outright rather than accepted and ignored:
+
+| Key on `on: keeper` | Answer |
+|---|---|
+| `async:` | **Refused** (`async_on_keeper_invalid`) - Soul-side task concurrency, no meaning off a Soul ([destiny/tasks.md §6](../destiny/tasks.md)). |
+| `loop:` · `apply:` | **Refused** - a keeper task is module-only in the pilot. A capture over a runtime-sized collection is written out one step per element ([NIM-709](../adr/0084-explicit-state-capture.md)). |
+| `block:` | **Refused** (`block_on_keeper_invalid`) - `on:` selects the hosts a block fans out to, and `keeper` is not one. The key is refused at **both** levels: on the block, and on a task nested inside one. Keeper-side tasks go flat, in the scenario's own task list. |
+| `when:` **static** (`input.` / `vars.` / `incarnation.`) | **Honoured.** The keeper settles it at render, before the task is routed keeper-side: false collapses the step to a skip placeholder, true renders it normally. This is the working form. |
+| `when:` reading `register.*` / `soulprint.*` | **Refused** (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - see below. |
+| `require:` | **Accepted, redundant** - the keeper runs its tasks in plan order, so the barrier is already satisfied; threading it keeps its names under the unknown-register check. |
+| `register:` · `id:` | **Accepted** - the task's register is accumulated under the keeper target and is readable by a **later keeper task** (`register.*` in the run-level context above). |
+
+**A `when:` that reads `register.*` or `soulprint.*` is an error**, not a slow path. `when:` is a Soul-side predicate: it is evaluated in the Soul's own flow-control sandbox, and a keeper task never reaches a Soul. Until it was refused, the key was accepted and dropped on the floor - the file said the step was conditional and the step ran every time. Since [ADR-0084](../adr/0084-explicit-state-capture.md) made `core.state.<verb>` the only writer of incarnation state, the step that runs every time is the step that **writes state**, which is why this is an ERROR at parse (`soul-lint`, with a line and a column) with a fail-closed backstop at render.
+
+Two replacements, both working today:
+
+```yaml
+# 1. The condition moves INSIDE the value - evaluated at render, in the keeper
+#    env, where a PREVIOUS keeper task's register is bound.
+- name: Record the provisioning outcome
+  on: keeper
+  module: core.state.set
+  params:
+    field: tier
+    value: "${ register.provision.changed ? 'fresh' : 'reused' }"
+
+# 2. The step must not run AT ALL - then it belongs on the Soul side, where
+#    `when:` is evaluated.
+- name: Warm the cache only where the probe found it cold
+  when: register.probe.stdout == 'cold'
+  module: core.exec.run
+  params: { cmd: warm-cache }
+```
+
+A keeper task's `register.*` context holds **keeper** tasks only. A capture that reaches for a **host** task's register does not silently read an empty value - the run aborts (`error_locked`, the field left unwritten, the abort reason named). Reaching a host-derived value into `incarnation.state` is not expressible today; the value has to come from a keeper task.
 
 ## `core.soul.registered`
 
@@ -317,40 +355,79 @@ Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
 
-## `core.state.present`
+## `core.state.<verb>`
 
-The single write of a service state field that carries **declared secrets** ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.state`; state `present` comes from the address suffix. Registered only when the Vault client is configured (`Deps.Vault`), the same pattern as `core.choir` / `core.cert` - otherwise the step fails with "unknown keeper-side module".
+The write point of a service state field ([ADR-0084](../adr/0084-explicit-state-capture.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key — base `core.state`; the address suffix **is the verb**. Registered only when the Vault client is configured (`Deps.Vault`), the same pattern as `core.choir` / `core.cert` — otherwise the step fails with "unknown keeper-side module".
 
-`present` and not `set` is the whole point. On a property declared `type: secret` in the service `state_schema`, an existing Vault value is **kept** and the incoming request discarded. An incidental re-render must not rotate a live credential, so deliberate rotation is not expressible here by design (its own decision, its own ticket - NIM-700).
+The field lands in `incarnation.state` **at the step**, under the run that produced it, not in an end-of-run commit. A later task in the same run reads what an earlier one wrote, and a run that dies half-way leaves what it had already captured instead of nothing.
+
+### The verbs
+
+| Address | What happens to the field |
+|---|---|
+| `core.state.set` | Overwrite it. |
+| `core.state.present` | Write it only if it has no value yet; an existing one wins. |
+| `core.state.add` | Idempotently add one element to a collection, by identity (`key:` for a map, `match:` for a list). |
+| `core.state.append` | Append one element to a list, no identity check. |
+| `core.state.modify` | Patch every element matching `match:`. |
+| `core.state.remove` | Drop every element matching `match:`. |
+| `core.state.unset` | Drop the field itself. |
+
+These are the [ADR-057](../adr/0057-state-changes-crud-verbs.md) verbs, applied by the same engine the retired `state_changes` used (`keeper/internal/stateop`) — a verb cannot mean two different things depending on which path wrote it. An address outside the table is refused (`unknown keeper-side module state`), and so is a param the verb does not take: a `patch:` handed to a `set` is an authoring mistake, and dropping it silently would write the field without the change the author asked for.
+
+**A declared secret is orthogonal to the verb.** On a property declared `type: secret` in the service `state_schema` ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4), every verb behaves identically: an existing Vault value is **kept**, a missing one is minted from the step's `generate_secret()` request, and the register carries a `vault:` reference rather than plaintext. `core.state.set` overwrites the field's ordinary content and still does not rotate a live credential. Deliberate rotation is not expressible here by design — its own decision, its own ticket (NIM-700).
+
+`core.state.present` answers a different question: whether the incoming value reaches the field at all. Over a field that already holds a value it discards the proposal and resolves the **stored** value instead, so the register quotes what won and nothing is minted for a write that was thrown away.
+
+```yaml
+- name: capture the users we just created
+  on: keeper
+  module: core.state.add
+  register: redis_users
+  params:
+    field: redis_users
+    key: "${ compute.new_user.name }"
+    value: "${ compute.new_user }"
+    on_conflict: skip
+```
 
 ### Parameters (`params:`)
 
-| Param | Type | Required | Meaning |
-|---|---|---|---|
-| `key` | string | yes | The **top-level** property of the service `state_schema` this task writes. Not a path, not a nested field - a name that is not a top-level property is an error. |
-| `set` | any | yes | The proposed value of that field. Secret properties may hold a `SecretRequest` produced by [`generate_secret()`](../templating.md#23-registered-cel-functions-starting-minimum); everything else is ordinary data. |
+| Param | Type | Verbs | Required | Meaning |
+|---|---|---|---|---|
+| `field` | string | all | yes | The **top-level** property of the service `state_schema` this task writes. Not a path, not a nested field — a name that is not a top-level property is an error. |
+| `value` | any | `set`, `present`, `add`, `append` | yes | The proposed value: the whole field for `set` / `present`, one element for `add` / `append`. Secret properties may hold a `SecretRequest` produced by [`generate_secret()`](../templating.md#23-registered-cel-functions-starting-minimum); everything else is ordinary data. |
+| `key` | string | `add` | no | The element's identity in a **map** field: the key it is stored under. On a **list** field it is an error, not a fallback — the list spelling is `match:`, and the two are mutually exclusive (which one the engine reads is decided by the field's kind, so a task carrying both would have one of them silently ignored). |
+| `match` | expression | `add`, `modify`, `remove` | no | Per-element predicate, evaluated by the render pipeline's own CEL environment — the module never builds one of its own. On `add` it is the element's identity in a **list** field (bindings `elem` and `value`); omitted there, identity is deep equality of the whole element. On `modify` / `remove` it selects which elements to touch (binding `elem`), and **omitting it does not mean "every element"** — an empty predicate matches nothing, so the step is a no-op (fail-safe: a forgotten line deletes nothing). To mean every element, write `match: "true"` and take the `state_wide_match` warning, which exists to make that choice visible. |
+| `on_conflict` | `skip` \| `replace` \| `error` | `add` | no (`skip`) | What to do when an element with that identity is already there. |
+| `patch` | map | `modify` | yes | The properties to overwrite on each matching element. |
+| `expect` | `any` \| `one` \| `at_most_one` | `modify`, `remove` | no (`any`) | How many elements the match is allowed to hit, checked **before** mutating. |
 
-The **service** and **incarnation** of the run are not parameters - they travel on the module context, like `core.cloud`'s incarnation, because they are two segments of a derived path and an author must not be able to name them. Both missing is a **failure, not a default**: the owner is what makes the path unforgeable, so the module fails closed rather than derive a path with an empty segment. The same applies to an unavailable `state_schema`.
+An enum param is checked at the module, not passed through: `on_conflict: replce` would otherwise fall to the engine's default (`skip`) and silently keep the old element.
+
+The **service** and **incarnation** of the run are not parameters — they travel on the module context, like `core.cloud`'s incarnation, because they are two segments of a derived path and an author must not be able to name them. Both missing is a **failure, not a default**: the owner is what makes the path unforgeable, so the module fails closed rather than derive a path with an empty segment. The same applies to an unavailable `state_schema`.
 
 A `SecretRequest` sitting in a position no declared property claims is an **error**, checked before anything is written. A request nobody resolves would travel on into `incarnation.state` as ordinary data and look like a password was asked for when nothing minted one.
 
 ### Output contract (`output:` module)
 
-| Key | Meaning |
-|---|---|
-| `key` | The state field this task wrote, echoed for diagnostics. |
-| `effective` | **The effective state** - what is stored now, existing values included, not what the caller proposed - with every secret property replaced by its `vault:` reference. This is what consumers read: `${ register.<name>.effective }`. |
-| `generated` | The derived Vault paths whose secret this run **minted**, sorted, flat form (`<mount>/<service>/…#<field>`, no `vault:` prefix). Paths, never values. |
+| Key | Verbs | Meaning |
+|---|---|---|
+| `field` | all | The state field this task wrote, echoed for diagnostics. |
+| `effective` | `set`, `present`, `add`, `append` | **The effective value** — what the step resolved, existing secrets included, not what the caller proposed — with every secret property replaced by its `vault:` reference. This is what consumers read: `${ register.<name>.effective }`. A verb carrying no `value:` reports no `effective` at all: the key is **absent**, not null, so "this verb writes no value" cannot be mistaken for "resolution produced nothing". |
+| `generated` | all | The derived Vault paths whose secret this run **minted**, sorted, flat form (`<mount>/<service>/…#<field>`, no `vault:` prefix). Paths, never values. |
 
-*A generator's output is a candidate, a writer's output is the truth.* Only the writer knows which value won a `present` resolution, so only the writer can be quoted - a consumer that re-derives the value from its own `generate_secret()` call would configure the target with a password the writer discarded. `changed=true` exactly when `generated` is non-empty, so a second run of an unchanged field is OK, not CHANGED. That is the whole of what the module does - it writes Vault, and the state field itself is still written by the run's `state_changes`, so a change to the field's non-secret content is not this task's change to report. `onchanges:` hung off this register therefore fires on **minting**, not on the field's content moving.
+*A generator's output is a candidate, a writer's output is the truth.* Only the writer knows which value won, so only the writer can be quoted — a consumer that re-derives the value from its own `generate_secret()` call would configure the target with a password the writer discarded.
 
-A secret in the register rides as a **reference**, not as plaintext ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §6) - which is why plaintext never reaches `apply_task_register` and needs no purge. The render boundary resolves the reference for the cell that consumes it, and the seal detector marks such a register (`SealSources.SealedRegisters`) so the consuming cell is masked in `status_details`.
+`changed=true` when the run minted a secret **or** the stored field is not what it was. Reporting only the mint would call a real state change a no-op; reporting only the field would miss a mint into a collection whose visible content did not move. `onchanges:` hung off this register therefore fires on either.
+
+A secret in the register rides as a **reference**, not as plaintext ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §6) — which is why plaintext never reaches `apply_task_register` and needs no purge. The render boundary resolves the reference for the cell that consumes it, and the seal detector marks such a register (`SealSources.SealedRegisters`) so the consuming cell is masked in `status_details`.
 
 ### Security
 
-Derived, never authored: [`shared/config.SecretField`](../../shared/config/secret_field.go) builds the path from (service, incarnation, state field, key) and every segment is checked against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$`, **failing closed** - `<key>` is operator-influenced data, so a `/`, a `.` or a `..` inside a user's name must never become a path segment. The corollary is the fence: an author-written path under `<mount>/<service>/` is refused in every spelling ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §7, [templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum)).
+Derived, never authored: [`shared/config.SecretField`](../../shared/config/secret_field.go) builds the path from (service, incarnation, state field, key) and every segment is checked against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$`, **failing closed** — `<key>` is operator-influenced data, so a `/`, a `.` or a `..` inside a user's name must never become a path segment. The corollary is the fence: an author-written path under `<mount>/<service>/` is refused in every spelling ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §7, [templating.md §2.3](../templating.md#23-registered-cel-functions-starting-minimum)).
 
-The audit event is `vault.kv-present`, **reused rather than renamed**: the fact recorded is the one that module already records - a secret was ensured present at these paths - and splitting one fact across two names would leave an operator having to filter on both. Written only when something was minted, payload `{paths, state_field, service, incarnation}`, no values. Every failure is a failed **event** rather than a gRPC error, so the run enters `onfail` / `error_locked` like any other task.
+The audit event is `vault.kv-present`, **reused rather than renamed**: the fact recorded is the one that module already records — a secret was ensured present at these paths — and splitting one fact across two names would leave an operator having to filter on both. Written only when something was minted, payload `{paths, state_field, service, incarnation}`, no values. Every failure is a failed **event** rather than a gRPC error, so the run enters `onfail` / `error_locked` like any other task.
 
 ## `core.cert.registered` / `core.cert.issued`
 

@@ -160,7 +160,7 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // here made an author's `compute.x` in a keeper task's params fail at eval with
 // a bare `no such key: x` while soul-lint accepted the file. [ADR-0083] §4 needs
 // it directly: the mint task derives the account set from the same compute the
-// scenario's state_changes writes, so the two cannot drift.
+// scenario's state captures, so the two cannot drift.
 func keeperVars(in RenderInput) cel.Vars {
 	inc := map[string]any{
 		"name":            in.Incarnation.Name,

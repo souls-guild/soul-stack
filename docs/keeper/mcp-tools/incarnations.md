@@ -182,10 +182,12 @@ it names. The same record is written to `incarnation_archive.status_details` and
 the `incarnation.destroy_completed` audit event.
 
 The three fields are three separate statements. Empty `vm_ids` is not "no
-machines": the ids reach `state` only when a run commits its `state_changes`, so
-a `create` that provisioned machines and then failed — the case this field exists
-for — leaves them running with no ids recorded, and `sids` is what still names
-the hosts. Being read from service-authored state, `provider` and `vm_ids` are
+machines": the ids reach `state` when the scenario's `core.state.<verb>` capture
+step runs ([ADR-0084](../../adr/0084-explicit-state-capture.md)), so a `create`
+that provisioned machines and then failed **before** that step — the case this
+field exists for — leaves them running with no ids recorded, and `sids` is what
+still names the hosts. A scenario that captures right after provisioning narrows
+that window to the provisioning call itself. Being read from service-authored state, `provider` and `vm_ids` are
 masked; `sids` are keeper-owned FQDNs and are not.
 
 This tool has its own `outputSchema` rather than sharing the plain apply-id one:

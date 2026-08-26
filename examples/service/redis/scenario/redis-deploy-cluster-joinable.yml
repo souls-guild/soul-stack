@@ -78,7 +78,7 @@
       # ★ REDESIGN default_admin (2026-06-30): input.password REMOVED (requirepass removed).
       # Authentication — via the system default_admin, its password arrives in users below.
       # A single compute.redis_config (declared ONCE in the including file's main.yml, ADR-009):
-      # the same map that goes into state_changes.redis_config — the "state ≡ live config" drift
+      # the same map the redis_config capture records — the "state ≡ live config" drift
       # is eliminated by compute itself. For cluster = base merge + cluster directives (cluster-
       # enabled/config-file/node-timeout) + tls-cluster yes when TLS is on. HOST-INVARIANT →
       # apply.input on targeted[0] is correct.
@@ -91,7 +91,7 @@
       # without it, PSYNC would hit NOAUTH → the join would not catch up on data. The directive survives a
       # restart (CONFIG SET is not persisted without REWRITE), is host-invariant (one default_admin per
       # cluster) → apply.input. Failover-safe (inert on non-replicas). ★ DIFFERS from
-      # state_changes.redis_config: there it's PURE compute.redis_config WITHOUT masterauth (the secret is in
+      # the redis_config capture: there it's PURE compute.redis_config WITHOUT masterauth (the secret is in
       # Vault, not in state). masterauth is vault()-IN-A-CELL (seal masking, ADR-010 §7.4).
       # admin_user = default_admin (compute.admin_user); the path is secret/redis/<inc>/users/
       # default_admin#password (precondition: == the password of the same user in the OLD cluster).

@@ -72,7 +72,6 @@ state_schema:
 `)
 	write("scenario/crosspassage/main.yml", `name: crosspassage
 description: probe role + config (passage 0); restart where primary onchanges cfg (passage 1)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run

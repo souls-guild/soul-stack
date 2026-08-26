@@ -19,9 +19,6 @@ description: >-
   attempt that passed the gate. Since the gate is in the future relative to prepare, the 1st
   probe attempt MUST see NOTYET → a real retry of ≥2 attempts.
 
-# Focus scenario: state doesn't change (commit state — a separate invariant).
-state_changes: {}
-
 tasks:
   # ── Task 0: set up a deterministic health-gate ───────────────────
   # printf epoch markers ONTO THE HOST. GATE_DELAY=6s, probe delay=2s → the probe can't

@@ -239,7 +239,7 @@ layer resolve per host is mechanically straightforward — the plumbing for a pe
 already exists (`RegisterByHost`, `DestinyVarsResolved`). What stops it is reach: the two
 host-invariant boundaries above would not move with it. `apply: input:` carries **136**
 `vars.` reads across the thirteen shipped services, and `compute:` — whose own contract says
-host-invariance is what makes it safe to feed `apply.input` and `state_changes` at once —
+host-invariance is what makes it safe to feed `apply.input` and a state capture's `params:` at once —
 carries five more. A per-host layer that stopped at those boundaries would be per-host in
 tasks and silently first-host everywhere else: the same class of quiet wrong answer this ADR
 removes, and worse than not having the feature, because it would look like it worked.

@@ -6,7 +6,7 @@
 # is used.
 #
 # ★ register.provision — from mocks.register (L0 stand-in for core.cloud.created, step (a)
-# is not executed): steps (b)/(c) and state_changes read vm_ids/hosts from here. The roster
+# is not executed): steps (b)/(c) and the provisioned_* captures read vm_ids/hosts from here. The roster
 # is 4 hosts (in production refresh_soulprint provides them; in an L0 mid-run re-resolve is
 # stubbed, so the roster is a static fixture).
 name: provision enabled in cluster mode sizes VM count from shards (count = shards * (1 + replicas))
@@ -92,7 +92,7 @@ mocks:
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
         - { sid: vm-4.example.com, vm_id: i-ddd444, primary_ip: 10.0.0.4, bootstrap_token: tok-vm4 }
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -165,7 +165,7 @@ assert:
         action: create
         replicas_per_shard: 1
 
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333, i-ddd444]

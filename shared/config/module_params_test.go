@@ -220,26 +220,26 @@ func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
 // Guard: restrict scalarText to *ast.StringNode and the folded case reports
 // param_type_mismatch again.
 func TestCheckParamType_CELInBlockScalar(t *testing.T) {
-	// core.state.present declares `set` as a list; each source below supplies a CEL
-	// expression, so none of them may be judged structurally.
+	// Each source below supplies a CEL expression, so none of them may be judged
+	// structurally, whatever the param's declared type.
 	sources := map[string]string{
 		"inline": `
 - name: mint
   on: keeper
-  module: core.state.present
+  module: core.state.set
   register: users
   params:
-    key: users
-    set: "${ [{'name': 'a'}] }"
+    field: users
+    value: "${ [{'name': 'a'}] }"
 `,
 		"folded": `
 - name: mint
   on: keeper
-  module: core.state.present
+  module: core.state.set
   register: users
   params:
-    key: users
-    set: >-
+    field: users
+    value: >-
       ${ ['a', 'b'].map(n, {
            'name': n
          }) }
@@ -247,11 +247,11 @@ func TestCheckParamType_CELInBlockScalar(t *testing.T) {
 		"literal": `
 - name: mint
   on: keeper
-  module: core.state.present
+  module: core.state.set
   register: users
   params:
-    key: users
-    set: |-
+    field: users
+    value: |-
       ${ ['a'].map(n, {'name': n}) }
 `,
 	}
@@ -265,15 +265,15 @@ func TestCheckParamType_CELInBlockScalar(t *testing.T) {
 	}
 
 	// The exemption is for CEL only — a real literal of the wrong shape still fails,
-	// in block form as much as inline.
+	// in block form as much as inline. The negative half uses a param whose declared
+	// type admits ONE shape (`core.exec.run args` is a list): `core.state` writes any
+	// field the state_schema declares, so its `value:` cannot narrow one.
 	bad := `
-- name: mint
-  on: keeper
-  module: core.state.present
-  register: users
+- name: run
+  module: core.exec.run
   params:
-    key: users
-    set: >-
+    cmd: /bin/true
+    args: >-
       plain folded text,
       not an expression
 `

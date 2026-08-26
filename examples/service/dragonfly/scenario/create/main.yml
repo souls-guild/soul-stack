@@ -286,8 +286,8 @@ validate:
 # ── Computed scenario vars (compute:) ──────────────────────────────────────
 # compute: resolved KEEPER-SIDE ONCE per run in the run-level context (input/
 # vars/incarnation — WITHOUT soulprint, the host-invariance barrier) and visible as compute.<name>
-# in both the body's apply.input AND state_changes. Removes duplication of the merge() translation:
-# declared HERE once, the body and state reference ${ compute.df_config }.
+# in both the body's apply.input AND the capture steps. Removes duplication of the merge()
+# translation: declared HERE once, the body and state reference ${ compute.df_config }.
 #
 # ★ CONFIG BOUNDARY: the host-layout flags --dir (snapshot, → data_dir) and --aclfile (→ conf_dir)
 # are set by the destiny TEMPLATE dragonfly.flags.tmpl FROM vars, NOT this compute. The TLS flags
@@ -306,8 +306,8 @@ compute:
   # The union of vars.system_acl_users ∪ vars.system_acl_users_sentinel keys: the accounts
   # the SERVICE provisions for itself (default_admin/replica/monitoring/sentinel/haproxy), as
   # opposed to df_users, which is operator intent. Declared once because two places must not
-  # drift: the `core.state.present` task that mints their passwords, and the
-  # `system_acl_users` state record written by state_changes. perms are NOT part of it -
+  # drift: the `core.state.set` task that mints their passwords, and the
+  # `system_acl_users` state record it writes. perms are NOT part of it -
   # those stay in service vars (policy), state records only which accounts exist.
   system_acl_names: >-
     ${ merge(default(vars.system_acl_users, {}).map(n, { n: 0 })
@@ -390,126 +390,10 @@ compute:
            : {}
        ) }
 
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# After a successful apply, Keeper commits what was deployed (ADR-009 §7.1, ADR-057 list form).
-# df_config — the same compute.df_config that went into render: a re-apply and day-2 see
-# a single source of truth.
-state_changes:
-  - set: df_version
-    value: "${ compute.df_version }"
-  - set: df_config
-    value: "${ compute.df_config }"
-  # tls: the same compute.tls_* (cert/key/ca — Vault PATHS, not PEM). ★ WITHOUT only/port: with
-  # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — day-2 connects via the socket.
-  - set: tls
-    value: >-
-      ${ {
-           'enable':   compute.tls_on,
-           'cert_ref': compute.tls_cert_ref,
-           'key_ref':  compute.tls_key_ref,
-           'ca_ref':   compute.tls_ca_ref
-         } }
-  # ★ install + host-layout (conf_dir/data_dir) moved out into service vars (v1→v2, Variant A):
-  # install — a read-model without readers, layout — day-2 reads service vars directly
-  # (default(vars.<x>, '<def>')). Their sets no longer exist — the keys are not in state_schema,
-  # a set would write a field outside the schema → state validation would fail.
-  - set: memory_mb
-    value: "${ int(default(input.memory_mb, 0)) }"
-  - set: sysctl_settings
-    value: "${ default(vars.sysctl_settings, {}) }"
-  # monitoring: read-model of the FACT that node_exporter was deployed (Slice II, ADR-024; symmetric
-  # with the install/tls read-model). Version/port — from vars.node_exporter_* (the same values
-  # that go into apply.input for the node-exporter destiny). ★ node-exporter-ONLY (DragonFly exposes
-  # metrics natively) — there are no redis_exporter fields here. Defaults duplicate the service vars / migration 004_to_005.
-  - set: monitoring
-    value: >-
-      ${ {
-           'node_exporter_version': default(vars.node_exporter_version, ''),
-           'node_exporter_listen':  default(vars.node_exporter_listen, ':9100')
-         } }
-  # logging: read-model of the FACT that log shipping was deployed (Slice V-I, ADR-067; symmetric with monitoring).
-  # Version/sink_type/endpoint/log_sources — from vars.vector_* (the same values that go into
-  # apply.input for the vector destiny). ★ vector_sink_auth_ref is NOT written HERE — it's a secret (in Vault, like
-  # tls.*_ref). Defaults duplicate the service vars / migration 005_to_006 (console — a safe default).
-  - set: logging
-    value: >-
-      ${ {
-           'vector_version':       default(vars.vector_version, ''),
-           'vector_sink_type':     default(vars.vector_sink_type, 'console'),
-           'vector_sink_endpoint': default(vars.vector_sink_endpoint, ''),
-           'vector_log_sources':   default(vars.vector_log_sources, [])
-         } }
-  # Topology: replicas (master's replicas), sentinel_quorum=0 (auto, not materialized).
-  - set: replicas
-    value: "${ int(default(input.replicas_per_master, 0)) }"
-  - set: sentinel_quorum
-    value: "${ 0 }"
-  # df_users - the AclUser array as-is; the `password` property is declared
-  # `type: secret`, so its value lives in Vault and the state engine strips it on the way
-  # in ([ADR-0083] §4) - input.users never carries one anyway.
-  - set: df_users
-    value: "${ default(input.users, []) }"
-  # system_acl_users - the service's OWN accounts (compute.system_acl_names). state records
-  # WHICH accounts exist; their perms stay in service vars (policy, not state) and their
-  # passwords in Vault at the path derived from this field ([ADR-0083] §1). Without the
-  # record, day-2 could not tell a provisioned account from one an operator added to vars
-  # after create, and .../secrets/reveal would have nothing to enumerate.
-  - set: system_acl_users
-    value: "${ compute.system_acl_names.map(n, { 'name': n }) }"
-  # df_hosts empty: state_changes are rendered per-host with soulprint.SELF (AllowHosts=false,
-  # orchestration §7.1) — the soulprint.hosts roster is not available. The exact declared roles — in
-  # apply.input.sentinel, not in state.
-  - set: df_hosts
-    value: "${ [] }"
-  # df_sentinel: facts about the monitored master. master_name from service vars; quorum=0 (auto); master_ip
-  # is not written (host-variant); failover timings from input.
-  - set: df_sentinel
-    value: >-
-      ${ {
-           'master_name':         default(vars.sentinel_master_name, 'master'),
-           'quorum':              0,
-           'down_after_ms':       int(input.sentinel_down_after_ms),
-           'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
-         } }
-
-  # ── cloud-provision read-model (ADR-061, Variant A) ──────────────────────────
-  # The FACT that "these VMs were created by THIS create run". ★ GUARD on input.provision (NOT
-  # has(register.provision)!): on a non-provision run dragonfly-provision.yml targets no one
-  # → there is no core.cloud.created step → register.provision does not exist → has(register
-  # .provision) would give no-such-key IN THE PREDICATE ITSELF. The gate is input.provision (an object input,
-  # has()-safe): set AND enabled → read register.provision (created by step (a)); otherwise [] / ''
-  # (hosts not provisioned by the service). The ternary short-circuits — register.provision.* is untouched
-  # on the non-provision path. Mirror of redis covenant.yml provisioned_* state_changes.
-  - set: provisioned_vm_ids
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? register.provision.vm_ids
-           : [] }
-  # provisioned_sids: SID (FQDN) of created VMs — for cascade-destroy day-2 teardown
-  # (souls→destroyed/seeds→orphaned/tokens→burned; the Reaper does NOT remove pending VM-souls).
-  # The same GUARD on input.provision as vm_ids/provider. sids are collected from
-  # register.provision.hosts[].sid (.map — the same expression as params.sid of step (c)
-  # core.soul.registered in dragonfly-provision.yml). Otherwise [] (hosts not provisioned by the service).
-  - set: provisioned_sids
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? register.provision.hosts.map(h, h.sid)
-           : [] }
-  # provisioned_provider — the FACT provider of created VMs. provider is read as
-  # default(input.provision.provider, vars.provision_provider): the operator usually does NOT set
-  # provider (the provision form is hidden, default-on) → falls back to vars.provision_provider
-  # (symmetric with dragonfly-provision.yml::core.cloud.created.params.provider). The gate
-  # input.provision (has()-safe) covers the non-provision path: enabled=false → '' (VMs not provisioned).
-  - set: provisioned_provider
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? default(input.provision.provider, vars.provision_provider)
-           : '' }
-
 # ── Run body (INLINE, sentinel-only — no dispatcher/include) ──────────────
 tasks:
   # ── Mint this run's ACL passwords ([ADR-0083] §4) ─────────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name), mints what is missing and
   # returns the effective state with every `type: secret` property replaced by its
@@ -525,15 +409,15 @@ tasks:
 
   - name: Mint the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
+      field: system_acl_users
       # compute.system_acl_names is the union of vars.system_acl_users and
       # vars.system_acl_users_sentinel - the SAME source the render below reads, so
       # "what we mint" and "what we read" cannot drift. generate_secret() evaluates to a
       # request, not a value: it cannot be stringified, concatenated or logged.
-      set: >-
+      value: >-
         ${ compute.system_acl_names.map(name, {
              'name':     name,
              'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
@@ -541,16 +425,16 @@ tasks:
 
   - name: Mint the passwords of the operator ACL users
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: df_users
     params:
-      key: df_users
-      # present, not set: an account that already holds a value keeps it, so a re-run
-      # never rotates a credential a client is already using. An empty input.users is the
+      field: df_users
+      # A declared secret resolves, never rotates: an account that already holds a value
+      # keeps it, so a re-run never breaks a client. An empty input.users is the
       # legitimate "no operator-extra" case and needs no `when` guard - an empty
       # collection is a valid value here (core.vault.kv-present rejected an empty targets
       # list, which is the only reason the old form carried one).
-      set: >-
+      value: >-
         ${ default(input.users, []).map(u, {
              'name':     u.name,
              'perms':    u.perms,
@@ -611,7 +495,7 @@ tasks:
         data_dir: "${ compute.data_dir }"
         # ★ default_admin REDESIGN: input.password is REMOVED (requirepass removed from the flagfile).
         # Authentication runs under the system default_admin, its password arrives via users below.
-        # A single compute.df_config (the same map as state_changes.df_config — drift is removed
+        # A single compute.df_config (the same map the df_config capture writes — drift is removed
         # by compute itself). Base merge (WITHOUT cluster; tls/tls_replication true with TLS — TLS
         # on the main port, WITHOUT tls_port). HOST-INVARIANT → apply.input.
         #
@@ -621,7 +505,7 @@ tasks:
         # via CONFIG SET at runtime, but CONFIG SET is NOT persisted → on restart DragonFly
         # would come up without masterauth → replica master_link_status:DOWN. A static flag in
         # the flagfile survives a restart. The directives are HOST-INVARIANT (one default_admin per
-        # cluster) → apply.input. ★ DIFFERENT from state_changes.df_config: there it's the PURE compute.df_config
+        # cluster) → apply.input. ★ DIFFERENT from the df_config capture: there it's the PURE compute.df_config
         # WITHOUT masterauth — the password does NOT go into state (secret stays in Vault). masterauth is a vault()
         # CALL IN THE CELL (seal masking). admin_user = default_admin; path — secret/dragonfly/<inc>/users/
         # default_admin#password. DF flag names are underscore-form (masteruser/masterauth are
@@ -871,3 +755,117 @@ tasks:
         sink_endpoint: "${ default(vars.vector_sink_endpoint, '') }"
         sink_auth_ref: "${ default(vars.vector_sink_auth_ref, '') }"
         log_sources:   "${ default(vars.vector_log_sources, []) }"
+
+  - name: Record the deployed DragonFly version
+    on: keeper
+    module: core.state.set
+    params:
+      field: df_version
+      value: "${ compute.df_version }"
+
+  - name: Record the effective DragonFly config
+    on: keeper
+    module: core.state.set
+    params:
+      field: df_config
+      value: "${ compute.df_config }"
+
+  # tls: the same compute.tls_* (cert/key/ca — Vault PATHS, not PEM). ★ WITHOUT only/port: with
+  # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — day-2 connects via the socket.
+  - name: Record the TLS material references
+    on: keeper
+    module: core.state.set
+    params:
+      field: tls
+      value: >-
+        ${ {
+             'enable':   compute.tls_on,
+             'cert_ref': compute.tls_cert_ref,
+             'key_ref':  compute.tls_key_ref,
+             'ca_ref':   compute.tls_ca_ref
+           } }
+
+  - name: Record the requested memory limit
+    on: keeper
+    module: core.state.set
+    params:
+      field: memory_mb
+      value: "${ int(default(input.memory_mb, 0)) }"
+
+  - name: Record the applied sysctl settings
+    on: keeper
+    module: core.state.set
+    params:
+      field: sysctl_settings
+      value: "${ default(vars.sysctl_settings, {}) }"
+
+  # monitoring: read-model of the FACT that node_exporter was deployed (Slice II, ADR-024; symmetric
+  # with the install/tls read-model). Version/port — from vars.node_exporter_* (the same values
+  # that go into apply.input for the node-exporter destiny). ★ node-exporter-ONLY (DragonFly exposes
+  # metrics natively) — there are no redis_exporter fields here. Defaults duplicate the service vars / migration 004_to_005.
+  - name: Record the deployed node_exporter
+    on: keeper
+    module: core.state.set
+    params:
+      field: monitoring
+      value: >-
+        ${ {
+             'node_exporter_version': default(vars.node_exporter_version, ''),
+             'node_exporter_listen':  default(vars.node_exporter_listen, ':9100')
+           } }
+
+  # logging: read-model of the FACT that log shipping was deployed (Slice V-I, ADR-067; symmetric with monitoring).
+  # Version/sink_type/endpoint/log_sources — from vars.vector_* (the same values that go into
+  # apply.input for the vector destiny). ★ vector_sink_auth_ref is NOT written HERE — it's a secret (in Vault, like
+  # tls.*_ref). Defaults duplicate the service vars / migration 005_to_006 (console — a safe default).
+  - name: Record the deployed log shipping
+    on: keeper
+    module: core.state.set
+    params:
+      field: logging
+      value: >-
+        ${ {
+             'vector_version':       default(vars.vector_version, ''),
+             'vector_sink_type':     default(vars.vector_sink_type, 'console'),
+             'vector_sink_endpoint': default(vars.vector_sink_endpoint, ''),
+             'vector_log_sources':   default(vars.vector_log_sources, [])
+           } }
+
+  # Topology: replicas (master's replicas), sentinel_quorum=0 (auto, not materialized).
+  - name: Record the replica count per master
+    on: keeper
+    module: core.state.set
+    params:
+      field: replicas
+      value: "${ int(default(input.replicas_per_master, 0)) }"
+
+  - name: Record the sentinel quorum
+    on: keeper
+    module: core.state.set
+    params:
+      field: sentinel_quorum
+      value: "${ 0 }"
+
+  # df_hosts stays empty on purpose: the declared roles live in apply.input.sentinel,
+  # the run roster is not part of the read-model.
+  - name: Record an empty host roster
+    on: keeper
+    module: core.state.set
+    params:
+      field: df_hosts
+      value: "${ [] }"
+
+  # df_sentinel: facts about the monitored master. master_name from service vars; quorum=0 (auto); master_ip
+  # is not written (host-variant); failover timings from input.
+  - name: Record the sentinel monitoring facts
+    on: keeper
+    module: core.state.set
+    params:
+      field: df_sentinel
+      value: >-
+        ${ {
+             'master_name':         default(vars.sentinel_master_name, 'master'),
+             'quorum':              0,
+             'down_after_ms':       int(input.sentinel_down_after_ms),
+             'failover_timeout_ms': int(input.sentinel_failover_timeout_ms)
+           } }

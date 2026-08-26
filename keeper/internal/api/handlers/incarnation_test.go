@@ -2643,7 +2643,6 @@ func (a *recordingAuditWriter) Write(_ context.Context, e *audit.Event) error {
 // (string, no default) and an optional `replicas` (integer, default 1).
 const scenarioCreateRequiredInput = `name: create
 create: true
-state_changes: {}
 input:
   name:
     type: string
@@ -2774,7 +2773,7 @@ func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 // any input passes (like a service with no required fields).
 func TestIncarnation_Create_NoSchema_202(t *testing.T) {
 	db := &fakeIncDB{}
-	h, _ := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
+	h, _ := newCreateHandlerWithSchema(t, db, "name: create\ntasks: []\n")
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
@@ -2798,7 +2797,7 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	loader := &fakeLoader{
-		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
+		localDir:  writeCreateScenarioDir(t, "name: create\ntasks: []\n"),
 		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(false)},
 	}
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
@@ -2840,7 +2839,7 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
 	loader := &fakeLoader{
-		localDir:  writeCreateScenarioDir(t, "name: create\nstate_changes: {}\ntasks: []\n"),
+		localDir:  writeCreateScenarioDir(t, "name: create\ntasks: []\n"),
 		lifecycle: &config.LifecycleConfig{AutoCreate: boolPtr(true)},
 	}
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
@@ -2867,7 +2866,7 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 	db := &fakeIncDB{}
 	// lifecycle=nil in fakeLoader (a manifest without the block) → auto_create defaults to true.
-	h, starter := newCreateHandlerWithSchema(t, db, "name: create\nstate_changes: {}\ntasks: []\n")
+	h, starter := newCreateHandlerWithSchema(t, db, "name: create\ntasks: []\n")
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
 		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)

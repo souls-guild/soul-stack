@@ -12,7 +12,7 @@
 #      password from users/default_admin). The former "default from
 #      render_context.vars.password = requirepass" model is removed
 #      (requirepass dropped from server.yml);
-#   5. state_changes.redis_users carries ONLY operator-extra (app) — the system users are NOT in
+#   5. state_after.redis_users carries ONLY operator-extra (app) — the system users are NOT in
 #      state (item 7 d2: added on top from service vars on every render).
 #
 # Topology: shards=1, replicas_per_master=0 → 1 host (size-guard PASS). render_context
@@ -71,7 +71,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -141,7 +141,7 @@ assert:
               arch: amd64
           role: ""
 
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     # ★ GUARD "system users NOT in state": redis_users carries ONLY operator-extra (app),

@@ -37,7 +37,6 @@ func (f *fakeInputLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byt
 // default).
 const scenarioWithRequiredInput = `name: create
 description: test scenario
-state_changes: {}
 input:
   name:
     type: string
@@ -119,7 +118,6 @@ func TestValidateInput_NoSchema_OK(t *testing.T) {
 	// Scenario without an `input:` block (like "ba" if create has no
 	// required) — any provided passes; a nil schema doesn't reject.
 	const noInput = `name: create
-state_changes: {}
 tasks:
   - name: noop
     module: core.exec.run

@@ -28,7 +28,7 @@
 #      (SID→{addr:primary_ip+":6379"}), shards_dest=2, source_nodes=external source.
 #   3. ★ FAILOVER: community.redis.cluster action:failover-takeover, same nodes-MAP.
 #   4. ★ FORGET: community.redis.cluster action:forget-external, nodes-MAP + source_nodes.
-#   5. state_changes: create-set (cluster) + seeded_from {source_endpoints:[source],
+#   5. state_after: create-set (cluster) + seeded_from {source_endpoints:[source],
 #      detached:TRUE} — cluster B3 is atomic, forget happens in the migrate phase →
 #      detached is immediately true (unlike sentinel, where detached:false and detach is
 #      a follow-up scenario).
@@ -110,7 +110,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -155,7 +155,7 @@ assert:
               # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth) arrives
               # as ordinary config directives (the joinable deploy-body adds them via a
               # vault()-in-cell). Password — the users/default_admin path; it's NOT in
-              # state_changes.redis_config.
+              # state_after.redis_config.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -231,7 +231,7 @@ assert:
   # IN FULL, detached:TRUE (cluster B3 is atomic — forget happens in the migrate phase →
   # detached immediately true, unlike sentinel's detached:false). NO timestamp (L0
   # determinism).
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     redis_config:

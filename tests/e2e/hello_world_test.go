@@ -10,7 +10,7 @@
 //  4. WaitApplySuccess -> asserts by after-create.yaml expectations:
 //     - apply_runs.status == "success";
 //     - incarnation.state.greeting_file == "/tmp/soul-stack-hello"
-//     (taken from state_changes.sets in scenario/create/main.yml);
+//     (taken from the capture step in scenario/create/main.yml);
 //     - audit_log: incarnation.scenario_started with apply_id;
 //     - metrics: keeper_scenario_runs_total{result="ok"} >= 1.
 package e2e_test

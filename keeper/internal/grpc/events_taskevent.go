@@ -55,7 +55,7 @@ func (h *eventStreamHandler) handleTaskEvent(ctx context.Context, sid, sessionID
 		TaskIdx: int(ev.GetTaskIdx()),
 		// plan_index (ADR-056 §S1 fix Variant B): the GLOBAL cross-plan index across the
 		// whole plan (= RenderedTask.Index) — the correlation key linking a CHANGED task to the plan in
-		// auditpg.SelectChangedTaskKeys (state_changes whitelist + audit). The local
+		// auditpg.SelectChangedTaskKeys (the audit changed-task set). The local
 		// TaskIdx under staged/per-host-where ≠ the global one. N=1 → plan_index==task_idx.
 		PlanIndex: int(ev.GetPlanIndex()),
 		Status:    ev.GetStatus().String(),
@@ -263,9 +263,9 @@ func maskString(s string) string {
 }
 
 // accumulateRegister accumulates a task's register_data into `apply_task_register`
-// (migration 022): after the barrier, the scenario-runner reads what's accumulated and builds
-// RenderInput.Register per-host to render state_changes.sets (slice 2,
-// orchestration.md §7.1).
+// (migration 022): after the barrier, the scenario-runner reads what's accumulated
+// and builds RenderInput.Register per-host for the next Passage's render
+// (staged-render, ADR-056).
 //
 // register_name isn't known here (the proto only carries task_idx, ADR-012(d)) —
 // we store by task_idx; the name is resolved by the scenario-runner when reading from its own
@@ -327,7 +327,7 @@ func (h *eventStreamHandler) accumulateRegister(ctx context.Context, sid string,
 // For NON-failed tasks (ok/changed), `error` is absent (TaskError is populated
 // only on FAILED/TIMED_OUT, see apply.proto); the useful status fields are preserved.
 // The final MaskSecrets pass on the SSE write path (writeSSEEvent) remains as a
-// second barrier for register/state_changes secrets by vault-ref/keys.
+// second barrier for register secrets by vault-ref/keys.
 func (h *eventStreamHandler) publishTaskExecuted(sid string, ev *keeperv1.TaskEvent) {
 	if h.deps.ApplyBus == nil {
 		return

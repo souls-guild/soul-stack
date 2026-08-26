@@ -311,7 +311,7 @@ type Deps struct {
 
 	// VaultKVMount — keeper.yml's `vault.kv_mount`, paired with VaultClient. Reveal
 	// derives the path it reads ([ADR-0083] §2) and must land on the mount
-	// `core.state.present` wrote to; "" is the default mount.
+	// `core.state.*` wrote to; "" is the default mount.
 	VaultKVMount string
 
 	// PushRun — the multi-host push orchestrator (Variant C, ADR-004 push-flow +

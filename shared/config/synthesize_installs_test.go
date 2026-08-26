@@ -72,7 +72,6 @@ func assertSynthTask(t *testing.T, task Task, alias, ref string) {
 func TestSynthesizeModuleInstalls_ParamNameIsAnAliasNotAnAddress(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Configure redis
     module: community.redis.config
@@ -116,7 +115,6 @@ tasks:
 func TestSynthesizeModuleInstalls_BeforeFirstConsumer(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Warmup
     module: core.exec.run
@@ -149,7 +147,6 @@ tasks:
 func TestSynthesizeModuleInstalls_ConsumerInsideBlock(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Warmup
     module: core.exec.run
@@ -181,7 +178,6 @@ tasks:
 func TestSynthesizeModuleInstalls_NoConsumerNoSynth(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Warmup
     module: core.exec.run
@@ -209,7 +205,6 @@ tasks:
 func TestSynthesizeModuleInstalls_TakeoverTopLevel(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Operator installs plugin explicitly
     module: core.module.installed
@@ -233,7 +228,6 @@ tasks:
 func TestSynthesizeModuleInstalls_TakeoverInsideBlock(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Provision group
     block:
@@ -257,7 +251,6 @@ tasks:
 func TestSynthesizeModuleInstalls_CELNameNotTakeover(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Install computed plugin
     module: core.module.installed
@@ -301,7 +294,6 @@ func TestSynthesizeModuleInstalls_NonStringNameNotTakeover(t *testing.T) {
 func TestSynthesizeModuleInstalls_EmptyModules(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Configure redis
     module: community.redis.config
@@ -324,7 +316,6 @@ tasks:
 func TestSynthesizeModuleInstalls_CorePrefixSkipped(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Install package
     module: core.pkg.installed
@@ -343,7 +334,6 @@ tasks:
 func TestSynthesizeModuleInstalls_MultipleArtifacts(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Use b
     module: beta.tool.setup
@@ -380,7 +370,6 @@ tasks:
 	// manifest order before the block.
 	shared := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Deploy group
     block:
@@ -419,7 +408,6 @@ tasks:
 func TestSynthesizeModuleInstalls_OneArtifactManyModules(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Warmup
     module: core.exec.run
@@ -460,7 +448,6 @@ tasks:
 func TestSynthesizeModuleInstalls_StratifyAfterRefreshBoundary(t *testing.T) {
 	tasks := synthTasks(t, `
 name: create
-state_changes: {}
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered

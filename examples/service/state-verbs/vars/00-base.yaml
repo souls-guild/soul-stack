@@ -1,0 +1,3 @@
+# Empty effective service vars layer: state-verbs reads no vars - every value the
+# scenario captures comes from input, so a case can predict the state exactly.
+{}

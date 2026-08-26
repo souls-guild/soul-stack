@@ -2,13 +2,16 @@
 
 // ★ Parity guard for the live provisioned_vm_ids bug (ADR-056 amendment
 // 2026-07-02). A class of bug the L0 harness MASKED (trial/harness.go
-// broadcasts register to all hosts): a keeper-side task's register
-// accumulates under the synthetic SID "keeper" (accumulateKeeperRegister),
-// while stateChangesVars, before the fix, read only the host's per-host
-// bucket → `${ register.provision.* }` in state_changes.sets → "no such key"
-// → error_locked AFTER a fully successful deploy. The test goes through the
-// live path: run()+PG, real accumulateKeeperRegister/loadRegisterByHost/
-// RenderStateOps — no mock register broadcast.
+// broadcasts register to all hosts): a keeper-side task's register accumulates
+// under the synthetic SID "keeper" (accumulateKeeperRegister), while the render
+// that reads it, before the fix, read only the host's per-host bucket →
+// `${ register.provision.* }` → "no such key" → error_locked AFTER a fully
+// successful deploy. Under [ADR-0084] the reader is a `core.state.<verb>`
+// capture rather than the retired end-of-run block, and the bug class survives
+// the move intact: a capture is an `on: keeper` task, so it renders against the
+// same keeper bucket (keeperVars, keeper/internal/render/dispatch.go). The test
+// goes through the live path: run()+PG, real accumulateKeeperRegister/
+// loadRegisterByHost — no mock register broadcast.
 
 package scenario
 
@@ -22,16 +25,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeperRegisterStateChangesRepo mirrors the live create redis-prov: a
-// keeper task (on: keeper, register: provision) + a host task,
-// state_changes.sets reads the keeper task's register.
-func keeperRegisterStateChangesRepo(t *testing.T) string {
+// keeperRegisterCaptureRepo mirrors the live create redis-prov: a keeper task
+// (on: keeper, register: provision) + a host task, and a capture that reads the
+// keeper task's register.
+func keeperRegisterCaptureRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
-description: keeper-register in state_changes.sets (live provisioned_vm_ids class)
-state_changes:
-  sets:
-    provisioned_ip: "${ register.provision.ip }"
+description: keeper-register in a capture (live provisioned_vm_ids class)
 tasks:
   - name: provision vm
     module: core.bootstrap.created
@@ -45,19 +45,25 @@ tasks:
     params:
       cmd: echo
       args: ["role"]
+  - name: record the address
+    module: core.state.set
+    on: keeper
+    params:
+      field: provisioned_ip
+      value: "${ register.provision.ip }"
 `)
 }
 
-// TestIntegration_KeeperRegisterInSets_CommitsToState — the run finishes
+// TestIntegration_KeeperRegisterInCapture_CommitsToState — the run finishes
 // Ready (NOT error_locked), the keeper task's register value commits into
 // incarnation.state. Per-host register for hosts is separately covered by
-// TestIntegration_RegisterInSets_CommitsToState (the host-probe class).
-func TestIntegration_KeeperRegisterInSets_CommitsToState(t *testing.T) {
+// TestIntegration_RegisterInCapture_CommitsToState (the host-probe class).
+func TestIntegration_KeeperRegisterInCapture_CommitsToState(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
-	gitURL := keeperRegisterStateChangesRepo(t)
+	gitURL := keeperRegisterCaptureRepo(t)
 
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	keepers := fakeKeeperRegistry{"core.bootstrap": bootstrap}
@@ -76,7 +82,7 @@ func TestIntegration_KeeperRegisterInSets_CommitsToState(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Before the fix: deploy success, but state_changes render fails "no such
+	// Before the fix: deploy success, but the capture's render fails "no such
 	// key: provision" → error_locked (waitRunDone fails the status assert).
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if inc.State["provisioned_ip"] != "10.0.0.7" {

@@ -1,7 +1,7 @@
 # Response script for soul-stub for long-runner::create.
 #
 # scenario writes an init marker /tmp/long-runner-init.txt via core.file.present.
-# state_changes.sets: last_run="create", runner_marker=/tmp/long-runner-init.txt.
+# captures: last_run="create", runner_marker=/tmp/long-runner-init.txt.
 scenarios:
   create:
     apply_responses:

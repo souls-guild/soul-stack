@@ -184,44 +184,33 @@ func renderedParams(tasks []*RenderedTask) map[string]any {
 	return tasks[0].Params.AsMap()
 }
 
-// state_changes is rendered in its OWN pass, after the barrier — Render's fenced
-// context does not reach it. It is also the one surface where a fenced read is not
-// merely read but committed into incarnation.state, so a hole here writes the
-// platform's own secret back as plaintext, which is exactly what `type: secret`
-// exists to prevent.
+// A `core.state.<verb>` capture is the one surface where a fenced read is not
+// merely read but COMMITTED into incarnation.state, so a hole here writes the
+// platform's own secret back as plaintext — exactly what `type: secret` exists to
+// prevent. [ADR-0084] made the capture an ordinary task, so it now rides the same
+// Render fence as every other params cell instead of a second pass of its own;
+// this pins that the move did not drop the check.
 
-func stateChangesDynamicScenario(path string) *config.ScenarioManifest {
+func stateCaptureDynamicScenario(path string) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "deploy",
-		StateChanges: &config.StateChanges{IsList: true, Ops: []config.StateChange{{
-			Verb:  config.VerbSet,
-			Field: "admin_password",
-			Value: "${ vault(vars.p) }",
-		}}},
+		Tasks: []config.Task{{
+			Name: "Record the admin password",
+			On:   "keeper",
+			Vars: map[string]any{"p": path},
+			Module: &config.ModuleTask{
+				Module: "core.state.set",
+				Params: map[string]any{"field": "admin_password", "value": "${ vault(vars.p) }"},
+			},
+		}},
 	}
 }
 
-func renderStateOpsDynamicVault(t *testing.T, scn *config.ScenarioManifest, path, service string) ([]RenderedOp, error) {
-	t.Helper()
-	kv := &pipelineStubKV{secrets: map[string]map[string]any{
-		"secret/redis/prod/redis_users/app": {"password": "leaked-own-namespace"},
-		"secret/services/shared/tls":        {"ca": "shared-ca-pem"},
-	}}
-	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
-	return p.RenderStateOps(RenderInput{
-		Ctx:         context.Background(),
-		Scenario:    scn,
-		ServiceVars: map[string]any{"p": path},
-		Incarnation: IncarnationMeta{Name: "prod", Service: service},
-		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"prod"}, nil)},
-	})
-}
-
-func TestRenderStateOps_OwnNamespaceVaultFencedWhenPathIsDynamic(t *testing.T) {
-	ops, err := renderStateOpsDynamicVault(t, stateChangesDynamicScenario(""),
-		"secret/redis/prod/redis_users/app#password", "redis")
+func TestRender_StateCaptureOwnNamespaceVaultFencedWhenPathIsDynamic(t *testing.T) {
+	scn := stateCaptureDynamicScenario("secret/redis/prod/redis_users/app#password")
+	tasks, err := renderDynamicVault(t, scn, "redis")
 	if err == nil {
-		t.Fatalf("RenderStateOps succeeded on an own-namespace path; ops = %v", ops)
+		t.Fatalf("Render succeeded on an own-namespace path in a capture; params = %v", renderedParams(tasks))
 	}
 	if !strings.Contains(err.Error(), config.VaultOwnNamespaceCode) {
 		t.Fatalf("err = %v, want %s", err, config.VaultOwnNamespaceCode)
@@ -232,15 +221,15 @@ func TestRenderStateOps_OwnNamespaceVaultFencedWhenPathIsDynamic(t *testing.T) {
 }
 
 // The negative twin: the fence is on the namespace, so a cross-namespace read
-// still resolves into a state operation.
-func TestRenderStateOps_CrossNamespaceVaultResolves(t *testing.T) {
-	ops, err := renderStateOpsDynamicVault(t, stateChangesDynamicScenario(""),
-		"secret/services/shared/tls#ca", "redis")
+// still resolves into the captured value.
+func TestRender_StateCaptureCrossNamespaceVaultResolves(t *testing.T) {
+	scn := stateCaptureDynamicScenario("secret/services/shared/tls#ca")
+	tasks, err := renderDynamicVault(t, scn, "redis")
 	if err != nil {
-		t.Fatalf("RenderStateOps: %v", err)
+		t.Fatalf("Render: %v", err)
 	}
-	if len(ops) != 1 || ops[0].Value != "shared-ca-pem" {
-		t.Fatalf("ops = %v, want one set op carrying the resolved cross-namespace value", ops)
+	if got := renderedParams(tasks)["value"]; got != "shared-ca-pem" {
+		t.Fatalf("captured value = %v, want the resolved cross-namespace value", got)
 	}
 }
 
@@ -314,6 +303,12 @@ func TestRender_LoopCrossNamespaceVaultResolves(t *testing.T) {
 // modify/remove predicates and patches are evaluated per element, after the
 // render pass has ended. [Pipeline.StateOpEvaluators] is the only way to obtain
 // those evaluators, so the fence cannot be left off by forgetting an argument.
+//
+// The path here is a literal: [ADR-0084] took the run context out of the
+// merge-time scope, so `vars.p` is no longer reachable and a dynamic assembly
+// would have to be built out of the element bindings. Fencing the literal is what
+// keeps the runtime half honest anyway — the load-time scan already rejects a
+// spelled-out own-namespace path, and this is the layer under it.
 func TestStateOpEvaluators_OwnNamespaceVaultFenced(t *testing.T) {
 	kv := &pipelineStubKV{secrets: map[string]map[string]any{
 		"secret/redis/prod/redis_users/app": {"password": "leaked-own-namespace"},
@@ -322,34 +317,34 @@ func TestStateOpEvaluators_OwnNamespaceVaultFenced(t *testing.T) {
 	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
 	matchEval, opEval := p.StateOpEvaluators(context.Background(), "redis")
 
-	sctx := func(path string) map[string]any {
-		return map[string]any{"vars": map[string]any{"p": path}}
-	}
 	own := "secret/redis/prod/redis_users/app#password"
 
 	// patch value.
-	got, err := opEval("${ vault(vars.p) }", sctx(own), nil, false)
+	got, err := opEval("${ vault('"+own+"') }", nil, false)
 	if err == nil {
 		t.Fatalf("opEval resolved an own-namespace path into a patch value: %v", got)
 	}
 	if !strings.Contains(err.Error(), config.VaultOwnNamespaceCode) {
 		t.Fatalf("err = %v, want %s", err, config.VaultOwnNamespaceCode)
 	}
+	if strings.Contains(err.Error(), "leaked-own-namespace") {
+		t.Fatalf("the secret VALUE reached the error text: %v", err)
+	}
 
 	// modify/remove match predicate.
-	if _, err := opEval("vault(vars.p) != ''", sctx(own), nil, true); err == nil ||
+	if _, err := opEval("vault('"+own+"') != ''", nil, true); err == nil ||
 		!strings.Contains(err.Error(), config.VaultOwnNamespaceCode) {
 		t.Fatalf("match predicate err = %v, want %s", err, config.VaultOwnNamespaceCode)
 	}
 
-	// add-dedup match: no scenario context, but vault() is still callable.
+	// add-dedup match: the same fence on the other evaluator.
 	if _, err := matchEval("vault('"+own+"') != ''", nil, nil); err == nil ||
 		!strings.Contains(err.Error(), config.VaultOwnNamespaceCode) {
 		t.Fatalf("add match err = %v, want %s", err, config.VaultOwnNamespaceCode)
 	}
 
 	// The negative twin: outside the prefix the read still resolves.
-	got, err = opEval("${ vault(vars.p) }", sctx("secret/services/shared/tls#ca"), nil, false)
+	got, err = opEval("${ vault('secret/services/shared/tls#ca') }", nil, false)
 	if err != nil {
 		t.Fatalf("cross-namespace opEval: %v", err)
 	}

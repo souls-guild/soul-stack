@@ -32,7 +32,7 @@ reads. `kv-read` - explicit form for cases requiring an audit event
 > (`config.ScanRenderedVaultParams`, called by the keeper dispatcher before `Apply`).
 > That prefix is derived and owned by the platform: a secret of the service itself is a
 > `state_schema` field with `type: secret`, written by
-> [`core.state.present`](../../../keeper/modules.md#corestatepresent). Both states stay
+> a [`core.state.<verb>`](../../../keeper/modules.md#corestateverb) capture step. Both states stay
 > available for every path OUTSIDE the prefix - a shared TLS CA, another service's
 > credential - which is what they are for now.
 
@@ -224,8 +224,9 @@ Keeper policy in Vault.
 The redis `create` scenario used to open with this step, generating the master password
 and the per-user ACL passwords before anything read them back through `${ vault(...) }`.
 It no longer does, and it no longer could: those are the service's **own** secrets, so
-they are now `state_schema` fields with `type: secret` minted by `core.state.present`
-([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §1, §4), and
+they are now `state_schema` fields with `type: secret` minted by a `core.state.<verb>`
+capture step ([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §1, §4,
+[ADR-0084](../../../adr/0084-explicit-state-capture.md)), and
 `secret/redis/<inc>` is exactly the prefix §7 fences. No scenario in `examples/` calls
 `kv-present` any more.
 
@@ -257,7 +258,7 @@ service's own namespace, where nothing derives a path for you:
 > phase of any task reading the same path through `${ vault(...) }` (staged-render
 > [ADR-056](../../../adr/0056-staged-render-passage.md)) - a render phase resolves what
 > is there at the time, and there is no re-render after a later write. For the service's
-> own secrets that edge is now `core.state.present` → register, guarded by
+> own secrets that edge is now a `core.state.<verb>` step → register, guarded by
 > [`keeper/internal/trial/redis_secret_mint_test.go`](../../../../keeper/internal/trial/redis_secret_mint_test.go).
 > For a shared path like the one above the same rule applies, and the ordering is the
 > author's to establish.
@@ -269,5 +270,6 @@ service's own namespace, where nothing derives a path for you:
 - [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
 - [templating.md](../../../templating.md) - vault-resolve phase and implicit `${ vault(...) }` in CEL.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
-- [ADR-0083](../../../adr/0083-declared-secret-state-fields.md) - declared secret state fields; §7 fences the service's own Vault namespace against both states of this module, §4 introduces `core.state.present` as the write that replaces `kv-present` for a service's own secrets.
+- [ADR-0083](../../../adr/0083-declared-secret-state-fields.md) - declared secret state fields; §7 fences the service's own Vault namespace against both states of this module, §4 introduces the keeper-side state write that replaces `kv-present` for a service's own secrets.
+- [ADR-0084](../../../adr/0084-explicit-state-capture.md) - explicit state capture; the write is addressed `core.state.<verb>` and lands at the step.
 - [ADR-017](../../../adr/0017-keeper-side-core.md) - Keeper-side core modules; `kv-read` (explicit vs implicit vault), `kv-present` (amendment 2026-06-28, generate-if-absent + security-invariant).

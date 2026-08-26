@@ -1,42 +1,61 @@
-// Package state implements the keeper-side core module `core.state.present`
-// ([ADR-0083] §4) — the single write of a service state field that carries
-// declared secrets.
+// Package state implements the keeper-side core module `core.state` — the step
+// that writes a service state field, at the step ([ADR-0084]) rather than in an
+// end-of-run commit.
 //
-// One call is read-or-write. On a property declared `type: secret` in the
-// service's `state_schema` the semantics are `present`, never `set`: an existing
-// Vault value is kept and the incoming [secretpolicy] request discarded. An
-// incidental re-render must not rotate a live credential, so deliberate rotation
-// is not expressible here by design — it gets its own decision and its own ticket.
+// The state suffix of the address IS the verb, one address per verb:
+//
+//	core.state.set      overwrite the field
+//	core.state.present  write it only if it has no value yet
+//	core.state.add      idempotently add one element to a collection
+//	core.state.append   append one element to a list, no identity check
+//	core.state.modify   patch every element matching `match:`
+//	core.state.remove   drop every element matching `match:`
+//	core.state.unset    drop the field itself
+//
+// The verbs are the ADR-057 ones, applied by the same engine the retired
+// `state_changes` used ([stateop.Merge]) — so a verb cannot mean two different
+// things depending on which path wrote it.
 //
 //   - name: Redis users
 //     on: keeper
-//     module: core.state.present
+//     module: core.state.set
 //     register: redis_users
 //     params:
-//     key: redis_users
-//     set: "${ compute.acl_inventory }"
+//     field: redis_users
+//     value: "${ compute.acl_inventory }"
+//
+// Resolving declared secrets is ORTHOGONAL to the verb ([ADR-0083] §4, amended
+// by [ADR-0084]). Whichever verb writes a field whose properties are declared
+// `type: secret`, an absent secret is minted and an existing one is KEPT: an
+// incidental re-render must not rotate a live credential. That is what
+// `type: secret` means in `state_schema`, not what the verb means — `present`
+// here is the field-level guard, and says nothing about the secret inside.
 //
 // The secret VALUE goes to the derived Vault path and nowhere else. What the
-// module returns is the EFFECTIVE state — what is now stored, existing values
-// included, not what the caller proposed — with every secret property replaced by
-// its `vault:` reference ([ADR-0083] §6). Only the writer knows which value won,
-// so only the writer can be quoted; and a reference in the register means
-// plaintext never reaches `apply_task_register`.
+// module returns is the EFFECTIVE value — what this step resolved, existing
+// secrets included, not what the caller proposed — with every secret property
+// replaced by its `vault:` reference ([ADR-0083] §6). Only the writer knows
+// which value won, so only the writer can be quoted; and a reference in the
+// register means plaintext never reaches `apply_task_register`.
 //
 // The Vault path is DERIVED, never authored: `shared/config.SecretField` builds it
 // from (service, incarnation, state field, key), and every segment is checked
 // against the [ADR-064] grammar. The run's service and incarnation travel on the
-// module context (coremod/util runctx), like `core.cloud`'s incarnation.
+// module context (coremod/util runctx).
 package state
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
+	keeperincarnation "github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/stateop"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -47,12 +66,8 @@ import (
 )
 
 // Name is the base module name without the state suffix (Registry key). The
-// author form of the task address is `core.state.present`.
-const Name = "core.state"
-
-// StatePresent is the only state. `present` and not `set` is the whole point of
-// §4: a declared secret that already has a value keeps it.
-const StatePresent = "present"
+// author form of the task address is `core.state.<verb>`.
+const Name = stateop.ModuleName
 
 // Output keys of the register payload.
 const (
@@ -60,8 +75,8 @@ const (
 	// with each secret property carrying its `vault:` reference. Consumers read
 	// `register.<name>.effective`.
 	OutputEffective = "effective"
-	// OutputKey — the state field this task wrote, echoed for diagnostics.
-	OutputKey = "key"
+	// OutputField — the state field this task wrote, echoed for diagnostics.
+	OutputField = "field"
 	// OutputGenerated — the derived Vault paths whose secret this run MINTED,
 	// sorted, in flat form (`<mount>/<service>/…#<field>`, no `vault:` prefix).
 	// Paths, never values.
@@ -89,6 +104,9 @@ type Module struct {
 	// Mount is the Vault KV mount from keeper.yml (`vault.kv_mount`). "" means
 	// the default mount, resolved by [config.SecretField.VaultPath].
 	Mount string
+	// Store commits the captured field ([ADR-0084]). Set through [Module.WithStore];
+	// without it Apply fails rather than resolving secrets it cannot record.
+	Store Store
 }
 
 // New is the wire helper.
@@ -96,21 +114,24 @@ func New(v VaultKV, a AuditWriter, mount string) *Module {
 	return &Module{Vault: v, Audit: a, Mount: mount}
 }
 
+// WithStore attaches the state store. Same builder shape as
+// soul.New(...).WithPresence(...).
+func (m *Module) WithStore(s Store) *Module {
+	m.Store = s
+	return m
+}
+
 // Validate is the runtime guard for the author form (soul-lint checks it
 // statically). It cannot check the field against `state_schema`: Validate has no
 // run context, so the schema is unavailable here — Apply does that check.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	var errs []string
-	if req.State != "" && req.State != StatePresent {
-		errs = append(errs, fmt.Sprintf("unknown state %q (want %s)", req.State, StatePresent))
+	spec, known := stateop.States[req.State]
+	if !known {
+		return &pluginv1.ValidateReply{Ok: false, Errors: []string{
+			fmt.Sprintf("unknown state %q (want %s)", req.State, stateop.KnownStates()),
+		}}, nil
 	}
-	params := req.Params.AsMap()
-	if _, err := stringParam(params, paramKey); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if _, ok := params[paramSet]; !ok {
-		errs = append(errs, fmt.Sprintf("param %q: missing", paramSet))
-	}
+	errs := stateop.CheckParams(req.Params.AsMap(), spec)
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
@@ -119,40 +140,31 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 	return nil
 }
 
-// Param names.
-const (
-	paramKey = "key"
-	paramSet = "set"
-)
-
 // Apply resolves the field's secrets and returns the effective state. Every
 // failure is a failed EVENT rather than a gRPC error, so the run enters
 // onfail/error_locked like any other task.
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
-	if req.State != "" && req.State != StatePresent {
-		return util.SendFailed(stream, fmt.Sprintf("unknown state %q (want %s)", req.State, StatePresent))
+	spec, known := stateop.States[req.State]
+	if !known {
+		return util.SendFailed(stream, fmt.Sprintf("unknown state %q (want %s)", req.State, stateop.KnownStates()))
 	}
 	params := req.Params.AsMap()
-	field, err := stringParam(params, paramKey)
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
+	if errs := stateop.CheckParams(params, spec); len(errs) > 0 {
+		return util.SendFailed(stream, strings.Join(errs, "; "))
 	}
-	value, ok := params[paramSet]
-	if !ok {
-		return util.SendFailed(stream, fmt.Sprintf("param %q: missing", paramSet))
-	}
+	field, _ := stateop.StringParam(params, stateop.ParamField)
 
 	service, incarnation := util.ServiceFrom(ctx), util.IncarnationFrom(ctx)
 	if service == "" || incarnation == "" {
 		// Fail closed rather than derive a path with an empty segment: the owner
 		// is what makes the path unforgeable.
-		return util.SendFailed(stream, "the run's service and incarnation are unknown -- core.state.present derives its Vault path from them")
+		return util.SendFailed(stream, "the run's service and incarnation are unknown -- core.state derives its Vault path from them")
 	}
 	schema := util.StateSchemaFrom(ctx)
 	if schema == nil {
-		return util.SendFailed(stream, "the service state_schema is unavailable -- core.state.present resolves declared secrets from it")
+		return util.SendFailed(stream, "the service state_schema is unavailable -- core.state resolves declared secrets from it")
 	}
 	declared, issues := config.CollectSecretFields(schema)
 	if len(issues) > 0 {
@@ -161,17 +173,65 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("service state_schema declares an unsupported secret at %s: %s", issues[0].Path, issues[0].Message))
 	}
 	if !topLevelProperty(schema, field) {
-		return util.SendFailed(stream, fmt.Sprintf("param %q: %q is not a top-level property of the service state_schema", paramKey, field))
+		return util.SendFailed(stream, fmt.Sprintf("param %q: %q is not a top-level property of the service state_schema", stateop.ParamField, field))
+	}
+	// Checked BEFORE the Vault work: minting a secret this task then cannot
+	// record would leave a live credential nothing in state points at.
+	scope, ok := util.RunScopeFrom(ctx)
+	if !ok {
+		return util.SendFailed(stream, "the run scope is unknown -- core.state records in state_history which run captured the field")
+	}
+	if m.Store == nil {
+		return util.SendFailed(stream, "the state store is not configured -- core.state writes the captured field itself")
+	}
+	var evals util.StateOpEvaluators
+	if spec.NeedsEval {
+		// Without an evaluator every predicate would match nothing, and a
+		// `modify`/`remove` that matched nothing reports a successful no-op.
+		if evals, ok = util.StateOpEvaluatorsFrom(ctx); !ok {
+			return util.SendFailed(stream, fmt.Sprintf("the merge-time evaluators are unavailable -- state %q matches its elements with a CEL predicate", req.State))
+		}
 	}
 
-	res, err := m.resolve(ctx, resolveScope{
-		service:     service,
-		incarnation: incarnation,
-		field:       field,
-		secrets:     secretsOfField(declared, field),
-	}, value)
+	op, err := stateop.BuildOp(spec, field, params)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
+	}
+
+	// `present` decides BEFORE the Vault work, not only inside the merge: a field
+	// that already has a value discards the incoming one, and minting a secret for
+	// a write that is then discarded would leave a live credential nothing in
+	// state points at. What the step resolves in that case is the STORED value —
+	// the register quotes what won, and what won is what was already there.
+	// See [Store.ReadState] for why a lock-free read is enough.
+	value, noMint := params[stateop.ParamValue], false
+	if spec.Verb == config.VerbPresent {
+		current, rerr := m.Store.ReadState(ctx, incarnation)
+		if rerr != nil {
+			return util.SendFailed(stream, fmt.Sprintf("read state of %q: %v", incarnation, rerr))
+		}
+		if v, ok := current[field]; ok && v != nil {
+			value, noMint = v, true
+		}
+	}
+
+	var res resolveResult
+	if spec.TakesValue {
+		res, err = m.resolve(ctx, resolveScope{
+			service:     service,
+			incarnation: incarnation,
+			field:       field,
+			element:     spec.Element,
+			noMint:      noMint,
+			secrets:     secretsOfField(declared, field),
+		}, value)
+		if err != nil {
+			return util.SendFailed(stream, err.Error())
+		}
+		// A COPY: the merge stores the value by reference and the strip of declared
+		// secrets then edits it in place, which would hollow out the very
+		// references the register is about to carry ([ADR-0083] §6).
+		op.Value = stateop.DeepCopy(res.effective)
 	}
 
 	if m.Audit != nil && len(res.generated) > 0 {
@@ -194,11 +254,52 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	return util.SendFinal(stream, len(res.generated) > 0, map[string]any{
-		OutputKey:       field,
-		OutputEffective: res.effective,
-		OutputGenerated: toAnySlice(res.generated),
+	// The capture itself ([ADR-0084]): the field lands in `incarnation.state` HERE,
+	// under the run that produced it, instead of riding an end-of-run commit.
+	//
+	// What is stored is the field put through the SAME verb engine the retired
+	// `state_changes` used ([stateop.Merge]), so a verb means here exactly what it
+	// meant there — including the strip of declared secrets, which keeps the value
+	// in Vault and the reference in the register.
+	stateChanged := false
+	_, captureErr := m.Store.CaptureState(ctx, keeperincarnation.CaptureSpec{
+		Name:         incarnation,
+		Scenario:     scope.Scenario,
+		ApplyID:      scope.ApplyID,
+		HistoryID:    audit.NewULID(),
+		ChangedByAID: optionalAID(scope.StartedByAID),
+	}, func(before map[string]any) (map[string]any, error) {
+		after, merr := stateop.Merge(before, []render.RenderedOp{op}, schema, evals.Match, evals.Op)
+		if merr != nil {
+			return nil, merr
+		}
+		stateChanged = !reflect.DeepEqual(before[field], after[field])
+		return after, nil
 	})
+	if captureErr != nil {
+		return util.SendFailed(stream, fmt.Sprintf("capture state field %q: %v", field, captureErr))
+	}
+
+	// Changed means the run changed something durable: a secret was minted, or the
+	// stored field is not what it was. Reporting only the mint would call a real
+	// state change a no-op.
+	out := map[string]any{
+		OutputField:     field,
+		OutputGenerated: toAnySlice(res.generated),
+	}
+	if spec.TakesValue {
+		out[OutputEffective] = res.effective
+	}
+	return util.SendFinal(stream, len(res.generated) > 0 || stateChanged, out)
+}
+
+// optionalAID maps an empty operator id to NULL. A run with no operator behind it
+// (a schedule, an internal path) records no author rather than an empty one.
+func optionalAID(aid string) *string {
+	if aid == "" {
+		return nil
+	}
+	return &aid
 }
 
 // resolveScope is the addressing context of one Apply: which service field is
@@ -207,7 +308,25 @@ type resolveScope struct {
 	service     string
 	incarnation string
 	field       string
-	secrets     []config.SecretField
+	// noMint — the value being resolved is what is ALREADY stored (`present` over a
+	// full field), so nothing may be minted for it. A secret property was stripped
+	// on its way into state, so what is resolved for it is the reference to a value
+	// that must already exist.
+	noMint bool
+	// element — the value being resolved is ONE element of a collection field
+	// (`add`/`append`) rather than the whole field, which moves the declared
+	// secrets one level up in the value and out of the `[i]` diagnostic path.
+	element bool
+	secrets []config.SecretField
+}
+
+// at renders the position of one element in a diagnostic: "" when the value IS
+// the element, "[i]" when it is the i-th of a whole-field list.
+func (sc resolveScope) at(i int) string {
+	if sc.element {
+		return ""
+	}
+	return fmt.Sprintf("[%d]", i)
 }
 
 // resolveResult is what Apply reports: the effective state and the derived paths
@@ -238,15 +357,30 @@ func (m *Module) resolve(ctx context.Context, sc resolveScope, value any) (resol
 			return resolveResult{}, err
 		}
 		out.effective = value
+	case sc.secrets[0].Collection() && sc.element:
+		// One element of the collection: the same walk over a list of one, then
+		// unwrapped, so an element carries the same rules whether it arrives alone
+		// or inside the whole field.
+		if err = noStrayMarkers(markers, collectionClaims(sc, 1)); err != nil {
+			return resolveResult{}, err
+		}
+		var eff any
+		eff, out.generated, err = m.resolveCollection(ctx, sc, []any{value})
+		if err == nil {
+			out.effective = eff.([]any)[0]
+		}
 	case sc.secrets[0].Collection():
 		items, ok := value.([]any)
 		if !ok {
-			return resolveResult{}, fmt.Errorf("param %q: %q holds a collection of secrets, so the value must be a list, got %T", paramSet, sc.field, value)
+			return resolveResult{}, fmt.Errorf("param %q: %q holds a collection of secrets, so the value must be a list, got %T", stateop.ParamValue, sc.field, value)
 		}
 		if err = noStrayMarkers(markers, collectionClaims(sc, len(items))); err != nil {
 			return resolveResult{}, err
 		}
 		out.effective, out.generated, err = m.resolveCollection(ctx, sc, items)
+	case sc.element:
+		// The field IS one secret, so it has no elements to add to.
+		return resolveResult{}, fmt.Errorf("%q is declared a single secret, not a collection -- write it whole with core.state.set or core.state.present", sc.field)
 	default:
 		if err = noStrayMarkers(markers, map[string]bool{"": true}); err != nil {
 			return resolveResult{}, err
@@ -263,11 +397,11 @@ func (m *Module) resolve(ctx context.Context, sc resolveScope, value any) (resol
 // noStrayMarkers fails on a secret request sitting where no declared property would
 // resolve it.
 func noStrayMarkers(markers, claimable map[string]bool) error {
-	for _, path := range sortedKeys(markers) {
+	for _, path := range stateop.SortedKeys(markers) {
 		if claimable[path] {
 			continue
 		}
-		return fmt.Errorf("param %q%s: a secret request sits where no property is declared `type: secret` -- declare it in state_schema, or drop the generate_secret() call", paramSet, path)
+		return fmt.Errorf("param %q%s: a secret request sits where no property is declared `type: secret` -- declare it in state_schema, or drop the generate_secret() call", stateop.ParamValue, path)
 	}
 	return nil
 }
@@ -278,7 +412,7 @@ func collectionClaims(sc resolveScope, n int) map[string]bool {
 	out := make(map[string]bool, n*len(sc.secrets))
 	for i := 0; i < n; i++ {
 		for _, s := range sc.secrets {
-			out[fmt.Sprintf("[%d].%s", i, s.Property)] = true
+			out[sc.at(i)+"."+s.Property] = true
 		}
 	}
 	return out
@@ -292,18 +426,18 @@ func (m *Module) resolveCollection(ctx context.Context, sc resolveScope, items [
 	for i, raw := range items {
 		elem, ok := raw.(map[string]any)
 		if !ok {
-			return nil, nil, fmt.Errorf("param %q[%d]: expected an object, got %T", paramSet, i, raw)
+			return nil, nil, fmt.Errorf("param %q%s: expected an object, got %T", stateop.ParamValue, sc.at(i), raw)
 		}
 		eff := make(map[string]any, len(elem))
 		for k, v := range elem {
 			eff[k] = v
 		}
 		for _, s := range sc.secrets {
-			key, err := elementKey(elem, s, i)
+			key, err := elementKey(elem, s, sc.at(i))
 			if err != nil {
 				return nil, nil, err
 			}
-			path := fmt.Sprintf("[%d].%s", i, s.Property)
+			path := sc.at(i) + "." + s.Property
 			ref, minted, err := m.present(ctx, sc, s, key, elem[s.Property], path)
 			if err != nil {
 				return nil, nil, err
@@ -342,7 +476,12 @@ func (m *Module) resolveScalar(ctx context.Context, sc resolveScope, s config.Se
 func (m *Module) present(ctx context.Context, sc resolveScope, s config.SecretField, key string, requested any, at string) (string, string, error) {
 	switch policy, isMarker, err := secretpolicy.FromMarker(requested); {
 	case err != nil:
-		return "", "", fmt.Errorf("param %q%s: %w", paramSet, at, err)
+		return "", "", fmt.Errorf("param %q%s: %w", stateop.ParamValue, at, err)
+	case isMarker && sc.noMint:
+		// Defensive: state carries no markers (a stray one is refused before the
+		// write, a claimed one is replaced by its reference), but one that did arrive
+		// here must not mint for a value nobody proposed.
+		return m.requireExisting(ctx, sc, s, key, at)
 	case isMarker:
 		return m.mintIfEmpty(ctx, sc, s, key, policy)
 	case requested == nil:
@@ -350,7 +489,7 @@ func (m *Module) present(ctx context.Context, sc resolveScope, s config.SecretFi
 		// reference.
 		return m.requireExisting(ctx, sc, s, key, at)
 	default:
-		return "", "", fmt.Errorf("param %q%s: %q is declared `type: secret` -- its value is minted by generate_secret() and never written literally", paramSet, at, s.Property)
+		return "", "", fmt.Errorf("param %q%s: %q is declared `type: secret` -- its value is minted by generate_secret() and never written literally", stateop.ParamValue, at, s.Property)
 	}
 }
 
@@ -398,7 +537,10 @@ func (m *Module) requireExisting(ctx context.Context, sc resolveScope, s config.
 		return "", "", fmt.Errorf("vault read %q: %w", path, err)
 	}
 	if !fieldPresent(payload, s.VaultField()) {
-		return "", "", fmt.Errorf("param %q%s: %q has no value yet and none was requested -- set it to generate_secret({…})", paramSet, at, s.Property)
+		if sc.noMint {
+			return "", "", fmt.Errorf("state field %q%s: %q is stored but was never minted in Vault -- core.state.present keeps the stored value and cannot mint one for it", sc.field, at, s.Property)
+		}
+		return "", "", fmt.Errorf("param %q%s: %q has no value yet and none was requested -- set it to generate_secret({…})", stateop.ParamValue, at, s.Property)
 	}
 	return ref, "", nil
 }
@@ -436,17 +578,17 @@ func (m *Module) readPath(ctx context.Context, path string) (map[string]any, err
 // elementKey reads the sibling property that addresses one element's secret. It
 // is the one path segment that comes from state DATA, so it is checked here as
 // well as inside VaultPath — this way the diagnostic names the element.
-func elementKey(elem map[string]any, s config.SecretField, idx int) (string, error) {
+func elementKey(elem map[string]any, s config.SecretField, at string) (string, error) {
 	raw, ok := elem[s.Key]
 	if !ok || raw == nil {
-		return "", fmt.Errorf("param %q[%d]: %q addresses the secret %q and is missing", paramSet, idx, s.Key, s.Property)
+		return "", fmt.Errorf("param %q%s: %q addresses the secret %q and is missing", stateop.ParamValue, at, s.Key, s.Property)
 	}
 	key, ok := raw.(string)
 	if !ok {
-		return "", fmt.Errorf("param %q[%d].%s: expected a string, got %T", paramSet, idx, s.Key, raw)
+		return "", fmt.Errorf("param %q%s.%s: expected a string, got %T", stateop.ParamValue, at, s.Key, raw)
 	}
 	if !config.ValidVaultPathSegment(key) {
-		return "", fmt.Errorf("param %q[%d].%s: %q is not a safe Vault path segment (letters, digits, `_` and `-`)", paramSet, idx, s.Key, key)
+		return "", fmt.Errorf("param %q%s.%s: %q is not a safe Vault path segment (letters, digits, `_` and `-`)", stateop.ParamValue, at, s.Key, key)
 	}
 	return key, nil
 }
@@ -483,7 +625,7 @@ func scanMarkers(v any, path string, out map[string]bool) {
 			out[path] = true
 			return
 		}
-		for _, k := range sortedKeys(t) {
+		for _, k := range stateop.SortedKeys(t) {
 			scanMarkers(t[k], path+"."+k, out)
 		}
 	case []any:
@@ -504,33 +646,6 @@ func fieldPresent(payload map[string]any, field string) bool {
 	}
 	s, ok := v.(string)
 	return ok && s != ""
-}
-
-// stringParam reads a required string param out of the decoded params map.
-func stringParam(params map[string]any, key string) (string, error) {
-	v, ok := params[key]
-	if !ok || v == nil {
-		return "", fmt.Errorf("param %q: missing", key)
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("param %q: expected string, got %T", key, v)
-	}
-	if strings.TrimSpace(s) == "" {
-		return "", fmt.Errorf("param %q: empty", key)
-	}
-	return s, nil
-}
-
-// sortedKeys returns a map's keys in sorted order — every walk must produce
-// byte-identical output for identical input.
-func sortedKeys[T any](m map[string]T) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // toAnySlice converts to the []any structpb needs.

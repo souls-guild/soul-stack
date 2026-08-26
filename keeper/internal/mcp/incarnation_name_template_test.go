@@ -115,7 +115,7 @@ func TestToolsCall_IncarnationCreate_ExplicitNameWithTemplate(t *testing.T) {
 // before ADR-0079.
 func TestToolsCall_IncarnationCreate_NoTemplate_NameStillRequired(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
-	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\nstate_changes: {}\ntasks: []\n")}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\ntasks: []\n")}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",

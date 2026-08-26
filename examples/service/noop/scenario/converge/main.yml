@@ -11,10 +11,6 @@ description: |
   special handling in keeper. This copy is also what the L3a Vigil/Oracle e2e
   fires as its reactor action, so it must stay runnable.
 
-# converge re-declares what create already recorded, so it has nothing to add
-# to state.
-state_changes: {}
-
 tasks:
   # Convergence marker: the file must exist with fixed content. On a clean
   # system it does not exist yet -> the task reports changed=true and creates

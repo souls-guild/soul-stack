@@ -83,7 +83,7 @@ monitoring/
 └── scenario/
     └── create/
         ├── main.yml                         # input + tasks (apply:destiny node-exporter
-        │                                     #   + inline redis_exporter) + state_changes
+        │                                     #   + inline redis_exporter) + core.state.set steps
         ├── templates/
         │   └── redis_exporter.service.tmpl   # redis_exporter systemd unit (inline, unix socket)
         └── tests/

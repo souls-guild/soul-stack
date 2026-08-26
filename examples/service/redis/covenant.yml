@@ -1,18 +1,20 @@
 # covenant.yml - a reusable shared contract for redis scenario sections (S4 pilot).
 #
-# Carries ONLY the shared contract of the FOUR sections: input / compute / state_changes /
-# validate (shared/config ScenarioFragment). name/tasks/create/form/extends are
+# Carries ONLY the shared contract of the THREE sections: input / compute / validate
+# (shared/config ScenarioFragment). name/tasks/create/form/extends are
 # NOT here (covenant is a contract, not an executable scenario; an extra key ->
 # covenant_unexpected_key). A scenario pulls in the fragment via `extends: covenant`
 # and ADDS its own delta add-only (covenant is the BASE, the delta does NOT override
 # covenant's keys, otherwise section_key_conflict). The keeper-side resolver (LoadScenarioManifest
 # Resolved) merges covenant FIRST: the effective manifest = covenant ++ delta,
-# so the order of compute declarations and state_changes Ops is preserved as it is here.
+# so the order of compute declarations is preserved as it is here.
 #
 # * The provision section of input is DELIBERATELY ABSENT: it's a `create` delta (cloud-create
-# in the same run, ADR-061), not part of the shared contract. The provisioned_* state_changes
-# sets below are provision-aware (a ternary on input.provision) - WITHOUT provision they
-# degenerate to [] (a zero state delta), so covenant is self-sufficient for scenarios without provision.
+# in the same run, ADR-061), not part of the shared contract.
+#
+# * There is no state capture here either: state is written by `core.state.<verb>` STEPS, and a
+# covenant carries no tasks ([ADR-0084] F-B, decision B2). The steps live in each inheriting
+# scenario; the compute vars they read stay declared once, here.
 
 # ── Operator input contract (docs/input.md) ────────────────────────────────
 # Simple typed concepts. Translation into redis.conf happens in the dispatcher branches.
@@ -61,7 +63,7 @@ input:
   # ★ The conf_dir/data_dir layout is also NOT operator input (#2): the defaults moved
   # to service vars (conf_dir/data_dir), compute reads them from there. Override is in the
   # the service vars, not the Run form. conf_dir/data_dir are NOT persisted
-  # in state (state_changes doesn't write them, see below) - layout lives in service vars,
+  # in state (no capture step writes them) - layout lives in service vars,
   # day-2 add_node reads vars.conf_dir/data_dir (has()-safe default). The only
   # place to change it is vars.
 
@@ -416,8 +418,8 @@ validate:
 # ── Computed scenario vars (compute:, ADR-009 amendment 2026-06-23) ────────────
 # `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
 # (input/vars/incarnation - WITHOUT soulprint, the host-invariance barrier) and is
-# visible as `compute.<name>` BOTH in the branches' apply.input AND in state_changes
-# below. This removes the duplication of the large merge() translation: it's declared
+# visible as `compute.<name>` BOTH in the branches' apply.input AND in the scenarios'
+# capture steps. This removes the duplication of the large merge() translation: it's declared
 # HERE ONCE, and the branches and state reference `${ compute.redis_config }` - the
 # "state == live config" drift is removed by compute itself (one value, not two
 # expressions to keep in sync).
@@ -471,9 +473,9 @@ compute:
   # The union of vars.system_acl_users ∪ vars.system_acl_users_sentinel keys: the
   # accounts the SERVICE provisions for itself (default_admin/replica/monitoring/
   # sentinel/haproxy), as opposed to redis_users, which is operator intent. Declared
-  # once here because two places must not drift: the `core.state.present` task that
-  # mints their passwords, and the `system_acl_users` state record written by
-  # state_changes. perms are NOT part of it — those stay in service vars (policy),
+  # once here because two places must not drift: the `core.state.set` task that
+  # mints their passwords, and the account list the service vars declare. perms are
+  # NOT part of it — those stay in service vars (policy),
   # state records only which accounts exist.
   system_acl_names: >-
     ${ merge(default(vars.system_acl_users, {}).map(n, { n: 0 })
@@ -490,7 +492,7 @@ compute:
   # ★ Redesign: version is a required enum, ONE for both install methods (binary
   # pulls binaries of this version; package pins =version). The former
   # "binary -> vars.binary_version" cascade is gone - the version is always
-  # operator input.version. Declared ONCE: state_changes.redis_version, the plugin's
+  # operator input.version. Declared ONCE: the redis_version capture, the plugin's
   # redis_version param, and destiny's binary URL all read it. required:true
   # guarantees presence -> plain input.version without a has() wrapper.
   redis_version: "${ input.version }"
@@ -512,7 +514,7 @@ compute:
   # modules_base_url moved from operator-input into vars.modules_base_url
   # (author-context, default ""; a fleet forks this repo and edits it here). Declared
   # as ONE compute var so that the branches (apply.input.modules_base_url) and
-  # state_changes read the same value. default() catches a missing key on an
+  # the redis_config capture read the same value. default() catches a missing key on an
   # existing service vars map; default "" mirrors the former
   # default(input.modules_base_url, '').
   modules_base_url: "${ default(vars.modules_base_url, '') }"
@@ -569,8 +571,8 @@ compute:
   # Assembled from vars.install_method (default package, author-context - NOT operator
   # input, 2026-06-28) + the service vars keys of the chosen method + input.version (the version -
   # an operator enum of upstream releases). method is always present, the rest is
-  # method-specific. The same struct goes into destiny `redis` (apply.input.install) and into
-  # state_changes.install. default(vars.install_method, 'package') catches a missing key on
+  # method-specific. The struct goes into destiny `redis` (apply.input.install); it is no
+  # longer persisted in state (v11→v12). default(vars.install_method, 'package') catches a missing key on
   # an existing service vars map (symmetric with modules_base_url).
   #
   # package (DEFAULT): repo_uri/gpg_key_url declare the apt repository the package comes from
@@ -597,7 +599,7 @@ compute:
   # ★ #2 (2026-06-26): conf_dir/data_dir are NO LONGER operator input - the defaults
   # moved into service vars (conf_dir/data_dir; a fleet forks this repo and edits it here).
   # Declared as SEPARATE compute vars so that redis_config (TLS paths below), the branches
-  # (apply.input.conf_dir/data_dir), and state_changes all read ONE resolved value.
+  # (apply.input.conf_dir/data_dir) all read ONE resolved value.
   # default(vars.<x>, …) - the author-context default = the current path (back-compat). host
   # invariant (one layout per cluster) - soulprint isn't available in compute. ★ The TLS directives
   # in redis.conf (tls-cert-file/...) follow conf_dir: destiny puts the PEM under ${conf_dir}/tls/
@@ -689,192 +691,3 @@ compute:
              compute.redis_config_base,
              compute.redis_config_tls
            ) }
-
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# After a successful apply, Keeper records what was deployed (ADR-009 §7.1, ADR-057
-# list form). redis_config - the RESULT of the translation (the same compute.redis_config that went
-# into rendering redis.conf in the cluster/sentinel branches): a repeat apply and day-2 scenarios see
-# one source of truth. Previously the merge() expression was DUPLICATED here and in
-# the branches' apply.input.config (a manual DRIFT-GUARD); now it's declared ONCE in
-# compute: above - drift is removed by compute itself.
-state_changes:
-  - set: redis_type
-    value: "${ input.redis_type }"
-  - set: redis_version
-    value: "${ compute.redis_version }"
-  # redis_config ≡ the branches' apply.input.config: a single compute.redis_config (see above).
-  - set: redis_config
-    value: "${ compute.redis_config }"
-
-  # ── Named intent fields (read-model, v3) ─────────────────────────────
-  # ★ CRITICAL (architect a9e1c2c6): values are taken from the SAME compute.*/input as
-  # redis_config - not from raw input separately. So namedfields (intent) and
-  # redis_config (the computed result) are consistent by construction (a single compute pass).
-  # tls: the same compute.tls_on/tls_only_on/tls_port/tls_*_ref that produced the TLS block in
-  # redis_config (cert/key/ca - Vault PATHS, not PEM: the secret doesn't live in state).
-  - set: tls
-    value: >-
-      ${ {
-           'enable':   compute.tls_on,
-           'only':     compute.tls_only_on,
-           'port':     compute.tls_port,
-           'cert_ref': compute.tls_cert_ref,
-           'key_ref':  compute.tls_key_ref,
-           'ca_ref':   compute.tls_ca_ref
-         } }
-  # connection_mode: the operator's explicit network channel mode (enum tls/tls_plain/plain).
-  # the read-model duplicates the choice; the tls namedfield above carries the derived enable/only/port.
-  - set: connection_mode
-    value: "${ input.connection_mode }"
-  # persistence: input.persistence (default rdb) - the same key used to select
-  # vars.persistence_presets in redis_config (the read-model duplicates the operator's choice).
-  - set: persistence
-    value: "${ input.persistence }"
-  # memory_mb: the operator's memory budget (int). Not set → 0 (a flat set always
-  # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from service vars).
-  - set: memory_mb
-    value: "${ int(default(input.memory_mb, 0)) }"
-  # maxmemory_policy: the operator's explicit choice; not set → '' (the directive comes from the service vars
-  # substrate, see redis_config). The namedfield marks the ABSENCE of an explicit choice with an empty
-  # string (we don't reach into redis_config for the actual value - this is a write-model).
-  - set: maxmemory_policy
-    value: "${ default(input.maxmemory_policy, '') }"
-  # io_threads: the operator's number of I/O threads (int, default 0). 0 = single-threaded I/O
-  # (the io-threads directive isn't written to redis.conf). the read-model duplicates the choice.
-  - set: io_threads
-    value: "${ int(input.io_threads) }"
-  # modules: the Redis modules ACTUALLY deployed (the "modules are ALWAYS ALL" directive). Redis
-  # < 8 → the full set (destiny loads all of them from vars.redis_modules); Redis 8+ → [] (modules
-  # are built in). NOT an operator choice (input.modules was removed) - compute.redis_modules_deployed.
-  - set: modules
-    value: "${ compute.redis_modules_deployed }"
-  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) moved into service vars
-  # (v11→v12, Variant A): install - a read-model with no readers, layout - day-2 reads
-  # service vars directly (default(vars.<x>, '<default>')). There are no more sets for them here -
-  # the keys aren't in state_schema, a set would write a field outside the schema → state validation would fail.
-  # sysctl_settings: the applied host tuning (the same vars.sysctl_settings that
-  # goes into destiny apply.input). from service vars (host-invariant, not operator input).
-  - set: sysctl_settings
-    value: "${ default(vars.sysctl_settings, {}) }"
-  # monitoring: a read-model of the FACT of deployed exporters (Slice I, symmetric with the install/tls
-  # read-model). Versions/ports - from vars.node_exporter_*/redis_exporter_* (the same values
-  # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
-  # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
-  # duplicate the service vars / migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
-  - set: monitoring
-    value: >-
-      ${ {
-           'node_exporter_version':  default(vars.node_exporter_version, ''),
-           'redis_exporter_version': default(vars.redis_exporter_version, ''),
-           'node_exporter_listen':   default(vars.node_exporter_listen, ':9100'),
-           'redis_exporter_listen':  default(vars.redis_exporter_listen, ':9121')
-         } }
-  # logging: a read-model of the FACT of deployed log-shipping (Slice V-I, ADR-067; symmetric with
-  # monitoring). Version/sink_type/endpoint/log_sources - from vars.vector_* (the same values
-  # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
-  # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
-  # monitoring password). The defaults duplicate the service vars / migration 013_to_014 (console - a safe default with no
-  # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
-  - set: logging
-    value: >-
-      ${ {
-           'vector_version':       default(vars.vector_version, ''),
-           'vector_sink_type':     default(vars.vector_sink_type, 'console'),
-           'vector_sink_endpoint': default(vars.vector_sink_endpoint, ''),
-           'vector_log_sources':   default(vars.vector_log_sources, [])
-         } }
-  # ── Topology (counts) ──────────────────────────────────────────────────────
-  # shards/replicas/sentinel_quorum - from the same input.* that the size-guard/cluster-build/
-  # sentinel branches use. shards - cluster only (not set → 0). replicas - UNIFIED
-  # int(default(input.replicas_per_master, 0)) in both modes (replicas per master;
-  # cluster - per shard, sentinel - of the master). sentinel_quorum - ALWAYS 0 (there's no
-  # more operator field for it, the quorum is AUTO size/2+1 computed in apply, it isn't materialized in state;
-  # 0 = "auto").
-  - set: shards
-    value: "${ int(default(input.shards, 0)) }"
-  - set: replicas
-    value: "${ int(default(input.replicas_per_master, 0)) }"
-  - set: sentinel_quorum
-    value: "${ 0 }"
-
-  # ── cloud-provision read-model (ADR-061, Variant A) ─────────────────────────
-  # The FACT that "these VMs were provisioned by THIS create run". ★ GUARD on input.provision (NOT
-  # has(register.provision)!): on a non-provision run, provision.yml group-drop →
-  # there's no core.cloud.created step → register.provision doesn't exist → has(register.provision)
-  # would give no-such-key IN THE PREDICATE ITSELF (CEL evaluates has()'s argument - it's present in env,
-  # but touching register.provision.vm_ids outside the guard would blow up). The gate is input.provision
-  # (an object input, has()-safe): set AND enabled → read register.provision (created by step
-  # (a)); otherwise [] / '' (hosts not provisioned by the service). The ternary short-circuits -
-  # register.provision.* isn't touched on the non-provision path.
-  - set: provisioned_vm_ids
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? register.provision.vm_ids
-           : [] }
-  # provisioned_sids: the SID (FQDN) of created VMs - for cascade-destroy day-2 teardown
-  # (souls→destroyed/seeds→orphaned/tokens→burned; the Reaper does NOT reap pending-VM souls).
-  # The same GUARD on input.provision as vm_ids/provider (on a non-provision run
-  # register.provision doesn't exist → the ternary short-circuits, register.* isn't touched).
-  # sids are gathered from register.provision.hosts[].sid (.map - the same expression as
-  # params.sid in step (c) core.soul.registered in provision.yml); there's no separate register
-  # .provision.sids. Otherwise [] (hosts not provisioned by the service).
-  - set: provisioned_sids
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? register.provision.hosts.map(h, h.sid)
-           : [] }
-  # provisioned_provider - the FACT provider of created VMs. provider is read as
-  # default(input.provision.provider, vars.provision_provider): the operator usually does NOT set
-  # provider (the provision form is hidden, default-on) → falls back to vars.provision_provider
-  # (symmetric with redis-provision.yml::core.cloud.created.params.provider). The input.provision gate
-  # (has()-safe) holds the non-provision path: enabled=false / create_from_souls → '' (VMs weren't
-  # provisioned by this run). ★ TODO: prod/dev provider switch (ENV keeper / Coven overlay) - a separate ADR.
-  - set: provisioned_provider
-    value: >-
-      ${ (has(input.provision) && input.provision.enabled)
-           ? default(input.provision.provider, vars.provision_provider)
-           : '' }
-
-  # redis_users - a TYPED array of AclUser (wave 1b, map→array). state stores
-  # input.users as-is (an array [{name,perms,state}]); the `password` property is
-  # declared `type: secret`, so its value lives in Vault and the state engine strips
-  # it on the way in ([ADR-0083] §4) - input.users never carries one anyway.
-  - set: redis_users
-    value: "${ default(input.users, []) }"
-  # system_acl_users - the service's OWN accounts (compute.system_acl_names). state
-  # records WHICH accounts exist; their perms stay in service vars (policy, not state)
-  # and their passwords in Vault at the path derived from this field ([ADR-0083] §1).
-  # Without the record, day-2 could not tell a provisioned account from one an operator
-  # added to vars after create, and .../secrets/reveal would have nothing to enumerate.
-  - set: system_acl_users
-    value: "${ compute.system_acl_names.map(n, { 'name': n }) }"
-  # redis_hosts is empty in ALL modes: state_changes render per-host with
-  # soulprint.SELF (AllowHosts=false, orchestration.md §7.1) - the roster soulprint.hosts
-  # is NOT AVAILABLE here (boundary: state is per-run, roles are laid out on the apply side).
-  # The exact declared sentinel roles (master-election) live in apply.input.sentinel,
-  # not in state (symmetric with cluster, where the plugin lays out the roles).
-  - set: redis_hosts
-    value: "${ [] }"
-  # redis_sentinel: facts about the monitored master (sentinel mode). master_name - from service vars
-  # (vars.sentinel_master_name, default 'master'; there's no more operator field for it).
-  # quorum isn't materialized in state (the auto-quorum size/2+1 is computed in apply,
-  # size(soulprint.hosts) isn't available in state_changes) → 0. master_ip is no longer written
-  # (the sentinel_only mode was removed: the master is picked from the roster, host-variant).
-  # ★ Redesign: the former named timings down_after_ms/failover_timeout_ms are absorbed into
-  # the generalized per-master dict. The read-model stores the EFFECTIVE map of per-master options
-  # (master_settings = vars.sentinel_master_defaults over input.sentinel_master_settings,
-  # last-wins) and the global settings (input.sentinel_settings) - day-2 reads them by name
-  # (like install/tls). Outside sentinel mode - an empty object (only cluster remains).
-  - set: redis_sentinel
-    value: >-
-      ${ (input.redis_type == 'sentinel')
-           ? {
-               'master_name':     default(vars.sentinel_master_name, 'master'),
-               'quorum':          0,
-               'master_settings': merge(
-                                     default(vars.sentinel_master_defaults, {}),
-                                     default(input.sentinel_master_settings, {})
-                                   ),
-               'settings':        default(input.sentinel_settings, {})
-             }
-           : {} }

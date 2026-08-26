@@ -136,7 +136,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			slog.String("reason", reason),
 			slog.String("terminal_status", string(failStatus)),
 			slog.String("error", maskErrText(cause, sealed.Paths())))
-		finalized := r.lockIncarnation(ctx, spec, stateBefore, failStatus, reason, cause, sealed.Paths(), log)
+		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, sealed.Paths(), log)
 		// BAG-1: guarantee a terminal apply_runs row for the run. An early abort
 		// (no_hosts etc.) happens BEFORE dispatch — no apply_runs row exists yet,
 		// and the Voyage-awaiter polls for all rows to reach terminal, waiting
@@ -333,14 +333,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// secret output fields ([ADR-0083] §8) are derived at render. Same
 		// per-parse snapshot the scenario was parsed with.
 		Modules: r.moduleManifests(ctx),
-		// State — a read-only snapshot of incarnation.state at the run's row-lock
-		// (stateBefore captured under FOR UPDATE). Exposed to scenario-render CEL
-		// as `incarnation.state.<path>` (ADR-009/010, Option A). ONE snapshot:
-		// renderIn is reused across all staged-render passages, so it stays
-		// invariant (P0 ≡ P1+ = pre-run state, does NOT accumulate across
-		// passages).
+		// State — incarnation.state as of the run's row-lock (stateBefore captured
+		// under FOR UPDATE). Exposed to scenario-render CEL as
+		// `incarnation.state.<path>` (ADR-009/010, Option A). This is the value
+		// Passage 0 renders against; from Passage 1 on it is re-read at the
+		// boundary when the plan captures state ([ADR-0084]: a `core.state.<verb>`
+		// step commits at the step, so state ACCUMULATES within a run). A plan
+		// without a capture keeps this one snapshot for every Passage.
 		State: stateBefore,
-		Ctx:   ctx, // vault() (RenderStateChanges doesn't go through Render → ctx needed explicitly)
+		Ctx:   ctx, // vault() resolution needs the request ctx explicitly
 		// Templates: reader for the service snapshot's .tmpl files, used by
 		// core.file.rendered. Two-level resolve scenario-local→service-level
 		// (ADR-009): reads via artifact.ReadSnapshotFile over art.LocalDir
@@ -543,7 +544,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// Passage's host-dispatch (keeper steps go first: provision/coven-bind →
 	// apply on hosts). They write their own apply_runs row
 	// (sid=render.KeeperTargetSID, passage) + register, which the barrier and
-	// loadRegisterByHost see alongside host rows. The first failing keeper task
+	// loadRegisterByHostUpToPassage see alongside host rows. The first failing keeper task
 	// → abort (this Passage's host-dispatch never starts). dispatchKeeperTasks
 	// is now called PER-Passage (Slice 2): for the staged path, inside the
 	// stage-loop on tasks RE-rendered at ActivePassage=p (a Passage>0
@@ -564,10 +565,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//   - otherwise → old path (direct Insert(running)+SendApply).
 	//
 	// Render above (steps 4.5/5) runs on BOTH paths: the run-goroutine keeps
-	// tasks/renderIn for post-barrier register-load + state_changes commit
-	// (KEY invariant: barrier+commit stay in the run-goroutine in Phase 1).
-	// state commits strictly AFTER the LAST Passage's barrier — a single commit,
-	// not per-wave or per-Passage (§7 / ADR-056 §d).
+	// tasks/renderIn for the per-Passage re-render (KEY invariant: barrier+commit
+	// stay in the run-goroutine in Phase 1). The run's terminal is recorded
+	// strictly AFTER the LAST Passage's barrier — once, not per-wave or
+	// per-Passage (ADR-056 §d).
 	if r.acolyteEnabled && !hasSerialTask(scn) && !staged {
 		// Acolyte path — non-staged (Acolyte excludes staged): all keeper tasks
 		// are in Passage 0, step-5 render (ActivePassage=0) already fully
@@ -602,8 +603,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// At P=0 we reuse the step-5 render (for staged it's already
 		// ActivePassage=0; for Count==1, a normal render, bit-for-bit). P>0
 		// (staged only): re-render with per-host register from Passage < P.
-		// state-commit happens ONCE after the last Passage (steps 7-8), NOT
-		// per-Passage (ADR-056 §d).
+		// ADR-056 §d put the state-commit once after the last Passage, for the
+		// end-of-run `state_changes:` section. [ADR-0084] retired that section: a
+		// `core.state.<verb>` step commits at the step, which is what capturesState
+		// gates the per-Passage state re-read on below.
+		capturesState := config.HasStateCapture(scn.Tasks)
 		passageTasks, passagePlans := tasks, plans
 		for p := 0; p < passage.Count; p++ {
 			if p > 0 {
@@ -667,6 +671,25 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// reset KeeperRegister (host-only Passage: keeper context is empty,
 				// bit-for-bit).
 				renderIn.KeeperRegister = keeperRegisterBucket(reg)
+				// State accumulation across Passages ([ADR-0084]): a
+				// `core.state.<verb>` step commits at the step, so
+				// `incarnation.state.<path>` in Passage p must read what the
+				// Passages before it captured, not the pre-run snapshot renderIn
+				// was built with. Read WITHOUT a row lock: the row is already held
+				// `applying` by this very run, so the only writer is this run's own
+				// capture path, and every capture of Passage < p finished before
+				// the barrier above. Gated on the plan actually carrying a capture:
+				// without one the row cannot have moved, the re-read would return
+				// stateBefore verbatim (render stays bit-for-bit), and a transient
+				// DB error would abort a run that never needed the state.
+				if capturesState {
+					st, serr := incarnation.SelectState(ctx, r.deps.DB, spec.IncarnationName)
+					if serr != nil {
+						abort("state_load_failed", fmt.Errorf("scenario: re-read incarnation.state before Passage %d: %w", p, serr))
+						return
+					}
+					renderIn.State = st
+				}
 				renderIn.TaskPassage = passage.TaskPassage
 				renderIn.ActivePassage = p
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
@@ -758,8 +781,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//      teardown scenario succeeded. We do NOT commit ready and do NOT touch
 	//      incarnation.state (destroy doesn't edit the state graph; teardown
 	//      works with hosts, not jsonb): the incarnation stays `destroying`.
-	//      Steps 7-8 (register-load + state_changes commit) are the normal-run
-	//      path and don't run for destroy. result=runResultOK records a
+	//      Step 7 (the ready/state_history commit) is the normal-run path and
+	//      doesn't run for destroy. result=runResultOK records a
 	//      successful teardown for metrics/trace.
 	if spec.TerminalMode == TerminalDestroy {
 		// In-process span for teardown finalization (dropping the incarnation row
@@ -810,41 +833,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 7. After the barrier — load run-task register data (accumulated from
-	//    TaskEvents in apply_task_register) and resolve it into a per-host
-	//    register map (sid → register-name → payload) via the task_idx→
-	//    register-name mapping from tasks. Gives `sets: ${ register.<task>.
-	//    <field> }` access to register (slice 2 of the full grammar,
-	//    orchestration.md §7.1).
-	registerByHost, err := r.loadRegisterByHost(ctx, spec.ApplyID, tasks)
-	if err != nil {
-		abort("register_load_failed", err)
-		return
-	}
-	renderIn.RegisterByHost = registerByHost
-
-	// 8. All tasks succeeded on all hosts → render state_changes (Keeper-side
-	//    CEL, last-wins cross-host) and commit into incarnation.state. Render
-	//    happens strictly AFTER the barrier (orchestration.md §7): values are
-	//    fixed by the fact of a successful apply, not before it. RenderStateOps
-	//    is an ordered list of set+add operations (the new list form); merge
-	//    applies them to stateBefore in order (set-overwrite / idempotent add).
-	renderedOps, err := r.deps.Render.RenderStateOps(renderIn)
-	if err != nil {
-		abort("state_changes_render_failed", err)
-		return
-	}
-	matchEval, opEval := r.deps.Render.StateOpEvaluators(ctx, inc.Service)
-	stateAfter, err := mergeStateChanges(stateBefore, renderedOps, art.Manifest.StateSchema, matchEval, opEval)
-	if err != nil {
-		// A failed operation apply (on_conflict: error / inconsistent collection /
-		// match predicate failed) → error_locked, state is NOT committed
-		// (stateAfter never reaches commitSuccess). orchestration.md §7: a failed
-		// merge means locking.
-		abort("state_changes_apply_failed", err)
-		return
-	}
-	if err := r.commitSuccess(ctx, spec, stateBefore, stateAfter, prov.stamp()); err != nil {
+	// 7. All tasks succeeded on all hosts → close the run: status → ready plus a
+	//    state_history row. The state itself is ALREADY in the row — each
+	//    `core.state.<verb>` task wrote its field where its value became known
+	//    ([ADR-0084]), so there is nothing left to merge here and no window in
+	//    which a host is configured with a value the database has not seen.
+	if err := r.commitSuccess(ctx, spec, stateBefore, prov.stamp()); err != nil {
 		// Single-winner (ADR-027(j) W1): the incarnation was already moved out
 		// of applying by another committer (recovery takeover / parallel
 		// finish) — NOT a failure. We don't abort (don't overwrite someone
@@ -1141,7 +1135,7 @@ func failureStatus(mode TerminalMode) incarnation.Status {
 // exactly one winning instance (no duplicate event on a recovery takeover,
 // symmetric to the success branch, where the losing commit returns before
 // emitRunCompleted).
-func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore map[string]any, failStatus incarnation.Status, reason string, cause error, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
+func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus incarnation.Status, reason string, cause error, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
 	// Commit under a detached ctx: the original ctx may have been cancelled
 	// (Cancel/Shutdown/timeout), but error_locked must be recorded regardless.
 	// WithoutCancel: keeps trace baggage, doesn't inherit the teardown path's
@@ -1169,10 +1163,19 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 	})
 	historyID := audit.NewULID()
 	err := pgx.BeginFunc(wctx, r.deps.DB, func(tx pgx.Tx) error {
+		// A failure terminal writes state back unchanged — but "unchanged" means
+		// the row as it stands, NOT the snapshot taken at the run's lock. A
+		// `core.state.*` step commits its field mid-run ([ADR-0084]), and writing
+		// the pre-run snapshot here would undo it: a failed run must leave state
+		// describing exactly what was captured before it died.
+		current, serr := incarnation.SelectStateForUpdate(wctx, tx, spec.IncarnationName)
+		if serr != nil {
+			return serr
+		}
 		return incarnation.UpdateStateFromRun(
 			wctx, tx,
 			spec.IncarnationName, spec.ScenarioName, spec.ApplyID,
-			stateBefore, stateBefore, // state untouched on failure
+			current, current, // state untouched on failure
 			failStatus, details,
 			startedByPtr(spec.StartedByAID),
 			historyID,
@@ -1401,21 +1404,33 @@ func (r *Runner) runOutcome(spec RunSpec, status incarnation.Status, cause error
 	return out
 }
 
-// commitSuccess records a successful run: state_changes are committed into
-// incarnation.state, status → ready, a snapshot goes to state_history. One PG
-// transaction (FOR UPDATE inside UpdateStateFromRun).
+// commitSuccess records a successful run: status → ready and a snapshot goes to
+// state_history. One PG transaction (FOR UPDATE inside UpdateStateFromRun).
+//
+// It writes no state of its own: every field was already written by its own
+// `core.state.<verb>` task during the run ([ADR-0084]). The row is still read
+// under FOR UPDATE, and that read is the snapshot's state_after — what the run
+// actually left behind. state_after therefore comes from the row, state_before
+// from the caller: `stateBefore` is the run's own row-lock snapshot (run(),
+// step 1), the last value that predates every capture this run made. Reading
+// both ends off the row here would make them equal and the history row would
+// stop recording a delta at all.
 //
 // engineCompat is the run's provenance stamp (ADR-0076(l)), written to both the
 // incarnation and its state_history row. This is the ONLY commit path that
 // stamps: a successful run is the one that produced the state, so it is the one
 // entitled to say which engines produced it.
-func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, stateAfter map[string]any, engineCompat *incarnation.EngineCompat) error {
+func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore map[string]any, engineCompat *incarnation.EngineCompat) error {
 	historyID := audit.NewULID()
 	return pgx.BeginFunc(ctx, r.deps.DB, func(tx pgx.Tx) error {
+		current, err := incarnation.SelectStateForUpdate(ctx, tx, spec.IncarnationName)
+		if err != nil {
+			return err
+		}
 		return incarnation.UpdateStateFromRun(
 			ctx, tx,
 			spec.IncarnationName, spec.ScenarioName, spec.ApplyID,
-			stateBefore, stateAfter,
+			stateBefore, current,
 			incarnation.StatusReady, nil,
 			startedByPtr(spec.StartedByAID),
 			historyID,

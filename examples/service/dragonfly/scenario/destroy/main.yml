@@ -26,7 +26,7 @@ description: >-
         NOT-provisioned incarnation, cloud.destroyed group-drops → host-teardown is the only branch and
         runs normally on the live hosts.
   Both branches in one scenario: cloud-cascade group-drops on non-provisioned incarnations, Soul-side
-  is always active. REUSE of the redis/destroy lifecycle skeleton (input: {}, terminal, no state_changes).
+  is always active. REUSE of the redis/destroy lifecycle skeleton (input: {}, terminal, no state capture).
 
   ★ TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
   packages):
@@ -50,7 +50,7 @@ description: >-
       and irreversible; removing shared packages would affect neighboring services). This is a deliberate MVP
       boundary — extending the "depth" (purging data, removing packages) is a separate decision.
 
-  ★ state_changes are ABSENT on purpose: destroy is terminal — the incarnation is being deleted
+  ★ there is no state capture on purpose: destroy is terminal — the incarnation is being deleted
   (auto_destroy), clearing state is pointless (it goes away with the incarnation). Mirror of create,
   where state is POPULATED; here we don't touch it.
 

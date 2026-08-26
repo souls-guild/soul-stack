@@ -122,13 +122,18 @@ func migrationPathFor(caseFile string) string {
 	return filepath.Join(migrationsDir, filepath.Base(stepDir)+".yml")
 }
 
-// compareState compares expected state_after with final migration state through
-// common diff mechanism (compareStateChanges) — field→value with normalization
-// via structpb. Unlike partial assert.state_changes L0, L1 requires COMPLETE
-// match: extra key in result (not in state_after) — also divergence (migration =
-// deterministic function, state is fixed entirely).
+// compareState compares expected state_after with the final migration state
+// through the common by-key mechanism ([compareFieldsByKey]) and then requires
+// COMPLETE match: an extra key in the result (one no state_after names) is a
+// divergence too. A migration is a deterministic function of the old state
+// ([ADR-019]), so the whole result is fixed, and a field appearing that the case
+// did not predict is exactly the defect the test exists to catch.
+//
+// This is the one place that keeps whole-state equality: the L0 scenario form is
+// a subset ([compareStateSubset]), where the run is not a pure function of the
+// fixture and the case names only the fields it asserts.
 func compareState(want, got map[string]any) []string {
-	fails := compareStateChanges(want, got)
+	fails := compareFieldsByKey("state_after", want, got)
 	for _, field := range sortedKeys(got) {
 		if _, ok := want[field]; !ok {
 			fails = append(fails, fmt.Sprintf("state.%s: extra field in migration result (not in state_after): %v", field, got[field]))

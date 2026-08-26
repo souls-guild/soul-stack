@@ -10,9 +10,6 @@ description: >-
   ignored_error, keeper persists it in apply_task_register. register: is mandatory,
   otherwise register_data doesn't accumulate.
 
-# Focus — the flow-control outcome and register, state doesn't change.
-state_changes: {}
-
 tasks:
   - name: Deliberately failing task with ignore_errors
     module: core.exec.run

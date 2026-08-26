@@ -8,7 +8,7 @@ description: >-
   same translation of simple concepts into a full redis.conf.
 
 # ── extends: covenant — shared section contract (S4 rollout) ────────────────────────────
-# The input / compute / state_changes / validate sections live in covenant.yml (root of the
+# The input / compute / validate sections live in covenant.yml (root of the
 # service repo) and are inherited add-only: the keeper-side resolver merges covenant FIRST,
 # and the create_from_souls delta ADDS on top (never overriding covenant keys — otherwise
 # section_key_conflict).
@@ -16,16 +16,18 @@ description: >-
 # ★ create_from_souls DELTA — NEAR-MINIMAL (create's twin without provision):
 #   - input  — the four identity components feeding name_template, plus `hosts`: the ROSTER
 #     this run deploys onto (NIM-371). covenant does NOT carry the provision section (that's
-#     create's delta, ADR-061), and create_from_souls has no provision at all → covenant's
-#     provisioned_* sets are provision-aware (ternary on input.provision) and resolve to
-#     vm_ids/sids=[], provider='' here, exactly the old constant defaults of the inline copy.
+#     create's delta, ADR-061), and create_from_souls has no provision at all → the three
+#     provisioned_* fields are never captured here and stay ABSENT (the capture steps live in
+#     the provision body itself, which this scenario does not include; every reader defaults
+#     them, [ADR-0084] F-B).
 #     ★ `hosts` is where create and create_from_souls genuinely differ in KIND: create
 #     PRODUCES its hosts (provision), this one is GIVEN them, so where they come from has to
 #     be part of the request.
 #   - compute — ONLY sentinel_monitor_now (covenant does NOT carry it: it diverges from
 #     migrate_cluster by value). On create semantics =true (node-1 is the real master, sentinel
 #     monitors it right away — no role:slave fill-in phase, unlike migrate_cluster).
-#   - state_changes — NONE (covenant covers it fully; provisioned_* is already provision-aware).
+#   - tasks carry the state capture steps — the same 18 as create minus provisioned_*: a
+#     covenant carries no tasks, so each inheritor writes its own ([ADR-0084] F-B).
 #   - validate — the roster-size rules (NIM-371): the count of `hosts` against the declared
 #     topology. Appended to covenant's rules (this section merges add-only).
 #   - form / tasks — strictly local (form is NOT merged; tasks — a dispatcher by redis_type
@@ -267,7 +269,7 @@ form:
 # redis_type is rejected by Keeper's input validation on the enum BEFORE render.
 tasks:
   # ── Mint this run's ACL passwords ([ADR-0083] §4) ─────────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name), mints what is missing and
   # returns the effective state with every `type: secret` property replaced by its
@@ -283,15 +285,15 @@ tasks:
 
   - name: Mint the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
+      field: system_acl_users
       # compute.system_acl_names (covenant) is the union of vars.system_acl_users and
       # vars.system_acl_users_sentinel — the SAME source the render below reads, so
       # "what we mint" and "what we read" cannot drift. generate_secret() evaluates to a
       # request, not a value: it cannot be stringified, concatenated or logged.
-      set: >-
+      value: >-
         ${ compute.system_acl_names.map(name, {
              'name':     name,
              'password': generate_secret({'length': 32, 'charset': 'alphanumeric'})
@@ -299,16 +301,16 @@ tasks:
 
   - name: Mint the passwords of the operator ACL users
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
-      # present, not set: an account that already holds a value keeps it, so a re-run
-      # never rotates a credential a client is already using. An empty input.users is the
+      field: redis_users
+      # A declared secret resolves, never rotates: an account that already holds a value
+      # keeps it, so a re-run never breaks a client. An empty input.users is the
       # legitimate "no operator-extra" case and needs no `when` guard — an empty
       # collection is a valid value here (core.vault.kv-present rejected an empty targets
       # list, which is the only reason the old form carried one).
-      set: >-
+      value: >-
         ${ default(input.users, []).map(u, {
              'name':     u.name,
              'perms':    u.perms,
@@ -335,3 +337,226 @@ tasks:
     when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
     when: "input.redis_type == 'sentinel'"
+
+  # ── incarnation.state capture ───────────────────────────────────────────────────
+  # What was deployed, recorded field by field by keeper-side steps ([ADR-0084]). The
+  # expressions read compute.*/input.*/vars.* only, so they are safe at the end of the run
+  # and carry no register edge. The VALUES stay defined once — in covenant.yml's compute —
+  # while the STEPS are local to each scenario: a covenant is a contract, not a task list
+  # (ADR-0084 F-B, decision B2). redis_users/system_acl_users are NOT here: their capture
+  # is the minting step at the top of this body ([ADR-0083] §4).
+
+  - name: Record the deployed topology type
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_type
+      value: "${ input.redis_type }"
+
+  - name: Record the deployed Redis version
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_version
+      value: "${ compute.redis_version }"
+
+  # redis_config ≡ the branches' apply.input.config: a single compute.redis_config, declared once in the covenant compute.
+  - name: Record the effective Redis config
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_config
+      value: "${ compute.redis_config }"
+
+  # ── Named intent fields (read-model, v3) ─────────────────────────────
+  # ★ CRITICAL (architect a9e1c2c6): values are taken from the SAME compute.*/input as
+  # redis_config - not from raw input separately. So namedfields (intent) and
+  # redis_config (the computed result) are consistent by construction (a single compute pass).
+  # tls: the same compute.tls_on/tls_only_on/tls_port/tls_*_ref that produced the TLS block in
+  # redis_config (cert/key/ca - Vault PATHS, not PEM: the secret doesn't live in state).
+  - name: Record the TLS material references
+    on: keeper
+    module: core.state.set
+    params:
+      field: tls
+      value: >-
+        ${ {
+             'enable':   compute.tls_on,
+             'only':     compute.tls_only_on,
+             'port':     compute.tls_port,
+             'cert_ref': compute.tls_cert_ref,
+             'key_ref':  compute.tls_key_ref,
+             'ca_ref':   compute.tls_ca_ref
+           } }
+
+  # connection_mode: the operator's explicit network channel mode (enum tls/tls_plain/plain).
+  # the read-model duplicates the choice; the tls namedfield above carries the derived enable/only/port.
+  - name: Record the operator's connection mode
+    on: keeper
+    module: core.state.set
+    params:
+      field: connection_mode
+      value: "${ input.connection_mode }"
+
+  # persistence: input.persistence (default rdb) - the same key used to select
+  # vars.persistence_presets in redis_config (the read-model duplicates the operator's choice).
+  - name: Record the effective persistence preset
+    on: keeper
+    module: core.state.set
+    params:
+      field: persistence
+      value: "${ input.persistence }"
+
+  # memory_mb: the operator's memory budget (int). Not set → 0 (a flat set always
+  # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from service vars).
+  - name: Record the deployed memory budget
+    on: keeper
+    module: core.state.set
+    params:
+      field: memory_mb
+      value: "${ int(default(input.memory_mb, 0)) }"
+
+  # maxmemory_policy: the operator's explicit choice; not set → '' (the directive comes from the service vars
+  # substrate, see redis_config). The namedfield marks the ABSENCE of an explicit choice with an empty
+  # string (we don't reach into redis_config for the actual value - this is a write-model).
+  - name: Record the deployed maxmemory policy
+    on: keeper
+    module: core.state.set
+    params:
+      field: maxmemory_policy
+      value: "${ default(input.maxmemory_policy, '') }"
+
+  # io_threads: the operator's number of I/O threads (int, default 0). 0 = single-threaded I/O
+  # (the io-threads directive isn't written to redis.conf). the read-model duplicates the choice.
+  - name: Record the deployed io-threads count
+    on: keeper
+    module: core.state.set
+    params:
+      field: io_threads
+      value: "${ int(input.io_threads) }"
+
+  # modules: the Redis modules ACTUALLY deployed (the "modules are ALWAYS ALL" directive). Redis
+  # < 8 → the full set (destiny loads all of them from vars.redis_modules); Redis 8+ → [] (modules
+  # are built in). NOT an operator choice (input.modules was removed) - compute.redis_modules_deployed.
+  - name: Record the Redis modules actually deployed
+    on: keeper
+    module: core.state.set
+    params:
+      field: modules
+      value: "${ compute.redis_modules_deployed }"
+
+  # ★ install + host-layout (conf_dir/data_dir/modules_base_url) moved into service vars
+  # (v11→v12, Variant A): install - a read-model with no readers, layout - day-2 reads
+  # service vars directly (default(vars.<x>, '<default>')). There are no capture steps for them here -
+  # the keys aren't in state_schema, a set would write a field outside the schema → state validation would fail.
+  # sysctl_settings: the applied host tuning (the same vars.sysctl_settings that
+  # goes into destiny apply.input). from service vars (host-invariant, not operator input).
+  - name: Record the applied host tuning
+    on: keeper
+    module: core.state.set
+    params:
+      field: sysctl_settings
+      value: "${ default(vars.sysctl_settings, {}) }"
+
+  # monitoring: a read-model of the FACT of deployed exporters (Slice I, symmetric with the install/tls
+  # read-model). Versions/ports - from vars.node_exporter_*/redis_exporter_* (the same values
+  # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
+  # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
+  # duplicate the service vars / migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
+  - name: Record the deployed exporters
+    on: keeper
+    module: core.state.set
+    params:
+      field: monitoring
+      value: >-
+        ${ {
+             'node_exporter_version':  default(vars.node_exporter_version, ''),
+             'redis_exporter_version': default(vars.redis_exporter_version, ''),
+             'node_exporter_listen':   default(vars.node_exporter_listen, ':9100'),
+             'redis_exporter_listen':  default(vars.redis_exporter_listen, ':9121')
+           } }
+
+  # logging: a read-model of the FACT of deployed log-shipping (Slice V-I, ADR-067; symmetric with
+  # monitoring). Version/sink_type/endpoint/log_sources - from vars.vector_* (the same values
+  # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
+  # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
+  # monitoring password). The defaults duplicate the service vars / migration 013_to_014 (console - a safe default with no
+  # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
+  - name: Record the deployed log shipping
+    on: keeper
+    module: core.state.set
+    params:
+      field: logging
+      value: >-
+        ${ {
+             'vector_version':       default(vars.vector_version, ''),
+             'vector_sink_type':     default(vars.vector_sink_type, 'console'),
+             'vector_sink_endpoint': default(vars.vector_sink_endpoint, ''),
+             'vector_log_sources':   default(vars.vector_log_sources, [])
+           } }
+
+  # ── Topology (counts) ──────────────────────────────────────────────────────
+  # shards/replicas/sentinel_quorum - from the same input.* that the size-guard/cluster-build/
+  # sentinel branches use. shards - cluster only (not set → 0). replicas - UNIFIED
+  # int(default(input.replicas_per_master, 0)) in both modes (replicas per master;
+  # cluster - per shard, sentinel - of the master). sentinel_quorum - ALWAYS 0 (there's no
+  # more operator field for it, the quorum is AUTO size/2+1 computed in apply, it isn't materialized in state;
+  # 0 = "auto").
+  - name: Record the shard count
+    on: keeper
+    module: core.state.set
+    params:
+      field: shards
+      value: "${ int(default(input.shards, 0)) }"
+
+  - name: Record the replica count per master
+    on: keeper
+    module: core.state.set
+    params:
+      field: replicas
+      value: "${ int(default(input.replicas_per_master, 0)) }"
+
+  - name: Record the sentinel quorum
+    on: keeper
+    module: core.state.set
+    params:
+      field: sentinel_quorum
+      value: "${ 0 }"
+
+  # redis_hosts stays empty in ALL modes on purpose: the declared sentinel roles
+  # (master-election) live in apply.input.sentinel and the cluster roles are laid out by
+  # the plugin — the run roster is not part of the read-model.
+  - name: Record an empty host roster
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_hosts
+      value: "${ [] }"
+
+  # redis_sentinel: facts about the monitored master (sentinel mode). master_name - from service vars
+  # (vars.sentinel_master_name, default 'master'; there's no more operator field for it).
+  # quorum isn't materialized in state (the auto-quorum size/2+1 is computed at deploy
+  # time, in apply) → 0. master_ip is no longer written
+  # (the sentinel_only mode was removed: the master is picked from the roster, host-variant).
+  # ★ Redesign: the former named timings down_after_ms/failover_timeout_ms are absorbed into
+  # the generalized per-master dict. The read-model stores the EFFECTIVE map of per-master options
+  # (master_settings = vars.sentinel_master_defaults over input.sentinel_master_settings,
+  # last-wins) and the global settings (input.sentinel_settings) - day-2 reads them by name
+  # (like install/tls). Outside sentinel mode - an empty object (only cluster remains).
+  - name: Record the monitored master (sentinel mode)
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_sentinel
+      value: >-
+        ${ (input.redis_type == 'sentinel')
+             ? {
+                 'master_name':     default(vars.sentinel_master_name, 'master'),
+                 'quorum':          0,
+                 'master_settings': merge(
+                                       default(vars.sentinel_master_defaults, {}),
+                                       default(input.sentinel_master_settings, {})
+                                     ),
+                 'settings':        default(input.sentinel_settings, {})
+               }
+             : {} }

@@ -130,8 +130,8 @@ func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
 // TestBuildChangedTasks_StagedLocalIdxMiscorrelates — REVERSE invariant of the
 // T3 GUARD: if the fold keyed by LOCAL task_idx (=2), the changed-key
 // {h.local,2} would NOT match the task's global Index=5 → the task would
-// silently drop out of changed_tasks (mismatching state_changes whitelist +
-// audit). This test asserts that such a key indeed does NOT match — a
+// silently drop out of changed_tasks (a hole in the run's audit trail). This
+// test asserts that such a key indeed does NOT match — a
 // regression to local indexing would be caught.
 func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
 	tasks := []*render.RenderedTask{

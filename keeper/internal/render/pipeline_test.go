@@ -909,11 +909,11 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 // per-host about the value and nothing to import; leaving it out of keeperVars only
 // produced an eval-time `no such key: <name>` that soul-lint did not predict.
 //
-// [ADR-0083] §4 depends on this directly: the `core.state.present` task that mints a
+// [ADR-0083] §4 depends on this directly: the `core.state.set` task that mints a
 // state field's declared secrets derives the account set from the same compute var
-// the scenario's state_changes writes, so "what we mint" and "what we record" cannot
-// drift. Mutation: drop `Compute: in.Compute` from keeperVars and this fails at
-// eval with `no such key: acl_names`.
+// it writes into the field, so "what we mint" and "what we record" cannot drift.
+// Mutation: drop `Compute: in.Compute` from keeperVars and this fails at eval with
+// `no such key: acl_names`.
 func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
@@ -921,9 +921,9 @@ func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
 			{Name: "acl_names", Value: "${ ['default_admin', 'replica'] }"},
 		},
 		Tasks: []config.Task{
-			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.state.present", Params: map[string]any{
-				"key": "system_acl_users",
-				"set": "${ compute.acl_names.map(n, { 'name': n }) }",
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.state.set", Params: map[string]any{
+				"field": "system_acl_users",
+				"value": "${ compute.acl_names.map(n, { 'name': n }) }",
 			}}},
 		},
 	}
@@ -937,13 +937,13 @@ func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	set := tasks[0].Params.GetFields()["set"].GetListValue().GetValues()
-	if len(set) != 2 {
-		t.Fatalf("params.set = %v, want 2 elements from compute.acl_names", set)
+	value := tasks[0].Params.GetFields()["value"].GetListValue().GetValues()
+	if len(value) != 2 {
+		t.Fatalf("params.value = %v, want 2 elements from compute.acl_names", value)
 	}
-	first := set[0].GetStructValue().GetFields()["name"].GetStringValue()
+	first := value[0].GetStructValue().GetFields()["name"].GetStringValue()
 	if first != "default_admin" {
-		t.Fatalf("params.set[0].name = %q, want default_admin", first)
+		t.Fatalf("params.value[0].name = %q, want default_admin", first)
 	}
 }
 
@@ -1047,199 +1047,6 @@ func TestRender_WhereNonBool_Error(t *testing.T) {
 	_, _, err := p.Render(context.Background(), in)
 	if err == nil {
 		t.Fatal("Render: expected a non-bool where error")
-	}
-}
-
-// TestRenderStateChanges_Literal — a literal in sets is assigned as-is.
-func TestRenderStateChanges_Literal(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"greeting_file": "/tmp/soul-stack-hello"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "hello-world"},
-		Hosts:       []*topology.HostFacts{host("a", []string{"hello-world"}, nil)},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err != nil {
-		t.Fatalf("RenderStateChanges: %v", err)
-	}
-	if got["greeting_file"] != "/tmp/soul-stack-hello" {
-		t.Errorf("greeting_file = %v, want literal", got["greeting_file"])
-	}
-}
-
-// TestRenderStateChanges_FromInput — sets takes a value from input.* via CEL.
-func TestRenderStateChanges_FromInput(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"version": "${ input.version }"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario:    manifest,
-		Input:       map[string]any{"version": "7.2.0"},
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err != nil {
-		t.Fatalf("RenderStateChanges: %v", err)
-	}
-	if got["version"] != "7.2.0" {
-		t.Errorf("version = %v, want 7.2.0", got["version"])
-	}
-}
-
-// TestRenderStateChanges_LastWins — a per-host value (soulprint.self) collapses
-// last-wins by SID sort order: the host with the lexicographically last SID wins.
-func TestRenderStateChanges_LastWins(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"leader": "${ soulprint.self.hostname }"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
-		// Passed in unsorted order — the fold must sort it itself.
-		Hosts: []*topology.HostFacts{
-			host("b.example.com", []string{"svc"}, map[string]any{"hostname": "beta"}),
-			host("a.example.com", []string{"svc"}, map[string]any{"hostname": "alpha"}),
-			host("c.example.com", []string{"svc"}, map[string]any{"hostname": "gamma"}),
-		},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err != nil {
-		t.Fatalf("RenderStateChanges: %v", err)
-	}
-	// c.example.com — last by SID → gamma.
-	if got["leader"] != "gamma" {
-		t.Errorf("leader = %v, want gamma (last SID wins)", got["leader"])
-	}
-}
-
-// TestRenderStateChanges_Empty — nil StateChanges and empty sets → empty map.
-func TestRenderStateChanges_Empty(t *testing.T) {
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	base := RenderInput{
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
-	}
-
-	for name, sc := range map[string]*config.StateChanges{
-		"nil_block": nil,
-		"nil_sets":  {Sets: nil},
-		"empty_set": {Sets: map[string]string{}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			in := base
-			in.Scenario = &config.ScenarioManifest{Name: "s", StateChanges: sc}
-			got, err := p.RenderStateChanges(in)
-			if err != nil {
-				t.Fatalf("RenderStateChanges: %v", err)
-			}
-			if len(got) != 0 {
-				t.Errorf("got = %v, want empty", got)
-			}
-		})
-	}
-}
-
-// TestRenderStateChanges_RegisterFromHost — register.* in sets is read from
-// per-host RegisterByHost (slice 2), NOT from the global RenderInput.Register
-// (that's cross-task chaining in the Render phase, invisible to sets). Positive path:
-// a probe task produced register.probe.stdout → it lands in sets.
-func TestRenderStateChanges_RegisterFromHost(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"x": "${ register.probe.stdout }"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario: manifest,
-		RegisterByHost: map[string]map[string]any{
-			"a": {"probe": map[string]any{"stdout": "hello"}},
-		},
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err != nil {
-		t.Fatalf("RenderStateChanges: %v", err)
-	}
-	if got["x"] != "hello" {
-		t.Errorf("sets.x = %v, want \"hello\" (from register.probe.stdout)", got["x"])
-	}
-}
-
-// TestRenderStateChanges_GlobalRegisterNotLeaked — the global
-// RenderInput.Register (the Render phase) is NOT visible in sets: sets only reads
-// RegisterByHost[sid]. With empty RegisterByHost, accessing register.* gives a
-// deterministic eval error ("no such key"), regardless of a populated
-// global Register.
-func TestRenderStateChanges_GlobalRegisterNotLeaked(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"x": "${ register.probe.stdout }"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario:    manifest,
-		Register:    map[string]any{"probe": map[string]any{"stdout": "leaked"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err == nil {
-		t.Fatalf("RenderStateChanges: expected an eval error (got=%v): the global Register must not leak into sets", got)
-	}
-	if got != nil {
-		t.Errorf("expected a nil result on a render error, got = %v", got)
-	}
-}
-
-// TestRenderStateChanges_RegisterLastWinsCrossHost — last-wins fold for sets with
-// register: when register values differ across hosts, the value from the
-// host with the lexicographically last SID lands in state.
-func TestRenderStateChanges_RegisterLastWinsCrossHost(t *testing.T) {
-	manifest := &config.ScenarioManifest{
-		Name: "create",
-		StateChanges: &config.StateChanges{
-			Sets: map[string]string{"leader": "${ register.probe.stdout }"},
-		},
-	}
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{
-		Scenario: manifest,
-		RegisterByHost: map[string]map[string]any{
-			"a": {"probe": map[string]any{"stdout": "from-a"}},
-			"b": {"probe": map[string]any{"stdout": "from-b"}},
-		},
-		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts: []*topology.HostFacts{
-			host("a", []string{"svc"}, nil),
-			host("b", []string{"svc"}, nil),
-		},
-	}
-	got, err := p.RenderStateChanges(in)
-	if err != nil {
-		t.Fatalf("RenderStateChanges: %v", err)
-	}
-	if got["leader"] != "from-b" {
-		t.Errorf("sets.leader = %v, want \"from-b\" (last-wins by SID)", got["leader"])
 	}
 }
 

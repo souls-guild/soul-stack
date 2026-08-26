@@ -45,12 +45,6 @@ var covenantFragmentType = reflect.TypeOf(ScenarioFragment{})
 // "own Unmarshal → stop" pattern.
 var taskType = reflect.TypeOf(Task{})
 
-// stateChangesType is a reflect-walker stop point. `state_changes:` has its own
-// validator validateStateChanges (over the AST, with a meaningful hint on the
-// allowed keys sets/appends/modifies). Without suppression the walker emits a
-// second hintless `unknown_key` at the same line/col — a duplicate in the JSON output.
-var stateChangesType = reflect.TypeOf(StateChanges{})
-
 // computeBlockType is a reflect-walker stop point. `compute:` is a YAML mapping
 // `<name>: <expression>` with its own UnmarshalYAML (ComputeBlock) and validator
 // validateComputeBlock. Without suppression the generic walker would see
@@ -61,7 +55,7 @@ var computeBlockType = reflect.TypeOf(ComputeBlock(nil))
 // has its own AST validator validateValidateBlock (requires that/message, compiles
 // that input-only). The generic slice-of-struct walker would catch only
 // unknown_key but duplicate it with validateValidateBlock at the same line/col —
-// suppress (like stateChangesType/computeBlockType).
+// suppress (like taskType/computeBlockType).
 var validateRuleSliceType = reflect.TypeOf([]ValidateRule(nil))
 
 // formLayoutType is a reflect-walker stop point for `form:`. The block has its own
@@ -180,10 +174,6 @@ func walkValueAgainstType(n ast.Node, t reflect.Type, path string) []diag.Diagno
 	}
 	// Task — own UnmarshalYAML + validateTaskNode over the AST.
 	if t == taskType {
-		return nil
-	}
-	// StateChanges — own validator validateStateChanges with a hint.
-	if t == stateChangesType {
 		return nil
 	}
 	// ComputeBlock — own UnmarshalYAML (mapping name→expression) + validator

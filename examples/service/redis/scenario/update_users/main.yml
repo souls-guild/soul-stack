@@ -24,7 +24,7 @@ input:
     # ★ form-prefill (docs/input.md -> "Pre-fill from state"): "fix them ALL" =
     # the form opens ALREADY showing the current operator-extra set (the operator
     # edits the delta instead of typing the set from scratch or silently wiping it). The source is
-    # incarnation.state.redis_users (the same AclUser array that state_changes writes
+    # incarnation.state.redis_users (the same AclUser array the redis_users capture writes
     # below: set redis_users <- input.users), so the field name (users) and the state key
     # (redis_users) diverge - prefill goes through an explicit accessor, not by matching
     # names. Resolved by the form-prefill endpoint (path-whitelist + secret exclusion);
@@ -74,19 +74,9 @@ compute:
   # service vars default.
   tls_ca:   "${ compute.tls_on ? vault(incarnation.state.tls.ca_ref) : '' }"
 
-# ── Mutating incarnation.state ─────────────────────────────────────────────────
-# ★ BULK-REPLACE: state.redis_users is REPLACED by input.users ENTIRELY (an AclUser array
-# [{name,perms,state}], wave 1b, WITHOUT the password - that's keeper-side vault, ADR-012). NOT an upsert,
-# NOT a merge: anything missing from input.users drops out of state (= the user is deleted). The same
-# set that went into rendering users.acl's operator-extra layer. required -> input.users is always
-# present; an empty array records "no operator-extra" (system users stay outside state).
-state_changes:
-  - set: redis_users
-    value: "${ input.users }"
-
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference.
@@ -99,23 +89,23 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
+      field: system_acl_users
       # ★★ DELIBERATELY read-only, never minted here: these are the credentials the LIVE
       # instance and its replicas already authenticate with (community.redis.acl AUTHs as
       # default_admin BEFORE ACL LOAD applies the new file). No `password` property on any
-      # element → present-semantics require an EXISTING value, so a broken incarnation
+      # element → secret resolution requires an EXISTING value, so a broken incarnation
       # fails loudly instead of being handed a fresh password nothing else knows.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Mint the missing operator ACL user passwords
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
+      field: redis_users
       # ★★ SCOPE — input.users only, deliberately NOT the service's own accounts (above).
       #
       # ★★ RE-RUN: mint-if-empty, so a user already in the set KEEPS their password —
@@ -125,7 +115,7 @@ tasks:
       # case. It needs no `when` guard here — an empty collection is a valid value, unlike
       # core.vault.kv-present's targets, which rejected an empty list and forced the old
       # form to carry a static group-drop.
-      set: >-
+      value: >-
         ${ input.users.map(u, {
              'name':     u.name,
              'perms':    u.perms,

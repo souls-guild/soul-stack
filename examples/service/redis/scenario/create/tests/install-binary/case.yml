@@ -102,7 +102,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -240,7 +240,7 @@ assert:
       params_subset:
         name: redis-server
 
-  state_changes:
+  state_after:
     redis_type: sentinel
     # redis_version = input.version (enum of builds published to Nexus).
     redis_version: "7.4.1"
@@ -260,7 +260,7 @@ assert:
         failover-timeout: "60000"
       settings: {}
     # -- namedfields (read-model). install was moved out of state into service vars (v11->v12,
-    # Option A): it's no longer in state_changes (field not in state_schema). The binary
+    # Option A): no capture step writes it (the field is not in state_schema). The binary
     # install method is covered by the destiny fetch-binary tasks above (not via state).
     # TLS off (service vars without tls_*): enable/only false, port 7379 (service vars default),
     # refs empty (vars.tls_*_ref not set -> the has() chain yields '').

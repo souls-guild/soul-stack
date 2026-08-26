@@ -74,7 +74,6 @@ state_schema:
 `)
 	write("scenario/destroy/main.yml", `name: destroy
 description: teardown step
-state_changes: {}
 tasks:
   - name: Tear down on every host
     module: core.exec.run

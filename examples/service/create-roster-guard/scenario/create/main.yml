@@ -30,9 +30,6 @@ input:
     min: 1
     description: Number of hosts the declared topology must end up with.
 
-# The service writes nothing to incarnation.state.
-state_changes: {}
-
 tasks:
   # ── 1. Bind the roster (keeper-side) ────────────────────────────────────────
   # `refresh_soulprint: true` makes this a passage boundary (ADR-0061 §S2/§S3):

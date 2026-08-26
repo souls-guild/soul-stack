@@ -3,6 +3,7 @@ package render
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -15,7 +16,6 @@ import (
 const asyncScenario = `
 name: async-pilot
 description: two async probes joined by an explicit require
-state_changes: {}
 tasks:
   - name: collect cpu
     module: core.exec.run
@@ -91,7 +91,6 @@ func TestRender_RequireAllReachesTheWire(t *testing.T) {
 	m := loadStagedManifest(t, `
 name: async-all
 description: a global barrier over every async task
-state_changes: {}
 tasks:
   - name: collect cpu
     module: core.exec.run
@@ -173,7 +172,6 @@ func TestRender_LoopAsyncMarksEveryIteration(t *testing.T) {
 	m := loadStagedManifest(t, `
 name: loop-async
 description: every iteration of an async loop runs in its own flow
-state_changes: {}
 tasks:
   - name: fetch
     module: core.exec.run
@@ -254,7 +252,6 @@ func TestRender_RequireUnknownRegister(t *testing.T) {
 const crossPassageRequireScenario = `
 name: cross-passage-require
 description: a barrier whose source lands in the next Passage
-state_changes: {}
 tasks:
   - name: probe role
     module: core.exec.run
@@ -353,5 +350,102 @@ func TestToProtoTasks_ConcurrencyZeroValue(t *testing.T) {
 	}
 	if pt.GetRequireAll() {
 		t.Error("require_all = true on a task that never declared it")
+	}
+}
+
+// TestRender_LoopOnKeeperTaskRejected — ★ pins the ONE gap [ADR-0084] F-C
+// leaves. The ADR deletes the `foreach` state op on the grounds that "as a step,
+// a task already has `loop:`" — but a capture is an `on: keeper` task, and
+// renderKeeperTask rejects `loop:` there. So a capture
+// over a runtime-sized collection has to be written out one task per element.
+//
+// This is a guard, not an endorsement: if keeper-side loop is ever implemented,
+// this test is the thing that must be deleted deliberately, which is what stops
+// the gap from being closed by accident and left undocumented. The decision is
+// NIM-709's.
+func TestRender_LoopOnKeeperTaskRejected(t *testing.T) {
+	m := &config.ScenarioManifest{
+		Name: "keeper-loop",
+		Tasks: []config.Task{
+			{
+				Name: "record every replica",
+				On:   "keeper",
+				Loop: &config.LoopSpec{Items: "${ input.replicas }", As: "sid"},
+				Module: &config.ModuleTask{
+					Module: "core.state.add",
+					Params: map[string]any{"field": "redis_hosts", "value": "${ sid }"},
+				},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	if _, _, err := p.Render(context.Background(), asyncRenderInput(m)); !errors.Is(err, ErrUnsupportedDSL) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (loop: on a keeper-side task)", err)
+	}
+}
+
+// TestRender_BlockOnKeeperTaskRejected — regression: `block:` + `on: keeper`
+// used to PANIC. The Render loop tests IsKeeperTask before it tests
+// task.Block, so such a task never reached renderBlockTask - it went into
+// renderKeeperTask, which dereferenced the nil Module. guardPilotDSL waves
+// blocks through by design (a block legitimately has no module), so nothing
+// upstream caught it either.
+//
+// Refused now on both layers: `block_on_keeper_invalid` offline and
+// ErrUnsupportedDSL here. The nil Module is what makes this a crash rather than
+// a wrong answer, so the render guard is the load-bearing one - a file that
+// never passed soul-lint still reaches Render.
+func TestRender_BlockOnKeeperTaskRejected(t *testing.T) {
+	m := &config.ScenarioManifest{
+		Name: "keeper-block",
+		Tasks: []config.Task{
+			{
+				Name: "record the topology",
+				On:   "keeper",
+				Block: &config.BlockTask{Block: []config.Task{
+					{
+						Name:   "the field",
+						Module: &config.ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "mode", "value": "sentinel"}},
+					},
+				}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	_, _, err := p.Render(context.Background(), asyncRenderInput(m))
+	if !errors.Is(err, ErrUnsupportedDSL) {
+		t.Fatalf("err = %v, want ErrUnsupportedDSL (block: on a keeper-side task)", err)
+	}
+	if !strings.Contains(err.Error(), "flat") {
+		t.Errorf("err = %q, want the message to name the remedy (write the keeper task flat)", err)
+	}
+}
+
+// TestRender_KeeperTasksInsideAPlainBlock — ★ the control that killed the first
+// remedy. `on: keeper` moved DOWN onto a block's children is refused too, and
+// not by a guard: renderBlockTask fans each child through resolveTargets, which
+// rejects the keeper literal as a routing bug ("must be routed to
+// renderKeeperTask"). So there is no form in which a keeper task lives inside a
+// block, and the error message above must not offer one - which is what it said
+// before this test was written.
+func TestRender_KeeperTasksInsideAPlainBlock(t *testing.T) {
+	m := &config.ScenarioManifest{
+		Name: "keeper-in-block",
+		Tasks: []config.Task{
+			{
+				Name: "record the topology",
+				Block: &config.BlockTask{Block: []config.Task{
+					{
+						Name:   "the mode",
+						On:     "keeper",
+						Module: &config.ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "mode", "value": "sentinel"}},
+					},
+				}},
+			},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	if _, _, err := p.Render(context.Background(), asyncRenderInput(m)); err == nil {
+		t.Fatal("Render: on: keeper on a block child must not render; got nil error")
 	}
 }

@@ -1,7 +1,7 @@
 ## ADR-0083. A secret is a declared state field — the author never writes a Vault path
 
 **Status:** accepted, implementing (NIM-698)
-**Amends:** [ADR-070](0070-secret-reveal-path.md) (`revealable_secrets` is absorbed — reveal derives its path instead of reading an authored template), [ADR-064](0064-secret-write-path.md) (the deterministic-path convention extends from operator input to state fields), [ADR-009](0009-scenario-dsl.md) (`state_schema` gains a field-level secret declaration), [ADR-010](0010-templating.md) (a new CEL function `generate_secret` and type `SecretRequest`; `vault()` is fenced out of the service's own namespace), [ADR-017](0017-keeper-side-core.md) (a new keeper-side module `core.state.present`), [ADR-056](0056-staged-render-passage.md) (keeper-side register becomes readable by Soul-side consumers), [ADR-012](0012-keeper-soul-grpc.md) (per-field `secret: true` on module output retires `no_log`)
+**Amends:** [ADR-070](0070-secret-reveal-path.md) (`revealable_secrets` is absorbed — reveal derives its path instead of reading an authored template), [ADR-064](0064-secret-write-path.md) (the deterministic-path convention extends from operator input to state fields), [ADR-009](0009-scenario-dsl.md) (`state_schema` gains a field-level secret declaration), [ADR-010](0010-templating.md) (a new CEL function `generate_secret` and type `SecretRequest`; `vault()` is fenced out of the service's own namespace), [ADR-017](0017-keeper-side-core.md) (a new keeper-side module `core.state`, addressed `core.state.set` after [ADR-0084](0084-explicit-state-capture.md)), [ADR-056](0056-staged-render-passage.md) (keeper-side register becomes readable by Soul-side consumers), [ADR-012](0012-keeper-soul-grpc.md) (per-field `secret: true` on module output retires `no_log`)
 **Implemented by:** NIM-698
 
 ### Problem
@@ -151,14 +151,14 @@ zero ids.
 #### 3. `generate_secret()` returns a request, not a value
 
 ```yaml
-set: >-
+value: >-
   ${ compute.acl_inventory.map(u, merge(u, {
        'password': generate_secret({ 'length': 32, 'charset': 'alphanumeric' })
      })) }
 ```
 
 The call evaluates to a `SecretRequest` — a typed marker carrying the policy — not to a
-string. `core.state.present` resolves it at write time: the field already holds a value,
+string. A `core.state.*` write resolves it at write time: the field already holds a value,
 the marker is dropped; the field is empty, a value is minted per the marker.
 
 The alternative, returning plaintext at render, is rejected in §Rejected. The short
@@ -177,7 +177,7 @@ hidden `__vault_resolver` argument, and a request carries nothing hidden. `Secre
 is an **opaque** CEL type — no readable fields and no string form — so
 `generate_secret({}).length` and `"pw-${ generate_secret({}) }"` are errors instead of
 things that render. Only a cell that is exactly one `${ … }` yields a native value, and
-that is the only shape `core.state.present` accepts. It is registered in the ordinary
+that is the only shape `core.state.*` accepts. It is registered in the ordinary
 scenario/destiny pass alone; in migration-CEL, flow-control and service-vars the call is
 refused, because a request nobody resolves is inert data that looks like it did
 something.
@@ -192,21 +192,21 @@ through the same bounds either way.
 
 The seal detector is deliberately **not** extended to treat `generate_secret` as a
 secret source. A request holds no secret material, and sealing is whole-cell: marking
-the `set:` cell would mask the entire inventory — names, permissions, states — out of
+the `value:` cell would mask the entire inventory — names, permissions, states — out of
 the diagnostics for a task that failed, which is precisely the all-or-nothing coarseness
 §8 removes from `no_log`. What does need masking is the consuming side, where a
 reference resolves to plaintext; that is §6's concern, not this one's.
 
-#### 4. `core.state.present` is the single write
+#### 4. `core.state.set` is the write
 
 ```yaml
 - name: Redis users
   on: keeper
-  module: core.state.present
+  module: core.state.set
   register: redis_users
   params:
-    key: redis_users
-    set: "${ compute.acl_inventory }"
+    field: redis_users
+    value: "${ compute.acl_inventory }"
 ```
 
 One call is read-or-write. On a secret property the semantics are `present`, never
@@ -214,12 +214,14 @@ One call is read-or-write. On a secret property the semantics are `present`, nev
 incidental re-render must not rotate a live credential, and deliberate rotation is
 therefore not expressible here by design — it gets its own decision and its own ticket.
 
-The module writes the secret value to the derived Vault path. It does not write to
-Postgres itself: the record reaches the database through the run's ordinary
-`state_changes` commit, with every `type: secret` property stripped by the state engine
-on the way in. Non-secret properties of the same object are written normally. One write
-path to Postgres, not two — the module has no privileged side channel, and a secret
-cannot reach a column even if a caller hands the field back verbatim.
+The module writes the secret value to the derived Vault path, and the record reaches
+Postgres through the same state engine every other write goes through, with every
+`type: secret` property stripped on the way in. Non-secret properties of the same object
+are written normally. One write path to Postgres, not two — the module has no privileged
+side channel, and a secret cannot reach a column even if a caller hands the field back
+verbatim. *(Amended by [ADR-0084](0084-explicit-state-capture.md): the record lands at
+the step, not in an end-of-run `state_changes` commit. What is stripped, and by which
+engine, is unchanged.)*
 
 **The register carries the effective state** — what is now stored, existing values
 included, not what the caller proposed. This is the property that makes the whole
@@ -416,7 +418,7 @@ four are honestly narrower than what they replace.
   a `no_log:` task's register outright, which also broke the register chain the next
   Passage renders from ([ADR-056](0056-staged-render-passage.md)). Protection moved to
   §1 (a declared secret is not in state) and §6 (the register name is sealed, so a
-  `state_changes` entry reading it writes the ref through), neither of which costs a
+  state capture reading it writes the ref through), neither of which costs a
   consumer its input.
 
 #### 9. The generation policy grammar is the existing one
@@ -436,7 +438,7 @@ default alphabet while the YAML said otherwise, and nothing reported it.
 
 - **A generator module that owns the store** (`core.secret.generated` with a `field:`
   parameter, resolving the path itself). It puts a second state manager beside
-  `core.state.present` and decides a storage path inside a module whose name says it
+  `core.state` and decides a storage path inside a module whose name says it
   generates strings — reintroducing, one layer down, the opacity this ADR removes. The
   module is dropped from the ticket entirely; `generate_secret()` (§3) covers minting.
 - **`generate_secret()` returning plaintext at render.** Render is re-run per passage and
@@ -475,8 +477,9 @@ default alphabet while the YAML said otherwise, and nothing reported it.
 - **Rotation.** Deliberately inexpressible under §4. Making it expressible is a decision
   about who may rotate what and what happens to the previous value — its own ticket.
 - **Explicit state capture and the retirement of end-of-run `state_changes`** (NIM-699).
-  `core.state.present` arrives here because §4 needs it; the broader question of whether
-  `state_changes` survives is separate.
+  `core.state` arrives here because §4 needs it; the broader question of whether
+  `state_changes` survives is separate. *(Answered by
+  [ADR-0084](0084-explicit-state-capture.md): it does not.)*
 
 ### Consequences
 
@@ -507,6 +510,59 @@ of code rather than by asserting on text:
 - a `type: secret` value never appears in `apply_task_register` after the generating run,
   and never in an audit payload;
 - a derived path segment containing `/`, `.`, or `..` fails closed;
-- a second run keeps the first run's password (present, not set);
+- a second run keeps the first run's password (a declared secret resolves, it does not rotate);
 - a Soul-side task reads a keeper register through the union, and the old empty-bucket
   fallback still does not fire.
+
+### Amendment 2026-08-25 (NIM-699, [ADR-0084](0084-explicit-state-capture.md)): the two params are renamed `field:` / `value:`
+
+§4's example above is written in the new spelling. `key:` → **`field:`**, `set:` → **`value:`**,
+and the register's echo key `key` → **`field`** with it. Nothing about the module's behaviour
+moves; what moves is the word.
+
+Both old names collide with the [ADR-057](0057-state-changes-crud-verbs.md) verb grammar that
+[ADR-0084](0084-explicit-state-capture.md) ports onto this module. There `key:` addresses an
+**element inside** a collection (the map key an `add`/`remove` operates on) while 698 spelled the
+**containing field** the same way — one word for a whole and its part, in params that will sit side
+by side. And `set` becomes a sibling state (`core.state.set`), so it cannot also be a parameter of
+`present` without the address and the parameter disagreeing about what the word means.
+
+This is breaking for every author, and deliberately unversioned: it lands before the release, and
+the adopters in `examples/` are migrated in the same commit.
+
+### Amendment 2026-08-25 (NIM-699, [ADR-0084](0084-explicit-state-capture.md)): the address becomes `core.state.set`, and the write lands at the step
+
+Two things in §4 move, and neither is a behaviour change to what 698 built.
+
+**The address.** `core.state.present` becomes **`core.state.set`**. ADR-0084 turns the module's
+state suffix into the [ADR-057](0057-state-changes-crud-verbs.md) verb, one address per verb, and
+what 698's module does to a field's ordinary content is overwrite it — which that dictionary calls
+`set`. The word `present` is then free for the operation ADR-057 would expect under it: write the
+field only if it has no value yet. Breaking for every author, deliberately unversioned, and the
+`examples/` adopters migrate in the same commit as the rename.
+
+**The secret rule stops being the verb's.** §4 states it as *"on a secret property the semantics are
+`present`, never `set`"*, and that sentence stays exactly true — but it is a property of a **declared
+secret**, not of the address it was first written under. Every verb resolves a `type: secret`
+property the same way: an existing Vault value is kept, a missing one is minted, the register carries
+a `vault:` reference. `core.state.set` overwrites the field and still does not rotate a live
+credential. Rotation remains inexpressible, for the reason §4 gives.
+
+**The commit point.** The sentence about the record reaching Postgres "through the run's ordinary
+`state_changes` commit" is superseded: `state_changes` is retired and the field lands in
+`incarnation.state` at the step. The stripping of declared secrets is unaffected — it happens in the
+same engine, now called from the module instead of from the end-of-run barrier — so a secret still
+cannot reach a column. What changes is *when* the row is written, which is ADR-0084's subject, not
+this one's.
+
+**`incarnation.state` no longer stays frozen for the whole run, and "per-passage state refresh" is
+no longer rejected.** §5 closes on *"`incarnation.state` stays the frozen pre-run snapshot it is"*,
+and the Rejected list carries per-passage refresh. Both were right for a single end-of-run commit and
+one verb: nothing could observe a write, so freezing cost nothing. Carrying the verb grammar makes
+them wrong — `add` with `on_conflict: skip` inserts twice against a frozen snapshot, `expect` asserts
+against a state that no longer exists, and a `modify` after an `add` silently patches nothing. Read-
+modify-write verbs only mean anything if the write is observable, so ADR-0084 takes accumulation:
+`incarnation.state` in a step's expression reflects every capture that has already run in this run.
+The three lines of §5 that this does **not** touch stand unchanged — the keeper register is still
+unioned into every per-host bucket, duplicate register names are still a load error, and a consumer
+still lands in a later Passage than its producer.

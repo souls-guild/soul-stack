@@ -35,7 +35,9 @@ var expectedModules = map[string][]string{
 	"core.bootstrap": {"issued", "delivered"},             // keeper-side ready-made VM onboarding + delivery
 	"core.vault":     {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
 	"core.choir":     {"present", "absent"},               // keeper-side (ADR-044)
-	"core.state":     {"present"},                         // keeper-side ([ADR-0083] §4): the write point of a state field carrying declared secrets
+	// keeper-side: the write point of a state field ([ADR-0084]); the state suffix
+	// IS the ADR-057 verb, one address per verb.
+	"core.state": {"set", "present", "add", "append", "modify", "remove", "unset"},
 }
 
 // TestDefault_RegisteredCoreModules — the registry builds (mustBuild does not panic)

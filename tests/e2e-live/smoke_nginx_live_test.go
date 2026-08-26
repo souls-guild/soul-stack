@@ -67,9 +67,9 @@ func TestL3bSmokeNginxLive_InstallAndStart(t *testing.T) {
 	// records the expected run time (~3-5 minutes).
 	stack.WaitApplySuccess(t, applyID, 300)
 
-	// apply_runs success != incarnation.state committed: state_changes are written in
-	// a separate transaction AFTER the barrier (run.go §8, status->ready). Without this
-	// wait, AssertIncarnationState reads empty state in the race window.
+	// apply_runs success != every capture is in: a core.state.<verb> step standing
+	// after the host work commits after those hosts report success ([ADR-0084]).
+	// Without this wait, AssertIncarnationState reads empty state in the race window.
 	stack.WaitIncarnationReady(t, inc, 30)
 
 	// YAML loader (L3b-5): apply_runs / incarnation_state / audit_events /

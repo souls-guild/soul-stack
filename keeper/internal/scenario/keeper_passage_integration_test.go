@@ -123,7 +123,6 @@ func keeperChainServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: 2-passage all-keeper chain (cloud.created -> bootstrap.delivered)
-state_changes: {}
 tasks:
   - name: provision vm
     module: core.cloud.created
@@ -158,7 +157,6 @@ func keeperChain3ServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: 3-passage all-keeper chain (bootstrap.created -> delivered -> finalized)
-state_changes: {}
 tasks:
   - name: provision vm
     module: core.bootstrap.created
@@ -377,7 +375,6 @@ func keeperForwardAccumServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: P2 reads register of both P0 and P1 (forward-accumulation)
-state_changes: {}
 tasks:
   - name: provision vm
     module: core.bootstrap.created
@@ -528,7 +525,6 @@ func crossChannelServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: keeper task reads HOST register (cross-channel, must fail-closed)
-state_changes: {}
 tasks:
   - name: host probe
     module: core.exec.run
@@ -760,7 +756,6 @@ func mixedKeeperHostPassage0Repo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: mixed keeper + host in Passage 0
-state_changes: {}
 tasks:
   - name: vault read
     module: core.vault.kv-read
@@ -858,7 +853,6 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 func TestStratify_KeeperChain_TwoPassages(t *testing.T) {
 	scn, _, diags, err := config.LoadScenarioManifestFromBytes("main.yml", []byte(`name: create
 description: keeper chain stratify
-state_changes: {}
 tasks:
   - name: provision
     module: core.cloud.created

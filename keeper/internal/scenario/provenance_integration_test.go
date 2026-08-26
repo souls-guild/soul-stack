@@ -97,7 +97,6 @@ description: noop service for the engine-provenance integration test
 `)
 	write("scenario/create/main.yml", `name: create
 description: smoke core.exec.run
-state_changes: {}
 tasks:
   - name: Echo hello on every host
     module: core.exec.run

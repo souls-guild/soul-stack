@@ -250,7 +250,7 @@ func TestRevealSecret_NoField_404(t *testing.T) {
 
 // TestRevealSecret_InvalidKey_422 — a key that is not a Vault path segment → 422,
 // Vault is NOT touched. The rule is [config.ValidVaultPathSegment] — the SAME one
-// core.state.present applies on write, so reveal accepts exactly the keys that can
+// core.state.* applies on write, so reveal accepts exactly the keys that can
 // have been written.
 func TestRevealSecret_InvalidKey_422(t *testing.T) {
 	vr := &fakeVaultReader{data: map[string]any{"password": "x"}}
@@ -594,7 +594,7 @@ func TestRevealSecret_BadIdentifiers_422(t *testing.T) {
 // TestRevealableSecrets_DiscoveryFiltersNonConformingKeys — a state key that is not a
 // Vault path segment is NOT advertised (reveal would 422 it). The filter is
 // [config.ValidVaultPathSegment], so an uppercase name IS advertised: discovery and
-// reveal must agree, and core.state.present writes under that same rule.
+// reveal must agree, and core.state.* writes under that same rule.
 func TestRevealableSecrets_DiscoveryFiltersNonConformingKeys(t *testing.T) {
 	state := map[string]any{"redis_users": []any{
 		map[string]any{"name": "../etc"},         // traversal

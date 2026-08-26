@@ -49,7 +49,7 @@
   it resolves RUN-LEVEL, i.e. after the row exists.
 
   **(c) The key is named `name_template` — plain, not a dictionary entity.** It is a
-  small DevOps-shaped key like `required_when` or `state_changes`, not a new concept
+  small DevOps-shaped key like `required_when` or `changed_when`, not a new concept
   in the Soul Stack vocabulary ([naming-rules](../naming-rules.md)); nothing is added
   to the dictionary beyond the key itself.
 

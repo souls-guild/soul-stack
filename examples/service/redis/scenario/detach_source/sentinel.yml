@@ -97,7 +97,7 @@
 #    run_once on hosts[0] (the same new master that replicated the source in
 #    migrate_cluster). Idempotent: already a standalone master (role:master, no
 #    master_host) → no-op. addr is the local new master (compute.tls_*); password
-#    is our secret/redis/<inc>#password. AFTER success, state_changes sets
+#    is our secret/redis/<inc>#password. AFTER success, the seeded_from capture sets
 #    seeded_from.detached=true (main.yml).
 - name: Detach the fresh master from the external source (REPLICAOF NO ONE)
   run_once: true

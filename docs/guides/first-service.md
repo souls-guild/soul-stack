@@ -35,7 +35,7 @@ hello-world/
 │   └── 00-base.yaml               # baseline parameters for all incarnations (background)
 └── scenario/
     ├── create/
-    │   ├── main.yml                # "create" operation: input + state_changes + tasks
+    │   ├── main.yml                # "create" operation: input + tasks
     │   └── tests/
     │       └── greeting-hello/case.yml   # L0 test: checks script rendering without hosts
     └── converge/
@@ -79,7 +79,7 @@ Full list of manifest fields (including `destiny[]` / `modules[]` for services w
 
 ## 4. `scenario/create/main.yml` - write the operation
 
-A script is one operation on a service (CRUD-style: `create` / `add_user` / `restart` / ...). Each `scenario/<name>/` folder is a separate operation; Keeper finds them with auto-discover; there is no need to list them in the manifest. The entry point is `main.yml` with three blocks: `input:` (input contract), `state_changes:` (what to write in state), `tasks:` (steps).
+A script is one operation on a service (CRUD-style: `create` / `add_user` / `restart` / ...). Each `scenario/<name>/` folder is a separate operation; Keeper finds them with auto-discover; there is no need to list them in the manifest. The entry point is `main.yml` with two blocks: `input:` (input contract) and `tasks:` (steps). Writing to state is one of those steps.
 
 [`examples/service/hello-world/scenario/create/main.yml`](../../examples/service/hello-world/scenario/create/main.yml):
 
@@ -93,29 +93,34 @@ input:
     required: true
     description: The text that is written to the greeting file.
 
-state_changes:
-  sets:
-    greeting_file: /tmp/soul-stack-hello
-
 tasks:
   - name: Write greeting file on every host of the incarnation
     module: core.file.present
     params:
       path: /tmp/soul-stack-hello
       content: "${ input.greeting }"
+
+  - name: Record the greeting file path
+    on: keeper
+    module: core.state.set
+    params:
+      field: greeting_file
+      value: /tmp/soul-stack-hello
 ```
 
 Analysis by blocks.
 
 **`input:` - script parameters.** Contract of what the operator must/can pass at startup. There is one parameter `greeting`: string, required (`required: true`). Keeper validates the passed `input` against this contract **before** the run - if the operator does not pass `greeting`, the run does not start. Full standard `input:` (types, formats, validation, reusable named types via `types:`/`$type`) - [docs/input.md](../input.md).
 
-**`tasks:` - operation steps.** One step:
+**`tasks:` - operation steps.** Two steps. The first:
 
 - `module: core.file.present` is a core module that ensures the existence of a file with the given content (idempotent: if the file is already like this, there is no change). The behavior of the module and all its parameters are [docs/module/core/file/README.md](../module/core/file/README.md). The complete list of core modules is [ADR-015](../adr/0015-core-modules-mvp.md).
 - `params.path` - where to write; `params.content` - what to write.
 - **`content: "${ input.greeting }"`** - the template engine works here. The `${ … }` marker is a CEL interpolation: during the render phase, Keeper substitutes the value `input.greeting` into the string. That is, the file text comes from the operator parameter, and is not hardwired into the script. The border "where is CEL, where is Go template", marker `${ … }`, security model - normative in [docs/templating.md](../templating.md).
 
-**`state_changes:` - what to record in state after success.** The key `sets` is the map `<state field>: <value>`. After **all** incarnation hosts have successfully completed the cross-host barrier, Keeper writes `incarnation.state.greeting_file = /tmp/soul-stack-hello` to Postgres. Here the value is a literal; in the general case, this is also a CEL expression (you can use `${ input.* }`, `${ register.* }`, etc.). The barrier/state-commit invariant and the grammar `state_changes` (`sets` / future `appends` / `modifies`) - [docs/scenario/orchestration.md → §7](../scenario/orchestration.md).
+**The second step - recording it in state.** `module: core.state.set` with `on: keeper` writes `incarnation.state.greeting_file = /tmp/soul-stack-hello` into Postgres. The state suffix of the address is the verb — `set` overwrites the field whole; `present`/`add`/`append`/`modify`/`remove`/`unset` are the rest ([ADR-0084](../adr/0084-explicit-state-capture.md)). Here the value is a literal; in the general case it is a CEL expression (`${ input.* }`, `${ compute.* }`, `${ register.<keeper-task>.* }`).
+
+Two things follow from a capture being a step. It runs **where you put it** — after the file task, so the path is recorded only once the file has been written on every host (the cross-host barrier still holds every host to the same point before the next step begins). And it lands **at that step**, not at an end-of-run commit: a run that dies later keeps what this step already recorded. The verbs, the ordering rules and the soul-lint diagnostics — [docs/scenario/orchestration.md → §7.1](../scenario/orchestration.md#71-the-capture-verbs).
 
 > Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all **member** hosts (via the membership relation; `incarnation.name` is not a Coven). That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
 
@@ -260,7 +265,7 @@ soulctl incarnation get hello-demo
 cat /tmp/soul-stack-hello        # → hello from my first service
 ```
 
-**State and history.** In `incarnation.state.greeting_file` - the path to the created file (what `state_changes.sets` wrote). History of runs (snapshots in `state_history`):
+**State and history.** In `incarnation.state.greeting_file` - the path to the created file (what the `core.state.set` step wrote). History of runs (snapshots in `state_history`):
 
 ```sh
 curl -s http://127.0.0.1:8080/v1/incarnations/hello-demo/history -H "Authorization: Bearer $TOKEN"
@@ -282,7 +287,7 @@ soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wa
 
 You've put together a single-script service. Further - as it grows:
 
-- **More operations.** Add scripts `scenario/<op>/main.yml` (`add_user`, `restart`, …) - each with its own `input:` and `state_changes:`. Complete DSL grammar of tasks (loop / block / register / onchanges / retry / ...) - [docs/destiny/tasks.md](../destiny/tasks.md); orchestration delta scenario (`on:` / `where:` / `serial:` / `apply:`) - [docs/scenario/orchestration.md](../scenario/orchestration.md).
+- **More operations.** Add scripts `scenario/<op>/main.yml` (`add_user`, `restart`, …) - each with its own `input:` and its own capture steps. Complete DSL grammar of tasks (loop / block / register / onchanges / retry / ...) - [docs/destiny/tasks.md](../destiny/tasks.md); orchestration delta scenario (`on:` / `where:` / `serial:` / `apply:`) - [docs/scenario/orchestration.md](../scenario/orchestration.md).
 - **Template files.** When the content is more complex than one line - Go text/template in `scenario/<name>/templates/<path>.tmpl` + module `core.file.rendered`. Templating engine spec - [docs/templating.md](../templating.md).
 - **Structural state and migrations.** When state outgrows one or two fields and changes incompatiblely, raise `state_schema_version` and add `migrations/<NNN>_to_<MMM>.yml`. Migrations format (flat DSL + CEL + `foreach`, forward-only) - [docs/migrations.md](../migrations.md).
 - **Dependencies.** Reused task packages - move them to separate destinies and connect them via `destiny[]` to `service.yml` + `apply:` in the script. Custom modules - via `modules[]`. Format - [docs/service/manifest.md](../service/manifest.md).

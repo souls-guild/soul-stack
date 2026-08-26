@@ -116,4 +116,4 @@ The service manifest is **not a trusted** input in the reveal threat model: the 
 
 The deferred singleton case (an admin password that is not a collection member) is **solved**, for free, by the scalar form.
 
-`key` is validated against the [ADR-064](0064-secret-write-path.md) segment grammar `^[a-zA-Z0-9_-]+$`, not the earlier lowercase identifier rule — reveal must accept exactly what `core.state.present` is able to write, or a legally-written secret would be unrevealable. A non-empty `key` on a scalar and an empty one on a collection are both refused and audited (`key_not_expected` / `key_not_in_state`).
+`key` is validated against the [ADR-064](0064-secret-write-path.md) segment grammar `^[a-zA-Z0-9_-]+$`, not the earlier lowercase identifier rule — reveal must accept exactly what a `core.state.<verb>` capture step is able to write, or a legally-written secret would be unrevealable. A non-empty `key` on a scalar and an empty one on a collection are both refused and audited (`key_not_expected` / `key_not_in_state`).

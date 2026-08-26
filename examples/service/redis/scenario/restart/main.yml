@@ -10,9 +10,6 @@ input:
     type: string
     default: "manual restart"
 
-# state doesn't change — only a log entry in state_history with a note.
-state_changes: {}
-
 # ── Computed scenario-vars (compute:, ADR-009 amendment 2026-06-23) ────────────
 # `compute:` is resolved KEEPER-SIDE ONCE per run in the run-level context
 # (input/vars/incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible
@@ -49,7 +46,7 @@ compute:
 
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference. The
@@ -63,14 +60,14 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
-      # No `password` property on any element → present-semantics require an EXISTING
+      field: system_acl_users
+      # No `password` property on any element → secret resolution requires an EXISTING
       # value: an account whose secret was never minted fails loudly here, rather than
       # the live instance being handed a freshly generated one it does not know.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   # Probe: the actual role of each host via the community.redis.role plugin
   # (go-redis INFO replication, without redis-cli). The actual role is volatile, taken by a

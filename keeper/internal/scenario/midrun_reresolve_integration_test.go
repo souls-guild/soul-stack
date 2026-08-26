@@ -122,7 +122,6 @@ func refreshServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: grow
 description: provision-refresh-role single run (ADR-0061 §S3)
-state_changes: {}
 tasks:
   - name: Register and refresh roster
     module: core.soul.registered
@@ -268,7 +267,6 @@ func TestIntegration_MidRunReResolve_AssertSeesGrownRoster(t *testing.T) {
 
 	gitURL := writeServiceRepo(t, `name: grow_assert
 description: refresh then assert grown topology
-state_changes: {}
 tasks:
   - name: Register and refresh roster
     module: core.soul.registered

@@ -85,25 +85,9 @@ compute:
   key_ref:  "${ has(input.key_ref)  ? input.key_ref  : incarnation.state.tls.key_ref }"
   ca_ref:   "${ has(input.ca_ref)   ? input.ca_ref   : incarnation.state.tls.ca_ref }"
 
-# -- incarnation.state mutation --------------------------------------------------
-# The scenario records the NEW Vault refs cert/key/ca (read-model state.tls.*_ref). enable/
-# only/port are NOT changed (rotate only touches the material). The same compute.*_ref that went into
-# rendering the destiny PEM. add/modify on namedfield state.tls (ADR-057): update the refs.
-state_changes:
-  - set: tls
-    value: >-
-      ${ {
-           'enable':   incarnation.state.tls.enable,
-           'only':     incarnation.state.tls.only,
-           'port':     incarnation.state.tls.port,
-           'cert_ref': compute.cert_ref,
-           'key_ref':  compute.key_ref,
-           'ca_ref':   compute.ca_ref
-         } }
-
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference. The
@@ -117,22 +101,22 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
-      # No `password` property on any element → present-semantics require an EXISTING
+      field: system_acl_users
+      # No `password` property on any element → secret resolution requires an EXISTING
       # value: an account whose secret was never minted fails loudly here, rather than
       # the live instance being handed a freshly generated one it does not know.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Resolve the passwords of the operator ACL users
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
-      set: "${ default(incarnation.state.redis_users, []) }"
+      field: redis_users
+      value: "${ default(incarnation.state.redis_users, []) }"
 
   # 1. GUARD - TLS must be enabled (state.tls.enable=true). The predicate is evaluated
   #    KEEPER-SIDE at render time (incarnation.state is available). false ABORTS render with a
@@ -268,3 +252,18 @@ tasks:
       tls:      "${ compute.tls_on }"
       tls_ca:   "${ compute.tls_ca }"
       args:     ["CONFIG", "SET", "tls-ca-cert-file", "${ compute.conf_dir + '/tls/ca.crt' }"]
+
+  - name: Record the rotated TLS material references
+    on: keeper
+    module: core.state.set
+    params:
+      field: tls
+      value: >-
+        ${ {
+             'enable':   incarnation.state.tls.enable,
+             'only':     incarnation.state.tls.only,
+             'port':     incarnation.state.tls.port,
+             'cert_ref': compute.cert_ref,
+             'key_ref':  compute.key_ref,
+             'ca_ref':   compute.ca_ref
+           } }

@@ -145,9 +145,9 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
-	// apply_runs success != incarnation.state committed: state_changes are
-	// written in a separate transaction AFTER the barrier (run.go §8). Wait
-	// for ready before reading.
+	// apply_runs success != every capture is in: a core.state.<verb> step standing
+	// after the host work commits after those hosts report success ([ADR-0084]).
+	// Wait for ready before reading.
 	stack.WaitIncarnationReady(t, inc, 30)
 	// redis_config -- the RESULT of the merge() translation (the same one
 	// that went into rendering redis.conf): maxmemory=1024*75/100=768mb

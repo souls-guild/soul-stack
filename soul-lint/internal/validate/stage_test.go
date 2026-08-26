@@ -440,3 +440,198 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		}
 	})
 }
+
+// --- ADR-0084 ordering guards ---
+//
+// The config-level tests own the predicates themselves. What only the linter can
+// prove is the reason both live at stage level: the capture and the task it must be
+// ordered against routinely arrive from DIFFERENT files, so the check has to run on
+// the EXPANDED plan. A per-file task rule sees one half of the pair and blesses it
+// (soul-lint's per-task rules are blind across an `include:` boundary).
+
+// storeAfterUseConsumer — a shared body that configures a live host with a password
+// generated in main.yml. The capture that would store it comes after the include: a
+// crash in that window leaves the host demanding a password that exists nowhere.
+//
+// The generator stays in main.yml on purpose: register references are resolved
+// per-file at parse time, so a register declared inside an included body is not
+// visible to the reference check in main.yml. That asymmetry is the reason the
+// ORDERING check has to be a stage-level rule in the first place.
+const storeAfterUseConsumer = `- name: configure the host with the generated password
+  module: core.exec.run
+  changed_when: false
+  params:
+    cmd: "redis-cli config set requirepass ${ register.gen.stdout }"
+`
+
+const storeAfterUseGenerate = `  - name: generate the admin password
+    module: core.exec.run
+    register: gen
+    changed_when: false
+    params:
+      cmd: "openssl rand -hex 16"
+`
+
+const storeAfterUseCapture = `  - name: capture the admin password
+    module: core.state.set
+    on: keeper
+    params:
+      field: admin_password
+      value: "${ register.gen.stdout }"
+`
+
+func TestStageDiagnostics_StoreAfterUseAcrossInclude(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "name: redis\n")
+	stageWrite(t, filepath.Join(root, "scenario", "_create", "configure.yml"), storeAfterUseConsumer)
+	main := filepath.Join(root, "scenario", "create", "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+
+		"  - include: _create/configure.yml\n"+storeAfterUseCapture)
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	d := diagWithCode(diags, config.CodeStateStoreAfterUse)
+	if d == nil {
+		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateStoreAfterUse, diags)
+	}
+	if d.Level != diag.LevelError {
+		t.Errorf("level = %v, want Error -- an unstored value on a live host must fail the lint", d.Level)
+	}
+	if !strings.Contains(d.Message, "configure the host with the generated password") ||
+		!strings.Contains(d.Message, "capture the admin password") {
+		t.Errorf("the message must name BOTH ends of the pair: %q", d.Message)
+	}
+}
+
+// TestStageDiagnostics_StoreAfterUseCorrectOrder — ★ REVERSE. The same three tasks
+// with the capture pulled AHEAD of the included consumer: generate → store → use, the
+// order the ADR prescribes. It must lint clean, or the guard bans the idiom it exists
+// to enforce.
+func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "name: redis\n")
+	stageWrite(t, filepath.Join(root, "scenario", "_create", "configure.yml"), storeAfterUseConsumer)
+	main := filepath.Join(root, "scenario", "create", "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+storeAfterUseCapture+
+		"  - include: _create/configure.yml\n")
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	if hasDiagCode(diags, config.CodeStateStoreAfterUse) {
+		t.Fatalf("generate -> store -> use must lint clean: %+v", diags)
+	}
+	if diag.HasErrors(diags) {
+		t.Fatalf("no errors expected: %+v", diags)
+	}
+}
+
+// TestStageDiagnostics_StaleStateReadAcrossInclude — the second rule, same boundary:
+// the capture is in main.yml, the interpolated read of the field it writes arrives
+// from the included body and lands in the SAME Passage, where an interpolated read
+// still renders the pre-capture value.
+func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "name: redis\n")
+	stageWrite(t, filepath.Join(root, "scenario", "_create", "announce.yml"),
+		`- name: point the replicas at the endpoint
+  module: core.exec.run
+  changed_when: false
+  params:
+    cmd: "redis-cli replicaof ${ incarnation.state.endpoint } 6379"
+`)
+	main := filepath.Join(root, "scenario", "create", "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n"+
+		`  - name: capture the endpoint
+    module: core.state.set
+    on: keeper
+    params:
+      field: endpoint
+      value: "10.0.0.1"
+`+"  - include: _create/announce.yml\n")
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	d := diagWithCode(diags, config.CodeStateStaleRead)
+	if d == nil {
+		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateStaleRead, diags)
+	}
+	if d.Level != diag.LevelError {
+		t.Errorf("level = %v, want Error", d.Level)
+	}
+	if !strings.Contains(d.Message, "endpoint") {
+		t.Errorf("the message must name the field: %q", d.Message)
+	}
+}
+
+// TestStageDiagnostics_WideMatchAcrossInclude — ★ the ADR-057 §d fuse, re-anchored
+// by [ADR-0084]. A `remove` with no `match:` demolishes the whole collection; the
+// author almost always meant to name one element. It is the one safeguard of the
+// removed grammar with no equivalent on the module path — a module manifest can
+// require a param, but cannot say "this one is suspicious when it says `true`".
+//
+// The subject is again the include boundary: the capture arrives from a shared
+// body, where the per-file task rules never see it.
+func TestStageDiagnostics_WideMatchAcrossInclude(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "name: redis\n")
+	stageWrite(t, filepath.Join(root, "scenario", "_update", "purge.yml"),
+		`- name: drop the user
+  module: core.state.remove
+  on: keeper
+  params:
+    field: redis_users
+`)
+	main := filepath.Join(root, "scenario", "update", "main.yml")
+	stageWrite(t, main, "name: update\ntasks:\n  - include: _update/purge.yml\n")
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	d := diagWithCode(diags, config.CodeStateWideMatch)
+	if d == nil {
+		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateWideMatch, diags)
+	}
+	if d.Level != diag.LevelWarning {
+		t.Errorf("level = %v, want Warning -- removing a whole collection is legitimate, just rarely intended", d.Level)
+	}
+	if !strings.Contains(d.Message, "redis_users") || !strings.Contains(d.Message, "drop the user") {
+		t.Errorf("the message must name the field and the task: %q", d.Message)
+	}
+	if diag.HasErrors(diags) {
+		t.Fatalf("a wide match must not fail the lint: %+v", diags)
+	}
+}
+
+// TestStageDiagnostics_WideMatchConstTrueAndNarrow — the other two halves of the
+// fuse in one place: a literal `true` predicate is just as wide as an absent one,
+// and a predicate over `elem` is not reported at all. Without the negative half
+// the rule could warn on everything and still look correct.
+func TestStageDiagnostics_WideMatchConstTrueAndNarrow(t *testing.T) {
+	capture := func(match string) string {
+		return `  - name: patch the users
+    module: core.state.modify
+    on: keeper
+    params:
+      field: redis_users
+      match: "` + match + `"
+      patch:
+        acl: "+@read"
+`
+	}
+	for _, tc := range []struct {
+		name  string
+		match string
+		wide  bool
+	}{
+		{"literal true", "true", true},
+		{"wrapped true", "${ true }", true},
+		{"over elem", "elem.sid == 'host-a'", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stageWrite(t, filepath.Join(root, "service.yml"), "name: redis\n")
+			main := filepath.Join(root, "scenario", "update", "main.yml")
+			stageWrite(t, main, "name: update\ntasks:\n"+capture(tc.match))
+
+			diags := stageDiagnostics(main, stageParse(t, main))
+			if got := hasDiagCode(diags, config.CodeStateWideMatch); got != tc.wide {
+				t.Fatalf("wide match warn = %v, want %v for match: %q -- %+v", got, tc.wide, tc.match, diags)
+			}
+		})
+	}
+}

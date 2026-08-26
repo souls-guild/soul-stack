@@ -107,7 +107,6 @@ func collectCreateInputSecrets(loader ServiceSnapshotLoader, art *artifact.Servi
 var covenantMergeErrorCodes = map[string]bool{
 	"covenant_extends_invalid":          true,
 	"covenant_extends_target_not_found": true,
-	"state_changes_form_mismatch":       true,
 	"section_key_conflict":              true,
 	"covenant_merge_failed":             true,
 	"covenant_unexpected_key":           true,

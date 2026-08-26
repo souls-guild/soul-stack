@@ -9,9 +9,6 @@ description: >-
   consumer into a Passage strictly AFTER probe (N=2) and resolves where with a fresh
   per-host register, collected by the Passage 0 barrier.
 
-# Focus scenario: state does not change (commit state is a separate invariant).
-state_changes: {}
-
 tasks:
   # ── Passage 0: probe per-host role ───────────────────────────────────────
   # printf (NOT echo) — no trailing newline, otherwise register.role.stdout would be

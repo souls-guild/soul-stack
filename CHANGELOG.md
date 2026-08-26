@@ -31,7 +31,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   function returning an opaque `SecretRequest` marker rather than a value, so no
   plaintext exists at render time. It takes a map because CEL has no keyword
   arguments.
-- `core.state.present` — the one keeper-side write. It reads the state field,
+- `core.state.set` — a keeper-side write of a state field. It reads the field,
   mints only the properties that are missing, writes them to their derived paths
   and returns the **effective** state in its register, so a second run keeps the
   first run's password.
@@ -41,6 +41,27 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   the union is unambiguous.
 - A secret in a register rides as a **`vault:` reference**, not as plaintext,
   which closes the `apply_task_register` window without adding a purge.
+- **Explicit state capture — `core.state.<verb>`**
+  ([ADR-0084](docs/adr/0084-explicit-state-capture.md), NIM-699). A scenario
+  writes its state where it says so, with a keeper-side step, and the write
+  lands **at that step** rather than at an end-of-run commit: a later task reads
+  what an earlier one wrote, and a run that dies half-way keeps what it had
+  already captured. The address **is** the verb — `core.state.set` /
+  `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset`, the
+  [ADR-057](docs/adr/0057-state-changes-crud-verbs.md) set, applied by the same
+  engine `state_changes:` used, so a verb cannot mean two things depending on
+  which path wrote it. A param the verb does not take (`patch:` on a `set`) is
+  an authoring error, not a silent drop.
+- **Secret resolution is orthogonal to the verb.** The rule that made ADR-0083
+  §4 name its module `present` moves onto the *property*: on `type: secret`
+  every verb keeps an existing Vault value and mints only what is absent — so
+  `core.state.set` overwrites the field's ordinary content and still does not
+  rotate a live credential. `core.state.present` now answers the separate
+  question of whether the incoming value reaches the field at all.
+- `core.state.present`'s two params are renamed `key:` → `field:` and
+  `set:` → `value:` (with the register echo key). Both old names collide with
+  the verb grammar: there `key:` addresses an element **inside** a collection,
+  while the module spelled the containing field the same way.
 
 ### Removed
 

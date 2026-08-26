@@ -33,7 +33,7 @@ const scenarioMainFile = "main.yml"
 // Scenario is a listing entry for a scenario from a materialized Service repository
 // snapshot (`scenario/<name>/main.yml`). It is a lightweight projection of top-level
 // scenario.yml fields for the UI dropdown "Choose scenario" (handler does not need
-// tasks, state_changes, or orchestration delta — only metadata).
+// tasks or orchestration delta — only metadata).
 //
 // JSON field names match the UI API ([ServiceScenariosListReply]); types are
 // minimal: InputSchema is stored as `map[string]any` (repeats raw YAML) so UI can

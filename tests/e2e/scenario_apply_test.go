@@ -12,8 +12,8 @@
 //   - acolyte pool disabled -> apply_runs stuck planned forever ->
 //     WaitApplySuccess timeout;
 //   - dispatch never reaches the Soul (no live stream / lease) -> orphaned;
-//   - state-commit broken (render state_changes.sets / commitSuccess) ->
-//     state does not match the scenario `state_changes.sets`.
+//   - capture broken (the keeper-side dispatch of a `core.state.<verb>` step) ->
+//     state does not match what the scenario's capture steps declare.
 //
 // Documented limitation: soul-stub does NOT execute real modules --
 // SetApplyDefaultSuccess makes it answer RunResult{SUCCESS} to any
@@ -64,12 +64,10 @@ func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	stack.AssertApplyRunsStatus(t, applyID, "success")
 }
 
-// TestScenarioApply_SmokeNginx_StateCommit -- an apply chain with a
-// non-empty state-commit: smoke-nginx-create declares state_changes.sets
-// {nginx_package, nginx_service}, rendered keeper-side and committed into
-// incarnation.state. Proves that the state-commit branch
-// (RenderStateChanges -> mergeStateChanges -> commitSuccess) works in a real
-// run, not just in unit tests.
+// TestScenarioApply_SmokeNginx_StateCommit -- an apply chain that captures
+// state: smoke-nginx-create carries `core.state.<verb>` steps for
+// {nginx_package, nginx_service}, rendered and committed keeper-side. Proves
+// that the capture path works in a real run, not just in unit tests.
 func TestScenarioApply_SmokeNginx_StateCommit(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/smoke-nginx",

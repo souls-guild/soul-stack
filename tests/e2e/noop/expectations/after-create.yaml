@@ -1,6 +1,6 @@
 # Post-apply expectations for noop::create.
 #
-# state_changes scenario is empty → we don't check incarnation.state (empty object).
+# the scenario captures nothing → we don't check incarnation.state (empty object).
 # What remains: apply_runs, audit, metrics — minimal-flow check of the scenario-runner.
 apply_runs:
   status: success

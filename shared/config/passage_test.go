@@ -51,8 +51,6 @@ input:
       properties:
         acl: { type: string }
       required: [acl]
-state_changes:
-  modifies: [redis_users.*.acl]
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
@@ -76,8 +74,6 @@ input:
   user: { type: string, required: true }
   acl:  { type: string, required: true }
   state: { type: string, required: true, enum: [on, off] }
-state_changes:
-  appends: [redis_users]
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
@@ -111,7 +107,6 @@ const redisRestart = `
 name: restart
 input:
   reason: { type: string, default: "manual restart" }
-state_changes: {}
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell
@@ -713,7 +708,6 @@ tasks:
 func TestCrossPassageWhenGating_Detect(t *testing.T) {
 	const src = `
 name: cross_passage_when
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.cmd.shell
@@ -848,7 +842,6 @@ func TestStratify_Empty(t *testing.T) {
 func TestCrossPassageRequisite_Detect(t *testing.T) {
 	const src = `
 name: cross_passage
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -888,7 +881,6 @@ tasks:
 func TestCrossPassageRequisite_SamePassageOK(t *testing.T) {
 	const src = `
 name: same_passage
-state_changes: {}
 tasks:
   - name: Apply config
     module: core.file.present
@@ -917,7 +909,6 @@ tasks:
 func TestCrossPassageRequisite_OnFailDetect(t *testing.T) {
 	const src = `
 name: cross_passage_onfail
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -954,7 +945,6 @@ tasks:
 func TestWithinBlock_PeerReject(t *testing.T) {
 	const src = `
 name: within_block_peer
-state_changes: {}
 tasks:
   - name: Rolling group
     block:
@@ -996,7 +986,6 @@ tasks:
 func TestWithinBlock_WhenPeerOK(t *testing.T) {
 	const src = `
 name: within_block_when_peer
-state_changes: {}
 tasks:
   - name: Rolling group
     block:
@@ -1026,7 +1015,6 @@ tasks:
 func TestWithinBlock_ExternalProbeOK(t *testing.T) {
 	const src = `
 name: external_probe
-state_changes: {}
 tasks:
   - name: Probe role top-level
     module: core.cmd.shell
@@ -1053,7 +1041,6 @@ tasks:
 func TestWithinBlock_RegisterSelfOK(t *testing.T) {
 	const src = `
 name: register_self
-state_changes: {}
 tasks:
   - name: Rolling group
     block:
@@ -1078,7 +1065,6 @@ tasks:
 func TestWithinBlock_NestedPeerReject(t *testing.T) {
 	const src = `
 name: nested_peer
-state_changes: {}
 tasks:
   - name: Outer group
     block:
@@ -1110,7 +1096,6 @@ tasks:
 func TestWithinBlock_NoRegisterOK(t *testing.T) {
 	const src = `
 name: no_register
-state_changes: {}
 tasks:
   - name: Rolling group
     where: "soulprint.self.sid != ''"

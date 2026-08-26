@@ -23,9 +23,6 @@ input:
     pattern: "^[a-z][a-z0-9-]*$"
     description: Coven label added by the keeper-side step.
 
-# The service writes nothing to incarnation.state: the keeper step mutates the souls registry.
-state_changes: {}
-
 tasks:
   # Keeper-side step: binds coven to the Soul in the registry. on: keeper → runs on
   # the keeper instance. mode: append — adds the label to the ones already bound (the root

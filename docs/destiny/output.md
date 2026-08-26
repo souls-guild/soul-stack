@@ -71,26 +71,22 @@ The appearance/expansion of the `output:` contract destiny is an evolution of th
 
 ## Communication with `output:` scenario
 
-Scenario `output:` block **no**: scenario writes the result to `incarnation.state` via `state_changes` ([architecture.md → Incarnation](../architecture.md)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. The scenario only has task-level `output:` (part of the task DSL core, [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)) for internal `register:` chains.
+Scenario `output:` block **no**: a scenario writes its result to `incarnation.state` with a `core.state.<verb>` capture step ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-the-capture-verbs)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. The scenario only has task-level `output:` (part of the task DSL core, [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)) for internal `register:` chains.
 
-> **`register:` as the source of `state_changes`.** `state_changes.sets` can
-> read `register.<task>.<field>` probe-run tasks
-> ([scenario/orchestration.md §7.1](../scenario/orchestration.md)).
-> `TaskEvent.register_data` accumulates on the Keeper side (table
-> `apply_task_register`), after the barrier scenario-runner builds per-host
-> register map and renders `sets`. Register keeper-side tasks (`on: keeper`,
-> e.g. `core.cloud.created`) is also visible in `state_changes` - run-level
-> substrate identical for all hosts; in case of name collision per-host register
-> the host has priority (host-wins, see §7.1). This is deliberately **separate** from
-> chaining inside the scenario: `register.*` in `where:` is a volatile runtime predicate
-> before commit, and `register.*` in `sets` is a stable post-barrier snapshot.
-> Forward forwarding destiny-`output:` (read through `register:` on
-> applier task) in `sets` for destiny calls via `apply:` is still out of scope -
-> is the same planned output-projection slice as described in section
-> ["How the caller reads"](#how-the-caller-reads---register-on-the-applier-task). DSL core
-> `register.<applier>.changed`/`.failed`/`.timed_out` (unit `OR`)
-> materializes and `sets` could read it; do not materialize exactly
-> applied `output:` fields.
+> **`register:` as the source of a capture's `value:`.** A `core.state.<verb>` step
+> reads `register.<task>.<field>` like any other keeper task
+> ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-the-capture-verbs)).
+> Being an `on: keeper` task it sees the **keeper** register bucket — the registers of
+> keeper-side tasks of previous Passages (`core.cloud.created`, `core.vault.kv-read`, an
+> earlier capture's own `register:`). A host probe's `register.<task>.stdout` is **not**
+> reachable from a capture; the retired `state_changes:` block folded the per-host register
+> map after the barrier and could read one. For a per-host fact use `soulprint.hosts`, or
+> re-derive it keeper-side. Forwarding a destiny `output:` (read through `register:` on the
+> applier task) into a capture's `value:` is still out of scope — the same planned
+> output-projection slice described in
+> ["How the caller reads"](#how-the-caller-reads---register-on-the-applier-task). The DSL
+> core `register.<applier>.changed`/`.failed`/`.timed_out` (unit `OR`) does materialize and a
+> capture could read it; the applied `output:` fields themselves do not.
 
 ## See also
 

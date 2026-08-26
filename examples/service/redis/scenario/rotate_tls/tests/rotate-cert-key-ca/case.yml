@@ -24,7 +24,7 @@
 #      ${conf_dir}/tls/. The args disambiguator is present; changed=true (force) must NO
 #      LONGER be set: task_absent catches a regression back to the force form (see
 #      below).
-#   4. state_changes: state.tls carries the NEW refs (cert/key/ca), enable/only/port
+#   4. state_after: state.tls carries the NEW refs (cert/key/ca), enable/only/port
 #      are preserved.
 #
 # ★ IDEMPOTENCY (guard invariant). reload is gated by onchanges:[tls_certs] instead of
@@ -74,7 +74,7 @@ fixtures:
   # reconnects straddling the server cert swap (tls-cert-file makes redis hand out the
   # new cert starting with the next reconnect) → the trust store must trust BOTH CAs,
   # otherwise a reconnect after the swap hits unknown authority. The new ca_ref is
-  # rendered to the file for Redis and recorded in state_changes (on SUBSEQUENT runs
+  # rendered to the file for Redis and recorded by the tls capture (on SUBSEQUENT runs
   # the rollover is complete → a single new CA).
   state:
     redis_type: sentinel
@@ -100,7 +100,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
       - { name: haproxy }
@@ -126,7 +126,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -324,8 +324,8 @@ assert:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
-  # state_changes: state.tls carries the NEW refs; enable/only/port are preserved.
-  state_changes:
+  # state_after: state.tls carries the NEW refs; enable/only/port are preserved.
+  state_after:
     tls:
       enable:   true
       only:     false

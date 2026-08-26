@@ -476,7 +476,7 @@ All payloads are a JSON object with three required keys:
 
 **What is not in the SSE payload:**
 
-- Fields `at` (post timestamp) in JSON-payload **no** - it lives in the internal structure of `applybus.Event.At` and is used only for logging/diagnostics. The SSE client takes the timestamp from itself when receiving an event or puts it on the keeper-side scenario-runner side in `state_changes`/audit-log (source - Postgres `audit_log.created_at`).
+- Fields `at` (post timestamp) in JSON-payload **no** - it lives in the internal structure of `applybus.Event.At` and is used only for logging/diagnostics. The SSE client takes the timestamp from itself when receiving an event, or reads the keeper-side audit-log (source - Postgres `audit_log.created_at`).
 - The `register_data` (TaskEvent) fields in the SSE payload are **not**. This is a deliberate simplification: register-data can be large and/or contain secrets - for the audit chain it is written in `audit_log.payload.register_data` (run through [`audit.MaskSecrets`](https://github.com/souls-guild/soul-stack/tree/main/shared/audit)); The SSE client that monitors the progress of the run does not need it.
 
 ### Event kinds (closed enum)
@@ -543,17 +543,14 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
   "apply_id": "01J9F0K8XA7YZ2EXAMPLEULID01",
   "kind": "apply.completed",
   "sid": "host-01.example.com",
-  "run_status": "RUN_STATUS_SUCCESS",
-  "state_changes": {
-    "users": [{"name": "alice", "action": "added"}]
-  }
+  "run_status": "RUN_STATUS_SUCCESS"
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `run_status` | string | yes | The full name of the enum constant `RunStatus` from proto. For `apply.completed` - always `RUN_STATUS_SUCCESS`. |
-| `state_changes` | object | optional | State delta calculated by the Soul-side scenario-runner and passed to `RunResult.state_changes`. JSON object (decoded from `google.protobuf.Struct`). May be absent if scenario does not modify state. |
+| `state_changes` | object | optional | **Never present in practice.** Keeper forwards `RunResult.state_changes` verbatim when a Soul sends it (JSON object decoded from `google.protobuf.Struct`), but a real Soul never populates that field: [ADR-0084](../adr/0084-explicit-state-capture.md) retired the end-of-run commit it fed, and a scenario now writes state through `core.state.<verb>` capture steps applied Keeper-side. The forwarding stays because [ADR-012](../adr/0012-keeper-soul-grpc.md) is only-add. To watch what a run wrote, read `incarnation.state` after `apply.completed`. |
 
 #### `apply.failed`
 
@@ -570,7 +567,7 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
 |---|---|---|---|
 | `run_status` | string | yes | `RUN_STATUS_FAILED` / `RUN_STATUS_ERROR_LOCKED` / any other non-success / non-cancelled. The SSE client must recognize a specific sub-status by this field. |
 
-Field `state_changes` for `apply.failed` **not published**: state is not overwritten for an error run (see `commitRunState`), and it is prohibited to give a partial delta outside. Per-task diagnostics are collected by the client from previous `task.executed` events with the `error` field.
+Field `state_changes` for `apply.failed` **not published** (`keeper/internal/grpc/events_runresult.go` builds the failed payload without it): state is not overwritten for an error run (see `commitRunState`), and it is prohibited to give a partial delta outside. Per-task diagnostics are collected by the client from previous `task.executed` events with the `error` field.
 
 #### `apply.cancelled`
 
@@ -651,7 +648,7 @@ await fetchEventSource(`/mcp/events?apply_id=${applyId}`, {
                     payload.error ?? '');
         break;
       case 'apply.completed':
-        console.log('done', payload.state_changes);
+        console.log('done', payload.apply_id);
         break;
       case 'apply.failed':
       case 'apply.cancelled':

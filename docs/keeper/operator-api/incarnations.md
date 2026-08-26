@@ -469,10 +469,14 @@ they are keeper-owned FQDNs and are not masked. All of it is captured **inside**
 the deleting transaction: after the call there is no live row left to read it from.
 
 **Read the three fields as three separate statements, not one.** Empty `vm_ids`
-does **not** mean no machines exist. The ids reach `state` only when a run
-commits its `state_changes`, so the case this response exists for — a `create`
-that provisioned machines and then failed — leaves the machines running with no
-ids recorded. `sids` is the field that still names the hosts there. Conversely a
+does **not** mean no machines exist. The ids reach `state` when the scenario's
+`core.state.<verb>` capture step runs ([ADR-0084](../../adr/0084-explicit-state-capture.md)),
+so a `create` that provisioned machines and then failed **before** that step —
+the case this response exists for — leaves the machines running with no ids
+recorded, and `sids` is the field that still names the hosts there. A scenario
+that captures immediately after provisioning narrows that window to the
+provisioning call itself; under the retired end-of-run commit the window was the
+whole run. Conversely a
 service that provisions no cloud reports hosts and no `provider`.
 The same set is written into `incarnation_archive.status_details.unreleased` and
 into the `incarnation.destroy_completed` audit event, so it stays queryable via

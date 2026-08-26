@@ -65,7 +65,7 @@
       # * default_admin REDESIGN (2026-06-30): input.password REMOVED (requirepass dropped).
       # Authentication is under the system default_admin, its password comes in via users below.
       # A single compute.redis_config (declared ONCE in the includer's main.yml, ADR-009):
-      # the same map that goes into state_changes.redis_config - the "state == live config" drift
+      # the same map the redis_config capture records - the "state == live config" drift
       # is eliminated by compute itself. For cluster = base merge + cluster directives (cluster-
       # enabled/config-file/node-timeout) + tls-cluster yes when TLS. HOST-INVARIANT ->
       # apply.input on targeted[0] is correct.
@@ -81,7 +81,7 @@
       # per cluster) -> apply.input. Failover-safe: Redis applies masteruser/masterauth only
       # when a node becomes a replica - inert on master nodes; with replicas=0 (no replicas)
       # the directive is also inert (nobody is a replica), but rendered symmetrically - without
-      # per-replicas branching. * DIFFERENT from state_changes.redis_config (covenant.yml): there
+      # per-replicas branching. * DIFFERENT from the redis_config capture: there
       # it's PURE compute.redis_config WITHOUT masterauth - the password does NOT travel into incarnation.state
       # (the secret lives in Vault). masterauth - vault()-IN-CELL (seal masking, ADR-010 §7.4).
       # admin_user = default_admin (compute.admin_user); path - secret/redis/<inc>/users/

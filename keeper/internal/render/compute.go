@@ -18,7 +18,7 @@ import (
 // A soulprint.* reference in a compute expression hits CEL no-such-key (a
 // structural barrier, not a text guard): compute is host-independent by
 // construction, so the same value safely feeds both apply.input (resolved on
-// targeted[0]) and state_changes (per-run, not per-host) without drift.
+// targeted[0]) and keeper-side tasks (per-run, not per-host) without drift.
 //
 // Resolved once: an already-computed in.Compute (from a caller or previous
 // pass) is returned as-is — idempotent across repeated calls in staged

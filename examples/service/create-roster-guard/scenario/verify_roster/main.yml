@@ -19,8 +19,6 @@ input:
     min: 1
     description: Number of hosts the bound roster must have.
 
-state_changes: {}
-
 tasks:
   # Ungated roster guard, same shape as create's. The difference is entirely in
   # WHERE it can be answered: here the incarnation exists and its members are

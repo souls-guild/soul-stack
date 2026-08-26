@@ -6,7 +6,7 @@ A minimal service for the L3a E2E pilot ([ADR-039](../../../docs/adr/0039-e2e-te
 
 - A service with a non-empty `state_schema` and two scenario fields
   (`nginx_package`, `nginx_service`) that are committed to `incarnation.state`
-  after a successful apply (via `state_changes.sets`).
+  after a successful apply (via `core.state.set` steps).
 - A `create` scenario made of two sequential core tasks:
   - `core.pkg.installed name=nginx` — installs the package;
   - `core.service.running name=nginx enabled=true` — starts and enables the systemd unit.

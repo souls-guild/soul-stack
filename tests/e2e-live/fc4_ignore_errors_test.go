@@ -86,8 +86,8 @@ func TestL3bFC4IgnoreErrorsLive_SuppressesRealModuleFailure(t *testing.T) {
 	// have been chalked up to "the module doesn't fail" - but it does (proven here).
 	failApplyID := stack.RunScenario(t, inc, "fail_hard", nil)
 
-	// fail_hard leaves the incarnation in error_locked (run.go §7: state_changes aren't
-	// committed on the terminal-failed barrier). WaitIncarnationStatus fails if
+	// fail_hard leaves the incarnation in error_locked (run.go §7; the scenario
+	// captures nothing, so there is no partial state either). WaitIncarnationStatus fails if
 	// any OTHER terminal is reached (including ready - which would be an
 	// ignore_errors regression: the failure must NOT be suppressed without the flag).
 	stack.WaitIncarnationStatus(t, inc, "error_locked", 120)

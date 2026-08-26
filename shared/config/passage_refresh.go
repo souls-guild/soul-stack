@@ -288,3 +288,42 @@ func valueReadsSoulprint(v any) bool {
 	}
 	return false
 }
+
+// stateModuleAddr — the base address of the keeper-side state-capture module
+// family ([ADR-0084]); the state suffix is the verb, so the base is what a plan
+// scan matches on.
+const stateModuleAddr = "core.state"
+
+// HasStateCapture reports whether the plan carries a `core.state.<verb>` step.
+//
+// Only such a run can change `incarnation.state` mid-flight, so it is the only one
+// whose render input has to be re-read at a Passage boundary (ADR-0084: state
+// accumulates within a run). Without a capture the row cannot move under the run,
+// the re-read would return the pre-run snapshot verbatim, and gating on this keeps
+// a transient DB error out of runs that never needed the state at all.
+//
+// Pure function, no I/O.
+func HasStateCapture(tasks []Task) bool {
+	for i := range tasks {
+		if taskHasStateCapture(&tasks[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// taskHasStateCapture — the task (or any of its block: children) captures state.
+// Block recursively, symmetric with taskHasRefreshEmitter.
+func taskHasStateCapture(t *Task) bool {
+	if _, ok := stateCaptureVerb(t); ok {
+		return true
+	}
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			if taskHasStateCapture(&t.Block.Block[i]) {
+				return true
+			}
+		}
+	}
+	return false
+}

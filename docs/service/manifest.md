@@ -31,7 +31,7 @@ service-<name>/
 │   │   └── deploy.yml
 │   ├── redis-provision.yml             # OPT.: service-level include neighbor (flat form)
 │   ├── create/
-│   │   ├── main.yml                    # entry point: input + state_changes + tasks
+│   │   ├── main.yml                    # entry point: input + tasks
 │   │   ├── install.yml                 # OPTS: include-neighbors main.yml
 │   │   ├── templates/                  # OPTS: scenario-local templates
 │   │   └── tests/                      # OPT: script tests
@@ -132,7 +132,7 @@ Derived paths — `<mount>/<service>/<incarnation>/redis_users/<name>#password` 
 - The node's grammar is closed to `type` / `key` / `label`. A `minLength:` written beside it would read as enforced and could not be — a value that never enters state never passes state validation.
 - Every path segment is validated against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$` and **fails closed**: `<key>` is operator-influenced data, so a `/` or a `..` in a user's name can never become a segment.
 
-The value is written by the keeper-side module [`core.state.present`](../keeper/modules.md), which mints only what is missing, and read back by the operator through `POST /v1/incarnations/{name}/secrets/reveal` under the `incarnation.view-secrets` right. Inside the service, a task reads it from the `register:` of that same `core.state.present` task, as a `vault:` reference rather than as plaintext.
+The value is written by a keeper-side [`core.state.<verb>`](../keeper/modules.md#corestateverb) capture step ([ADR-0084](../adr/0084-explicit-state-capture.md)), which mints only what is missing, and read back by the operator through `POST /v1/incarnations/{name}/secrets/reveal` under the `incarnation.view-secrets` right. Inside the service, a task reads it from the `register:` of that same capture step, as a `vault:` reference rather than as plaintext.
 
 **Not to be confused with `secret: true`** ([ADR-010](../adr/0010-templating.md) §7.4), which marks a state field whose value *does* live in state and is merely masked on output. `type: secret` is the stronger statement: the value is not there at all.
 
@@ -280,7 +280,7 @@ Working example with full folder layout - [`examples/service/redis/`](../../exam
 
 ## Scripts
 
-Each folder `scenario/<name>/` is a separate operation on the service (CRUD-style: `create`/`add_user`/`restart`/...). `main.yml` - script entry point: contains inline `input:` (input contract for [`docs/input.md`](../input.md)), `state_changes:` (which fields `incarnation.state` the script will update upon success), `tasks:` (steps).
+Each folder `scenario/<name>/` is a separate operation on the service (CRUD-style: `create`/`add_user`/`restart`/...). `main.yml` - script entry point: contains inline `input:` (input contract for [`docs/input.md`](../input.md)) and `tasks:` (steps). A field of `incarnation.state` is updated by a `core.state.<verb>` step among those tasks ([ADR-0084](../adr/0084-explicit-state-capture.md)), not by a separate section.
 
 The full regulatory specification of scenario-DSL is [`docs/scenario/`](../scenario/README.md).
 
@@ -294,10 +294,8 @@ name: create
 create: true          # script is valid as a starter script (bootstrap of new incarnation)
 input:
   # ...
-state_changes:
-  # ...
 tasks:
-  # ...
+  # ...        (incl. the `core.state.<verb>` steps that write incarnation.state)
 ```
 
 Rules:
@@ -313,7 +311,7 @@ Choice semantics, three branches of the contract and bare-incarnation on the API
 
 One `main.yml` copes as long as the script remains visible (~150 lines). If logical subsections are clearly identified inside, we move them to `scenario/<name>/<sub>.yml` and connect them through `include:`. Same as [`docs/destiny/manifest.md -> When tasks/main.yml needs neighbors`](../destiny/manifest.md#when-you-need-neighbors-tasksmainyml).
 
-**When several scenarios need the SAME pieces**, the neighbour moves one level up, to the service level, where the two-level resolve finds it ([`docs/scenario/orchestration.md §6`](../scenario/orchestration.md)): `scenario/<file>.yml` when the whole service shares it, `scenario/_<family>/<file>.yml` (`include: _<family>/<file>.yml`) when one family of scenarios does — `create` and `create_from_souls` sharing provisioning and deployment steps is the standard case. A `_`- or `.`-prefixed directory under `scenario/` is **not** a scenario and never appears in auto-discovery, even if it contains a `main.yml`. Shared **contract sections** (`input:`/`compute:`/`state_changes:`/`validate:`) are a different mechanism — `covenant.yml` + `extends:`, see [`docs/scenario/orchestration.md §6.1`](../scenario/orchestration.md).
+**When several scenarios need the SAME pieces**, the neighbour moves one level up, to the service level, where the two-level resolve finds it ([`docs/scenario/orchestration.md §6`](../scenario/orchestration.md)): `scenario/<file>.yml` when the whole service shares it, `scenario/_<family>/<file>.yml` (`include: _<family>/<file>.yml`) when one family of scenarios does — `create` and `create_from_souls` sharing provisioning and deployment steps is the standard case. A `_`- or `.`-prefixed directory under `scenario/` is **not** a scenario and never appears in auto-discovery, even if it contains a `main.yml`. Shared **contract sections** (`input:`/`compute:`/`validate:`) are a different mechanism — `covenant.yml` + `extends:`, see [`docs/scenario/orchestration.md §6.1`](../scenario/orchestration.md). A shared state **write** is not a contract section: it is a step, so it travels with the other steps through `include:` ([ADR-0084](../adr/0084-explicit-state-capture.md) F-B).
 
 ## Reusable named input types - `types.yml`
 

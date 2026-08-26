@@ -95,7 +95,6 @@ func newAcolyteRunnerWith(t *testing.T, summons SummonsPublisher, disp ApplyDisp
 // host.
 const runOnceScenario = `name: create
 description: run_once + per-host fixture
-state_changes: {}
 tasks:
   - name: Run once on first host
     module: core.exec.run
@@ -117,7 +116,6 @@ tasks:
 // single-host render collapsed the size to 1 on every host.
 const soulprintHostsScenario = `name: create
 description: soulprint.hosts.size fixture
-state_changes: {}
 tasks:
   - name: Echo roster size
     module: core.exec.run
@@ -131,7 +129,6 @@ tasks:
 // resolution in RenderForHost).
 const perHostWhereScenario = `name: create
 description: per-host where fixture
-state_changes: {}
 tasks:
   - name: Only on host-a
     module: core.exec.run
@@ -165,7 +162,6 @@ func driveAcolyteRun(t *testing.T, r *Runner, spec RunSpec, disp ApplyDispatcher
 func TestIntegration_TargetingParity_AcolyteVsOldPath(t *testing.T) {
 	const parityScenario = `name: create
 description: run_once + soulprint.hosts parity fixture
-state_changes: {}
 tasks:
   - name: Run once on first host
     module: core.exec.run

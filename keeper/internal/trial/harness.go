@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/stateop"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -53,8 +54,8 @@ type Result struct {
 }
 
 // renderedCase — result of hermetic render pass of case: flat plan
-// of tasks + reusable pipeline/RenderInput for subsequent folding
-// of state_changes and coverage-sink with accumulated CEL branches. One per case run,
+// of tasks + reusable pipeline/RenderInput plus the coverage-sink with
+// accumulated CEL branches. One per case run,
 // shared by L0-assert (RunCase) and L2-execution (RunL2Case):
 // both start with the same Keeper-side render plan.
 type renderedCase struct {
@@ -243,12 +244,6 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	// both checks independent, case can carry any combination.
 	res.Failures = append(res.Failures, compareTaskPresence(c.Assert.TaskPresent, c.Assert.TaskAbsent, tasks)...)
 
-	// Render state_changes.sets — mirror of prod (scenario.run §7.1,
-	// RenderStateChanges after barrier). In L0 no dispatch/register accumulation, but
-	// CEL folding render of sets is always run: unprotected `${ input.X }` on
-	// optional-without-default input (CEL «no such key») is caught here without asserts —
-	// this was a blind spot of harness seeing only tasks. Mocks.Register gives
-	// `register.*` in sets same per-host register context as in `where:`.
 	in.Ctx = ctx
 	// Mocks.Register — single L0-payload probe (probe-per-host = dispatch layer L3,
 	// outside pilot): same register context applied to each host
@@ -260,34 +255,53 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 		in.RegisterByHost[h.SID] = mockReg
 	}
 
-	// Render state_changes is ALWAYS run (like prod after barrier), even without
-	// assert: unprotected `${ input.X }` on optional-without-default input (CEL «no
-	// such key») is caught here — blind spot of harness seeing only tasks.
-	ops, err := pipeline.RenderStateOps(in)
-	if err != nil {
-		return res, fmt.Errorf("trial: render state_changes: %w", err)
+	// The `core.state.<verb>` steps of the plan, in the order they run
+	// ([ADR-0084]). This is the offline half of the capture: prod runs each step
+	// against the live row and the step writes there, L0 has no row and threads the
+	// accumulating state through [stateop.Merge] instead. The op comes from the same
+	// [stateop.OpsFromPlan] the run's own param checking sits behind, so a param
+	// means here what it means in the run.
+	//
+	// Built ALWAYS, even when the case asserts no state: a capture step whose params
+	// do not survive [stateop.CheckParams] is a defect the scenario carries whether
+	// or not this case asserts state, and a case that asserts nothing would
+	// otherwise hide it until the run. A step the render SKIPPED is not built —
+	// [stateop.OpsFromPlan] drops the placeholder, which has no params to check and
+	// no write to fold.
+	//
+	// What L0 does NOT reproduce is per-Passage granularity: the plan is rendered
+	// once, so a step's `value:` is the one rendered against fixtures.state, not
+	// against the state its predecessors just wrote. The divergence is a false green
+	// that this harness cannot see; what catches it is the ordering guard
+	// ([config.StaleStateRead], `state_stale_same_passage_read`), and that guard runs
+	// in SOUL-LINT, not here — a project whose CI runs the trial without the linter
+	// keeps the false green.
+	captures, cerr := stateop.OpsFromPlan(tasks)
+	if cerr != nil {
+		return res, fmt.Errorf("trial: %w", cerr)
 	}
 
-	// assert.state_changes — projection of set operations (field→value, back-compat).
-	if c.Assert.StateChanges != nil {
-		res.Failures = append(res.Failures, compareStateChanges(c.Assert.StateChanges, setOpsProjection(ops))...)
-	}
-
-	// assert.state_after — deterministic final incarnation.state: base
-	// fixtures.state + applied in order state_changes operations (mirror
-	// of prod commit, run.go: mergeStateChanges + Pipeline.StateOpEvaluators).
-	// Check is FULL (compareState, like L1): extra key — mismatch.
-	if c.Assert.StateAfter != nil {
+	// assert.state_after — the deterministic final incarnation.state: base
+	// fixtures.state, then the capture steps applied in plan order, which is the
+	// order prod applies them in. The engine is the prod one ([stateop.Merge]), so
+	// a verb cannot mean one thing here and another in the run.
+	//
+	// The check is a SUBSET ([ADR-0084] F-C/C4): a field the case does not name is
+	// a field the case has no opinion about. Migration L1 keeps the full form.
+	if c.Assert.StateAfter != nil || len(c.Assert.StateAbsent) > 0 {
 		schema, serr := loadServiceStateSchema(caseFile)
 		if serr != nil {
 			return res, serr
 		}
 		matchEval, opEval := pipeline.StateOpEvaluators(ctx, in.Incarnation.Service)
-		stateAfter, merr := mergeStateChanges(c.Fixtures.State, ops, schema, matchEval, opEval)
+		stateAfter, merr := stateop.Merge(c.Fixtures.State, captures, schema, matchEval, opEval)
 		if merr != nil {
-			return res, fmt.Errorf("trial: apply state_changes: %w", merr)
+			return res, fmt.Errorf("trial: apply state writes: %w", merr)
 		}
-		res.Failures = append(res.Failures, compareState(c.Assert.StateAfter, stateAfter)...)
+		if c.Assert.StateAfter != nil {
+			res.Failures = append(res.Failures, compareStateSubset(c.Assert.StateAfter, stateAfter)...)
+		}
+		res.Failures = append(res.Failures, compareStateAbsent(c.Assert.StateAbsent, stateAfter)...)
 	}
 
 	res.Pass = len(res.Failures) == 0
@@ -592,20 +606,23 @@ func describeExpected(et ExpectedTask) string {
 	return b.String()
 }
 
-// compareStateChanges compares expected assert.state_changes with rendered
-// state_changes.sets (field → CEL-folded value). Returns list of
-// mismatches (empty = match). Both sides normalized via structpb
-// (numbers → float64), as in compareParams, so YAML decode of assert and CEL output
-// of render are compared in same form. Extra fields in render (not mentioned in
-// assert) are NOT mismatches — assert is partial, like rendered_tasks.
-func compareStateChanges(want, got map[string]any) []string {
+// compareFieldsByKey compares a want map against a got map BY KEY: every field
+// named in want must exist in got and be deep-equal to it. Fields present only
+// in got are NOT reported here — whether "extra" is a failure belongs to the
+// caller ([compareState] adds that check, [compareStateSubset] deliberately does
+// not). label prefixes every message with the assert section that spoke.
+//
+// Both sides are normalized through structpb (numbers → float64), as in
+// compareParams, so a YAML-decoded assert and a CEL render output are compared in
+// the same form.
+func compareFieldsByKey(label string, want, got map[string]any) []string {
 	wantStruct, err := structpb.NewStruct(want)
 	if err != nil {
-		return []string{fmt.Sprintf("assert.state_changes invalid: %v", err)}
+		return []string{fmt.Sprintf("assert.%s invalid: %v", label, err)}
 	}
 	gotStruct, err := structpb.NewStruct(got)
 	if err != nil {
-		return []string{fmt.Sprintf("state_changes not comparable: %v", err)}
+		return []string{fmt.Sprintf("%s not comparable: %v", label, err)}
 	}
 	wantMap := wantStruct.AsMap()
 	gotMap := gotStruct.AsMap()
@@ -614,14 +631,26 @@ func compareStateChanges(want, got map[string]any) []string {
 	for _, field := range sortedKeys(wantMap) {
 		gv, ok := gotMap[field]
 		if !ok {
-			fails = append(fails, fmt.Sprintf("state_changes.%s: expected in set, but field not rendered", field))
+			fails = append(fails, fmt.Sprintf("%s.%s: expected, but the field is absent from the result", label, field))
 			continue
 		}
 		if !deepEqualJSON(wantMap[field], gv) {
-			fails = append(fails, fmt.Sprintf("state_changes.%s mismatch:\n    expected: %v\n    got:      %v", field, wantMap[field], gv))
+			fails = append(fails, fmt.Sprintf("%s.%s mismatch:\n    expected: %v\n    got:      %v", label, field, wantMap[field], gv))
 		}
 	}
 	return fails
+}
+
+// compareStateSubset is the scenario-side `assert.state_after`: a case names the
+// fields it has an opinion about and only those are compared ([ADR-0084] F-C/C4).
+//
+// It is deliberately NOT the full comparison [compareState] runs for a migration.
+// A case forced to restate the whole post-run state to assert one field is a case
+// that gets updated by pasting in whatever the run produced — which asserts
+// nothing. Subset also survives a service gaining a state field, instead of
+// reddening every case in the suite.
+func compareStateSubset(want, got map[string]any) []string {
+	return compareFieldsByKey("state_after", want, got)
 }
 
 // presentMarker — sentinel value for assert params: «key is present and carries
@@ -631,6 +660,30 @@ func compareStateChanges(want, got map[string]any) []string {
 // check of multiline template is fragile and checked at L2/Real-Linux E2E.
 // Regression «template-path moved instead of content» caught by absence of
 // template_content key in render (assert template-key does NOT enumerate).
+// compareStateAbsent is the scenario-side `assert.state_absent`: every named
+// field must be gone from the final state ([ADR-0084] F-C/C4).
+//
+// It exists because [compareStateSubset] cannot assert a removal — a field the
+// case does not name is a field the case has no opinion about, which is precisely
+// what an absence looks like. `core.state.unset`, a `remove` that empties a field
+// and a declared secret stripped on the way out all end here.
+//
+// Absence is strict key absence. A field left in place holding null is reported
+// WITH its value rather than accepted: a dropped key and a blanked one are two
+// different states, and the message has to say which one the run produced or the
+// case author is left guessing.
+func compareStateAbsent(fields []string, got map[string]any) []string {
+	var fails []string
+	for _, field := range fields {
+		v, ok := got[field]
+		if !ok {
+			continue
+		}
+		fails = append(fails, fmt.Sprintf("state_absent.%s: expected to be gone from the state, got: %v", field, v))
+	}
+	return fails
+}
+
 const presentMarker = "<present>"
 
 // compareParams compares expected params with CEL-rendered *structpb.Struct.

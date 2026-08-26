@@ -99,4 +99,4 @@ Operator API Herald/Provider CRUD + OpenAPI (drift-regen) + companion UI (`types
 
 The `secretwrite` segment grammar `^[a-zA-Z0-9_-]+$` gains a second, load-bearing job: it validates every segment of a **derived** secret path `secret/<service>/<incarnation>/<state-field>/<key>` ([ADR-0083](0083-declared-secret-state-fields.md) §1). `<key>` is operator-influenced data — a user's name out of `incarnation.state` — so a `/`, a `.` or a `..` inside it must never become a path segment, and the check **fails closed** rather than sanitising: a gate that normalises its input decides on a path different from the one it was given.
 
-The operator write path in this ADR is untouched. What changes is that a service's own secrets no longer need one: `core.state.present` mints and writes them keeper-side, and the author declares the field instead of a path.
+The operator write path in this ADR is untouched. What changes is that a service's own secrets no longer need one: a `core.state.<verb>` capture step ([ADR-0084](0084-explicit-state-capture.md)) mints and writes them keeper-side, and the author declares the field instead of a path.

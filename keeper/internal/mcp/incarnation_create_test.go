@@ -38,7 +38,6 @@ func (f *mcpStarterAssert) Start(_ context.Context, spec scenario.RunSpec) error
 // rule that fails for any input (that: false). Drives ValidateInput into the
 // ErrValidateFailed branch (DSL wave 2), distinct from ErrInputInvalid.
 const scenarioMCPValidateRule = `name: create
-state_changes: {}
 input:
   replicas:
     type: number
@@ -322,7 +321,7 @@ func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\nstate_changes: {}\ntasks: []\n")}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\ntasks: []\n")}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
@@ -353,7 +352,7 @@ func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testin
 		return nil
 	}}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\nstate_changes: {}\ntasks: []\n")}
+	loader := &mcpLoader{localDir: mcpCreateSnapshot(t, "name: create\ntasks: []\n")}
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
@@ -627,7 +626,6 @@ func TestToolsCall_IncarnationCreate_WildcardAnyCoven(t *testing.T) {
 
 // scenarioMCPRequiredInput is a `create` scenario with a required field `name`.
 const scenarioMCPRequiredInput = `name: create
-state_changes: {}
 input:
   name:
     type: string

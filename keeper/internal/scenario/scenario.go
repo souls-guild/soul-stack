@@ -16,7 +16,7 @@
 // still out of pilot scope is a key on a node that cannot carry it (loop: on an
 // apply: task, loop:/async: on a keeper-side task, scenario orchestration inside
 // a destiny) — render.Pipeline rejects those (ErrUnsupportedDSL).
-// Cross-host barrier (orchestration.md §7): state_changes commit once after
+// Cross-host barrier (orchestration.md §7): the run's terminal transition happens once after
 // ALL waves/tasks on ALL hosts of the run finish, never per-wave.
 //
 // RunResult collection uses Variant A (poll apply_runs.status, PM decision):
@@ -194,9 +194,11 @@ var (
 type TerminalMode int
 
 const (
-	// TerminalCommitState — normal run (apply/upgrade): success commits
-	// state_changes into incarnation.state + status ready; failure →
-	// error_locked. Default (zero value): all existing runs take this path.
+	// TerminalCommitState — normal run (apply/upgrade): success moves the
+	// incarnation to ready and writes a state_history row; failure →
+	// error_locked. The state fields themselves are already in the row, each
+	// written at its own `core.state.<verb>` step ([ADR-0084]). Default (zero
+	// value): all existing runs take this path.
 	TerminalCommitState TerminalMode = iota
 
 	// TerminalDestroy — teardown run (scenario `destroy`, S-D2b): success does

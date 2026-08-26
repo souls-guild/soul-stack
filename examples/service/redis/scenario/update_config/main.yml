@@ -151,27 +151,9 @@ compute:
          default(input.redis_settings, {})
        ) }
 
-# -- incarnation.state mutation ─────────────────────────────────────────────────
-# The scenario records the NEW deployed redis_config + changed namedfields (read-model
-# from the same compute/input as redis_config - no drift, like create). Namedfields not
-# set by the operator keep their prior value (substrate from state).
-state_changes:
-  - set: redis_config
-    value: "${ compute.redis_config }"
-  - set: persistence
-    value: "${ compute.persistence }"
-  - set: memory_mb
-    value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
-  - set: maxmemory_policy
-    value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
-  # io_threads read-model (substrate like memory_mb): set -> new; else the previously
-  # deployed state.io_threads; else 0. Keeps state.io_threads == redis_config['io-threads'].
-  - set: io_threads
-    value: "${ int(default(input.io_threads, default(incarnation.state.io_threads, 0))) }"
-
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference. The
@@ -185,22 +167,22 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
-      # No `password` property on any element → present-semantics require an EXISTING
+      field: system_acl_users
+      # No `password` property on any element → secret resolution requires an EXISTING
       # value: an account whose secret was never minted fails loudly here, rather than
       # the live instance being handed a freshly generated one it does not know.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Resolve the passwords of the operator ACL users
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
-      set: "${ default(incarnation.state.redis_users, []) }"
+      field: redis_users
+      value: "${ default(incarnation.state.redis_users, []) }"
 
   # -- Version-aware validator for redis_settings directive names (assert, #6) ─────────────
   # * qa-gap: update_config accepts redis_settings (passthrough KEY->VALUE) -
@@ -268,7 +250,7 @@ tasks:
         # this task re-renders redis.conf whole (the same destiny `redis` brick) ->
         # without topping up the static replica->master AUTH, redis.conf on disk would lose masteruser/
         # masterauth -> cluster/sentinel replicas would hit NOAUTH on PSYNC after a restart.
-        # The directive is inert on master nodes (failover-safe). * DIFFERS from state_changes.redis_config
+        # The directive is inert on master nodes (failover-safe). * DIFFERS from the redis_config capture
         # below: that one carries the CLEAN compute.redis_config WITHOUT masterauth - the password does NOT
         # end up in incarnation.state (secret stays in Vault, ADR-061). masterauth is a vault()-in-cell (seal-masking
         # ADR-010 §7.4); admin_user = compute.admin_user; path - secret/redis/<inc>/users/
@@ -338,3 +320,40 @@ tasks:
       # * rewrite=false (NIM-53): the file is the source of truth from step 1 (see the task comment).
       # REWRITE would roll back startup-only (io-threads) to the live value - NIM-53 regression.
       rewrite:  false
+
+  - name: Record the effective Redis config
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_config
+      value: "${ compute.redis_config }"
+
+  - name: Record the effective persistence settings
+    on: keeper
+    module: core.state.set
+    params:
+      field: persistence
+      value: "${ compute.persistence }"
+
+  - name: Record the deployed memory limit
+    on: keeper
+    module: core.state.set
+    params:
+      field: memory_mb
+      value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
+
+  - name: Record the deployed maxmemory policy
+    on: keeper
+    module: core.state.set
+    params:
+      field: maxmemory_policy
+      value: "${ default(input.maxmemory_policy, default(incarnation.state.maxmemory_policy, '')) }"
+
+  # io_threads read-model (substrate like memory_mb): set -> new; else the previously
+  # deployed state.io_threads; else 0. Keeps state.io_threads == redis_config['io-threads'].
+  - name: Record the deployed io-threads count
+    on: keeper
+    module: core.state.set
+    params:
+      field: io_threads
+      value: "${ int(default(input.io_threads, default(incarnation.state.io_threads, 0))) }"

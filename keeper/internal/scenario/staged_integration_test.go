@@ -61,7 +61,6 @@ state_schema:
 `)
 	write("scenario/failover/main.yml", `name: failover
 description: probe role (passage 0) then act on master (passage 1)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -319,7 +318,6 @@ state_schema:
 `)
 	write("scenario/expand/main.yml", `name: expand
 description: probe role (p0) then fan-out loop on live hosts (p1 expands to N tasks)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -696,7 +694,6 @@ state_schema:
 `)
 	write("scenario/restart/main.yml", `name: restart
 description: probe role (p0) → failover on master (p1) → re-probe role_after (p1) → act on new master (p2)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -1015,7 +1012,6 @@ state_schema:
 `)
 	write("scenario/runoncestaged/main.yml", `name: runoncestaged
 description: probe role then run_once-act on master (staged + run_once)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -1222,7 +1218,6 @@ state_schema:
 `)
 	write("scenario/failover/main.yml", `name: failover
 description: probe X (p0) + noop (p0) → act where X (p1)
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run
@@ -1429,7 +1424,6 @@ state_schema:
 	// #2 (Passage 1) reads the probe's register role.
 	write("scenario/failover/main.yml", `name: failover
 description: box-a-only prep (p0) + probe role (p0, both) → act where role (p1)
-state_changes: {}
 tasks:
   - name: Box-A-only prep
     module: core.exec.run

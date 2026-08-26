@@ -356,8 +356,10 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 //     not fail-stop, and rescue does not run on cancel.
 //   - otherwise → OK.
 //
-// state_changes isn't aggregated yet (lands in M2.3+); RunResult.state_changes
-// stays nil.
+// RunResult.state_changes stays nil and always will: [ADR-0084] retired the
+// end-of-run commit it fed, so a scenario's state is written Keeper-side by
+// `core.state.<verb>` tasks and the Soul has no delta to report. The proto field
+// survives only because [ADR-012] is only-add.
 //
 // Returns an error only on Sink I/O failure (stream broke). All task-level
 // business errors travel through TaskEvent.error.

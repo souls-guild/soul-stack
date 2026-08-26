@@ -98,7 +98,7 @@ func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
 	// (c) AFTER rotation the server serves cert2 - hot-swap + CA-rollover proven live.
 	stack.AssertRedisTLSCertServed(t, tlsConn, fp2)
 
-	// (d) read-model: state.tls recorded the NEW material (rotate_tls state_changes -
+	// (d) read-model: state.tls recorded the NEW material (the rotate_tls capture -
 	// enable/only/port preserved, cert/key/ca_ref = new ones from input).
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"tls": map[string]any{

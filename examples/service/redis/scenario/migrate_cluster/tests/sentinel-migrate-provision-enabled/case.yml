@@ -14,7 +14,7 @@
 # cluster/sentinel branch (main.yml::tasks) — VMs come up before the deploy.
 #
 # * register.provision in L0 comes from mocks.register (the probe isn't executed, ADR-023): steps
-# (b)/(c) of the provision body and state_changes (provisioned_*) read register.provision.
+# (b)/(c) of the provision body and its provisioned_* captures read register.provision.
 # {vm_ids,hosts} come from it. The roster is 2 hosts (vm-1 master, vm-2 replica); in prod it's
 # provided by refresh_soulprint after onboarding, in L0 mid-run re-resolve is stubbed, roster is a
 # static fixture, so the 2 hosts are supplied by hand. The created VM sids = the roster's sids.
@@ -109,7 +109,7 @@ fixtures:
 
 # register.provision — the ready-made core.cloud.created payload (L0-passthrough, step (a) is not
 # executed): vm_ids of the created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
-# state_changes read it. The created VM sids = the roster's sids (in prod refresh_soulprint
+# the provisioned_* captures read it. The created VM sids = the roster's sids (in prod refresh_soulprint
 # would add them; here the roster already carries them). 2 VMs for the sentinel topology (1 master + 1
 # replica).
 mocks:
@@ -120,7 +120,7 @@ mocks:
         - { sid: vm-1.example.com, vm_id: i-aaa111, primary_ip: 10.0.0.1, bootstrap_token: tok-vm1 }
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -235,7 +235,7 @@ assert:
   # WITHOUT cluster directives (sentinel). provisioned_* — the FACT "these VMs were brought up by this migrate
   # run" (for cascade-destroy teardown); same guard+shape as create.
   # seeded_from: source_endpoints = source.hosts ENTIRELY, detached:false (source still alive).
-  state_changes:
+  state_after:
     redis_type: sentinel
     redis_version: "7.4.1"
     redis_config:

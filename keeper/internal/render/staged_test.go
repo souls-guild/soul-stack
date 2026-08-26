@@ -16,7 +16,6 @@ import (
 const stagedScenario = `
 name: staged
 description: probe role then act on master
-state_changes: {}
 tasks:
   - name: probe role
     module: core.exec.run
@@ -152,7 +151,6 @@ func TestRender_NoStratifyPlanIsPassage0(t *testing.T) {
 	const plain = `
 name: plain
 description: two independent tasks
-state_changes: {}
 tasks:
   - name: first
     module: core.exec.run

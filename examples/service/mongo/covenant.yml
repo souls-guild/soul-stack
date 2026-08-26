@@ -1,8 +1,9 @@
 # covenant.yml — a reusable shared contract for the mongo scenario sections (PILOT).
 #
-# Carries ONLY the shared contract of the FOUR sections: input / compute / state_changes /
-# validate (shared/config ScenarioFragment). name/tasks/create/form/extends — NOT here
-# (covenant is a contract, not an executable scenario). A scenario plugs in the fragment
+# Carries ONLY the shared contract of the THREE sections: input / compute / validate
+# (shared/config ScenarioFragment). name/tasks/create/form/extends — NOT here (covenant is
+# a contract, not an executable scenario; state capture is a TASK, so it lives in the
+# scenario body, [ADR-0084] F-B). A scenario plugs in the fragment
 # via `extends: covenant` and ADDS its own delta add-only (covenant is the BASE, the delta
 # does NOT override covenant keys, otherwise section_key_conflict). The keeper-side
 # resolver merges covenant FIRST.
@@ -101,9 +102,9 @@ validate:
 # ── Computed scenario-vars (compute:) ──────────────────────────────────────
 # compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input / service vars /
 # incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible as
-# compute.<name> in tasks/apply.input AND in state_changes. Removes duplication of the
-# merge() translation: declared HERE ONCE, both the body and state reference
-# ${ compute.mongo_config }.
+# compute.<name> in tasks/apply.input AND in the scenario's capture steps. Removes
+# duplication of the merge() translation: declared HERE ONCE, both the body and the capture
+# reference ${ compute.mongo_config }.
 #
 # ★ CONFIG BOUNDARY: host-layout (dbPath → data_dir, path → log_dir, port → net_port),
 # authorization enabled and bindIp are set by the mongod.conf.tmpl TEMPLATE from vars, NOT
@@ -123,9 +124,9 @@ compute:
   # ── system_user_names: the service's OWN accounts, name list ────────────────
   # The keys of vars.system_users: the accounts the SERVICE provisions for itself (PILOT:
   # default_admin), as opposed to mongo_users, which is operator intent. Declared once
-  # because two places must not drift: the `core.state.present` task that mints their
-  # passwords, and the `system_users` state record written by state_changes. roles are NOT
-  # part of it — those stay in service vars (policy), state records only which accounts exist.
+  # because two places must not drift: the `core.state.set` task that mints their
+  # passwords, and the account list the service vars declare. roles are NOT part of it —
+  # those stay in service vars (policy), state records only which accounts exist.
   system_user_names: "${ default(vars.system_users, {}).map(name, name) }"
   # Effective MongoDB version: required enum, ONE for both install methods (binary pulls
   # the binary of this version from Nexus; package pins =version). Declared ONCE (state +
@@ -202,44 +203,3 @@ compute:
          },
          default(input.mongo_settings, {})
        ) }
-
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# After a successful apply, Keeper records what was deployed (ADR-009 §7.1, ADR-057 list
-# form). mongo_config is the same compute.mongo_config that went into the mongod.conf
-# render: a repeat apply and day-2 see a single source of truth.
-state_changes:
-  - set: mongo_version
-    value: "${ compute.mongo_version }"
-  - set: mongo_config
-    value: "${ compute.mongo_config }"
-  # memory_mb: operator's memory budget (int). Not set → 0.
-  - set: memory_mb
-    value: "${ int(default(input.memory_mb, 0)) }"
-  # wiredtiger_cache_gb: effective cache size (same compute that went into mongo_config).
-  - set: wiredtiger_cache_gb
-    value: "${ compute.wiredtiger_cache_gb }"
-  # sysctl_settings: applied host tuning (the same vars.sysctl_settings that goes into the render).
-  - set: sysctl_settings
-    value: "${ default(vars.sysctl_settings, {}) }"
-  # system_users — the service's OWN accounts (compute.system_user_names). state records
-  # WHICH accounts exist; their roles stay in service vars (policy, not state) and their
-  # passwords in Vault at the path derived from this field ([ADR-0083] §1). Without the
-  # record, a later run could not tell a provisioned account from one an operator added to
-  # vars after create, and .../secrets/reveal would have nothing to enumerate.
-  - set: system_users
-    value: "${ compute.system_user_names.map(n, { 'name': n }) }"
-  # mongo_users — array of MongoUser; the `password` property is declared `type: secret`, so
-  # its value lives in Vault and the state engine strips it on the way in ([ADR-0083] §4) —
-  # input.users never carries one anyway. ★ database/state are
-  # added MANUALLY via .map: $type-defaults (types.yml MongoUser) are only added at the
-  # top-level input, NOT into nested array-element fields — while state_schema.mongo_users
-  # requires state (required). roles as-is (state_schema only requires role in the element;
-  # db is optional — the plugin fills in userDB if empty). name — MongoUser required → bare u.name.
-  - set: mongo_users
-    value: >-
-      ${ default(input.users, []).map(u, {
-           'name':     u.name,
-           'database': default(u.database, 'admin'),
-           'state':    default(u.state, 'present'),
-           'roles':    u.roles
-         }) }

@@ -610,6 +610,7 @@ Order is the in-order walk of the task list, descending into `block:` - a block 
 - **Applies to:** all types of problems.
 - **Semantics:** the task is executed only if the expression is truthy. Falsy → the task is skipped with the mark `skipped: when`.
 - **Combination with requisites:** all conditions are summed by AND. First, requisites (`onchanges`, `onfail`, `require`) are checked, then `when:`.
+- **Not on a keeper-side task, unless it is static.** A scenario step with `on: keeper` is executed by the keeper's own runner, which evaluates no flow-control predicate. A **static** `when:` (`input.` / `vars.` / `incarnation.`) is fine - the keeper settles it at render, before the task is routed keeper-side. A `when:` reading `register.*`/`soulprint.*` is rejected (`when_on_keeper_dynamic_unsupported`): it would be accepted and dropped, and since [ADR-0084](../adr/0084-explicit-state-capture.md) the step that runs regardless of its condition is the step that writes incarnation state. Replacements and the full key-by-key answer - [keeper/modules.md](../keeper/modules.md).
 
 #### `has()`-guard for optional-input with non-static `when:`
 

@@ -300,39 +300,34 @@ func TestPathAddressesOwnNamespace_SurvivesClientNormalisation(t *testing.T) {
 	}
 }
 
-// `state_changes:` is the surface where a fenced path is not merely read but
-// COMMITTED into incarnation.state — the second copy [ADR-0083] exists to remove,
-// written into the place the ADR calls the source of truth. Every cell of both
-// forms is scanned, `foreach.do` included.
-func TestScanOwnNamespaceVault_StateChanges(t *testing.T) {
+// A `core.state.<verb>` task is the surface where a fenced path is not merely read
+// but COMMITTED into incarnation.state — the second copy [ADR-0083] exists to
+// remove, written into the place the ADR calls the source of truth. [ADR-0084]
+// moved that write from a top-level block onto an ordinary task, so the fence now
+// rides the module-params scan; every param cell a capture can carry is checked.
+func TestScanOwnNamespaceVault_StateCaptureTask(t *testing.T) {
 	const own = "${ vault('secret/redis/prod/redis_users/app#password') }"
-	cases := map[string]*StateChanges{
-		"set value": {IsList: true, Ops: []StateChange{
-			{Verb: VerbSet, Field: "admin_password", Value: own},
+	cases := map[string]*ModuleTask{
+		"set value": {Module: "core.state.set", Params: map[string]any{
+			"field": "admin_password", "value": own,
 		}},
-		"add key": {IsList: true, Ops: []StateChange{
-			{Verb: VerbAdd, Field: "redis_users", Key: own, Value: map[string]any{"acl": "+@all"}},
+		"add key": {Module: "core.state.add", Params: map[string]any{
+			"field": "redis_users", "key": own, "value": map[string]any{"acl": "+@all"},
 		}},
-		"modify match": {IsList: true, Ops: []StateChange{
-			{Verb: VerbModify, Field: "redis_users", Match: own + " == elem.pw"},
+		"modify match": {Module: "core.state.modify", Params: map[string]any{
+			"field": "redis_users", "match": own + " == elem.pw",
 		}},
-		"modify patch": {IsList: true, Ops: []StateChange{
-			{Verb: VerbModify, Field: "redis_users", Match: "true", Patch: map[string]any{"pw": own}},
+		"modify patch": {Module: "core.state.modify", Params: map[string]any{
+			"field": "redis_users", "match": "true", "patch": map[string]any{"pw": own},
 		}},
-		"foreach in": {IsList: true, Ops: []StateChange{
-			{Verb: VerbForeach, In: own, As: "u"},
+		"append value": {Module: "core.state.append", Params: map[string]any{
+			"field": "audit_log", "value": []any{own},
 		}},
-		"foreach do": {IsList: true, Ops: []StateChange{
-			{Verb: VerbForeach, In: "${ input.users }", As: "u", Do: []StateChange{
-				{Verb: VerbSet, Field: "admin_password", Value: own},
-			}},
-		}},
-		"legacy sets": {Sets: map[string]string{"admin_password": own}},
 	}
-	for name, sc := range cases {
+	for name, mod := range cases {
 		t.Run(name, func(t *testing.T) {
-			m := &ScenarioManifest{Name: "deploy", StateChanges: sc}
-			got := ScanOwnNamespaceVault("deploy.yml", "redis", m, nil)
+			tasks := []Task{{Name: "capture", On: "keeper", Module: mod}}
+			got := ScanOwnNamespaceVault("deploy.yml", "redis", nil, tasks)
 			if len(got) != 1 {
 				t.Fatalf("diagnostics = %+v, want exactly one %s", got, VaultOwnNamespaceCode)
 			}
@@ -343,12 +338,13 @@ func TestScanOwnNamespaceVault_StateChanges(t *testing.T) {
 	}
 }
 
-// The negative twin: a cross-namespace read in state_changes is left alone.
-func TestScanOwnNamespaceVault_StateChangesCrossNamespaceOpen(t *testing.T) {
-	m := &ScenarioManifest{Name: "deploy", StateChanges: &StateChanges{IsList: true, Ops: []StateChange{
-		{Verb: VerbSet, Field: "ca", Value: "${ vault('secret/services/shared/tls#ca') }"},
+// The negative twin: a cross-namespace read in a capture is left alone.
+func TestScanOwnNamespaceVault_StateCaptureCrossNamespaceOpen(t *testing.T) {
+	tasks := []Task{{Name: "capture", On: "keeper", Module: &ModuleTask{
+		Module: "core.state.set",
+		Params: map[string]any{"field": "ca", "value": "${ vault('secret/services/shared/tls#ca') }"},
 	}}}
-	if got := ScanOwnNamespaceVault("deploy.yml", "redis", m, nil); len(got) != 0 {
+	if got := ScanOwnNamespaceVault("deploy.yml", "redis", nil, tasks); len(got) != 0 {
 		t.Fatalf("the fence fired on a cross-namespace path: %+v", got)
 	}
 }

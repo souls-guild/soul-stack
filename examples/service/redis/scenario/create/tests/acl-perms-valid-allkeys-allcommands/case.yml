@@ -2,7 +2,7 @@
 # PASSES input validation and reaches state. Operator sets two users with
 # valid but "broad" perms: `allkeys +@all` (full rights) and `~app:* +@read
 # -@dangerous` (fine-grained). Both are correct Redis-ACL syntax → the pattern lets them through,
-# users end up in state_changes.redis_users (write-model: name/perms/state, without password).
+# users end up in state_after.redis_users (write-model: name/perms/state, without password).
 # Proves that the pattern does NOT false-positive on legitimate rights (including allkeys/+@all).
 # Topology cluster shards=3 replicas=0 → 3 hosts (size-guard PASS).
 name: valid wide acl perms pass input validation and reach state
@@ -64,7 +64,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -132,7 +132,7 @@ assert:
 
   # Both users passed the pattern in input validation and ended up in write-model state.
   # redis_users is an ARRAY of AclUser [{name,perms,state}] WITHOUT password (keeper-side vault).
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     redis_config:

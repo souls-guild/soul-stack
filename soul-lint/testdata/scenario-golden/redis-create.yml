@@ -49,17 +49,6 @@ input:
             index: { type: string }
             role:  { type: string, enum: [primary, replica] }
 
-# Что сценарий пишет в incarnation.state после успешного apply.
-# sets — map поле→CEL-выражение (orchestration.md §7.1): и какое поле обновить,
-# и откуда значение. В пилоте sets видит только input/incarnation/soulprint.self;
-# soulprint.hosts/vars/essence/state — future (полная грамматика), здесь не используем.
-state_changes:
-  sets:
-    redis_version: "${ input.redis_version }"
-    redis_users:   "${ input.redis_users }"
-    redis_config:  "${ input.redis_config }"
-    redis_hosts:   "${ input.redis_hosts }"
-
 tasks:
   # Если нужно — создаём VM через CloudDriver (ADR-017: keeper-side core).
   - name: provision
@@ -91,3 +80,34 @@ tasks:
         action:      ensure_users
         users:       "${ input.redis_users }"
         master_addr: "${ soulprint.hosts.where(\"role == 'primary'\").first.network.primary_ip }"
+
+  # What the scenario writes into incarnation.state, one explicit step per field
+  # ([ADR-0084]). The capture runs where the value becomes known, not at the end
+  # of the run.
+  - name: Record the cluster topology and settings
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_version
+      value: "${ input.redis_version }"
+
+  - name: Record the ACL users
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_users
+      value: "${ input.redis_users }"
+
+  - name: Record the effective redis.conf overrides
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_config
+      value: "${ input.redis_config }"
+
+  - name: Record the cluster hosts
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_hosts
+      value: "${ input.redis_hosts }"

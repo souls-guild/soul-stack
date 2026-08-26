@@ -71,7 +71,6 @@ state_schema:
 	// Bare read: no has() around it. With State absent this is a hard CEL error.
 	write("scenario/verify_bare/main.yml", `name: verify_bare
 description: assert reading incarnation.state without a has() guard
-state_changes: {}
 input: {}
 tasks:
   - name: Guard on the recorded version
@@ -84,7 +83,6 @@ tasks:
 	// Guarded read: the shape that fails SILENTLY when State is missing.
 	write("scenario/verify_guarded/main.yml", `name: verify_guarded
 description: assert reading incarnation.state behind has() guards
-state_changes: {}
 input: {}
 tasks:
   - name: Guard on the tls switch

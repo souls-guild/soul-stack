@@ -99,7 +99,7 @@ Bringing the flag **`refresh_soulprint: true`** on `core.soul.registered` to lif
 
 **Weakening of the roster stability invariant (amends [ADR-009 §7](0009-scenario-dsl.md)).** The previous invariant — "the run roster is stable for the entire run". The new one — **"the roster is stable within a single Passage; at the refresh boundary it is re-resolved (a live snapshot)"**. Between Passages the roster is re-resolved **if** the finished Passage contained a successful `refresh_soulprint: true` step.
 
-**The barrier/state-commit invariant §7 is NOT weakened.** `incarnation.state` is still committed **once** after the last Passage. Re-resolve is the **roster** axis (whom to target), not the commit axis.
+**The barrier/state-commit invariant §7 is NOT weakened.** `incarnation.state` is still committed **once** after the last Passage. ⚠ **The state-commit half is retired by [ADR-0084](0084-explicit-state-capture.md) (NIM-699) — a write lands at its `core.state.<verb>` step. The barrier this amendment is actually about is unchanged.** Re-resolve is the **roster** axis (whom to target), not the commit axis.
 
 **Re-resolve implementation — S3 (run.go).** Implemented: the stage-loop of run.go at the refresh boundary (`RefreshBoundaries`) calls `resolveRoster` (a live snapshot) and passes the result into the repeated Render of the next Passage; `register.<name>.refreshed` echoes the flag value. A re-resolve failure → abort (not silently on the old roster).
 

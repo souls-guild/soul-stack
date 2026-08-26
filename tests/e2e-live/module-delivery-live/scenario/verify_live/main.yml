@@ -6,9 +6,6 @@ description: >-
   fetch->verify->atomic-rename->hot-registers the plugin and RIGHT THERE runs the
   consumer (without restarting the daemon, ADR-065(d)).
 
-# state_changes is empty: the scenario proves module delivery, not a state mutation.
-state_changes: {}
-
 tasks:
   # Consumer of community.redis.* -> triggers auto-synthesis of the install step before it.
   # register+failed_when: task success means Redis answered PONG (Output.result,

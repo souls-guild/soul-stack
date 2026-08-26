@@ -845,15 +845,19 @@ WHERE ar.apply_id = $1`
 
 // WaitIncarnationReady blocks until incarnation.status transitions to `ready`.
 //
-// Why separate from WaitApplySuccess: `apply_runs.status=success` (per-host
-// task terminal) is set EARLIER than the state_changes commit into
-// incarnation.state. commitSuccess (run.go §8) writes state + status='ready'
-// in one PG transaction AFTER the barrier for all hosts - i.e. there's a
-// window between "apply_runs success" and "state committed". On L3a
-// (soul-stub responds instantly) the window is microscopic; on L3b (real soul
-// + gRPC round-trip) the test can read incarnation.state as empty `{}` ->
-// AssertIncarnationState flakes. We wait specifically for status='ready' -
-// the only point that guarantees state_changes are already in the DB.
+// Why separate from WaitApplySuccess: `apply_runs.status=success` is a
+// PER-HOST task terminal, and a run is more than its host tasks. A
+// `core.state.<verb>` capture ([ADR-0084]) is a keeper-side step that commits
+// its field at its own step, which for a capture standing after the host work
+// is AFTER those hosts report success - i.e. there's a window between
+// "apply_runs success" and "the last capture is in". On L3a (soul-stub responds
+// instantly) the window is microscopic; on L3b (real soul + gRPC round-trip)
+// the test can read incarnation.state as empty `{}` -> AssertIncarnationState
+// flakes. We wait specifically for status='ready' - the run's own terminal, and
+// the only point that guarantees every capture the run makes is already in the
+// DB.
+//
+// [ADR-0084]: docs/adr/0084-explicit-state-capture.md
 //
 // Terminal != ready (error_locked / migration_failed / destroy_failed) - an
 // immediate t.Fatal with the current status.
@@ -885,8 +889,9 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 //
 // Mirrors WaitIncarnationReady for NON-ready outcomes (split-brain guard,
 // failed_when fail-stop): a run that SHOULD fail leaves the incarnation in
-// `error_locked` (run.go §7 - state_changes aren't committed at the
-// terminal-failed barrier).
+// `error_locked` (run.go §7). Note that error_locked does NOT mean the state is
+// untouched: since [ADR-0084] whatever a capture committed BEFORE the failure
+// stays, so a failed run's state describes how far it actually got.
 //
 // * Race with seeded-ready. SeedIncarnationReady puts the incarnation directly
 // into `ready`; RunScenario returns apply_id asynchronously, BEFORE lockRun

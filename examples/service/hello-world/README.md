@@ -1,11 +1,11 @@
 # hello-world
 
 A minimal example service for **E2E with a real commit to `incarnation.state`**.
-Unlike [`noop`](../noop/README.md) (there `core.exec.run echo`,
-`state_changes: {}` — state doesn't change), here the `create` scenario:
+Unlike [`noop`](../noop/README.md) (there `core.exec.run echo` and no capture step at
+all — state doesn't change), here the `create` scenario:
 
 1. writes a greeting file on every host of the incarnation via `core.file.present`;
-2. records the file path in `incarnation.state.greeting_file` (`state_changes.sets`).
+2. records the file path in `incarnation.state.greeting_file` with a `core.state.set` step.
 
 This gives a smoke check of the whole chain: input -> CEL interpolation -> apply on
 host -> cross-host barrier -> commit state to Postgres.
@@ -19,7 +19,7 @@ hello-world/
 │   └── 00-base.yaml                 # baseline service vars: greeting (fallback)
 └── scenario/
     └── create/
-        └── main.yml                  # input.greeting -> core.file.present -> state_changes.sets.greeting_file
+        └── main.yml                  # input.greeting -> core.file.present -> core.state.set greeting_file
 ```
 
 No `migrations/` directory: `state_schema_version = 1`, no migrations needed
@@ -41,8 +41,9 @@ No `migrations/` directory: `state_schema_version = 1`, no migrations needed
   - `input:` — the general standard [docs/input.md](../../../docs/input.md).
   - `core.file.present` with inline `content` — [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)
     (`core.copy` is deliberately not a separate module — covered by `core.file.present`).
-  - `state_changes.sets` — format [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) /
-    [ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl).
+  - `core.state.set` — the state capture step, [ADR-0084](../../../docs/adr/0084-explicit-state-capture.md);
+    the field it writes has to be declared in `state_schema`
+    ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
 ## Validation
 

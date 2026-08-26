@@ -6,8 +6,6 @@ description: >-
   Proves that success in create is credited specifically to failed_when:false
   (ignore_errors), not to the module "not failing". Mirrors create without the flag.
 
-state_changes: {}
-
 tasks:
   - name: Deliberately failing task WITHOUT ignore_errors
     module: core.exec.run

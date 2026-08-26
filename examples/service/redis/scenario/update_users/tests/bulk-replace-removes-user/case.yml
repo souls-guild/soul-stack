@@ -3,9 +3,9 @@
 # input.users = {alice (with CHANGED perms)} — bob is NOT in the set. update_users replaces
 # state.redis_users ENTIRELY:
 #   1. users.acl renders with alice (new perms) — WITHOUT bob (removed from the ACL);
-#   2. state_changes.redis_users = [alice] (bob dropped out — bulk-replace, not upsert).
+#   2. state_after.redis_users = [alice] (bob dropped out — bulk-replace, not upsert).
 # A regression where "update_users merges/upserts instead of replacing" = bob would remain
-# in users.acl and/or in state_changes → assert fails. Render-only, hermetic. Plaintext (addr 6379).
+# in users.acl and/or in the captured state → assert fails. Render-only, hermetic. Plaintext (addr 6379).
 name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
 
 fixtures:
@@ -42,7 +42,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
@@ -53,7 +53,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -101,8 +101,8 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
-  # state_changes: redis_users = the NEW set ENTIRELY (only alice, bob dropped — bulk-
+  # state_after: redis_users = the NEW set ENTIRELY (only alice, bob dropped — bulk-
   # replace, WITHOUT the password). An upsert/merge regression = bob would remain → fails.
-  state_changes:
+  state_after:
     redis_users:
       - { name: alice, perms: "~app:* +@read +@write", state: "on" }

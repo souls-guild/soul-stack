@@ -33,18 +33,20 @@ import (
 //
 // Incarnation addressing (M2.x): `apply_id` is carried by the Soul itself; the
 // incarnation name is absent from the proto (see apply.proto: RunResult only
-// carries apply_id/status/state_changes). Correlation is closed by the `apply_runs`
+// carries apply_id/status/state_changes -- the last one RESERVED and never
+// populated, see apply.proto). Correlation is closed by the `apply_runs`
 // table (migration 018): the scenario-runner writes a `(apply_id, sid)` row on
 // dispatch of `ApplyRequest`, and this handler reads it via
 // [applyrun.SelectIncarnationByApplyID] and moves it to a terminal status
 // ([correlateRunResult]). An apply_id not found in `apply_runs` (ad-hoc push
 // without a scenario-runner) → log+skip.
 //
-// Committing `incarnation.state` (applying `state_changes` per the scenario-DSL) —
-// is the scenario-runner's domain (.g): it owns the cross-host final barrier
-// (docs/scenario/orchestration.md §7), commits state once after the
-// unconditional barrier, and calls [commitRunState] with the already merged state.
-// We do NOT touch state here, so as not to break the barrier invariant on multi-host.
+// Writing `incarnation.state` is not this handler's business at all. Since
+// [ADR-0084] the write is a `core.state.<verb>` keeper-side task that commits its
+// own field at its own step ([coremod/state]), so by the time a RunResult lands
+// the state is already whatever the run captured. We do NOT touch state here.
+//
+// [ADR-0084]: docs/adr/0084-explicit-state-capture.md
 func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID string, ev *keeperv1.RunResult) {
 	if ev == nil {
 		h.logger.Warn("eventstream: RunResult payload is nil",
@@ -260,9 +262,12 @@ func (h *eventStreamHandler) publishRunResult(sid string, ev *keeperv1.RunResult
 // pool — *pgxpool.Pool or a compatible type. scenario / name / applyID are taken
 // by the caller from the incarnation-state table. stateBefore — the current value of
 // `incarnation.state` (read under SELECT FOR UPDATE inside the transaction);
-// stateAfter — the result of merging `stateBefore + RunResult.state_changes`
-// (the caller does the merge itself, because the state_changes grammar is the scenario-DSL,
-// not the gRPC contract).
+// stateAfter — the state to commit, merged by the caller.
+//
+// UNUSED since the scenario-runner took over the terminal transition, and doubly
+// so since [ADR-0084] moved the state write into `core.state.<verb>` steps that
+// commit per-field. Kept as the reference shape of the atomic
+// state+status+history transition.
 //
 // On RUN_STATUS_SUCCESS the status becomes `ready`; on the rest —
 // `error_locked` with status_details, so triage can see the reason.
@@ -298,7 +303,7 @@ func commitRunState(
 	var details map[string]any
 	switch runStatus {
 	case keeperv1.RunStatus_RUN_STATUS_SUCCESS:
-		// stateAfter already accounts for state_changes.
+		// stateAfter is whatever the caller decided to commit.
 	default:
 		status = incarnation.StatusErrorLocked
 		details = map[string]any{

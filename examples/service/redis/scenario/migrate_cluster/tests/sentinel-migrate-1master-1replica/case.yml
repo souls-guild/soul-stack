@@ -32,7 +32,7 @@
 #      master_addr/source_external (presence disambiguates).
 #   3. * offset-gate: community.redis.offset-synced, source_addr=external
 #      source, lag_threshold=0 (default verify).
-#   4. state_changes: create set + seeded_from {source_endpoints:[source], detached:false}.
+#   4. state_after: create set + seeded_from {source_endpoints:[source], detached:false}.
 #
 # NOTE L0 limitation (like sentinel-create): apply.input is host-invariant in
 # the pilot (resolved on the FIRST targeted host) -> render_context.self in
@@ -121,7 +121,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -248,7 +248,7 @@ assert:
   # directives (sentinel). seeded_from: source_endpoints = source.hosts IN
   # FULL, detached:false (source still alive - detach_source will detach it).
   # WITHOUT timestamp (L0 determinism).
-  state_changes:
+  state_after:
     redis_type: sentinel
     redis_version: "7.4.1"
     redis_config:

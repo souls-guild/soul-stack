@@ -164,7 +164,7 @@ type IncarnationHandler struct {
 	vault VaultKVReader
 	// vaultMount — keeper.yml's `vault.kv_mount`, injected alongside the reader.
 	// Reveal derives the path it reads ([ADR-0083] §2), so it must land on the same
-	// mount `core.state.present` wrote to; "" means the default mount, resolved by
+	// mount `core.state.*` wrote to; "" means the default mount, resolved by
 	// [config.EffectiveVaultMount].
 	vaultMount string
 }

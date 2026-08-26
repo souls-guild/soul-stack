@@ -1,6 +1,6 @@
 # Post-apply expectations for long-runner::create.
 #
-# state_changes.sets from scenario/create/main.yml:
+# the captures in scenario/create/main.yml:
 #   last_run: "create"
 #   runner_marker: /tmp/long-runner-init.txt
 apply_runs:

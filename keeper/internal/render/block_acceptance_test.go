@@ -82,11 +82,11 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		},
 		TaskPassage: plan.TaskPassage,
 		// Passage 2 — where the block lives. passage_plan [0 1 2 2]: the keeper-side
-		// core.state.present resolve ([ADR-0083] §4) is passage 0, the probe reads its
+		// core.state.set resolve ([ADR-0083] §4) is passage 0, the probe reads its
 		// register in passage 1, the block + restart-master follow in passage 2.
 		ActivePassage: 2,
 		// [ADR-0083] §4: state carries the account NAMES; the keeper-side
-		// core.state.present task resolves each name's password from the Vault path
+		// core.state.set task resolves each name's password from the Vault path
 		// derived from (service, incarnation, field, key). Render does not execute
 		// that task, so its register is seeded here — the consumer's post-resolution
 		// view, exactly as an L0 case seeds mocks.register.
@@ -232,8 +232,8 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadScenarioManifest: %v", err)
 	}
-	// create/main.yml carries `extends: covenant` (R3): the input/compute/state_changes/
-	// validate sections moved to examples/service/redis/covenant.yml. Without the covenant merge, CEL
+	// create/main.yml carries `extends: covenant` (R3): the input/compute/validate
+	// sections moved to examples/service/redis/covenant.yml. Without the covenant merge, CEL
 	// apply.input.install fails with "no such key: install" (compute.install is declared in
 	// the covenant). Resolved via a MIRROR of prod (artifact.LoadScenarioManifestResolved) / trial
 	// (harness.loadResolvedScenario) / soul-lint — the shared config.ResolveScenarioCovenant.
@@ -315,7 +315,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     redisSentinelResolver{},
-		// The register of the keeper-side core.state.present task that mints the
+		// The register of the keeper-side core.state.set task that mints the
 		// service's own ACL accounts. Render does not execute it, so its result is
 		// seeded — the consumer's post-resolution view ([ADR-0083] §4).
 		KeeperRegister: map[string]any{

@@ -146,16 +146,16 @@ func (c *Case) validate() error {
 	// equally mutually exclusive with abort.
 	if c.ExpectRenderError != "" {
 		if len(c.Assert.RenderedTasks) > 0 || len(c.Assert.TaskPresent) > 0 || len(c.Assert.TaskAbsent) > 0 ||
-			c.Assert.StateChanges != nil || c.Assert.StateAfter != nil {
+			c.Assert.StateAfter != nil || len(c.Assert.StateAbsent) > 0 {
 			return fmt.Errorf("expect_render_error and assert.* are mutually exclusive: expect_render_error expects render abort, assert.* — successful plan/result")
 		}
 		return nil
 	}
 	// L0 requires assertion of task plan in at least one form: positional
-	// (rendered_tasks) OR presence (task_present/task_absent). state_changes/
-	// state_after — additional sections, plan itself is not replaced by them.
+	// (rendered_tasks) OR presence (task_present/task_absent). state_after/
+	// state_absent — additional sections, the plan itself is not replaced by them.
 	if len(c.Assert.RenderedTasks) == 0 && len(c.Assert.TaskPresent) == 0 && len(c.Assert.TaskAbsent) == 0 {
-		return fmt.Errorf("assert: empty (L0 requires task plan — rendered_tasks OR task_present/task_absent; state_changes/state_after — additional sections; or set expect_render_error for fail-case)")
+		return fmt.Errorf("assert: empty (L0 requires task plan — rendered_tasks OR task_present/task_absent; state_after/state_absent — additional sections; or set expect_render_error for fail-case)")
 	}
 	for i, et := range c.Assert.RenderedTasks {
 		if et.Module == "" {

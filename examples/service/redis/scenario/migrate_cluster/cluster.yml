@@ -171,7 +171,7 @@
 # (input.source.hosts) says exactly which old nodes to drop (the plugin resolves their
 # ids from the topology). password/tls/tls_ca use the same anti-downgrade gates. AFTER
 # FORGET succeeds the migration is complete: the old cluster is detached, only the new
-# one remains → state_changes.seeded_from.detached := true (main.yml branches on
+# one remains → the seeded_from capture records detached: true (main.yml branches on
 # redis_type).
 - name: Forget the old source nodes from the cluster (CLUSTER FORGET)
   run_once: true

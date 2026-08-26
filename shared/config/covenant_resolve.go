@@ -62,8 +62,6 @@ const covenantFileExt = ".yml"
 //     decode/schema errors passed through as-is, tagged with the covenant's File);
 //   - section_key_conflict              — a section key in both covenant AND scenario
 //     (add-only merge forbids override);
-//   - state_changes_form_mismatch       — covenant and scenario declared state_changes
-//     in different forms (list vs deprecated map);
 //   - covenant_merge_failed             — other (unexpected) merge errors;
 //   - form_field_unknown/duplicate/…    — the post-merge form check (see the core);
 //   - name_template_input_unknown/…     — the post-merge `name_template` check
@@ -110,20 +108,6 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 		// covenant.yml is invalid: pass its own errors through as-is (File is already
 		// = covenantFile from decode), skip merge (fragment is broken).
 		return fdiags
-	}
-
-	// Cross-form state_changes: on an IsList mismatch MergeCovenant doesn't detect
-	// `set <field>` conflicts (it takes the local form). Mixing list↔map is different
-	// grammars; reject explicitly BEFORE merge, else covenant sets of the other form
-	// would be silently lost.
-	if fragment.StateChanges != nil && m.StateChanges != nil &&
-		fragment.StateChanges.IsList != m.StateChanges.IsList {
-		return append(fdiags, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			File: scenarioPath, Code: "state_changes_form_mismatch",
-			Message: fmt.Sprintf("extends: %q - covenant and scenario declared state_changes in different forms (list vs map)", name),
-			Hint:    "bring both sides to the list-form of state_changes (map-form is deprecated)",
-		})
 	}
 
 	if err := MergeCovenant(*fragment, m); err != nil {

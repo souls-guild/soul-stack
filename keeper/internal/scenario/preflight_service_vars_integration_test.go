@@ -84,7 +84,6 @@ tier: gold
 `)
 	write("scenario/verify_tier/main.yml", `name: verify_tier
 description: assert over a value only the service's vars provide
-state_changes: {}
 input:
   expect_tier:
     type: string

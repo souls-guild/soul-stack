@@ -5,8 +5,8 @@
 // plan (`[]RenderedTask`) against `assert.rendered_tasks`, collection of trial
 // coverage by CEL branches through cel.CoverageSink.
 //
-// L0 assert sections: rendered_tasks (flat task plan), state_changes
-// (rendered sets), and state_after (deterministic final incarnation.state).
+// L0 assert sections: rendered_tasks (flat task plan), state_after and
+// state_absent (the deterministic final incarnation.state).
 // assert.dispatch is an L3 level section (multi-host orchestration, [ADR-023]);
 // on single-host there is one synthetic host, so it is meaningful only on
 // multi-host and is not implemented in L0 (strict-decode rejects it as
@@ -21,8 +21,8 @@ package trial
 // Fixtures specify the entire hermetic context of the run (input/vars/soulprint/
 // vault). Mocks.Register provides register context for probe steps in `where:`/`when:`
 // (in L0 pilot, ready register payload is passed without probe execution).
-// Assert is the expected result; L0 verifies RenderedTasks, StateChanges, and
-// StateAfter (see AssertBlock).
+// Assert is the expected result; L0 verifies RenderedTasks, StateAfter and
+// StateAbsent (see AssertBlock).
 type Case struct {
 	Name     string      `yaml:"name"`
 	Fixtures Fixtures    `yaml:"fixtures"`
@@ -59,8 +59,9 @@ type Case struct {
 //
 // State is the base `incarnation.state` BEFORE scenario execution (for operations
 // that accumulate state on top of existing — add_user/update_acl/…). Needed
-// only for assert.state_after, where expected outcome = State + rendered
-// state_changes.sets; for create scenarios (state "from scratch") omitted.
+// only for assert.state_after, where the expected outcome = State + what the
+// scenario's `core.state.<verb>` steps write; for create scenarios (state "from
+// scratch") omitted.
 //
 // DefaultDestinySource is L0 analog of keeper.yml::default_destiny_source (same
 // key name): URL template with {name} substitution, by which apply:destiny
@@ -113,24 +114,32 @@ type Mocks struct {
 }
 
 // AssertBlock is the expected result of a run. Subsections are independent and
-// optional ([ADR-023]); L0 implements RenderedTasks, StateChanges, and
-// StateAfter.
+// optional ([ADR-023]); L0 implements RenderedTasks, StateAfter and StateAbsent.
 //
-// StateChanges is the expected result of rendering `state_changes.sets` of
-// scenario (field → value after CEL reduction, symmetric to RenderedTasks for
-// tasks). Optional: even without this section state_changes are ALWAYS rendered
-// during case execution, and render error (e.g., unguarded `${ input.X }` with
-// optional-without-default input → CEL "no such key") is case failure. Section
-// is needed when you want to fix specific values, not just the fact of
-// successful render.
+// StateAfter is the expected final `incarnation.state` after the run: base
+// `fixtures.state` with the scenario's `core.state.<verb>` writes applied on top,
+// in plan order (mirror of the prod run, [ADR-0084]). Hermetic, without a host
+// (L0).
 //
-// StateAfter is the expected deterministic final `incarnation.state` after
-// run: base `fixtures.state` + rendered `state_changes.sets`
-// (mirror of prod commit, orchestration.md §7.1). Hermetic, without host (L0).
-// Verification is COMPLETE (like L1-migration): extra key in result is also
-// mismatch, state is fixed entirely. Optional: case chooses state_after when
-// the final state fact matters, not just delta sets (state_changes is
-// partial delta verification, state_after is full result verification).
+// Verification is a SUBSET ([ADR-0084] F-C/C4): the case names the fields it
+// asserts and only those are compared; a field present in the result that the
+// case does not mention is not a mismatch. Whole-state equality would force
+// every case to restate fields it has no opinion about, and a case that must
+// restate the world to assert one field is a case that gets updated by pasting
+// in whatever the run produced — which asserts nothing. It also survives a
+// service gaining a state field instead of reddening the whole suite.
+//
+// The L1 migration form (`state_before:`/`state_after:` at case top level, not
+// this section) keeps the COMPLETE comparison: a migration is a pure function of
+// the old state, so an unpredicted field there IS the defect (see compareState).
+//
+// StateAbsent is the other half of that subset: the fields the run must NOT
+// leave in `incarnation.state`. Without it a subset check has no way to assert a
+// REMOVAL — `core.state.unset` and a `remove` that empties a field both produce
+// an absence, and an absence is exactly what naming no field says nothing about.
+// The check is strict key absence: a field present but null is reported, with its
+// value, rather than counted as gone — dropping a key and blanking it are two
+// different states, and a case that meant the second one says so in StateAfter.
 type AssertBlock struct {
 	RenderedTasks []ExpectedTask `yaml:"rendered_tasks,omitempty"`
 
@@ -145,8 +154,8 @@ type AssertBlock struct {
 	TaskPresent []ExpectedTask `yaml:"task_present,omitempty"`
 	TaskAbsent  []ExpectedTask `yaml:"task_absent,omitempty"`
 
-	StateChanges map[string]any `yaml:"state_changes,omitempty"`
-	StateAfter   map[string]any `yaml:"state_after,omitempty"`
+	StateAfter  map[string]any `yaml:"state_after,omitempty"`
+	StateAbsent []string       `yaml:"state_absent,omitempty"`
 	// Dispatch is an L3 level section (multi-host orchestration, [ADR-023]): on
 	// single-host there is one synthetic host, dispatch-plan is meaningful only on
 	// topology. Field is NOT declared so strict-decode rejects cases relying on

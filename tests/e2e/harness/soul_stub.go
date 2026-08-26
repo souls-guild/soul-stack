@@ -17,11 +17,12 @@ import (
 // keeperv1 enum directly).
 //
 // StateChanges goes into RunResult.state_changes (a per-task artifact for
-// register/drift); incarnation.state is mutated separately — by the
-// keeper-side render of scenario.state_changes.sets AFTER the barrier
-// (run.go section 8), NOT from RunResult. So StateChanges here documents
-// the task's expected effect on the host but does not affect the
-// incarnation_state assert.
+// register/drift); incarnation.state is mutated separately — by the scenario's
+// keeper-side `core.state.<verb>` steps, each committing at its own step
+// ([ADR-0084]), NOT from RunResult. So StateChanges here documents the task's
+// expected effect on the host but does not affect the incarnation_state assert.
+//
+// [ADR-0084]: docs/adr/0084-explicit-state-capture.md
 type TaskResponse struct {
 	TaskName     string
 	StateChanges map[string]any

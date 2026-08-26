@@ -77,7 +77,7 @@
       # ★ REDESIGN default_admin (2026-06-30): input.password REMOVED (requirepass dropped).
       # Authentication is via the system default_admin, its password comes in via users below.
       # Unified compute.redis_config (declared ONCE in the includer's main.yml, ADR-009):
-      # the same map that ends up in state_changes.redis_config — the "state ≡ live config"
+      # the same map the redis_config capture records — the "state ≡ live config"
       # drift is removed by compute itself. For sentinel = base merge (WITHOUT cluster directives;
       # tls-replication yes when TLS, port 0 when tls_only). HOST-INVARIANT → apply.input.
       #
@@ -90,7 +90,7 @@
       # in redis.conf survives a restart. The directives are host-INVARIANT (one default_admin per
       # cluster) → apply.input. Failover-safe: Redis applies masteruser/masterauth only
       # when a node becomes a replica — inert on the current master, the old master after
-      # failover already carries the creds. ★ DIFFERS from state_changes.redis_config (covenant.yml):
+      # failover already carries the creds. ★ DIFFERS from the redis_config capture:
       # there the PURE compute.redis_config remains WITHOUT masterauth — the password does NOT go into
       # incarnation.state (the secret lives in Vault). masterauth — vault()-IN-A-CELL (seal masking,
       # ADR-010 §7.4): the password is masked in logs/OTel/state. admin_user = default_admin

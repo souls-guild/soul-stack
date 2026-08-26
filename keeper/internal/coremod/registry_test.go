@@ -14,6 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
+	keeperincarnation "github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
 
@@ -97,6 +98,19 @@ func (noopChoirStore) IncarnationExists(_ context.Context, _ string) (bool, erro
 	return true, nil
 }
 
+// noopStateStore is the capture dependency `core.state.*` gained in [ADR-0084]:
+// without it the module is not registered, since it can resolve a secret but not
+// record the field it resolved.
+type noopStateStore struct{}
+
+func (noopStateStore) CaptureState(_ context.Context, _ keeperincarnation.CaptureSpec, mutate func(map[string]any) (map[string]any, error)) (map[string]any, error) {
+	return mutate(map[string]any{})
+}
+
+func (noopStateStore) ReadState(_ context.Context, _ string) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
 func TestDefault_RegistersAllFour(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
 		SoulStore:   noopSoulStore{},
@@ -105,6 +119,7 @@ func TestDefault_RegistersAllFour(t *testing.T) {
 		CloudTokens: noopCloudTokens{},
 		Vault:       noopVault{},
 		Audit:       noopAudit{},
+		StateStore:  noopStateStore{},
 	})
 	got := r.Names()
 	sort.Strings(got)

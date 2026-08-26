@@ -344,32 +344,35 @@ assert:
 	}
 }
 
-// optionalStateMain is a scenario that reads optional-without-default input in
-// state_changes.sets WITHOUT a has() guard. On the latest path (value not
-// provided), sets rendering must fail with "no such key": the class of bugs the
-// harness catches by rendering state_changes.
+// optionalStateMain is a scenario whose capture step reads an
+// optional-without-default input WITHOUT a has() guard. On the latest path (the
+// value not provided), rendering that step must fail with "no such key".
 const optionalStateMain = `name: create
 input:
   redis_version:
     type: string
     required: false
-state_changes:
-  sets:
-    redis_version: "${ input.redis_version }"
 tasks:
   - name: noop
     module: core.file.present
     params:
       path: /tmp/noop
       content: x
+  - name: record the version
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_version
+      value: "${ input.redis_version }"
 `
 
-// TestRunCase_StateChangesRenderError checks that unguarded
-// optional-without-default input in state_changes.sets causes a sets render
-// error (RunCase returns err), not a silent PASS. This was a harness blind spot
-// before expansion: tasks rendered, state_changes did not.
-func TestRunCase_StateChangesRenderError(t *testing.T) {
-	caseDir := writeScenarioTree(t, optionalStateMain, `name: state_changes render must fail
+// TestRunCase_CaptureRenderError checks that an unguarded
+// optional-without-default input in a capture's params: aborts the render
+// (RunCase returns err) instead of passing silently. A capture is a task, so
+// this is the same guarantee the harness gives any other task's params — the
+// blind spot the retired `state_changes:` block had cannot come back.
+func TestRunCase_CaptureRenderError(t *testing.T) {
+	caseDir := writeScenarioTree(t, optionalStateMain, `name: capture render must fail
 fixtures:
   input: {}
 assert:
@@ -379,10 +382,10 @@ assert:
 `)
 	_, err := Run(context.Background(), caseDir)
 	if err == nil {
-		t.Fatal("expected state_changes render error (no such key on unguarded optional input), got nil")
+		t.Fatal("expected a render error (no such key on unguarded optional input), got nil")
 	}
-	if !strings.Contains(err.Error(), "state_changes") {
-		t.Fatalf("error must point to state_changes, got: %v", err)
+	if !strings.Contains(err.Error(), "redis_version") {
+		t.Fatalf("error must name the missing key, got: %v", err)
 	}
 }
 
@@ -393,28 +396,33 @@ input:
   redis_version:
     type: string
     required: false
-state_changes:
-  sets:
-    redis_version: "${ has(input.redis_version) ? input.redis_version : '' }"
 tasks:
   - name: noop
     module: core.file.present
     params:
       path: /tmp/noop
       content: x
+  - name: record the version
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_version
+      value: "${ has(input.redis_version) ? input.redis_version : '' }"
 `
 
-// TestRunCase_StateChangesAssertPass checks that has()-guarded optional renders
-// as "" and matches assert.state_changes.
-func TestRunCase_StateChangesAssertPass(t *testing.T) {
-	caseDir := writeScenarioTree(t, guardedStateMain, `name: state_changes assert pass
+// TestRunCase_GuardedOptionalCapturedAsEmpty checks that a has()-guarded optional
+// renders as "" and that the capture step commits that "" — the value is asserted
+// through the state the run produced ([ADR-0084]), not through a projection of a
+// block that no longer exists.
+func TestRunCase_GuardedOptionalCapturedAsEmpty(t *testing.T) {
+	caseDir := writeScenarioTree(t, guardedStateMain, `name: guarded optional captured as empty
 fixtures:
   input: {}
 assert:
   rendered_tasks:
     - index: 0
       module: core.file.present
-  state_changes:
+  state_after:
     redis_version: ""
 `)
 	results, err := Run(context.Background(), caseDir)
@@ -426,10 +434,11 @@ assert:
 	}
 }
 
-// TestRunCase_StateChangesAssertFail checks that a mismatch between
-// assert.state_changes and the rendered value fails the case.
-func TestRunCase_StateChangesAssertFail(t *testing.T) {
-	caseDir := writeScenarioTree(t, guardedStateMain, `name: state_changes assert fail
+// TestRunCase_GuardedOptionalMismatchFails — the same scenario with the optional
+// PRESENT: the guard passes the input through, so a case naming anything else
+// fails.
+func TestRunCase_GuardedOptionalMismatchFails(t *testing.T) {
+	caseDir := writeScenarioTree(t, guardedStateMain, `name: guarded optional mismatch
 fixtures:
   input:
     redis_version: "7.2.4"
@@ -437,7 +446,7 @@ assert:
   rendered_tasks:
     - index: 0
       module: core.file.present
-  state_changes:
+  state_after:
     redis_version: "WRONG"
 `)
 	results, err := Run(context.Background(), caseDir)
@@ -445,7 +454,7 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("expected FAIL on state_changes mismatch")
+		t.Fatal("expected FAIL on the captured redis_version")
 	}
 	if len(results[0].Failures) == 0 {
 		t.Fatal("expected non-empty mismatch list")
@@ -453,26 +462,30 @@ assert:
 }
 
 // addUserStateMain is a scenario that accumulates state on top of existing
-// state: state_changes.sets adds last_user from input without touching base
+// state: a capture step records last_user from input without touching base
 // users. Mirror of add_user operations over incarnation.state
 // (orchestration.md section 7.1).
 const addUserStateMain = `name: add_user
 input:
   name:
     type: string
-state_changes:
-  sets:
-    last_user: "${ input.name }"
 tasks:
   - name: create user
     module: core.user.present
     params:
       name: "${ input.name }"
+  - name: record the user
+    on: keeper
+    module: core.state.set
+    params:
+      field: last_user
+      value: "${ input.name }"
 `
 
-// TestRunCase_StateAfterPass checks assert.state_after against the FULL final
-// state: base fixtures.state (users) + rendered sets (last_user). Mirror of the
-// production mergeStateChanges(stateBefore, renderedSets) commit.
+// TestRunCase_StateAfterPass checks assert.state_after against the final state:
+// base fixtures.state (users) + what the capture step wrote (last_user). Mirror
+// of the production merge, which the harness reaches through the same
+// [stateop.Merge] ([ADR-0084] F-C).
 func TestRunCase_StateAfterPass(t *testing.T) {
 	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user accumulates over base state
 fixtures:
@@ -495,12 +508,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("expected PASS (base.users + sets.last_user), got: %v", results[0].Failures)
+		t.Fatalf("expected PASS (base.users + the captured last_user), got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_StateAfterFail checks that expected final state differing from
-// actual (last_user in state_after does not match rendered value) fails the case.
+// TestRunCase_StateAfterFail checks that an expected final state differing from
+// the actual one (last_user in state_after does not match the captured value)
+// fails the case.
 func TestRunCase_StateAfterFail(t *testing.T) {
 	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after mismatch
 fixtures:
@@ -530,12 +544,18 @@ assert:
 	}
 }
 
-// TestRunCase_StateAfterFullCompare checks that state_after is compared FULLY
-// (like L1): an extra key in the actual final state (base users not mentioned in
-// expected state_after) is also a mismatch. This differs from partial
-// state_changes checks.
-func TestRunCase_StateAfterFullCompare(t *testing.T) {
-	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after must be complete
+// TestRunCase_StateAfterSubset is the C4 semantics of [ADR-0084] F-C: the case
+// names ONE field and the run also produces `users`, carried over from
+// fixtures.state — and the case still passes. Before C4 this same case failed on
+// the unmentioned key.
+//
+// The point is not leniency. Whole-state equality forces a case to restate
+// fields it has no opinion about, and such a case gets updated by pasting in
+// whatever the run produced, which asserts nothing. What keeps the subset honest
+// is TestRunCase_StateAfterMissingField below: a named field still has to be
+// there.
+func TestRunCase_StateAfterSubset(t *testing.T) {
+	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after names one field
 fixtures:
   input:
     name: bob
@@ -553,8 +573,39 @@ assert:
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	if !results[0].Pass {
+		t.Fatalf("expected PASS: state_after is a subset, `users` is a field the case does not assert; got: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_StateAfterMissingField is the floor under the subset: a field the
+// case names but the run never writes is still a failure. Without this the
+// subset form would pass a case asserting a field that does not exist at all,
+// and every typo in a field name would become a silent green.
+func TestRunCase_StateAfterMissingField(t *testing.T) {
+	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after names an unwritten field
+fixtures:
+  input:
+    name: bob
+  state:
+    users:
+      - alice
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.user.present
+  state_after:
+    last_operator: bob
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 	if results[0].Pass {
-		t.Fatal("expected FAIL: base users not mentioned in state_after, full comparison catches extra key")
+		t.Fatal("expected FAIL: state_after names last_operator, which the run never writes")
+	}
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "last_operator") {
+		t.Fatalf("expected the failure to name the absent field, got: %v", results[0].Failures)
 	}
 }
 
@@ -1391,5 +1442,228 @@ assert:
 	}
 	if !results[0].Pass {
 		t.Fatalf("expected PASS (presence + positional are independent), got: %v", results[0].Failures)
+	}
+}
+
+// captureStateMain is a scenario that writes state the way [ADR-0084] means it
+// to be written: `core.state.<verb>` steps, at the step, instead of an
+// end-of-run `state_changes` block. `set` overwrites, `present` keeps what is
+// already there, `unset` drops the field itself.
+const captureStateMain = `name: capture
+input:
+  name:
+    type: string
+tasks:
+  - name: create user
+    module: core.user.present
+    params:
+      name: "${ input.name }"
+  - name: record the last user
+    on: keeper
+    module: core.state.set
+    params:
+      field: last_user
+      value: "${ input.name }"
+  - name: keep the owner as first written
+    on: keeper
+    module: core.state.present
+    params:
+      field: owner
+      value: "${ input.name }"
+  - name: drop the migration flag
+    on: keeper
+    module: core.state.unset
+    params:
+      field: migrating
+`
+
+// TestRunCase_StateAfterThreadsCaptureSteps — the capture steps of the plan must
+// reach `assert.state_after`. Their writes land at their own step ([ADR-0084]),
+// nowhere near the retired `state_changes` block this scenario deliberately does
+// not have; a harness that only merged that block would report the untouched
+// fixture and pass every case that asserts a capture.
+//
+// `present` over an occupied field is the discriminating one: it proves the
+// harness runs the VERB rather than assigning the value.
+func TestRunCase_StateAfterThreadsCaptureSteps(t *testing.T) {
+	caseDir := writeScenarioTree(t, captureStateMain, `name: capture steps reach state_after
+fixtures:
+  input:
+    name: bob
+  state:
+    users:
+      - alice
+    owner: alice
+    migrating: true
+assert:
+  task_present:
+    - module: core.state.set
+  state_after:
+    users:
+      - alice
+    last_user: bob
+    owner: alice
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("expected PASS (set writes last_user, present keeps owner=alice), got: %v", results[0].Failures)
+	}
+}
+
+// gatedCaptureMain — a multi-action scenario: one plan, and the capture belongs to
+// exactly one of the actions. A static `when:` is the supported spelling for that
+// ([ADR-0084] F-D), so a case for a DIFFERENT action renders the capture as a skip
+// placeholder.
+const gatedCaptureMain = `name: create
+input:
+  action:
+    type: string
+    required: true
+tasks:
+  - name: create user
+    module: core.user.present
+    params:
+      name: alice
+  - name: record the owner
+    on: keeper
+    module: core.state.set
+    when: "input.action == 'create'"
+    params:
+      field: owner
+      value: alice
+`
+
+// TestRunCase_StaticallySkippedCaptureIsNotAnOp — ★ a capture the plan statically
+// skipped writes nothing, so it is not an op. The skip placeholder keeps the task's
+// module address and carries NO params (the render never ran), so a fold that selects
+// on the module address alone hands [stateop.CheckParams] an empty map and the case
+// dies on `param "field": missing` — a scenario-wide abort, on every case of the
+// other action, including the ones asserting no state at all.
+func TestRunCase_StaticallySkippedCaptureIsNotAnOp(t *testing.T) {
+	t.Run("the gated-off action", func(t *testing.T) {
+		caseDir := writeScenarioTree(t, gatedCaptureMain, `name: rotate leaves the capture out
+fixtures:
+  input:
+    action: rotate
+assert:
+  task_absent:
+    - module: core.state.set
+`)
+		results, err := Run(context.Background(), caseDir)
+		if err != nil {
+			t.Fatalf("Run: %v -- a skipped capture must not be folded as an op", err)
+		}
+		if !results[0].Pass {
+			t.Fatalf("expected PASS, got: %v", results[0].Failures)
+		}
+	})
+
+	t.Run("the action that owns it", func(t *testing.T) {
+		caseDir := writeScenarioTree(t, gatedCaptureMain, `name: create runs the capture
+fixtures:
+  input:
+    action: create
+assert:
+  task_present:
+    - module: core.state.set
+  state_after:
+    owner: alice
+`)
+		results, err := Run(context.Background(), caseDir)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if !results[0].Pass {
+			t.Fatalf("expected PASS (the capture renders and writes owner), got: %v", results[0].Failures)
+		}
+	})
+}
+
+// TestRunCase_StateAbsentAfterUnset — `core.state.unset` drops the field, and
+// `assert.state_absent` is the only section that can say so: state_after is a
+// subset, where a field nobody names is a field nobody has an opinion about.
+func TestRunCase_StateAbsentAfterUnset(t *testing.T) {
+	caseDir := writeScenarioTree(t, captureStateMain, `name: unset removes the field
+fixtures:
+  input:
+    name: bob
+  state:
+    migrating: true
+assert:
+  task_present:
+    - module: core.state.unset
+  state_absent:
+    - migrating
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("expected PASS (unset dropped `migrating`), got: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_StateAbsentStillPresent — the other direction: a field the run
+// leaves in place must FAIL the section, and the message must carry the value,
+// or the author cannot tell a field that survived from one that was blanked.
+func TestRunCase_StateAbsentStillPresent(t *testing.T) {
+	caseDir := writeScenarioTree(t, captureStateMain, `name: state_absent names a field the run keeps
+fixtures:
+  input:
+    name: bob
+  state:
+    owner: alice
+assert:
+  task_present:
+    - module: core.state.present
+  state_absent:
+    - owner
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatal("expected FAIL: `owner` is still in the state, state_absent named it")
+	}
+	if !strings.Contains(results[0].Failures[0], "state_absent.owner") ||
+		!strings.Contains(results[0].Failures[0], "alice") {
+		t.Fatalf("the failure must name the field AND the value it still holds, got: %v", results[0].Failures)
+	}
+}
+
+// TestRunCase_StateAbsentNullIsNotGone — absence is strict KEY absence. A field
+// left standing with a null value is a different state from a field that is not
+// there, and the section must not conflate them: an author who meant "blanked"
+// writes it in state_after, an author who wrote state_absent meant the key.
+// Reported WITH the value, or the message reads as if the field were missing and
+// the author has nothing to go on.
+func TestRunCase_StateAbsentNullIsNotGone(t *testing.T) {
+	caseDir := writeScenarioTree(t, captureStateMain, `name: a null field is not an absent field
+fixtures:
+  input:
+    name: bob
+  state:
+    blanked: null
+assert:
+  task_present:
+    - module: core.state.set
+  state_absent:
+    - blanked
+`)
+	results, err := Run(context.Background(), caseDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if results[0].Pass {
+		t.Fatal("expected FAIL: `blanked` is still a key in the state, holding null -- state_absent means the key is gone")
+	}
+	if !strings.Contains(results[0].Failures[0], "state_absent.blanked") ||
+		!strings.Contains(results[0].Failures[0], "<nil>") {
+		t.Fatalf("the failure must name the field AND show the null it still holds, got: %v", results[0].Failures)
 	}
 }

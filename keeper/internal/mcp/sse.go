@@ -322,7 +322,7 @@ func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) bool {
 //	<blank line>
 //
 // Payload runs through [audit.MaskSecrets] before serialization (H1):
-// register-output / state_changes can carry secrets (`bootstrap_token` etc.)
+// register-output can carry secrets (`bootstrap_token` etc.)
 // that would otherwise leak into the SSE frame in the clear. Payload is
 // written as a single JSON string (json.Marshal never leaves \n inside the
 // result, so SSE's "no multiline data" requirement holds automatically).
@@ -384,7 +384,9 @@ func maskRawJSON(raw []byte) any {
 //
 //   - apply.started     → {apply_id, kind, at}
 //   - task.executed     → + {sid, task_idx, task_status, error?: {code,message,module}}
-//   - apply.completed   → + {sid, run_status, state_changes?}
+//   - apply.completed   → + {sid, run_status, state_changes?} — the last one
+//     forwarded only if a Soul sends RunResult.state_changes, which no real Soul
+//     does since [ADR-0084] retired the end-of-run commit it fed
 //   - apply.failed      → + {sid, run_status}
 //   - apply.cancelled   → + {sid, run_status}
 //

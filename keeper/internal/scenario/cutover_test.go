@@ -573,7 +573,6 @@ func insertPlannedFixtureFull(t *testing.T, applyID, sid string, recipe *applyru
 // (writeServiceRepo writes exactly that).
 const serialGuardScenario = `name: create
 description: serial-guard fixture
-state_changes: {}
 tasks:
   - name: Echo with serial
     module: core.exec.run
@@ -588,7 +587,6 @@ tasks:
 // targeted (claim performs a no-op success).
 const whereFalseScenario = `name: create
 description: where-false fixture
-state_changes: {}
 tasks:
   - name: Never targets any host
     module: core.exec.run

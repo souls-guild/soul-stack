@@ -5,7 +5,7 @@
 # validates expectations fail-early via harness.CheckApplyRunsStatusValid.
 #
 # incarnation_state - deep-subset check; here an exact match of
-# scenario.state_changes.sets from examples/service/smoke-nginx/scenario/create/main.yml.
+# the scenario captures in examples/service/smoke-nginx/scenario/create/main.yml.
 #
 # audit_events - at least one `incarnation.scenario_started` line with
 # incarnation=test-nginx. The event-type name - shared/audit/event_types.go

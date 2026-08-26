@@ -459,7 +459,7 @@ func sortedMapKeys[T any](m map[string]T) []string {
 // Called at the end of the state merge on BOTH paths — the scenario runner and the
 // Trial twin — so a declared secret cannot reach `incarnation.state`,
 // `state_history` or a Trial diff even if a task hands one back. That is belt and
-// braces rather than the mechanism: `core.state.present` returns a `vault:`
+// braces rather than the mechanism: `core.state.*` returns a `vault:`
 // reference, so the plaintext should never be in the merged record to begin with.
 //
 // A schema issue is ignored here, deliberately. This is a stripper on the way out,

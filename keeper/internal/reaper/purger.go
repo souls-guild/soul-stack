@@ -314,8 +314,8 @@ func (p *Purger) PurgeArchivedStateHistory(ctx context.Context, maxAge time.Dura
 //
 // Purpose — protective hygiene of transient run-state: register_data —
 // plaintext-JSONB of probe results (potentially with secrets), needed
-// by scenario-runner exactly once after cross-host barrier for rendering
-// state_changes.sets. FK `ON DELETE CASCADE` cleans it cascadingly with
+// by scenario-runner after a cross-host barrier, to render the next Passage
+// (staged-render, ADR-056). FK `ON DELETE CASCADE` cleans it cascadingly with
 // apply_run (rule `purge_apply_runs`, 30d), but this rule removes register
 // earlier — immediately through grace after terminal, reducing plaintext-storage window.
 //

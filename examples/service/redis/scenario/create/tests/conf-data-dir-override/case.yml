@@ -15,7 +15,7 @@
 #     (/opt/redis/users.acl), and NOT the hardcoded /var/lib/redis ÷ /etc/redis/users.acl
 #     (directive B, fix of the dir/aclfile hardcode in redis.conf.tmpl bypassing override);
 #   - the host-layout override travels via service vars (conf_dir/data_dir), NOT state —
-#     add_node reads it from vars.conf_dir/data_dir (see the state_changes assert below).
+#     add_node reads it from vars.conf_dir/data_dir (see the state_after assert below).
 # version=5:6.2.7 (< 8) → modules active (.so under data_dir is checkable). TLS off
 # (this case is about the FILE paths of destiny tasks). TLS directives in redis.conf under
 # the conf_dir override are covered by a separate case conf-data-dir-override-tls (qa fix of
@@ -81,7 +81,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -201,12 +201,12 @@ assert:
       params_subset:
         path: /etc/redis
 
-  state_changes:
+  state_after:
     redis_type: sentinel
     redis_version: "7.4.1"
     modules: [bloom, json, search, timeseries]
     # ★ conf_dir/data_dir moved out of state into service vars (v11→v12, Variant A): the override
-    # no longer persists into state (not present in state_changes — fields not in
+    # no longer persists into state (no capture step writes them — the fields are not in
     # state_schema). The host-layout override lives in the service vars;
     # add_node reads it from there (default(vars.conf_dir/data_dir, ...)). The destiny
     # tasks above already verify that the override reached the redis.conf/data-dir paths on

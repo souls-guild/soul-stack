@@ -20,9 +20,6 @@ description: >-
   a per-task SKIPPED event in audit_log, rather than the absence of an
   apply_runs row.
 
-# Focus scenario: state doesn't change (commit state is a separate invariant).
-state_changes: {}
-
 tasks:
   # ── per-host role probe against a REAL redis (Passage 0) ──────────────────
   # `redis-cli role | head -1 | tr -d '\n'` — register.redis_role.stdout without

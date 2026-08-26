@@ -318,7 +318,7 @@ state_schema:
     # path Keeper DERIVES from (service, incarnation, redis_users, name) — no path is
     # written anywhere in this repo — and never in state. `key: name` says which sibling
     # property is the element's identity, i.e. the last path segment. Written by
-    # core.state.present, revealed to the operator by .../secrets/reveal, and read back
+    # core.state.set, revealed to the operator by .../secrets/reveal, and read back
     # by day-2 scenarios through that module's register.
     redis_users:
       type: array
@@ -341,7 +341,7 @@ state_schema:
     # password is declared `type: secret`, so its value lives in Vault at a path
     # Keeper DERIVES from (service, incarnation, system_acl_users, name). Written by
     # create/create_from_souls, read back by every day-2 scenario through
-    # core.state.present's register — which is why the set is recorded rather than
+    # core.state.set's register — which is why the set is recorded rather than
     # recomputed from vars: an operator who edits vars after create must not silently
     # re-point an in-cluster credential.
     system_acl_users:

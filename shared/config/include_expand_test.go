@@ -593,7 +593,7 @@ func TestExpandIncludes_NoInclude(t *testing.T) {
 }
 
 // TestExpandIncludes_IncluderRegisterVisibleToBody — the direction the secret
-// design needs ([ADR-0083] §4): a `core.state.present` task in the main file
+// design needs ([ADR-0083] §4): a `core.state.set` task in the main file
 // declares `register: system_acl_users`, and the included deploy body reads
 // `${ register.system_acl_users.effective }` in `params:`. Per-file
 // validateTaskRefs would call that unknown; ExpandIncludes threads the includer's
@@ -611,7 +611,7 @@ func TestExpandIncludes_IncluderRegisterVisibleToBody(t *testing.T) {
 `,
 	}
 	root := []Task{
-		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "system_acl_users"}}},
 		{Include: &IncludeTask{Include: "deploy.yml"}},
 	}
 	got, diags := ExpandIncludes(root, mapResolver(files))
@@ -654,7 +654,7 @@ func TestExpandIncludes_UnknownRegisterInBodyStillCaught(t *testing.T) {
 `,
 	}
 	root := []Task{
-		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "system_acl_users"}}},
 		{Include: &IncludeTask{Include: "deploy.yml"}},
 	}
 	if _, diags := ExpandIncludes(root, mapResolver(files)); !hasCode(diags, "unknown_register_reference") {
@@ -687,7 +687,7 @@ func TestExpandIncludes_RegisterScopeIsTransitive(t *testing.T) {
 		"leaf.yml": "- name: consume\n  module: core.cmd.shell\n  params: { cmd: \"${ register.system_acl_users.effective }\" }\n",
 	}
 	root := []Task{
-		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "system_acl_users"}}},
 		{Include: &IncludeTask{Include: "mid.yml"}},
 	}
 	if _, diags := ExpandIncludes(root, mapResolver(files)); diag.HasErrors(diags) {
@@ -709,7 +709,7 @@ func TestExpandIncludes_CrossFileDuplicateStaysFlatVerdict(t *testing.T) {
 		"deploy.yml": "- name: redeclare\n  register: system_acl_users\n  module: core.cmd.shell\n  params: { cmd: 'true' }\n",
 	}
 	root := []Task{
-		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.present", Params: map[string]any{"key": "system_acl_users"}}},
+		{Register: "system_acl_users", Module: &ModuleTask{Module: "core.state.set", Params: map[string]any{"field": "system_acl_users"}}},
 		{Include: &IncludeTask{Include: "deploy.yml"}},
 	}
 	_, diags := ExpandIncludes(root, mapResolver(files))

@@ -6,7 +6,7 @@
 # refresh_soulprint.
 #
 # ★ register.provision in L0 comes from mocks.register (the probe doesn't execute, ADR-023): steps
-# (b)/(c) of provision.yml and state_changes read register.provision.{vm_ids,hosts}
+# (b)/(c) of provision.yml and its provisioned_* captures read register.provision.{vm_ids,hosts}
 # from here. This is the L0 pass-through of the ready register payload from core.cloud.created.
 #
 # VM COUNT from sentinel topology = 1 + replicas_per_master. replicas_per_master=2 →
@@ -85,7 +85,7 @@ fixtures:
 
 # register.provision — the ready core.cloud.created payload (L0 pass-through, step (a) doesn't
 # execute): vm_ids of created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
-# state_changes read it. sids of created VMs = sids of the roster (in prod refresh_soulprint
+# the provisioned_* captures read it. sids of created VMs = sids of the roster (in prod refresh_soulprint
 # would have added them; here the roster already carries them).
 mocks:
   register:
@@ -96,7 +96,7 @@ mocks:
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -148,11 +148,12 @@ assert:
       params_subset:
         path: /etc/redis/redis.conf
 
-  state_changes:
+  state_after:
     redis_type: sentinel
     redis_version: "7.4.1"
     # read-model: the FACT "these VMs were brought up by this run" — vm_ids from register.provision,
-    # provider from input.provision (gated on input.provision.enabled, state_changes ternary).
+    # provider from input.provision. The three captures live INSIDE redis-provision.yml, so they
+    # exist only on a run that actually provisions.
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
     # provisioned_sids: SID of each created VM (register.provision.hosts[].sid) — for
     # cascade-destroy teardown. Same guard+shape as provisioned_vm_ids.

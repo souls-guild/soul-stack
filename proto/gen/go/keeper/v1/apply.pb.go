@@ -889,8 +889,12 @@ type RunResult struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	ApplyId string                 `protobuf:"bytes,1,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
 	Status  RunStatus              `protobuf:"varint,2,opt,name=status,proto3,enum=soulstack.keeper.v1.RunStatus" json:"status,omitempty"`
-	// Aggregated state_changes for Keeper's later incarnation.state commit.
-	// Structure matches docs/scenario/orchestration.md (the state_changes block).
+	// RESERVED, never populated. It carried the aggregated state delta for Keeper's
+	// end-of-run incarnation.state commit; ADR-0084 retired that commit -- a state
+	// write is a keeper-side `core.state.<verb>` task landing at its own step, so
+	// nothing on the Soul side has a delta to report. The field stays because
+	// ADR-012 is forward-compat only-add: Keeper still forwards a non-nil value into
+	// the apply event payload, so an older Soul does not lose its report.
 	StateChanges *structpb.Struct `protobuf:"bytes,3,opt,name=state_changes,json=stateChanges,proto3" json:"state_changes,omitempty"`
 	// attempt: the run's fencing epoch, an ECHO of ApplyRequest.attempt (ADR-027(g),
 	// gate-1 recovery redesign). Soul returns it unchanged. On receipt

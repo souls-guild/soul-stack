@@ -17,7 +17,7 @@ scenario/
 │   └── deploy.yml
 ├── <shared>.yml              # OPT.: service-level include neighbor (flat form)
 └── <name>/
-    ├── main.yml              # entry point: name, description, input, state_changes, tasks (inline)
+    ├── main.yml              # entry point: name, description, input, tasks (inline)
     ├── <sub>.yml             # include neighbors (same task structure)
     ├── templates/            # OPTS: templates used by the steps in this script
     ├── vars.yml              # OPTS: scenario locales (like destiny vars.yml)
@@ -26,11 +26,11 @@ scenario/
             └── case.yml
 ```
 
-`main.yml` contains **inline** `input:`, `state_changes` and `tasks:`. Neighboring `*.yml` are connected via `include:` ([destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks)). Folder layout (`templates/`, `vars.yml`, `tests/`) - **symmetrical to destiny** intentionally, without a separate dictionary; two-level resolve - see §6.
+`main.yml` contains **inline** `input:` and `tasks:` (state is written by `core.state.<verb>` steps inside `tasks:`, §7). Neighboring `*.yml` are connected via `include:` ([destiny/tasks.md §4](../destiny/tasks.md#4-basic-blocks)). Folder layout (`templates/`, `vars.yml`, `tests/`) - **symmetrical to destiny** intentionally, without a separate dictionary; two-level resolve - see §6.
 
 **A directory under `scenario/` whose name starts with `_` or `.` is NOT a scenario** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-08-17). It holds shared task bodies of a family of scenarios (`create`, `create_from_souls`, later `update`/`destroy`), addressed as `include: _<family>/<file>.yml` (§6). It is skipped by scenario discovery **even when it does contain `main.yml`** — the prefix is the signal, not the absence of an entry point — so a shared body never turns up in the scenario listings the API serves, nor in the deprecation walk. Discovery is what the prefix governs: it removes the directory from the listings, and is not an admission check on the run path. The same rule applies to `upgrade/`. `soul-lint` is not a discoverer (`validate-scenario` takes an explicit path), so nothing there filters the name; what skips these directories is whatever walks a `scenario/` tree — the two keeper walkers above, and the corpus loop in the repo `Makefile`.
 
-Structure `main.yml` (blocks `name`, `description`, `input`, `state_changes`, `tasks`) - in [architecture.md → "`scenario/<name>/main.yml`"](../architecture.md). Block `input:` - according to the general standard [docs/input.md](../input.md).
+Structure `main.yml` (blocks `name`, `description`, `input`, `tasks`) - in [architecture.md → "`scenario/<name>/main.yml`"](../architecture.md). Block `input:` - according to the general standard [docs/input.md](../input.md).
 
 ## 2. Delta scenario relative to the DSL core
 
@@ -225,8 +225,9 @@ on top of which `serial:` and `run_once:` work:
 - Step with a target of M hosts (after resolving `on:`+`where:`, see §3–§4) by
 by default applies **to all M hosts in the same wave** (cross-host
 fan-out), then a cross-host join before the next step. Join subordinate
-barrier/state-commit invariant (§7): `state_changes` commit strictly
-after completing the steps on all hosts of the run, not host by host.
+to the cross-host barrier invariant (§7): the next Passage starts strictly
+after the step has completed on all hosts of the run, not host by host — and a
+`core.state.<verb>` capture, being a keeper task, is one of those next steps.
 - Host order in any phased processing (waves `serial:`, host selection
 for `run_once:`) **deterministic**: lexicographically by `SID`.
 Non-deterministic order is prohibited - it breaks reproducibility
@@ -270,10 +271,12 @@ after the inherited `retry:` is exhausted, stops rolling:
 subsequent waves will not start. Direct consequence of absolute fail-closed
 and §7. There is no tolerance threshold for partial failure (§8, open Q).
 - **Interaction with barrier (§7) is an invariant, not an option.** `serial:`
-**does not split** state-commit. `state_changes` commit **once after
-completion of ALL waves across all hosts**, never wave by wave. Partial
-commit after a successful wave when the next one falls is prohibited - otherwise
-`incarnation.state` will diverge from the fact (see §7).
+**does not split a Passage**: the wave loop closes inside the Passage, and only
+then does the next Passage start. A `core.state.<verb>` capture placed after a
+`serial:` step therefore runs once, after **ALL** waves across all hosts, never
+wave by wave. What a capture commits is its own write at its own step (§7), so a
+run that dies in a later wave leaves the captures that already ran — deliberately,
+not as a partial commit of one block.
 
 > **Granularity `serial:` is per-Passage min-width.** The grammar allows `serial:` to be written on each task independently, and the wave width is **one per Passage**: the minimum positive `serial:`-width among tasks **of this Passage** (the narrowest window). Tasks without `serial:` do not narrow the window; if `serial:` is not carried out by any Passage task, it goes in one wave (the entire width of the target). The reason for aggregation is the dispatch model "one `ApplyRequest` per host with all its tasks en masse" (ADR-012(d)) on top of the composite PK `(apply_id, sid, passage)` table `apply_runs`: tasks of one Passage are sent to the host in one message, so it is impossible to send different Passage tasks in different waves. Choosing a minimum (not a maximum) - fail-closed: the window is narrowed to the narrowest intention of the author, the blast radius when falling is minimal.
 >
@@ -356,7 +359,7 @@ examples `wait: { condition: C, timeout: T }` → probe step with
 
 ### 2.4. `compute:` - calculated vars of the run
 
-`compute:` - **top-level** script block (next to `input:`/`state_changes:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in `apply: input:` and in `state_changes` ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23).
+`compute:` - **top-level** script block (next to `input:`/`tasks:`, **not** per-task key): map `<name>: <CEL expression>`, which Keeper resolves **ONCE per run** and makes available as `compute.<name>` in `apply: input:` and in any task's `params:`, including a `core.state.<verb>` capture ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23).
 
 ```yaml
 name: create
@@ -365,29 +368,32 @@ compute:
     ${ merge(vars.redis_config,
              vars.persistence_presets[input.persistence],
              default(input.redis_settings, {})) }
-state_changes:
-  - set: redis_config
-    value: "${ compute.redis_config }"     # ← same compute
 tasks:
+  - name: record the effective config
+    module: core.state.set
+    on: keeper
+    params:
+      field: redis_config
+      value: "${ compute.redis_config }"    # ← same compute
   - apply:
       destiny: redis
       input:
         config: "${ compute.redis_config }" # ← and here is the same compute
 ```
 
-**Why.** `apply: input:` and `state_changes` are **different** CEL contexts, and neither of them **sees** the task-level `vars:` (`vars:` is the scope of one task, §10). The general expression (big `merge()` - translation of a simple input into `redis.conf`) would have to be written **twice** and synchronized by hand. `compute:` declares it **once** - drift "state ≡ live config" is removed by the mechanism itself, and not by the author's discipline.
+**Why.** `apply: input:` (per-host, resolved on the first target `SID`) and a capture's `params:` (keeper-side, §7.1) are **different** CEL contexts, and neither of them **sees** the task-level `vars:` of the other task (`vars:` is the scope of one task, §10). The general expression (big `merge()` - translation of a simple input into `redis.conf`) would have to be written **twice** and synchronized by hand. `compute:` declares it **once** - drift "state ≡ live config" is removed by the mechanism itself, and not by the author's discipline.
 
-**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: reference to `soulprint.*` in a compute expression → CEL no-such-key. The consequence is that `compute.<name>` **is the same for all hosts**, so the same value is correctly sent to both `apply: input:` (resolved on the first target host on `SID`) and to `state_changes` (per-RUN, not per-host). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
+**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: reference to `soulprint.*` in a compute expression → CEL no-such-key. The consequence is that `compute.<name>` **is the same for all hosts**, so the same value is correctly sent both to `apply: input:` (resolved on the first target host on `SID`) and to a `core.state.<verb>` capture (keeper-side, hostless by construction). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
 
-**`on: keeper` reads it too.** A keeper-side task's `params:` (and its task-level `vars:`) resolve in the same run-level soulprint-free context `compute:` itself is resolved in, one phase later — so `compute.<name>` is readable there, with the same value every other reader sees. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 relies on it: the `core.state.present` task that mints a state field's declared secrets derives the account set from the same compute var `state_changes` records, instead of restating the expression.
+**`on: keeper` reads it too.** A keeper-side task's `params:` (and its task-level `vars:`) resolve in the same run-level soulprint-free context `compute:` itself is resolved in, one phase later — so `compute.<name>` is readable there, with the same value every other reader sees. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 relies on it: the `core.state.<verb>` capture step that mints a state field's declared secrets derives the account set from the same compute var the destiny passage is handed, instead of restating the expression.
 
 **Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` → no-such-key (like `register.*` - §10). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
 
 **Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`vars`/`compute`).
 
-> **Boundary `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)) - local for one task and **visible only in its** `params:`. `compute:` - rune-level, visible in `apply: input:` **and** `state_changes`. If the value is needed in both state and destiny transfer, this is `compute:`; if only within `params:` of one task - `vars:`.
+> **Boundary `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)) - local for one task and **visible only in its** `params:`. `compute:` - run-level, visible in `apply: input:` **and** in a capture's `params:`. If the value is needed in both the state write and the destiny transfer, this is `compute:`; if only within `params:` of one task - `vars:`.
 
 ### 2.5. `validate:` - declarative input invariants
 
@@ -493,6 +499,8 @@ tasks: [ ... ]
 2. List in `on:` - **AND/intersection** of **stable** covens. Additional stable covens (e.g. `baremetal`, `dc-eu`, `prod`) narrow the set, but **cannot expand it beyond the incarnation members**.
 3. **Cross-incarnation targeting is prohibited by construction.** The `on:` resolver cannot return a host that is not a member of the current incarnation, given any set of covens — the roster is membership-scoped, so a stable coven can only intersect it, never reach outside it. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), now enforced by the membership join rather than by the name-coven.
 4. Role (master / replica) **never Coven** and does not participate in `on:`. The volatile role is expressed only through `where:` (see §4).
+
+**Flow control on `on: keeper` is not the Soul-side one.** The keeper's own runner walks its tasks in plan order and evaluates no predicate, so `async:` is refused (`async_on_keeper_invalid`), `loop:`/`apply:`/`block:` are refused, `require:` is accepted-and-redundant, and a `when:` reading `register.*`/`soulprint.*` is refused (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - it would be accepted and dropped, and the step that runs regardless of its condition is the one that writes incarnation state (§7). A **static** `when:` stays the working form: the keeper settles it at render, before the task is routed keeper-side. The full key-by-key answer with replacements - [keeper/modules.md](../keeper/modules.md).
 
 ## 4. Volatile predicate - `where:`
 
@@ -610,7 +618,7 @@ element - **stable** host facts:
 | Element field | Type | Contents |
 |---|---|---|
 | `sid` | string | `SID` host (FQDN). |
-| `role` | string | **declared-role** — the `role` of this host's Choir Voice (`incarnation_choir_voices.role`, `master`/`replica`/…), and since [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330) that is its ONLY source — the former `incarnation.spec.hosts[].role` fallback is gone with the field. This is **declared, NOT actual**: the actual role is volatile and is taken only by a live probe + `where:` key ([ADR-008](../adr/0008-coven-stable-tags.md)). On `create` (redis is not running yet, probe has nothing to poll) declared is the only topology source, and the create scenario lays it down itself with a `core.choir.present` step (`on: keeper`) before any task reads it. The field is **empty/`null`** for a host no Voice places into a part (for example the `add_replica` branch: an existing Soul is bound to the incarnation as a member, but nobody gave it a Voice) — "no declared role", NOT a default group. The declared role reflects **intent** and is not auto-filled by the fact of binding; the actual role of such a host is recorded in `incarnation.state` by the scenario `state_changes`, not in `soulprint.hosts[].role`. |
+| `role` | string | **declared-role** — the `role` of this host's Choir Voice (`incarnation_choir_voices.role`, `master`/`replica`/…), and since [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330) that is its ONLY source — the former `incarnation.spec.hosts[].role` fallback is gone with the field. This is **declared, NOT actual**: the actual role is volatile and is taken only by a live probe + `where:` key ([ADR-008](../adr/0008-coven-stable-tags.md)). On `create` (redis is not running yet, probe has nothing to poll) declared is the only topology source, and the create scenario lays it down itself with a `core.choir.present` step (`on: keeper`) before any task reads it. The field is **empty/`null`** for a host no Voice places into a part (for example the `add_replica` branch: an existing Soul is bound to the incarnation as a member, but nobody gave it a Voice) — "no declared role", NOT a default group. The declared role reflects **intent** and is not auto-filled by the fact of binding; the actual role of such a host is recorded in `incarnation.state` by a `core.state.<verb>` capture step (§7.1), not in `soulprint.hosts[].role`. |
 | `network` | map | stable host network facts (`network.primary_ip`, `network.fqdn`, `network.interfaces[]`) - typed scheme [ADR-018](../adr/0018-soulprint-typed.md), full spec [`docs/soul/soulprint.md → NetworkFacts`](../soul/soulprint.md#networkfacts). The same stable layer that gives off `soulprint.where(...)`. |
 | `os` | map | stable host OS facts (`os.family`, ...). |
 | `covens` | array of string | stable host Coven labels — **real stable tags only** (cluster / project / environment / datacenter). The incarnation name is **no longer** projected here ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)); membership lives in `incarnation_membership`, not in `covens`. |
@@ -856,14 +864,14 @@ requisites / `on:` / `where:`) **not expanded** - this is an error
 
 Layout: `scenario/<name>/tests/<case>/case.yml`. Format `case.yml` - `verify:` / `expect:` - **reused from [destiny/testing.md](../destiny/testing.md)** (there is no separate DSL assertions, same approach). Delta scenario:
 
-- **L0 render-multi-host is executed by the standard harness.** Roster of run hosts is set by `fixtures.hosts: [...]` (host record `sid`/`covens`/`role`/`soulprint`/`choirs`, format - [destiny/testing.md](../destiny/testing.md)). Render invariants on the topology (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-projection, nodes-determinism master/replica, `state_changes` on multi-host) are driven hermetically `soul-trial run`, without docker and without dispatch (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md)).
+- **L0 render-multi-host is executed by the standard harness.** Roster of run hosts is set by `fixtures.hosts: [...]` (host record `sid`/`covens`/`role`/`soulprint`/`choirs`, format - [destiny/testing.md](../destiny/testing.md)). Render invariants on the topology (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-projection, nodes-determinism master/replica, `core.state.<verb>` capture on multi-host) are driven hermetically `soul-trial run`, without docker and without dispatch (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md)).
 - **L3-dispatch remains stub.** Docker `stand:` on the cluster topology, assertions "who really executes the master" (`assert.dispatch`) and committed cross-host `incarnation.state` after the barrier (§7) are postponed. The exact format of the multi-host block `stand:` inherits from open Q sandbox from [destiny/testing.md](../destiny/testing.md) (see §8 below).
 
 > This is an **open Q extension about sandbox** from [destiny/testing.md](../destiny/testing.md): **L0 render-multi-host (`fixtures.hosts`) - closed** and executed by a standard harness (sealed render level). **L3-dispatch** (multi-host docker stand, `assert.dispatch`, committed cross-host `state`) is not a closed solution, an explicitly marked extension of an open issue. Does not close silently; before solving L3-dispatch - declarative-stub `stand:`, as in destiny-molecule.
 
 ## 6.1. `extends:` - inheritance of the general section contract from `covenant.yml`
 
-`extends: <covenant-name>` - **top-level** script key: the script **inherits** the general service-level contract of sections `input:` / `compute:` / `state_changes:` / `validate:` from the covenant fragment file in the **root service repo** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-29). Covenant - **service-level shared catalog**, isomorphic to `types.yml` ([ADR-062](../adr/0062-input-types.md), named input schemas) and service-level `include:` (§6, task sets): three mechanisms fumble between scenarios of different nature (type / tasks / contract sections), all resolve BEFORE consumers and do not introduce a wire entity.
+`extends: <covenant-name>` - **top-level** script key: the script **inherits** the general service-level contract of sections `input:` / `compute:` / `validate:` from the covenant fragment file in the **root service repo** ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-29). Covenant - **service-level shared catalog**, isomorphic to `types.yml` ([ADR-062](../adr/0062-input-types.md), named input schemas) and service-level `include:` (§6, task sets): three mechanisms fumble between scenarios of different nature (type / tasks / contract sections), all resolve BEFORE consumers and do not introduce a wire entity.
 
 **`extends:` NAMES the covenant file.** The meaning of `extends:` is **name of the covenant file without extension**: `extends: <name>` resolves to the file **`<name>.yml`** in the root of the service repo (the mechanism supports an arbitrary name, symmetrically to how `apply: { destiny: <name> }` addresses destiny by name). **Convention:** the general contract sections of the service are called **`covenant`** → file **`covenant.yml`**, link **`extends: covenant`**. This convention is used in all the examples below.
 
@@ -876,9 +884,6 @@ input:
   password:   { type: string, vault_scope: secret }
 compute:
   redis_config: "${ merge(vars.redis_config, default(input.redis_settings, {})) }"
-state_changes:
-  - set: redis_type
-    value: "${ input.redis_type }"
 validate:
   - that: "input.redis_type != 'cluster' || has(input.shards)"
     message: "cluster requires shards"
@@ -900,280 +905,355 @@ input:
 tasks: [ ... ]
 ```
 
-**Add-only merge, fail-closed.** Covenant - **minimum** (common base); the script **ADDS** its delta. Merging - **shallow by top key** sections (input field / compute name / list element `state_changes`/`validate`): top keys are merged, there is no recursive merging of values. Double top key (one input field in both covenant and script; one compute name; intersection of `set` fields `state_changes`) → error `section_key_conflict` (**NOT last-wins, NOT override**). The intent "base = general, scenario = incremental only" is made explicit; collision = author's error, not silent erasure. **Deep merge rejected** (would hide which part of the schema is from the covenant - the same "either link or inline" principle from [ADR-062](../adr/0062-input-types.md)).
+**Add-only merge, fail-closed.** Covenant - **minimum** (common base); the script **ADDS** its delta. Merging - **shallow by top key** sections (input field / compute name / list element `validate`): top keys are merged, there is no recursive merging of values. Double top key (one input field in both covenant and script; one compute name) → error `section_key_conflict` (**NOT last-wins, NOT override**). The intent "base = general, scenario = incremental only" is made explicit; collision = author's error, not silent erasure. **Deep merge rejected** (would hide which part of the schema is from the covenant - the same "either link or inline" principle from [ADR-062](../adr/0062-input-types.md)).
 
 **`form:` DOES NOT merge.** UI-`form:`-block ([ADR-045](../adr/0045-param-dsl.md)) from covenant **not inherited** - this is a form layout for a specific operation, local-only. Covenant carries a data contract, not a presentation.
 
-**Append order is covenant FIRST.** In ordered sections (`compute:` §2.4, `state_changes:` §7.1, `validate:` §2.5) covenant elements come **before** local ones: local `compute[i]` can refer to covenant-`compute[j]` (`compute` resolves from left to right, §2.4), local `state_changes`/`validate` - rely on what has already been applied from the covenant. The reverse order would break the forward-reference covenant→local.
+**Append order is covenant FIRST.** In ordered sections (`compute:` §2.4, `validate:` §2.5) covenant elements come **before** local ones: local `compute[i]` can refer to covenant-`compute[j]` (`compute` resolves from left to right, §2.4), local `validate` - relies on what has already been applied from the covenant. The reverse order would break the forward-reference covenant→local.
 
-**The resolution point is BEFORE the consumers.** The merge is performed at a single resolution point of the manifest (isomorphic to `$type`-resolution [ADR-062](../adr/0062-input-types.md) and `include`-resolution §6): load `covenant.yml` → merge 4 add-only sections (fail-closed on a conflict) → then a **regular** pipeline on an ALREADY-merged manifest (input-merge → required → render → dispatch). All consumers (`ValidateInput`, render, `assert:`/`validate:`-eval, soul-lint) see a complete manifest - **fragment-aware of no code outside the resolution point**.
+**The resolution point is BEFORE the consumers.** The merge is performed at a single resolution point of the manifest (isomorphic to `$type`-resolution [ADR-062](../adr/0062-input-types.md) and `include`-resolution §6): load `covenant.yml` → merge 3 add-only sections (fail-closed on a conflict) → then a **regular** pipeline on an ALREADY-merged manifest (input-merge → required → render → dispatch). All consumers (`ValidateInput`, render, `assert:`/`validate:`-eval, soul-lint) see a complete manifest - **fragment-aware of no code outside the resolution point**.
 
 **MVP restrictions.**
 
 - **One `extends:` per script** (not a list of covenants).
 - **covenant does NOT extend-it covenant** (flat sheet, no recursion/chaining → cycle-detection is not needed on this layer, unlike `$type`).
-- **covenant carries ONLY 4 sections** - `input:` / `compute:` / `state_changes:` / `validate:`. **NOT** `tasks:` / `name:` / `create:` / `form:` / `extends:` (different top key in the covenant file → validation error). Tasks (`tasks:`) are divided through service-level `include:` (§6), not through covenant.
+- **covenant carries ONLY 3 sections** - `input:` / `compute:` / `validate:`. **NOT** `tasks:` / `name:` / `create:` / `form:` / `extends:` (a foreign top key in the covenant file → `covenant_unexpected_key`). Tasks (`tasks:`) are divided through service-level `include:` (§6), not through covenant.
+- **A covenant does NOT carry state writes.** `state_changes:` was the fourth section until
+  [ADR-0084](../adr/0084-explicit-state-capture.md) removed it from the grammar, and it does **not**
+  come back as a task list: a capture is a step with a position, and a section that dropped its ops
+  at the end of the run had no position to inherit. The shared write moves into the scenarios as a
+  `core.state.<verb>` step, shared the way steps are shared — through service-level `include:` (§6).
+  A covenant carrying `state_changes:` is rejected like any other foreign key.
 
 > **Convention: one `covenant.yml` per service (recommendation).** The mechanism supports several covenant files (`extends: <name>` → `<name>.yml`), but **it is recommended** to keep one common contract section of the service in the file `covenant.yml` (`extends: covenant`). Several covenant files are justified only when the service has several unrelated families of scripts with different common contracts - for a typical service this is unnecessary fragmentation.
 
 **Forward-compat.** Key `extends:` **optional**; script without `extends:` - manifest **bit-for-bit as it is now** (resolution point in the absence of `extends:` - no-op). The service without `covenant.yml` does not break.
 
-> **Boundary `extends:` (covenant) ↔ service-level `include:` (§6) ↔ `types.yml` (`$type`).** Three service-level shared mechanisms, three different niches: `covenant.yml` (+`extends:`) fumbles ** contract sections** run (`input`/`compute`/`state_changes`/`validate`); service-level `include:` (two-level resolve, §6) fumbles **task sets** (`tasks`-fragments); `types.yml` (+`$type`) searches for **named input circuits**. Not to be confused: the common **set of steps** of the deployment (`cluster.yml`/`sentinel.yml`) is `include:`, the common **input contract/state** between scripts is `extends:`.
+> **Boundary `extends:` (covenant) ↔ service-level `include:` (§6) ↔ `types.yml` (`$type`).** Three service-level shared mechanisms, three different niches: `covenant.yml` (+`extends:`) fumbles ** contract sections** run (`input`/`compute`/`validate`); service-level `include:` (two-level resolve, §6) fumbles **task sets** (`tasks`-fragments); `types.yml` (+`$type`) searches for **named input circuits**. Not to be confused: the common **set of steps** of the deployment (`cluster.yml`/`sentinel.yml`) is `include:`, the common **input contract** between scripts is `extends:`. A shared **state write** is a step, so it goes through `include:` as well ([ADR-0084](../adr/0084-explicit-state-capture.md) F-B).
 
-## 7. Barrier / state-commit invariant
+## 7. State capture and the cross-host barrier
 
-Commit `incarnation.state` (applying `state_changes` script) is **cross-host final-barrier**:
+`incarnation.state` is written by **capture steps** — ordinary `on: keeper` tasks addressed
+`core.state.<verb>` — and every write lands **at its step**, not at the end of the run
+([ADR-0084](../adr/0084-explicit-state-capture.md)). The end-of-run `state_changes:` section that
+used to hold all of a scenario's writes is **removed from the grammar**: a scenario still carrying
+one is rejected (`unknown_key`), never ignored — silently dropping the block would stop the writes
+it describes with nothing saying so.
 
-1. The script unconditionally waits for the completion of **all** async tasks of **all** run hosts (final-barrier extension from [destiny/tasks.md §6](../destiny/tasks.md#6-asynchronous-tasks-async-true) from one host to the cross-host scenario level). Per-host, that final barrier is the end of the host's `ApplyRequest` - i.e. the end of its current Passage ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); the cross-host barrier here is the outer one, over the last Passage of every host.
-2. Only **after** this barrier `state_changes` are committed to `incarnation.state` (Postgres).
-3. If at least one task on at least one host is finally-failed → `state` **NOT committed** → incarnation goes to `status: error_locked` ([architecture.md → "Incarnation"](../architecture.md)).
+**`on: keeper` is not optional on a capture, and forgetting it is an ERROR**
+(`state_capture_not_on_keeper`), raised at config parse and by `soul-lint`. `core.state` lives on
+the keeper and nowhere else: dispatched to a host the step is an unknown module and the run dies
+there. The offline half is what the diagnostic is really for — the L0 trial folds a capture by its
+module **address**, so an unrouted one predicts `state_after` exactly as a routed one does, and the
+case goes green on a plan the run cannot execute. The check runs after `include:` is resolved, so a
+capture written in a shared file is flagged at that file's own line, not at the `- include:` node.
 
-**This is an invariant, not an option.** A state commit is allowed strictly after an unconditional cross-host barrier; partial commit with a partial failure is prohibited - otherwise `incarnation.state` will diverge from the actual state of the hosts. Applicable incl. to probe-footgun from §5: partial probe → `failed` → barrier commits failure → state is not committed.
+The **cross-host barrier is unchanged** and still unconditional:
 
-### 7.1. Grammar `state_changes` - list of CRUD operations
+1. Each Passage waits for **all** async tasks of **all** its run hosts before the next Passage
+   starts (final-barrier extension from [destiny/tasks.md §6](../destiny/tasks.md#6-asynchronous-tasks-async-true)
+   from one host to the cross-host scenario level; per-host that final barrier is the end of the
+   host's `ApplyRequest`, i.e. the end of its current Passage,
+   [ADR-0075](../adr/0075-intra-host-async-tasks.md)).
+2. A capture is a keeper task, so it lands in a keeper Passage and is subject to that same barrier:
+   it starts only after the previous Passage has joined on every host, and a host task after it
+   starts only once the capture has committed.
+3. A finally-failed task stops the run and moves the incarnation to `status: error_locked`
+   ([architecture.md → "Incarnation"](../architecture.md)).
 
-`state_changes` declares **what** the script writes to `incarnation.state` after
-barrier, **and where the value comes from**. This is a **ordered list of operations**
-(YAML list, **not** map), each element is one **CRUD verb** (singular):
-`set` / `add` / `modify` / `remove` + structural `foreach`. Grammar
-committed [ADR-057](../adr/0057-state-changes-crud-verbs.md).
+**What moved is the commit, not the barrier.** A run that dies half-way now leaves state describing
+exactly what was captured **before** it died, rather than nothing at all. That is the point of the
+change: `provisioned_vm_ids` captured immediately after provisioning survives a failure three tasks
+later, so a day-2 cascade-destroy can still find the VMs it has to reap. The old all-or-nothing
+commit lost them and left real cloud instances that nothing in Postgres pointed at.
 
-| Verb | Form | Semantics |
+**`error_locked` is incarnation-scoped, not host-scoped**, and that is what makes a partial commit
+safe. The lock freezes further scenarios against the incarnation; ad-hoc `command` / `run` against a
+host stays available by construction (neither `keeper/internal/errand` nor `keeper/internal/console`
+reads the status). Partial state + a frozen incarnation + a reachable host is the triple an operator
+repairs from.
+
+**`state_history` is a snapshot per capture**, not per run: every capture opens its own transaction,
+re-reads the row `FOR UPDATE`, mutates, appends history, commits.
+
+### 7.1. The capture verbs
+
+The **verb is the module's state suffix**, exactly as for the rest of keeper-side core
+(`core.choir.present` / `core.choir.absent`), and the field the operation acts on is the `field:`
+param. The verb dictionary is [ADR-057](../adr/0057-state-changes-crud-verbs.md); moving it onto the
+module address is [ADR-0084](../adr/0084-explicit-state-capture.md).
+
+| Address | Params beyond `field:` | Semantics |
 |---|---|---|
-| `set` | `set: <field>` + `value: "${CEL}"` | overwriting the entire `incarnation.state.<field>` field. |
-| `add` | `add: <collection>` + (map: `key:`+`value:` \| list: `value:`+opt.`match:`) + `on_conflict:` | add an element to the collection. |
-| `modify` | `modify: <collection>` + `match:` + `patch: { <path>: "${CEL}" }` | patch **all** matching `match` (all-by-default). |
-| `remove` | `remove: <collection>` + `match:` | remove **all** matching `match` (all-by-default). |
-| `foreach` | `foreach: "${CEL-list|map}"` + `as: <name>` + `do: [<verb...>]` | bulk fan-out N operations. The form is literally from migration-DSL ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). |
+| `core.state.set` | `value:` | overwrite `incarnation.state.<field>` whole. |
+| `core.state.present` | `value:` | write only if the field holds no value; an existing one wins. |
+| `core.state.add` | `value:` + opt. `key:` / `match:` / `on_conflict:` | insert an element **by identity** (`key:` for a map, `match:` for a list). |
+| `core.state.append` | `value:` | append to a list with **no** identity check. |
+| `core.state.modify` | `patch:` + opt. `match:` / `expect:` | patch **every** element matching `match:`. |
+| `core.state.remove` | opt. `match:` / `expect:` | delete **every** element matching `match:`. |
+| `core.state.unset` | — | delete the whole field. |
 
-The empty list (`state_changes: []`) is valid - the script does not change the state.
+An address the table does not list is **refused**, and so is a param the verb does not take: a
+`patch:` handed to a `set` is an authoring mistake, and accepting it silently would write the field
+without the change the author asked for.
 
-**Order and atomicity.** Operations are applied **in the order they are declared**,
-sequentially, to the **intermediate** state (each sees the result of the previous ones).
-The entire chain is one PG transaction, one `state_history`-snapshot (§7). Fail anyone
-operations (eval CEL error, violated `expect`, `on_conflict: error`) →
-`incarnation.state` **not committed** → `error_locked` (§7 barrier invariant not
-weakened: operations are applied AFTER the cross-host barrier).
+A scenario that writes nothing simply carries no capture step — the former `state_changes: []` has
+no successor and needs none.
 
-**Collection type is from `state_schema`** (`service.yml`). `add` to the missing field
-→ materialize an empty map/list from the schema (the shape is known from the schema, even if
-no value yet).
+**Collection shape comes from `state_schema`** (`service.yml`). An `add` / `append` to a field with
+no value yet materialises the empty map/list the schema declares.
 
-#### CEL operations environment
+**A capture reports what it wrote.** With `register: <name>` on the step,
+`register.<name>.effective` carries the field's state **after** the write, `.field` echoes the field
+name, and `.generated` lists the Vault paths this run minted
+([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4). Reading `.effective` is the normal way
+for a later step to see what a capture produced — see "Reading state while writing it" below.
 
-The value in `value:` / `patch:` and the predicate in `match:` are expressions rendered
-Keeper-side after the barrier (§7) in the same CEL environment as `params:` tasks
-([ADR-010](../adr/0010-templating.md), token `${ … }`). A literal without `${ … }` is assigned as is.
-Non-string result of CEL (number/bool/list/map) - according to interpolation rules
-[ADR-010](../adr/0010-templating.md) (whole cell = one `${…}` → native type).
+#### CEL context of a capture
 
-**Full context** - `input.*` / `incarnation.*` / `soulprint.self.*` /
-`register.*` / `vars.*` / `compute.*` (§2.4). On top of it in
-`match`/`patch`/`value` **local bindings of the current element are valid
-collections**:
+`value:` / `patch:` / `match:` / `key:` are ordinary task params, so they render in the ordinary
+`params:` CEL environment of an `on: keeper` task ([ADR-010](../adr/0010-templating.md), marker
+`${ … }`); a literal without `${ … }` is taken as-is, and a cell that is exactly one `${…}` keeps
+its native type.
+
+Available: `input.*` / `incarnation.*` (incl. `incarnation.state.*`) / `vars.*` / `compute.*` (§2.4)
+/ `register.*` (keeper-side only, see below). **Not** available: `soulprint.self.*` and
+`soulprint.hosts` — a keeper task has no host. This is the same context every other keeper-side step
+renders in, not a second one.
+
+On top of it, `match:` and `patch:` of the read-modify-write verbs bind the **current element** of
+the collection:
 
 | Binding | Semantics |
 |---|---|
-| `elem` | the current element of the list collection (or a scalar, if list of scalars). |
-| `key` / `value` | key/value of the current map collection entry. |
+| `elem` | the current element of a list collection (a scalar for a list of scalars). |
+| `key` / `value` | key and value of the current map entry. |
 
-The name `elem` (not `self`) was chosen to avoid a collision with per-host `soulprint.self`.
+The name `elem` (not `self`) was chosen to avoid the collision with per-host `soulprint.self`. These
+bindings are evaluated by the module at merge time, against the state as of that step.
 
-**Per-RUN semantics.** Values are taken from `input/vars/incarnation/register`
-run is per-RUN, **NOT** per-host union. If the expression gives different values
-per-host (`${ soulprint.self.* }` / `${ register.* }`) - **last-wins by sorting
-`SID`** (deterministic, like "last entry wins" in
-[output.md](../destiny/output.md)).
-
-#### `set` - field overwrite
+#### `set` / `present` — writing a whole field
 
 ```yaml
-state_changes:
-  - set: redis_version
+- name: record the version we deployed
+  module: core.state.set
+  on: keeper
+  params:
+    field: redis_version
     value: "${ input.version }"
-  - set: greeting_file
-    value: "${ vars.greeting_path }"
-  - set: created_at
-    value: "static-literal"        # literal without ${ } - assigned as is
+
+- name: pin the master this cluster was built around
+  module: core.state.present       # a later run must not move it
+  on: keeper
+  params:
+    field: origin_master
+    value: "${ compute.master_sid }"
 ```
 
-#### `add` - collection growth (idempotent by default)
+`present` discards the proposal when the field already holds a value and resolves the **stored**
+value instead — including for a field declared `type: secret`, where nothing is minted for a write
+that was thrown away (a minted-then-discarded credential would be a live secret in Vault that
+nothing in state points at).
 
-list-collection (opt. `match:` - grandfather predicate; `on_conflict: skip` = "add,
-if not"):
+#### `add` / `append` — growing a collection
 
 ```yaml
-state_changes:
-  - add: redis_hosts
+- name: record the new replica
+  module: core.state.add
+  on: keeper
+  params:
+    field: redis_hosts             # list
     value: "${ vars.new_sid }"
-    match: "elem == vars.new_sid"
-    on_conflict: skip              # DEFAULT: repeat does not duplicate
-```
+    match: "elem == vars.new_sid"  # identity predicate
+    on_conflict: skip              # DEFAULT: a repeat run does not duplicate
 
-map-collection (`key:` + `value:`):
-
-```yaml
-state_changes:
-  - add: redis_users
+- name: record the new user
+  module: core.state.add
+  on: keeper
+  params:
+    field: redis_users             # map
     key: "${ input.username }"
     value:
       acl:   "${ input.acl }"
       state: "on"
-    on_conflict: error             # double creation is a clear error
+    on_conflict: error             # a double create is an outright error
 ```
 
-`on_conflict: skip` (default) `| replace | error` — collision behavior (key
-map is busy / list-`match` already finds the element).
+`on_conflict: skip` (default) `| replace | error` — what happens when the map key is taken or the
+list `match:` already finds an element. `append` is the deliberate no-identity form: it grows the
+list unconditionally and is therefore **not** idempotent, which is what an append-only log wants and
+what a roster does not.
 
-#### `modify` / `remove` - patch and delete by predicate
+**Identity belongs to the collection kind, and the two spellings are not interchangeable.** `key:`
+names an element of a **map** field; `match:` names an element of a **list** field. Which of the two
+the engine reads is decided by the field's kind in `state_schema`, not by which one the author
+wrote, so the wrong spelling is an **error**, not a fallback — a `key:` on a list would otherwise
+drop through to whole-element deep equality, and a re-run with the same key and one changed property
+would append a second element instead of hitting `on_conflict:`. Writing **both** on one task is
+refused for the same reason: one of them would be silently ignored.
 
-`match:` — CEL predicate over the element; patched/deleted **all** suitable
+#### `modify` / `remove` — patch and delete by predicate
+
+`match:` is a CEL predicate over the element; **every** matching element is patched or deleted
 (all-by-default). Multiplicity is a property of the predicate, not a flag.
 
 ```yaml
-state_changes:
-  # point patch of one map entry
-  - modify: redis_users
+- name: apply the new ACL
+  module: core.state.modify
+  on: keeper
+  params:
+    field: redis_users
     match: "key == input.username"
     patch:
       acl:   "${ input.acl }"
       state: "${ input.state }"
-  # patch ALL replicas at once
-  - modify: redis_hosts
-    match: "elem.role == 'replica'"
-    patch:
-      config_version: "${ input.version }"
-  # remove host (with multiplicity assertion)
-  - remove: redis_hosts
+
+- name: retire the host
+  module: core.state.remove
+  on: keeper
+  params:
+    field: redis_hosts
     match: "elem == input.sid"
-    expect: one
+    expect: one                    # runtime multiplicity assertion
 ```
 
-**`expect: one | at_most_one | any`** (DEFAULT `any`) - opt. runtime assertion numbers
-meshed `match` elements in `modify`/`remove`. Multiplicity ≠ expected (`one` -
-exactly one, `at_most_one` - zero or one) → `error_locked` **before commit**.
+**`expect: one | at_most_one | any`** (default `any`) — an optional runtime assertion on how many
+elements `match:` selected, checked **before** mutating. A mismatch fails the task, so the capture
+does not commit.
 
-**Empty-match → no-op** (idempotent) for `modify` AND `remove`: predicate not
-caught nothing - the operation quietly does nothing, not an error.
+**Empty match → no-op** (idempotent) for `modify` and `remove` alike: a predicate that catches
+nothing quietly does nothing, and is not an error. An **absent** `match:` is the same case, not the
+opposite one — it matches **nothing**, so the step is a no-op and a forgotten line demolishes
+nothing. "Every element" is written out, as `match: "true"` (and takes the wide-match WARN below).
+`add` reads an absent `match:` differently: there it means deep equality of the whole element, since
+the predicate is an *identity*, not a selection — see the per-kind rule under `add`.
 
-**Wide match fuse** - `soul-lint` issues **WARN** on
-constant-true predicate (`match: true`) and for **absence** `match:`
-`remove`/`modify` (which would demolish/repatch the entire collection).
+**Wide-match fuse.** `soul-lint` emits a **WARN** (`state_wide_match`) for a `modify` / `remove`
+whose `match:` is absent, empty or a constant `true` — the form that repatches or demolishes the
+**whole** collection. A warning and not an error, because the wide form is legitimate ("clear every
+user"); it is just far more often a predicate the author meant to narrow. A `match:` carrying an
+interpolation is **not** reported: its value is decided at render, and warning on every `${ … }`
+predicate would make the rule noise. The check runs in the stage pass, after `include:` expansion,
+because a capture routinely arrives through an include and the per-file task rules never see it.
 
-#### `foreach` — bulk fan-out
+> **There is no `foreach`.** [ADR-057](../adr/0057-state-changes-crud-verbs.md)'s structural
+> `foreach` was a render-time expander of the removed block and does not become a module state:
+> iteration over a step is the DSL's own `loop:`. ⚠ **But `loop:` does not reach an `on: keeper`
+> task today** — `renderKeeperTask` rejects it alongside `apply:` and `async:`, a pilot restriction
+> older than this change. Until that lifts, a capture over a runtime-sized collection has to be
+> written out one task per element. See
+> [ADR-0084 → "What is retired"](../adr/0084-explicit-state-capture.md).
+
+#### Ordering: generate → capture → use
+
+**Store-after-use is the one broken order**, and `soul-lint` rejects it as an **ERROR**
+(`state_store_after_use`). If a value is generated, captured, then used to configure a host, every
+crash point is recoverable: crash before the capture and nothing was applied; crash after it and the
+value is in Postgres/Vault where an operator can reach it. If it is generated, **used**, and only
+then captured, a crash in the window between leaves a live host configured with a value that exists
+nowhere else.
+
+A second rule rides the same pass. **A stale same-Passage read is an ERROR too**
+(`state_stale_same_passage_read`): an interpolated `${ incarnation.state.<field> }` refreshes only
+at a Passage boundary, so a task reading a field that an earlier task in the **same** Passage
+captures would render the *pre-capture* value — while the verb engine, which always reads live,
+would have written the new one. Rather than let the two mechanisms disagree in production, soul-lint
+rejects the pair; the author's options are the ones the DSL already has (read
+`register.<capture>.effective`, or push the reader into a later Passage with a `register:`
+dependency).
+
+Both rules run after `include:` expansion, since a producer and its capture routinely land in
+different files. Cross-Passage dataflow goes through `apply_task_register` and is not a lexical
+relationship, so the guards cover the within-Passage case — which is where the whole current corpus
+lives.
+
+#### Reading state while writing it
+
+**State accumulates: a capture is observable to the steps after it, not only to the next run.** How
+it is observable differs between the two mechanisms, and their granularity is not the same.
+
+*The verb engine always reads live.* Every capture opens its own transaction and re-reads the row
+`FOR UPDATE` before mutating, so `on_conflict:`, `match:` and `expect:` are evaluated against the
+state as of that step — two captures in the same Passage included. That is what makes the
+read-modify-write verbs mean anything: an `add … on_conflict: skip` is idempotent only because it
+can see the element a previous step inserted, and an `expect` asserting against a frozen snapshot
+would be worse than no assert at all.
+
+*An interpolated `${ incarnation.state.… }` read refreshes per Passage.* A Passage renders as one
+pass before it dispatches, so the read carries the state as of that Passage's render; from Passage 1
+on the runner re-reads the row at the boundary. The re-read is unlocked on purpose (the row is
+already held `applying` by this very run, so the only writer is this run's own capture path) and is
+gated on the plan actually containing a capture step, so a plan without one renders bit-for-bit as
+before.
+
+*Ordering two captures across a boundary* uses what the DSL already has: `register:` on the first
+plus a `register.<name>` read in the second puts them in different Passages (`render.Stratify`).
+Usually nothing is needed — read `register.<name>.effective` instead of going back through
+`incarnation.state`.
+
+**What this costs, stated plainly:** a rendered plan is no longer a pure function of pre-run state —
+moving a capture step changes what a later step reads. What contains it is that the order is
+explicit and reviewable (a capture is a task in a numbered list, not a block that floats to the end
+of the run) and that the one genuinely broken order is rejected statically by the guard above.
+
+#### `register.*` as a value source
+
+`value:` / `patch:` / `match:` see `register.<task>.<field>` — but a capture is a keeper task, and a
+keeper task reads the **keeper** register bucket only ([ADR-056](../adr/0056-staged-render-passage.md)
+slice 2): registers issued by keeper-side tasks of **previous Passages**. The per-host register of a
+host probe is **not** visible to it. The channel is one-way by design — a host task reads the union
+of its own bucket and the keeper bucket (its own wins,
+[ADR-0083](../adr/0083-declared-secret-state-fields.md) §5), a keeper task never sees host register.
+
+The canonical consumer is the cloud-provision read-model
+([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)): a capture reads
+`register.provision.vm_ids` / `.hosts` from the keeper step `core.cloud.created` of an earlier
+Passage — see the `provisioned_*` captures in
+[`examples/service/redis/scenario/redis-provision.yml`](../../examples/service/redis/scenario/redis-provision.yml).
 
 ```yaml
-state_changes:
-  - foreach: "${ input.new_replicas }"
-    as: sid
-    do:
-      - add: redis_hosts
-        value: "${ sid }"
-        match: "elem == sid"
-        on_conflict: skip
+- name: provision the VMs
+  module: core.cloud.created
+  on: keeper
+  register: provision
+  params: { … }
+
+- name: record the VMs we just created
+  module: core.state.append
+  on: keeper
+  params:
+    field: provisioned_vm_ids
+    value: "${ register.provision.vm_ids }"
 ```
 
-`foreach`/`as`/`do` - same structural form as in migration-DSL
-([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl),
-[migrations.md](../migrations.md)). Inside `do:` the same verbs and binding are available
-`<as-name>` to the current iteration element (on top of the full CEL context).
+A capture cannot reach into a host's register bucket, and there is no other per-host root to
+reach for either: a keeper task binds no soulprint at all, so `soulprint.self` and the
+scenario-only `soulprint.hosts` (§4.1) are both unavailable there, and `incarnation.host_count`
+reads 0. What a capture can carry into state is what a **keeper** task produced. A value that
+exists only per host has no route into `incarnation.state` today — the retired `state_changes:`
+block had one (it rendered per host and folded the register map last-wins by SID), and closing
+that gap is a separate decision, not something to assume works.
 
-#### `register.*` as value source
-
-`value:` / `patch:` / `match:` see `register.<task>.<field>` - result
-`register:`-run tasks (host-probe **or** keeper-side step, see below):
-
-```yaml
-state_changes:
-  - set: leader_host
-    value: "${ register.elect.stdout }"   # from the register probe step: elect
-```
-
-Channel Soul→Keeper: `TaskEvent.register_data` of each task accumulates for
-Keeper side in table `apply_task_register` (one row per `(apply_id, sid,
-task_idx)`). **After** cross-host barrier (§7) scenario-runner loads
-register-run data, resolve `task_idx → register-name` according to its plan
-tasks and builds a **per-host** register map (`sid → register-name → payload`).
-Rendering is per-host in the same last-wins order as for `soulprint.self.*`:
-register **task host** addresses **result of exactly the host** for which
-the value is calculated.
-
-**Register keeper-side tasks (`on: keeper`) - run-level layer.** Register,
-issued by a keeper-side task (for example `core.cloud.created` with
-`register: provision`), available in the `state_changes` render as **run-level
-substrate**: there is one keeper per run, the value is identical for all hosts. When
-name collisions per-host register of a specific host **takes precedence** (host-wins).
-Channel visibility limit ([ADR-056](../adr/0056-staged-render-passage.md)) when
-this is saved: in `params:` / `when:` / `changed_when:` **host tasks**
-keeper-register is still **not visible** - deliberate isolation of per-host
-context from the keeper channel (the keeper channel itself of the keeper tasks of subsequent Passages
-read as before). The keeper-register underlay is valid **only** in
-`state_changes` — run-level construct that calculates the total `incarnation.state`.
-Canonical consumer - cloud-provision read-model
-([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
-`state_changes` reads `register.provision.vm_ids` / `.hosts` from keeper step
-`core.cloud.created` (see `provisioned_*` in
-[`examples/service/redis/covenant.yml`](../../examples/service/redis/covenant.yml)).
-
-`register.*` here is a **stable** post-barrier snapshot (values already
-are recorded by the fact of successful apply), non-volatile runtime predicate as
-`where:` (§5). Storage - Postgres (not in-memory): on a multi-Keeper cluster
-([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) `TaskEvent` may not arrive
-to the instance that runs run-goroutine; the general table is experiencing
-cross-Keeper routing and does not allow you to commit state using an incomplete picture of register.
-
-Referring to the register name of the **task host** for which this host did not provide
-register data (there is no such probe task on the host), - eval error "no such key"
-→ run `error_locked` (like any call to an undeclared key in CEL).
-Keeper-register-link resolves from the run-level substrate on any host and gives
-"no such key", only if the keeper task in the register run did not issue (step
-dropped - for example, static-when group-drop provision branches). Conditional reading
-gated by a predicate on always existing data: canon - gate by `input.*`
-with short circuit ternary, **not** `has(register.…)` (see comment at
-`provisioned_*` in redis `covenant.yml`).
+Referring to a register name that no keeper task of an earlier Passage issued is an eval error
+("no such key") → the task fails → `error_locked`, like any undeclared key in CEL. A conditional
+read is gated by a predicate over always-present data — the canon is a ternary over `input.*` with
+short-circuit, **not** `has(register.…)`.
 
 **A secret-carrying task DOES fall into the state graph.** Until
-[ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 a `no_log: true` probe had
-its `register` dropped from the per-host register-map, so `register.<task>.*` read
-"no such key" and the value could not reach `incarnation.state`. That source-side drop
-is gone with the key: the same fold feeds the next Passage's render
-([ADR-056](../adr/0056-staged-render-passage.md)), so dropping a row to protect one
-field breaks the register chain for every consumer of that task.
+[ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 a `no_log: true` probe had its `register`
+dropped from the per-host register map, so `register.<task>.*` read "no such key" and the value
+could not reach `incarnation.state`. That source-side drop is gone with the key: the same fold feeds
+the next Passage's render ([ADR-056](../adr/0056-staged-render-passage.md)), so dropping a row to
+protect one field breaks the register chain for every consumer of that task.
 
-What protects the state instead is that the value is never in it: a declared secret
-lives in Vault and its register carries a `vault:` ref, not plaintext
-([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1), and the register NAME is
-sealed so a `state_changes` entry reading it writes the ref through
-([ADR-010](../adr/0010-templating.md) §7.4, [ADR-0083](../adr/0083-declared-secret-state-fields.md) §6).
-Output masking on the external GET channels (`GET /incarnations`, `/history`) remains
-the independent second defence-in-depth layer (see
+What protects state instead is that the value is never in it. A field declared `type: secret` in
+`state_schema` lives in Vault and the capture writes a `vault:` reference rather than plaintext —
+and resolution is **orthogonal to the verb**: every verb that writes a field resolves that field's
+declared secrets the same way (keep an existing Vault value, mint a missing one), and none of them
+rotates a live credential ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4,
+[ADR-0084](../adr/0084-explicit-state-capture.md)). Output masking on the external GET channels
+(`GET /incarnations`, `/history`) remains the independent second layer (see
 [keeper/operator-api.md → Secret masking](../keeper/operator-api.md)).
-
-#### Transition period (deprecated map form)
-
-Before [ADR-057](../adr/0057-state-changes-crud-verbs.md) `state_changes` was
-**map** with keys `sets` / `appends` / `modifies`:
-
-```yaml
-state_changes:        # DEPRECATED form (transition period)
-  sets:               # → translated into a sequence of `set` elements
-    redis_version: "${ input.version }"
-  appends: [redis_hosts]          # was a no-op placeholder (state did not grow!)
-  modifies: [redis_users.*.acl]   # was a no-op placeholder
-```
-
-`sets` - map `<field>: <CEL>` - has been implemented (field overwriting), equivalent
-sequence of `set` elements of the new list. `appends` / `modifies` —
-**placeholder declaration without value source**, by the engine **not used**
-(`incarnation.state` did not grow: `add_replica`/`add_user`/`update_acl` passed
-successfully, but the collection did not change - a latent bug that verbs fix
-`add`/`modify`).
-
-**Transit (breaking).** map form is parsed **one release** as DEPRECATED
-(dual-parse, `soul-lint` warn): `sets` is translated into `set` elements, non-empty
-`appends`/`modifies` remain no-op (the behavior does not change) with the warning "rewrite to
-`add`/`modify`, otherwise the state does not grow." In the next release the map form will be **removed**
-(parsing the old form → validation error).
 
 ## 8. Open questions (extensions, do not close silently)
 

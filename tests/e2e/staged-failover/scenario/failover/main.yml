@@ -5,7 +5,6 @@ description: |
   Stratify (ADR-056) splits the probe and the register.role consumer into separate Passages;
   the stage-loop renders Passage 1 with per-host register from Passage 0 → where targets
   ONLY the master host.
-state_changes: {}
 tasks:
   - name: Probe role
     module: core.exec.run

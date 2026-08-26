@@ -9,7 +9,7 @@
 # This is what DIFFERS cluster from the sentinel branch: sentinel.yml does a final offset-gate +
 # REPLICAOF NO ONE (source lives until detach), cluster does nothing (forget is atomic in
 # migrate). Included from main.yml via CONDITIONAL-INCLUDE (`when: incarnation.state
-# .redis_type == 'cluster'`). state_changes in main.yml unconditionally merges detached:true -
+# .redis_type == 'cluster'`). The capture in main.yml unconditionally merges detached:true -
 # for a cluster incarnation this is idempotent (B3 already set true).
 #
 # The assert below is a render-phase keeper-side guard (does NOT emit RenderedTask); it PASSES

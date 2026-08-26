@@ -20,15 +20,22 @@ input:
     required: true
     description: Content of the marker file.
 
-# What we record into incarnation.state after a successful apply (ADR-009 §7.1).
-state_changes:
-  - set: marker_path
-    value: "${ input.path }"
-  - set: marker_content
-    value: "${ input.content }"
-
 tasks:
   # scenario-include: the sibling file marker.yml is expanded inline BEFORE render.
   # Inside — an apply:destiny task (expanded by an isolated render pass of
   # destiny into N of its tasks with end-to-end indices).
   - include: marker.yml
+
+  - name: Record the marker path the destiny wrote
+    on: keeper
+    module: core.state.set
+    params:
+      field: marker_path
+      value: "${ input.path }"
+
+  - name: Record the marker content the destiny wrote
+    on: keeper
+    module: core.state.set
+    params:
+      field: marker_content
+      value: "${ input.content }"

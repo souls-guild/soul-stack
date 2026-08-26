@@ -5,7 +5,7 @@
 # input.provision.enabled` (main.yml tasks). enabled=false → the whole provision.yml targets
 # no one; its keeper-side steps (core.cloud.created + core.soul.registered) are
 # ABSENT from the plan (group-drop via include-when), and the read-model provisioned_vm_ids/provisioned_provider
-# get the conservative default ([] / '') via the state_changes ternary (gated on input.provision.enabled).
+# are never captured (the capture steps are inside the dropped include) and stay absent.
 #
 # Paired with provision-default-on (section omitted there → default-on → cloud steps present)
 # and provision-enabled-sentinel/cluster (explicit enabled: true). This case proves that
@@ -69,7 +69,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -108,12 +108,14 @@ assert:
     - module: core.cloud.created
     - module: core.soul.registered
 
-  state_changes:
+  state_after:
     redis_type: sentinel
     redis_version: "7.4.1"
-    # read-model: no VMs were provisioned by this run → conservative default.
-    # provisioned_sids=[] covers the non-provision branch of the guard (register.provision
-    # doesn't exist on group-drop → the ternary short-circuits, sids are not read).
-    provisioned_vm_ids: []
-    provisioned_sids: []
-    provisioned_provider: ""
+
+  # The three cloud-provision fields are ABSENT, not empty: the capture steps live inside
+  # redis-provision.yml, which is group-dropped here, so nothing ever writes them
+  # ([ADR-0084] F-B). Every reader defaults them.
+  state_absent:
+    - provisioned_vm_ids
+    - provisioned_sids
+    - provisioned_provider

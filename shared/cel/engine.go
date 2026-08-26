@@ -286,7 +286,7 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		envOpts = append(envOpts, defaultEnvOptions()...)
 	}
 	// generate_secret() ([ADR-0083] §3) — a declared secret request, resolved by
-	// `core.state.present`. Registered ONLY in the ordinary scenario/destiny pass,
+	// `core.state.*`. Registered ONLY in the ordinary scenario/destiny pass,
 	// because that is the only pass whose output reaches that module. In the other
 	// three the request would be a marker nobody ever resolves: inert data that looks
 	// like it did something. Non-registration turns each of those into an

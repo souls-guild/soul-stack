@@ -94,7 +94,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -136,7 +136,7 @@ assert:
             config:
               # ★ default_admin REDESIGN: replica→master AUTH (masteruser/masterauth) comes as
               # REGULAR config directives (the cluster deploy body injects them via vault()-in-cell,
-              # password from the users/default_admin branch). They're NOT in state_changes.redis_config.
+              # password from the users/default_admin branch). They're NOT in state_after.redis_config.
               masteruser:       "default_admin"
               masterauth:       "default-admin-secret-pass"
               maxmemory:        "256mb"
@@ -165,7 +165,7 @@ assert:
               arch: amd64
           role: ""
 
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     redis_config:

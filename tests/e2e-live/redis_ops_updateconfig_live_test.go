@@ -36,7 +36,7 @@ func TestL3bRedisLive_Day2UpdateConfig(t *testing.T) {
 	// CONFIG GET maxmemory would return bytes, so we check the deterministic conf-file render.
 	stack.AssertRedisConfFileDirective(t, 0, "/etc/redis/redis.conf", "maxmemory", "384mb")
 
-	// (c) read-model: state carries the new simple values (update_config state_changes).
+	// (c) read-model: state carries the new simple values (the update_config capture).
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"persistence":      "aof_1sec",
 		"maxmemory_policy": "allkeys-lru",

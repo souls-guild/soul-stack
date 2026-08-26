@@ -90,6 +90,41 @@
     name: "${ incarnation.name }"
     generate_userdata: false
 
+
+# ── cloud-provision read-model (ADR-061, Variant A) ──────────────────────────
+# The FACT that "these VMs were created by THIS run", captured HERE rather than at the
+# end of the run: the value lives in register.provision, and the capture has to precede
+# every consumer of that register (ADR-0084, "The ordering guard"). No ternary either —
+# the include is dropped whole when provision is off, so a run that provisions nothing
+# simply has no such step, and the fields stay absent (every reader defaults them).
+- name: Record the provider IDs of the VMs this run created
+  on: keeper
+  module: core.state.set
+  params:
+    field: provisioned_vm_ids
+    value: "${ register.provision.vm_ids }"
+
+# provisioned_sids: SID (FQDN) of created VMs — for cascade-destroy day-2 teardown
+# (souls→destroyed/seeds→orphaned/tokens→burned; the Reaper does NOT remove pending VM-souls).
+# DIFFERS from vm_ids: those are provider-side ids for core.cloud.destroyed. The .map is
+# the same expression as params.sid of step (c) below.
+- name: Record the SIDs of the VMs this run created
+  on: keeper
+  module: core.state.set
+  params:
+    field: provisioned_sids
+    value: "${ register.provision.hosts.map(h, h.sid) }"
+
+# provisioned_provider — the provider that created them, read the same way step (a) above
+# reads it: input.provision.provider with a fallback to vars.provision_provider (the
+# provision form is hidden and default-on, so the operator usually sets neither).
+- name: Record the cloud provider that created the VMs
+  on: keeper
+  module: core.state.set
+  params:
+    field: provisioned_provider
+    value: "${ default(input.provision.provider, vars.provision_provider) }"
+
 # (b) Install soul + deliver the per-VM bootstrap token over SSH (on: keeper,
 #     core.bootstrap.delivered, ADR-063). Takes hosts from the previous step's register
 #     (each — {sid, primary_ip, bootstrap_token}). install: true → the VM arrived WITHOUT

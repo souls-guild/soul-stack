@@ -47,16 +47,13 @@ func seedIncarnationWithState(t *testing.T, name string, state map[string]any) {
 	}
 }
 
-// setBServiceRepo — service-noop whose `bump` scenario carries state_changes.sets
-// setting ONLY field b (a static literal). Other state fields aren't
-// mentioned — merge must preserve them.
+// setBServiceRepo — service-noop whose `bump` scenario captures ONLY field b
+// (a static literal, [ADR-0084]). Other state fields aren't mentioned — the
+// capture must leave them standing.
 func setBServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepoScenario(t, "bump", `name: bump
 description: set only field b
-state_changes:
-  sets:
-    b: "20"
 tasks:
   - name: No-op step
     module: core.exec.run
@@ -64,6 +61,12 @@ tasks:
       cmd: echo
       args: ["bump"]
     changed_when: "false"
+  - name: Record b
+    on: keeper
+    module: core.state.set
+    params:
+      field: b
+      value: "20"
 `)
 }
 
@@ -111,8 +114,9 @@ state_schema:
 }
 
 // TestIntegration_RunMergesIntoExistingState — GAP#4 #1: incarnation with
-// state {a:1, b:2}; scenario bump sets ONLY b. After the run (real
-// DB round-trip): a is preserved (merge didn't overwrite the whole state), b is updated to 20.
+// state {a:1, b:2}; scenario bump captures ONLY b. After the run (real
+// DB round-trip): a is preserved (the capture writes one field, not the whole
+// state), b is updated to 20.
 func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -136,17 +140,17 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// a isn't mentioned in sets → must be preserved (JSON round-trip from JSONB → float64).
+	// a isn't captured by any step → must be preserved (JSON round-trip from JSONB → float64).
 	if inc.State["a"] != float64(1) {
 		t.Errorf("state.a = %v (%T), want 1 (merge must preserve unmodified fields)", inc.State["a"], inc.State["a"])
 	}
-	// b is mentioned in sets → overwritten with the literal "20".
+	// b is captured by core.state.set → overwritten with the literal "20".
 	if inc.State["b"] != "20" {
 		t.Errorf("state.b = %v (%T), want \"20\" (sets updated the field)", inc.State["b"], inc.State["b"])
 	}
 
 	// Real DB round-trip: read state again directly from the DB to
-	// confirm the merge is committed, not just visible in the in-memory snapshot.
+	// confirm the capture is committed, not just visible in the in-memory snapshot.
 	fromDB, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
 		t.Fatalf("SelectByName: %v", err)
@@ -158,7 +162,8 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 		t.Errorf("DB state.b = %v, want \"20\"", fromDB.State["b"])
 	}
 
-	// state_history snapshot: state_before carries the original b=2, state_after — b="20".
+	// state_history snapshot: state_before carries the original b=2 (the run's
+	// row-lock snapshot, taken before any capture ran), state_after — b="20".
 	hist, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {

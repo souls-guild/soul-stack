@@ -73,7 +73,6 @@ state_schema:
 `)
 	write("scenario/create/main.yml", `name: create
 description: cluster topology size-guard via assert
-state_changes: {}
 input:
   redis_type:
     type: string
@@ -227,7 +226,6 @@ state_schema:
 	// main.yml is the DISPATCHER: top-level = mode-guard + branch include. No assert here.
 	write("scenario/create/main.yml", `name: create
 description: dispatcher main.yml — guard + include branch (assert lives in branch)
-state_changes: {}
 input:
   redis_type:
     type: string
@@ -413,7 +411,6 @@ state_schema:
 	write("scenario/create/main.yml", `name: create
 description: ungated size-guard + an input-only guard
 create: true
-state_changes: {}
 input:
   replicas_per_master:
     type: integer

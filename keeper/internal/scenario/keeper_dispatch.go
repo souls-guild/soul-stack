@@ -26,7 +26,7 @@ import (
 // keeper-side core Registry, its ApplyEvents are collected by an in-proc stream
 // and folded into the same run tables:
 //   - apply_runs (apply_id, sid=[render.KeeperTargetSID]) — terminal success/failed;
-//   - apply_task_register — task register result (read by loadRegisterByHost);
+//   - apply_task_register — task register result (read by loadRegisterByHostUpToPassage);
 //   - error_summary — failure reason (RecordTaskFailure), same as Soul-side tasks.
 //
 // All keeper tasks of a Passage share ONE apply_runs row (apply_id, sid=keeper,
@@ -120,7 +120,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 
 		// register: of a keeper task accumulates under KeeperTargetSID — same path
 		// as Soul-side accumulateRegister. No register: (rt.Register=="") →
-		// not written (loadRegisterByHost wouldn't resolve it anyway). passage is
+		// not written (buildRegisterByHost wouldn't resolve it anyway). passage is
 		// REQUIRED (Slice 2): FK apply_task_register→apply_runs is the triple
 		// (apply_id, sid, passage) (migration 078) — a Passage P task's register
 		// must reference the keeper apply_runs row for exactly passage P (inserted
@@ -294,6 +294,23 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema 
 	modCtx := coremodutil.WithIncarnation(ctx, spec.IncarnationName)
 	modCtx = coremodutil.WithService(modCtx, spec.ServiceRef.Name)
 	modCtx = coremodutil.WithStateSchema(modCtx, stateSchema)
+	// The run's own identity, for a module that WRITES `incarnation.state` at the
+	// step ([ADR-0084]): the `state_history` row it commits has to name the run
+	// that caused the change, and there is no end-of-run commit left to name it.
+	modCtx = coremodutil.WithRunScope(modCtx, coremodutil.RunScope{
+		Scenario:     spec.ScenarioName,
+		ApplyID:      spec.ApplyID,
+		StartedByAID: spec.StartedByAID,
+	})
+	// The merge-time CEL evaluators, for a capture verb whose predicate runs per
+	// element (`add` dedup, `modify`/`remove` matching) and therefore cannot be
+	// folded render-side. Bound to the run's service so they stay inside the §7
+	// vault fence, exactly as the retired `state_changes` merge had them.
+	matchEval, opEval := r.deps.Render.StateOpEvaluators(ctx, spec.ServiceRef.Name)
+	modCtx = coremodutil.WithStateOpEvaluators(modCtx, coremodutil.StateOpEvaluators{
+		Match: matchEval,
+		Op:    opEval,
+	})
 	sink := newKeeperApplyStream(modCtx)
 	if err := mod.Apply(req, sink); err != nil {
 		return false, true, nil, err.Error()
@@ -319,8 +336,8 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema 
 // apply_task_register under KeeperTargetSID — same path as Soul-side
 // accumulateRegister (events_taskevent.go). Payload is {changed, failed,
 // timed_out, skipped} + the module's output fields (mirrors selfRegisterData
-// in applyrunner.go). A task without register: → no-op (loadRegisterByHost
-// wouldn't resolve it into state_changes anyway). Errors are only logged
+// in applyrunner.go). A task without register: → no-op (buildRegisterByHost
+// has no name to resolve it under anyway). Errors are only logged
 // (best-effort, like Soul-side accumulateRegister).
 //
 // The module's declared-secret output fields ([ADR-0083] §8) are stored HERE

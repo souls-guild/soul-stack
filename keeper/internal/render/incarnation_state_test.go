@@ -81,13 +81,14 @@ func TestRenderState_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestRenderState_StagedSnapshotInvariant proves the ★ staged-snapshot
-// invariant: on a staged run (renderIn reused across P0 and P1+),
-// incarnation.state.* is identical in both passages — it's the pre-run
-// stateBefore, NOT an intermediate state_changes result. Simulates a staged
-// render: same RenderInput.State, different ActivePassage; eval of
-// incarnation.state.* must give the same result both times.
-func TestRenderState_StagedSnapshotInvariant(t *testing.T) {
+// TestRenderState_PassageDoesNotAlterProjection proves ActivePassage is not an
+// input to the projection: for one RenderInput.State, `incarnation.state.*`
+// evaluates identically in P0 and P1. Under [ADR-0084] state DOES accumulate
+// across Passages, but that refresh is the runner's move — it re-reads the row
+// at the barrier and assigns renderIn.State (scenario/run.go:687-693). Render
+// itself stays a pure function of the State it was handed, which is what makes
+// the re-read the single place the accumulation can be reasoned about.
+func TestRenderState_PassageDoesNotAlterProjection(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
@@ -114,9 +115,9 @@ func TestRenderState_StagedSnapshotInvariant(t *testing.T) {
 	p0 := eval(0)
 	p1 := eval(1)
 	if !reflect.DeepEqual(p0, p1) {
-		t.Fatalf("★ incarnation.state diverged between passages: P0=%v P1=%v (the snapshot must be invariant)", p0, p1)
+		t.Fatalf("★ incarnation.state diverged between passages: P0=%v P1=%v (only the runner may move it)", p0, p1)
 	}
-	// Snapshot == the original pre-run state (no accumulation across passages).
+	// The projection is the State it was handed, unchanged.
 	want := map[string]any{"alice": map[string]any{"acl": "+@read"}}
 	if !reflect.DeepEqual(p0, want) {
 		t.Fatalf("incarnation.state.redis_users = %v, want pre-run %v", p0, want)
@@ -148,22 +149,22 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	}
 }
 
-// TestRenderState_StateChangesSeesState proves incarnation.state is also
-// available in the state_changes context: stateChangesVars calls the same
-// incarnationVars, so a single edit point (Variant A) gives incarnation.state
-// in sets/modify patches too.
-func TestRenderState_StateChangesSeesState(t *testing.T) {
+// TestRenderState_CaptureSeesState proves a `core.state.<verb>` capture sees
+// incarnation.state like any other task: [ADR-0084] made the capture an ordinary
+// task, so its params render through hostVars and there is no second context to
+// keep in step (there used to be one, and it was its own edit point).
+func TestRenderState_CaptureSeesState(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@read"}}}
 	in := RenderInput{
 		Incarnation: IncarnationMeta{Name: "redis"},
 		State:       state,
 		Hosts:       []*topology.HostFacts{{SID: "redis-0.example.com"}},
 	}
-	vars := stateChangesVars(in, in.Hosts[0])
+	vars := hostVars(in, in.Hosts[0], 1)
 	if vars.Incarnation["state"] == nil {
-		t.Fatalf("state_changes context does not see incarnation.state: %v", vars.Incarnation)
+		t.Fatalf("a capture does not see incarnation.state: %v", vars.Incarnation)
 	}
 	if !reflect.DeepEqual(vars.Incarnation["state"], state) {
-		t.Fatalf("state_changes incarnation.state = %v, want %v", vars.Incarnation["state"], state)
+		t.Fatalf("capture incarnation.state = %v, want %v", vars.Incarnation["state"], state)
 	}
 }

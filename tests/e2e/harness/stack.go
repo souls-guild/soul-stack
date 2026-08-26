@@ -901,16 +901,18 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 
 // WaitIncarnationReady blocks until incarnation.status becomes `ready`.
 //
-// Why separate from WaitApplySuccess: apply_runs.status=success (per-host
-// task barrier) is set EARLIER than the state_changes commit into
-// incarnation.state — commitSuccess (run.go section 8) writes
-// state+status='ready' in one PG transaction AFTER the barrier over all
-// hosts. On smoke-nginx (2 tasks) the window is microscopic and
+// Why separate from WaitApplySuccess: apply_runs.status=success is a PER-HOST
+// task terminal, and a run is more than its host tasks. A `core.state.<verb>`
+// capture ([ADR-0084]) is a keeper-side step committing its field at its own
+// step, which for a capture standing after the host work is AFTER those hosts
+// report success. On smoke-nginx (2 tasks) the window is microscopic and
 // AssertIncarnationState right after WaitApplySuccess passes; on a service
 // with dozens of tasks (redis::create — 3 destinies) the window is wider,
 // and reading state catches an empty `{}`. We wait specifically for
-// status='ready' — the only point that guarantees state_changes is already
-// in the DB. Mirrors the L3b harness (tests/e2e-live).
+// status='ready' — the run's own terminal, and the only point that guarantees
+// every capture is already in the DB. Mirrors the L3b harness (tests/e2e-live).
+//
+// [ADR-0084]: docs/adr/0084-explicit-state-capture.md
 //
 // Terminal != ready (error_locked / migration_failed / destroyed) ->
 // immediate t.Fatal with the current status.

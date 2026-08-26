@@ -9,9 +9,6 @@ description: >-
   upgrade-paths?to=v2.0.0 shows mode=found + slug=to_v2. The real transition
   would roll out on hosts (e2e-live level, see README).
 
-# state_changes empty: demo scenario commits nothing to incarnation.state.
-state_changes: {}
-
 # tasks empty: demo has no souls (found-autorun cannot roll out host work —
 # e2e-live level). upgrade-paths?to=v2.0.0 shows mode=found from the from: above.
 tasks: []

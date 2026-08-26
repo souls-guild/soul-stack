@@ -1,6 +1,17 @@
 # ADR-057. `state_changes` — an ordered list of CRUD verbs (`set`/`add`/`modify`/`remove`)
 
-- **Context.** The `state_changes` grammar from [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) defined three keys: `sets` (a map `<field>: <CEL>`, implemented) and `appends`/`modifies` (lists of field-paths). The latter two were a **placeholder declaration with no value source** — they were not applied by the engine (see [orchestration.md §7.1 «`appends`/`modifies` — future»](../scenario/orchestration.md#71-grammar-state_changes---list-of-crud-operations)). This is a latent bug: a scenario with `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) passed successfully, but `incarnation.state` **did not grow** — the added host/user did not settle into the state. `modifies` (`update_acl`) likewise — the collection patch was not applied. The root cause is that `appends`/`modifies` carried only a **field-path** (what to touch), without a **value source** (what to write) and without a **predicate** (which element). And `sets` can only overwrite a field wholesale — it is not enough for growing collections and pointwise patching of elements.
+> **Status: AMENDED by [ADR-0084](0084-explicit-state-capture.md) (2026-08-25, NIM-699) — the verbs
+> survive, the block does not.** Everything this ADR fixed about the grammar still holds: the same
+> verb set (extended with `present` / `append` / `unset`), the `match:` predicate with `expect:`,
+> `key:` + `on_conflict:` on `add`, `patch:` on `modify`. What is retired is the container: a state
+> write is no longer an element of a `state_changes:` list applied after the cross-host barrier, it
+> is a keeper-side task `module: core.state.<verb>` standing at its own position in `tasks:`, and it
+> lands at that step. One consequence is that ordering stops being an intra-block property and
+> becomes the author's, guarded by soul-lint (`state_store_after_use`, `state_stale_same_passage_read`,
+> `state_wide_match`). `foreach` is dropped with the block — a step has `loop:`. Read the verb
+> semantics below; read the placement and the ordering rules in ADR-0084.
+
+- **Context.** The `state_changes` grammar from [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) defined three keys: `sets` (a map `<field>: <CEL>`, implemented) and `appends`/`modifies` (lists of field-paths). The latter two were a **placeholder declaration with no value source** — they were not applied by the engine (`orchestration.md` §7.1 «`appends`/`modifies` — future», a section since replaced). This is a latent bug: a scenario with `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) passed successfully, but `incarnation.state` **did not grow** — the added host/user did not settle into the state. `modifies` (`update_acl`) likewise — the collection patch was not applied. The root cause is that `appends`/`modifies` carried only a **field-path** (what to touch), without a **value source** (what to write) and without a **predicate** (which element). And `sets` can only overwrite a field wholesale — it is not enough for growing collections and pointwise patching of elements.
 
   In parallel, `sets` is a map, i.e. **unordered**: as the grammar grows (several order-dependent mutations of one collection) a map does not define a deterministic application sequence.
 
@@ -129,7 +140,7 @@
   - **`upsert`** — a merged "add-or-modify". Hides the author's intent (creating something new vs patching an existing one — different audit semantics). Covered by an explicit `add` + `on_conflict: replace`, where the intent is visible.
 
 - **Consequences.**
-  - [orchestration.md §7.1](../scenario/orchestration.md#71-grammar-state_changes---list-of-crud-operations) is rewritten for list-of-verbs (the normative spec); the paragraphs about `appends`/`modifies` move to the "deprecated, transition period" section.
+  - `orchestration.md` §7.1 is rewritten for list-of-verbs (the normative spec); the paragraphs about `appends`/`modifies` move to the "deprecated, transition period" section. That section now documents the capture verbs instead — [§7.1](../scenario/orchestration.md#71-the-capture-verbs).
   - [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) receives an amendment (the `state_changes` grammar is extended; status `amended`).
   - [naming-rules.md](../naming-rules.md) is augmented with the state_changes verbs and keys.
   - The latent bug "`appends`/`modifies` do not grow the state" is closed by the implementation of `add`/`modify`.
@@ -147,4 +158,4 @@
   - **CEL idiom for reading a key with a hyphen.** Checking for the presence of a collection key is done with the operator `'<key>' in <map>`, **not** `has(<map>['<key>'])`: `has()` is a macro only for field-selection, an index argument is rejected by the parser. Protection against no-such-key (the absence of `state` in a push/trial run without State, a not-yet-materialized collection) is `has(incarnation.state) && has(incarnation.state.<col>) && '<key>' in incarnation.state.<col>`. Bracket notation remains for **accessing** the value (`incarnation.state.<col>['<key>']`).
   - **The normative spec of the convention** — [docs/destiny/production-conventions.md §7a "Day-2: source of truth = `incarnation.state`"](../destiny/production-conventions.md#7a-day-2-source-of-truth--incarnationstate). A working illustration — the `restart` of the [`redis`](../../examples/service/redis/scenario/restart/main.yml) service (the TLS discriminator from `incarnation.state.redis_config`, the guard cases `rolling-restart-replicas`/`rolling-restart-tls` on both paths).
 
-- **Status.** amended (2026-06-24: day-2 read convention).
+- **Status.** amended (2026-06-24: day-2 read convention; 2026-08-25 / NIM-699: the grammar moved onto `core.state.<verb>` steps — see the banner at the top of this file and [ADR-0084](0084-explicit-state-capture.md)).

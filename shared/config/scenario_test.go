@@ -31,8 +31,16 @@ func TestLoadScenarioManifest_Golden(t *testing.T) {
 	if cfg.Name != "create" {
 		t.Errorf("name: got %q want create", cfg.Name)
 	}
-	if cfg.StateChanges == nil || len(cfg.StateChanges.Sets) == 0 {
-		t.Errorf("state_changes.sets must be parsed")
+	// The golden writes state through explicit `core.state.set` tasks ([ADR-0084]);
+	// there is no top-level block left to parse.
+	captures := 0
+	for i := range cfg.Tasks {
+		if m := cfg.Tasks[i].Module; m != nil && m.Module == "core.state.set" {
+			captures++
+		}
+	}
+	if captures != 4 {
+		t.Errorf("core.state.set captures: got %d want 4", captures)
 	}
 	if len(cfg.Tasks) == 0 {
 		t.Errorf("tasks must be parsed")
@@ -97,7 +105,7 @@ tasks: []
 }
 
 func TestLoadScenarioManifest_DeprecatedKeys(t *testing.T) {
-	for _, key := range []string{"wait", "filter", "version"} {
+	for _, key := range []string{"wait", "filter", "version", "state_changes"} {
 		key := key
 		t.Run(key, func(t *testing.T) {
 			src := "name: x\ntasks: []\n" + key + ": foo\n"
@@ -410,6 +418,147 @@ tasks:
 	}
 }
 
+// TestLoadScenarioManifest_WhenOnKeeperDynamic — ★ [ADR-0084] F-D. `when:` is a
+// Soul-side predicate; a keeper task never reaches a Soul, so a register-/
+// soulprint-reading one was accepted and dropped, and the step ran every time.
+// Since [ADR-0084] the step that runs every time is the step that writes
+// incarnation state, which is why the offline half is an ERROR.
+func TestLoadScenarioManifest_WhenOnKeeperDynamic(t *testing.T) {
+	for name, when := range map[string]string{
+		"register":  "register.probe.changed",
+		"soulprint": "soulprint.self.os.family == 'debian'",
+		"mixed":     "input.provision && register.probe.changed",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// The producing task keeps the fixture free of
+			// unknown_register_reference, so the file's only defect is the one
+			// under test.
+			src := "name: x\ntasks:\n  - module: core.exec.run\n    register: probe\n    params: { cmd: \"true\" }\n" +
+				"  - module: core.state.set\n    on: keeper\n    when: \"" + when + "\"\n    params: { field: provisioned, value: yes }\n"
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if !hasCodeAt(diags, "when_on_keeper_dynamic_unsupported", "$.tasks[1].when") {
+				dump(t, diags)
+				t.Fatalf("expected when_on_keeper_dynamic_unsupported for when: %q", when)
+			}
+		})
+	}
+}
+
+// The negative half, and the one a too-wide rule would break: a STATIC when: on
+// a keeper task is the working form — the keeper settles it at render, before the
+// task is routed keeper-side. A dynamic when: on an ordinary Soul-side task is
+// legal gating and must stay untouched.
+func TestLoadScenarioManifest_WhenOnKeeperStaticAccepted(t *testing.T) {
+	src := `name: x
+tasks:
+  - module: core.state.set
+    on: keeper
+    when: input.provision
+    params: { field: provisioned, value: yes }
+  - module: core.exec.run
+    when: register.probe.changed
+    params: { cmd: "true" }
+  - module: core.exec.run
+    register: probe
+    params: { cmd: "true" }
+`
+	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if hasCode(diags, "when_on_keeper_dynamic_unsupported") {
+		dump(t, diags)
+		t.Fatalf("a static when: on a keeper task and a dynamic when: on a Soul-side task must both pass")
+	}
+}
+
+// TestLoadScenarioManifest_StateVerbNotOnKeeper - `core.state.<verb>` without
+// `on: keeper` is dispatched to a host that has no such module. The failure is loud
+// in a real run and silent in L0, where the trial folds the step by its module
+// address alone and predicts the state a run could never reach - which is why this
+// is refused offline rather than left to the run.
+func TestLoadScenarioManifest_StateVerbNotOnKeeper(t *testing.T) {
+	for name, tc := range map[string]struct {
+		on   string
+		want bool
+	}{
+		"no on: at all": {"", true},
+		"on: a coven":   {"    on: [\"primary\"]\n", true},
+		"on: keeper":    {"    on: keeper\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := `name: x
+tasks:
+  - name: record the owner
+    module: core.state.set
+` + tc.on + `    params:
+      field: owner
+      value: alice
+`
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			got := hasCode(diags, "state_capture_not_on_keeper")
+			if got != tc.want {
+				t.Fatalf("state_capture_not_on_keeper = %v, want %v -- diags: %v", got, tc.want, diags)
+			}
+		})
+	}
+}
+
+// TestLoadScenarioManifest_BlockOnKeeper — ★ regression for a PANIC. A block
+// carrying `on: keeper` used to pass validation and then crash the render: the
+// Render loop tests IsKeeperTask before it tests task.Block, so the task went
+// into renderKeeperTask, which dereferenced its nil Module.
+//
+// Both levels are refused, because neither works. `on: keeper` on the block is
+// the crash; `on: keeper` on a child is fanned out through the Soul-side roster
+// resolve, which rejects the literal as a routing bug. Blocks and keeper tasks
+// are disjoint - the diagnostic says so at whichever level the author wrote it.
+func TestLoadScenarioManifest_BlockOnKeeper(t *testing.T) {
+	t.Run("on the block", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: record the topology
+    on: keeper
+    block:
+      - module: core.state.set
+        params: { field: mode, value: sentinel }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if !hasCodeAt(diags, "block_on_keeper_invalid", "$.tasks[0].block") {
+			dump(t, diags)
+			t.Fatalf("expected block_on_keeper_invalid at the block key")
+		}
+	})
+
+	t.Run("on a block child", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: record the topology
+    block:
+      - module: core.state.set
+        on: keeper
+        params: { field: mode, value: sentinel }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if !hasCodeAt(diags, "block_on_keeper_invalid", "$.tasks[0].block[0].on") {
+			dump(t, diags)
+			t.Fatalf("expected block_on_keeper_invalid at the child's on: key")
+		}
+	})
+
+	t.Run("a plain block is untouched", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: configure
+    block:
+      - module: core.exec.run
+        params: { cmd: "true" }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "block_on_keeper_invalid") {
+			dump(t, diags)
+			t.Fatalf("a block with no keeper task must pass")
+		}
+	})
+}
+
 // TestLoadScenarioManifest_ApplyWhenDynamic — an applier's condition is decided
 // before its destiny is rendered, so a `when:` reading register/soulprint has
 // nowhere to be evaluated. It used to be dropped and the destiny applied
@@ -671,456 +820,6 @@ func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
 			dump(t, diags)
 			t.Fatalf("changed_when: %s - expected type_mismatch", v)
 		}
-	}
-}
-
-func TestLoadScenarioManifest_BadStateChangesKey(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  unexpected: [foo]
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	found := false
-	for _, d := range diags {
-		if d.Code == "unknown_key" && d.YAMLPath == "$.state_changes.unexpected" {
-			found = true
-		}
-	}
-	if !found {
-		dump(t, diags)
-		t.Fatalf("expected unknown_key on $.state_changes.unexpected")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetsScalar(t *testing.T) {
-	// sets is now a mapping field→expression (orchestration.md §7.1); a scalar in
-	// its place → type_mismatch.
-	src := `name: x
-tasks: []
-state_changes:
-  sets: "not-a-mapping"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "type_mismatch") {
-		dump(t, diags)
-		t.Fatalf("expected type_mismatch on state_changes.sets")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetsSeqRejected(t *testing.T) {
-	// The old []string form (sets: [a, b]) is no longer valid: sets is a mapping.
-	src := `name: x
-tasks: []
-state_changes:
-  sets: [redis_version, redis_users]
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "type_mismatch") {
-		dump(t, diags)
-		t.Fatalf("expected type_mismatch on old seq-form sets")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetsMap(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  sets:
-    greeting_file: "/tmp/soul-stack-hello"
-    redis_version: "${ input.version }"
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("expected no errors for valid sets-map")
-	}
-	if cfg.StateChanges == nil || len(cfg.StateChanges.Sets) != 2 {
-		t.Fatalf("sets parsed = %+v, want 2 entries", cfg.StateChanges)
-	}
-	if cfg.StateChanges.Sets["greeting_file"] != "/tmp/soul-stack-hello" {
-		t.Errorf("sets.greeting_file = %q", cfg.StateChanges.Sets["greeting_file"])
-	}
-	if cfg.StateChanges.Sets["redis_version"] != "${ input.version }" {
-		t.Errorf("sets.redis_version = %q", cfg.StateChanges.Sets["redis_version"])
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetsEmptyValue(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  sets:
-    greeting_file: ""
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "empty_value") {
-		dump(t, diags)
-		t.Fatalf("expected empty_value on empty sets expression")
-	}
-}
-
-func TestLoadScenarioManifest_EmptyStateChangesOK(t *testing.T) {
-	// state_changes: {} — valid (restart-like, see examples).
-	src := `name: noop
-state_changes: {}
-tasks: []
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("expected no errors for empty state_changes")
-	}
-}
-
-// --- New list form of state_changes (pilot: set + add). ---
-
-// TestLoadScenarioManifest_StateChangesTransitMapForm — ★ TRANSIT: the old
-// map form `state_changes: { sets: {...} }` STILL parses (deprecated) — existing
-// scenarios on it stay green. IsList=false, Sets populated.
-func TestLoadScenarioManifest_StateChangesTransitMapForm(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  sets:
-    redis_version: "${ input.version }"
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("* TRANSIT: the old map form should parse without errors")
-	}
-	if cfg.StateChanges == nil || cfg.StateChanges.IsList {
-		t.Fatalf("* map form: IsList should be false, got %+v", cfg.StateChanges)
-	}
-	if cfg.StateChanges.Sets["redis_version"] != "${ input.version }" {
-		t.Errorf("map form sets not parsed: %+v", cfg.StateChanges.Sets)
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesListForm — the new list form set+add
-// parses: IsList=true, Ops in order, value object preserved, on_conflict/match.
-func TestLoadScenarioManifest_StateChangesListForm(t *testing.T) {
-	src := `name: add_replica
-tasks: []
-state_changes:
-  - add: redis_hosts
-    value:
-      sid:  "${ vars.new_sid }"
-      role: replica
-    match: "elem.sid == value.sid"
-    on_conflict: skip
-  - set: redis_version
-    value: "${ input.version }"
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("list form set+add should validate without errors")
-	}
-	sc := cfg.StateChanges
-	if sc == nil || !sc.IsList || len(sc.Ops) != 2 {
-		t.Fatalf("ops = %+v, want IsList + 2 ops", sc)
-	}
-	if sc.Ops[0].Verb != VerbAdd || sc.Ops[0].Field != "redis_hosts" {
-		t.Errorf("op[0] = %+v, want add redis_hosts", sc.Ops[0])
-	}
-	if sc.Ops[0].Match != "elem.sid == value.sid" || sc.Ops[0].OnConflict != OnConflictSkip {
-		t.Errorf("op[0] match/on_conflict = %q/%q", sc.Ops[0].Match, sc.Ops[0].OnConflict)
-	}
-	valMap, ok := sc.Ops[0].Value.(map[string]any)
-	if !ok || valMap["role"] != "replica" {
-		t.Errorf("op[0].value = %+v, want a map with role:replica", sc.Ops[0].Value)
-	}
-	if sc.Ops[1].Verb != VerbSet || sc.Ops[1].Field != "redis_version" || sc.Ops[1].Value != "${ input.version }" {
-		t.Errorf("op[1] = %+v, want set redis_version", sc.Ops[1])
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesEmptyListOK — an empty `state_changes: []`
-// is valid (state does not change), IsList=true.
-func TestLoadScenarioManifest_StateChangesEmptyListOK(t *testing.T) {
-	src := `name: noop
-state_changes: []
-tasks: []
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("empty list state_changes should be valid")
-	}
-	if cfg.StateChanges == nil || !cfg.StateChanges.IsList || len(cfg.StateChanges.Ops) != 0 {
-		t.Fatalf("state_changes = %+v, want an empty list", cfg.StateChanges)
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetMissingValue(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - set: redis_version
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "missing_required_field") {
-		dump(t, diags)
-		t.Fatalf("expected missing_required_field (set with no value)")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesAddMissingValue(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - add: redis_hosts
-    match: "elem.sid == value.sid"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "missing_required_field") {
-		dump(t, diags)
-		t.Fatalf("expected missing_required_field (add with no value)")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesBadOnConflict(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - add: redis_hosts
-    value: { sid: x }
-    match: "elem.sid == value.sid"
-    on_conflict: overwrite
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "invalid_value") {
-		dump(t, diags)
-		t.Fatalf("expected invalid_value (on_conflict: overwrite not one of skip/replace/error)")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesSetRejectsMatch(t *testing.T) {
-	// match: does not apply to set → unknown_key.
-	src := `name: x
-tasks: []
-state_changes:
-  - set: redis_version
-    value: "7.2"
-    match: "true"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "unknown_key") {
-		dump(t, diags)
-		t.Fatalf("expected unknown_key (match not applicable to set)")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesAddRejectsPatch(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - add: redis_hosts
-    value: { sid: x }
-    patch: { role: replica }
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "unknown_key") {
-		dump(t, diags)
-		t.Fatalf("expected unknown_key (patch not applicable to add)")
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesModifyValid — modify with match+patch
-// validates without errors (a narrow match → no wide_match warning).
-func TestLoadScenarioManifest_StateChangesModifyValid(t *testing.T) {
-	src := `name: update_acl
-tasks: []
-state_changes:
-  - modify: redis_users
-    match: "key == input.username"
-    patch:
-      acl:   "${ input.acl }"
-      state: "${ input.state }"
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("modify with match+patch should validate without errors")
-	}
-	op := cfg.StateChanges.Ops[0]
-	if op.Verb != VerbModify || op.Field != "redis_users" || op.Match != "key == input.username" {
-		t.Errorf("op = %+v, want modify redis_users", op)
-	}
-	patch, ok := op.Patch.(map[string]any)
-	if !ok || patch["acl"] != "${ input.acl }" {
-		t.Errorf("op.Patch = %+v, want map acl→CEL", op.Patch)
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesModifyMissingPatch — modify without patch →
-// missing_required_field.
-func TestLoadScenarioManifest_StateChangesModifyMissingPatch(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - modify: redis_users
-    match: "key == input.username"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "missing_required_field") {
-		dump(t, diags)
-		t.Fatalf("expected missing_required_field (modify with no patch)")
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesRemoveValid — remove with match (+expect) ok.
-func TestLoadScenarioManifest_StateChangesRemoveValid(t *testing.T) {
-	src := `name: remove_replica
-tasks: []
-state_changes:
-  - remove: redis_hosts
-    match: "elem.sid == input.sid"
-    expect: one
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("remove with match+expect should validate without errors")
-	}
-	op := cfg.StateChanges.Ops[0]
-	if op.Verb != VerbRemove || op.Match != "elem.sid == input.sid" || op.Expect != ExpectOne {
-		t.Errorf("op = %+v, want remove + expect one", op)
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesForeachValid — foreach with as+do parses:
-// In carries the collection CEL expression, Do — a nested add.
-func TestLoadScenarioManifest_StateChangesForeachValid(t *testing.T) {
-	src := `name: add_replicas
-tasks: []
-state_changes:
-  - foreach: "${ input.replicas }"
-    as: sid
-    do:
-      - add: redis_hosts
-        value: "${ sid }"
-        match: "elem == sid"
-        on_conflict: skip
-`
-	cfg, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("foreach with as+do should validate without errors")
-	}
-	op := cfg.StateChanges.Ops[0]
-	if op.Verb != VerbForeach || op.In != "${ input.replicas }" || op.As != "sid" {
-		t.Errorf("op = %+v, want foreach in/as", op)
-	}
-	if len(op.Do) != 1 || op.Do[0].Verb != VerbAdd || op.Do[0].Field != "redis_hosts" {
-		t.Errorf("op.Do = %+v, want [add redis_hosts]", op.Do)
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesForeachMissingAsDo — foreach without as/do.
-func TestLoadScenarioManifest_StateChangesForeachMissingAsDo(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - foreach: "${ input.replicas }"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "missing_required_field") {
-		dump(t, diags)
-		t.Fatalf("expected missing_required_field (foreach with no as/do)")
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesBadExpect — expect outside {one,at_most_one,
-// any} → invalid_value.
-func TestLoadScenarioManifest_StateChangesBadExpect(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - remove: redis_hosts
-    match: "elem.sid == input.sid"
-    expect: exactly_two
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "invalid_value") {
-		dump(t, diags)
-		t.Fatalf("expected invalid_value (expect: exactly_two)")
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesWideMatchWarn — ★ safeguard (a):
-// modify/remove without match: OR with a constant-true match → wide_match WARN
-// (not an error, exit-code 0).
-func TestLoadScenarioManifest_StateChangesWideMatchWarn(t *testing.T) {
-	cases := map[string]string{
-		"remove-no-match": `name: x
-tasks: []
-state_changes:
-  - remove: redis_hosts
-`,
-		"modify-const-true": `name: x
-tasks: []
-state_changes:
-  - modify: redis_hosts
-    match: "true"
-    patch: { role: "${ 'replica' }" }
-`,
-	}
-	for name, src := range cases {
-		t.Run(name, func(t *testing.T) {
-			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-			if diag.HasErrors(diags) {
-				dump(t, diags)
-				t.Fatalf("wide match - WARN, not an error (exit-code 0)")
-			}
-			if !hasCode(diags, "wide_match") {
-				dump(t, diags)
-				t.Fatalf("expected wide_match warning")
-			}
-		})
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesDeprecatedMapWarn — ★ safeguard (b):
-// a valid old map form gives a deprecated_form WARN; appends/modifies also give a
-// noop_placeholder WARN. Not an error (dual-parse transit).
-func TestLoadScenarioManifest_StateChangesDeprecatedMapWarn(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  sets:
-    redis_version: "${ input.version }"
-  appends: [redis_hosts]
-  modifies: [redis_users.acl]
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("map form deprecated - WARN, not an error")
-	}
-	if !hasCode(diags, "deprecated_form") {
-		dump(t, diags)
-		t.Fatalf("expected deprecated_form warning on map-form")
-	}
-	if !hasCode(diags, "noop_placeholder") {
-		dump(t, diags)
-		t.Fatalf("expected noop_placeholder warning on appends/modifies")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesNoVerb(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - value: { sid: x }
-    match: "true"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "missing_required_field") {
-		dump(t, diags)
-		t.Fatalf("expected missing_required_field (operation without a verb)")
 	}
 }
 
@@ -1598,113 +1297,6 @@ func TestLoadScenarioManifest_TaskNoLogRemoved(t *testing.T) {
 				t.Fatalf("expected unknown_key with an ADR-0083 hint at %s", path)
 			}
 		})
-	}
-}
-
-// --- BUG-1: expect does not apply to set/add (the cardinality assert is ONLY for
-// modify/remove, ADR-057 §c). It was accepted silently → ignored at runtime
-// (the operator expected a duplicate safeguard on add, but there is none). ---
-
-func TestLoadScenarioManifest_StateChangesSetRejectsExpect(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - set: redis_version
-    value: "7.2"
-    expect: one
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCodeAt(diags, "unknown_key", "$.state_changes[0].expect") {
-		dump(t, diags)
-		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect not applicable to set)")
-	}
-}
-
-func TestLoadScenarioManifest_StateChangesAddRejectsExpect(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - add: redis_hosts
-    value: { sid: x }
-    expect: one
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCodeAt(diags, "unknown_key", "$.state_changes[0].expect") {
-		dump(t, diags)
-		t.Fatalf("expected unknown_key on $.state_changes[0].expect (expect not applicable to add - dedup is done by on_conflict)")
-	}
-}
-
-// --- BUG-2: a nested foreach in do: is outside the ADR-057 grammar (do carries
-// CRUD verbs, not another loop). It must be caught at validation (lint-error),
-// NOT at runtime (where it would fall into state_changes_apply_failed →
-// error_locked AFTER apply on hosts). ---
-
-func TestLoadScenarioManifest_StateChangesNestedForeachRejected(t *testing.T) {
-	src := `name: x
-tasks: []
-state_changes:
-  - foreach: "${ input.outer }"
-    as: o
-    do:
-      - foreach: "${ o.inner }"
-        as: i
-        do:
-          - add: redis_hosts
-            value: "${ i }"
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "nested_foreach_unsupported") {
-		dump(t, diags)
-		t.Fatalf("* expected nested_foreach_unsupported (lint-error, NOT runtime) on do-level foreach")
-	}
-}
-
-// --- foreach.as reserved-binding collision: as: must not shadow a CEL-context
-// name (input/register/...) or a local element binding (elem/key/value) →
-// reserved_binding_name. ---
-
-func TestLoadScenarioManifest_StateChangesForeachReservedAs(t *testing.T) {
-	for _, name := range []string{"input", "register", "vars", "incarnation", "soulprint", "elem", "key", "value"} {
-		src := `name: x
-tasks: []
-state_changes:
-  - foreach: "${ input.replicas }"
-    as: ` + name + `
-    do:
-      - add: redis_hosts
-        value: "${ ` + name + ` }"
-`
-		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-		if !hasCode(diags, "reserved_binding_name") {
-			dump(t, diags)
-			t.Fatalf("★ expected reserved_binding_name for foreach.as: %s", name)
-		}
-	}
-}
-
-// TestLoadScenarioManifest_StateChangesForeachNonReservedAsOK — an ordinary as-name
-// does not trigger reserved_binding_name (guard against over-rejection).
-func TestLoadScenarioManifest_StateChangesForeachNonReservedAsOK(t *testing.T) {
-	src := `name: add_replicas
-tasks: []
-state_changes:
-  - foreach: "${ input.replicas }"
-    as: sid
-    do:
-      - add: redis_hosts
-        value: "${ sid }"
-        match: "elem == sid"
-        on_conflict: skip
-`
-	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if hasCode(diags, "reserved_binding_name") {
-		dump(t, diags)
-		t.Fatalf("as: sid should not trigger reserved_binding_name")
-	}
-	if diag.HasErrors(diags) {
-		dump(t, diags)
-		t.Fatalf("a valid foreach with as: sid should not produce errors")
 	}
 }
 

@@ -22,7 +22,7 @@
 #      = the new master), quorum=1 (size(1)/2+1), master_name/timings/version from state
 #      (compute.sentinel_master_name/sentinel_directives/redis_version). Symmetric with
 #      migrate cases, where this same module is in task_absent.
-#   4. state_changes: seeded_from.detached := true (source_endpoints ARE PRESERVED).
+#   4. state_after: seeded_from.detached := true (source_endpoints ARE PRESERVED).
 name: sentinel detach_source runs final offset gate then detaches the external source
 
 fixtures:
@@ -66,13 +66,13 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -135,7 +135,7 @@ assert:
 
   # seeded_from.detached := true (source_endpoints PRESERVED — merge of the old object
   # with {detached:true}). detach_source does not touch the rest of state.
-  state_changes:
+  state_after:
     seeded_from:
       source_endpoints:
         - "10.9.0.1:6379"

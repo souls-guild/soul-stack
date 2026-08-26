@@ -219,7 +219,6 @@ state_schema:
 `)
 	write("scenario/create/main.yml", `name: create
 description: smoke core.exec.run
-state_changes: {}
 tasks:
   - name: Echo hello on every host
     module: core.exec.run
@@ -420,12 +419,20 @@ func newRunnerWithSoulCap(t *testing.T, disp ApplyDispatcher, cap SoulCapability
 // post-run "ready".
 func waitRunDone(t *testing.T, name, applyID string, want incarnation.Status) *incarnation.Incarnation {
 	t.Helper()
+	// The wait is on the row that CLOSES the run, not on any row of it: since
+	// [ADR-0084] a `core.state.*` step writes its own history row mid-run, and
+	// "a history row for this apply exists" would fire while the run is still
+	// applying. `run_status` is written by the terminal only.
+	const terminalSQL = `
+SELECT count(*) FROM state_history
+WHERE incarnation_name = $1 AND apply_id = $2 AND run_status IS NOT NULL
+`
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		_, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
-			name, incarnation.HistoryFilter{ApplyID: applyID}, 0, 1)
+		var total int
+		err := integrationPool.QueryRow(context.Background(), terminalSQL, name, applyID).Scan(&total)
 		if err != nil {
-			t.Fatalf("HistorySelectByName: %v", err)
+			t.Fatalf("terminal history probe: %v", err)
 		}
 		if total > 0 {
 			inc, err := incarnation.SelectByName(context.Background(), integrationPool, name)
@@ -433,7 +440,7 @@ func waitRunDone(t *testing.T, name, applyID string, want incarnation.Status) *i
 				t.Fatalf("SelectByName: %v", err)
 			}
 			if inc.Status != want {
-				t.Fatalf("incarnation status = %q, want %q", inc.Status, want)
+				t.Fatalf("incarnation status = %q, want %q (details=%v)", inc.Status, want, inc.StatusDetails)
 			}
 			return inc
 		}
@@ -748,8 +755,9 @@ func TestIntegration_NoHosts_ErrorLocked(t *testing.T) {
 }
 
 // registerServiceRepo creates a service repo with a scenario where a probe
-// task (core.exec.run, register: probe) feeds state_changes.sets via
-// ${ register.probe.stdout } (slice 2 of the full state_changes grammar).
+// task (core.exec.run, register: probe) is read by a capture via
+// ${ register.probe.stdout } — i.e. a keeper-side step reaching for a HOST
+// task's register.
 func registerServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -774,10 +782,7 @@ state_schema:
   properties: {}
 `)
 	write("scenario/probe/main.yml", `name: probe
-description: probe → register → state_changes.sets
-state_changes:
-  sets:
-    leader: "${ register.probe.stdout }"
+description: a capture reaching for a host task's register
 tasks:
   - name: Probe leader
     module: core.exec.run
@@ -786,6 +791,12 @@ tasks:
       args: ["leader"]
     register: probe
     changed_when: "false"
+  - name: Record the leader
+    module: core.state.set
+    on: keeper
+    params:
+      field: leader
+      value: "${ register.probe.stdout }"
 `)
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -829,11 +840,21 @@ func (m *registerMockDispatcher) SendApply(ctx context.Context, sid string, req 
 	return nil
 }
 
-// TestIntegration_RegisterInSets_CommitsToState — the full slice 2 path: probe
-// task (register: probe) → register data accumulated in apply_task_register →
-// loaded per-host after the barrier → state_changes.sets
-// ${ register.probe.stdout } rendered → value lands in incarnation.state.
-func TestIntegration_RegisterInSets_CommitsToState(t *testing.T) {
+// TestIntegration_CaptureCannotReadHostRegister pins the boundary [ADR-0084]
+// draws, and pins that it fails LOUDLY. The retired `state_changes:` block was
+// rendered once per host, so it could read that host's register; a capture is a
+// single `on: keeper` task rendered once, and a keeper-side render sees the
+// keeper bucket only (keeperVars, keeper/internal/render/dispatch.go — the
+// scenario runner never sets RenderInput.Register). There is no per-host
+// register to name from there, and "once per host" is not a shape a single
+// field can hold anyway.
+//
+// So the run must ABORT on the capture's render — error_locked, field absent —
+// rather than commit an empty or arbitrary value. Silently writing "" here
+// would be the worst outcome: a green run and a state row that lies. The
+// keeper-side counterpart, a capture reading a KEEPER task's register, works
+// and is covered by TestIntegration_KeeperRegisterInCapture_CommitsToState.
+func TestIntegration_CaptureCannotReadHostRegister(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
@@ -859,9 +880,15 @@ func TestIntegration_RegisterInSets_CommitsToState(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
-	if inc.State["leader"] != "leader" {
-		t.Errorf("incarnation.state.leader = %v, want \"leader\" (from register.probe.stdout)", inc.State["leader"])
+	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
+	if v, present := inc.State["leader"]; present {
+		t.Errorf("incarnation.state.leader = %v, want absent: the capture cannot see a host task's register, so it must abort rather than write something", v)
+	}
+	if inc.StatusDetails == nil {
+		t.Fatal("status_details is nil, want the render failure recorded")
+	}
+	if reason, _ := inc.StatusDetails["reason"].(string); reason == "" {
+		t.Errorf("status_details.reason = %q, want a non-empty abort reason naming the render failure", reason)
 	}
 }
 
@@ -895,7 +922,6 @@ destiny:
 `)
 	write("scenario/create/main.yml", `name: create
 description: delegate to pilot-flat destiny
-state_changes: {}
 tasks:
   - name: Apply pilot-flat
     apply:
@@ -1089,7 +1115,6 @@ input:
   suffix:
     type: string
     default: "!"
-state_changes: {}
 tasks:
   - name: Echo greeting with default suffix
     module: core.exec.run
@@ -1342,8 +1367,8 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 }
 
 // serialServiceRepo creates a service repo with a `roll` scenario carrying a
-// serial: of the given shape and a non-empty state_changes.sets — to test
-// wave dispatch + a single barrier.
+// serial: of the given shape and a capture step — to test wave dispatch + a
+// single barrier.
 func serialServiceRepo(t *testing.T, serial string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1369,9 +1394,6 @@ state_schema:
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: rolling restart with serial
-state_changes:
-  sets:
-    rolled: "yes"
 tasks:
   - name: Rolling step
     module: core.exec.run
@@ -1380,6 +1402,12 @@ tasks:
       cmd: echo
       args: ["roll"]
     changed_when: "false"
+  - name: Record the roll
+    module: core.state.set
+    on: keeper
+    params:
+      field: rolled
+      value: "yes"
 `)
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -1397,10 +1425,13 @@ tasks:
 }
 
 // TestIntegration_Serial_AllWavesCommitOnce — serial: 1 across 3 hosts: all
-// three hosts get an ApplyRequest (waves rolled through), state_changes
-// commits EXACTLY ONCE after ALL waves (single barrier, orchestration.md §7) —
-// the most important invariant of slice D. Checks: 3 SendApply calls, exactly
-// 1 state_history snapshot, incarnation.state.rolled committed.
+// three hosts get an ApplyRequest (waves rolled through), and the capture runs
+// EXACTLY ONCE after ALL waves (single barrier, orchestration.md §7) — the most
+// important invariant of slice D. A capture is an `on: keeper` step, so it is
+// dispatched once for the run, not once per wave; per-wave would show up as
+// three capture rows instead of one. Checks: 3 SendApply calls, exactly 2
+// state_history snapshots (the capture and the terminal),
+// incarnation.state.rolled committed.
 func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1438,20 +1469,20 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 		}
 	}
 
-	// state committed (single commit after all waves).
+	// state captured (a single capture after all waves).
 	if inc.State["rolled"] != "yes" {
 		t.Errorf("state.rolled = %v, want \"yes\"", inc.State["rolled"])
 	}
 
-	// CRITICAL: exactly ONE state_history snapshot — state commits once after
-	// all waves, not per-wave (§7).
+	// CRITICAL: exactly TWO state_history snapshots — the one capture and the
+	// run's terminal. A capture that ran per-wave would show three (§7).
 	_, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
 		t.Fatalf("HistorySelectByName: %v", err)
 	}
-	if total != 1 {
-		t.Errorf("state_history snapshots = %d, want 1 (single commit, NOT per-wave)", total)
+	if total != 2 {
+		t.Errorf("state_history snapshots = %d, want 2 (one capture + the terminal, NOT per-wave)", total)
 	}
 
 	// All apply_runs success.
@@ -1571,9 +1602,6 @@ state_schema:
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: two tasks with different serial widths
-state_changes:
-  sets:
-    rolled: "yes"
 tasks:
   - name: Wide step
     module: core.exec.run
@@ -1589,6 +1617,12 @@ tasks:
       cmd: echo
       args: ["narrow"]
     changed_when: "false"
+  - name: Record the roll
+    module: core.state.set
+    on: keeper
+    params:
+      field: rolled
+      value: "yes"
 `)
 	wt, err := repo.Worktree()
 	if err != nil {
@@ -1896,7 +1930,6 @@ state_schema:
 `)
 	write("scenario/once/main.yml", `name: once
 description: run_once on a single host
-state_changes: {}
 tasks:
   - name: Run once
     module: core.exec.run
@@ -1964,7 +1997,6 @@ func vaultParamServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: secret-in-params smoke
-state_changes: {}
 tasks:
   - name: Run with secret param
     module: core.exec.run
@@ -2132,7 +2164,6 @@ func TestIntegration_StatusDetailsError_VaultRefMasked(t *testing.T) {
 	// masking path (reason present, no secret).
 	gitURL := writeServiceRepo(t, `name: create
 description: render-fail
-state_changes: {}
 tasks:
   - name: bad apply
     apply:
@@ -2213,7 +2244,6 @@ func keeperServiceRepo(t *testing.T, keeperModule string, keeperTasks int) strin
 	var b strings.Builder
 	b.WriteString(`name: create
 description: keeper-side dispatch integration
-state_changes: {}
 tasks:
 `)
 	for i := 0; i < keeperTasks; i++ {
@@ -2502,7 +2532,6 @@ func keeperOnlyServiceRepo(t *testing.T, keeperModule string) string {
 	t.Helper()
 	return writeServiceRepo(t, fmt.Sprintf(`name: create
 description: keeper-only scenario
-state_changes: {}
 tasks:
   - name: Keeper only step
     module: %s
@@ -2598,7 +2627,6 @@ func mixedKeeperHostServiceRepo(t *testing.T, keeperModule string) string {
 	t.Helper()
 	return writeServiceRepo(t, fmt.Sprintf(`name: create
 description: mixed keeper+host scenario
-state_changes: {}
 tasks:
   - name: Keeper step
     module: %s
@@ -2708,7 +2736,6 @@ func mixedKeeperHostRefreshServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
 description: mixed provision (refresh) + host deploy
-state_changes: {}
 tasks:
   - name: Register provisioned hosts and refresh roster
     module: core.soul.registered

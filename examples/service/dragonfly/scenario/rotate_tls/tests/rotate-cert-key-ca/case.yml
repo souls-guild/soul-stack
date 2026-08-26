@@ -14,7 +14,7 @@
 #   2. applier-register tls_certs MATERIALIZED (core.noop.run id:tls_certs) — onchanges anchor.
 #   3. reload re-read (three community.redis.command): addr = LOCAL UNIX socket (WITHOUT tls/tls_ca),
 #      args = CONFIG SET tls_cert_file/tls_key_file/tls_ca_cert_file (UNDERSCORE).
-#   4. state_changes: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
+#   4. state_after: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
 #
 # * Idempotency guard: forced changed:true from the reload tasks REMOVED (task_absent catches the regression).
 name: rotate_tls re-renders PEM from new refs and re-reads via onchanges-gated CONFIG SET (underscore flags)
@@ -48,7 +48,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
@@ -70,7 +70,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -188,8 +188,8 @@ assert:
         changed: true
         args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
 
-  # state_changes: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
-  state_changes:
+  # state_after: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
+  state_after:
     tls:
       enable:   true
       cert_ref: "secret/services/dragonfly/tls-v2#cert"

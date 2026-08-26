@@ -234,7 +234,7 @@ func TestResolveInputValuesVault_PatternOnResolved(t *testing.T) {
 // diagnostics (for negative schema cases where schemaFromInput would Fatalf).
 func scenarioDiags(t *testing.T, inputYAML string) []diag.Diagnostic {
 	t.Helper()
-	body := "name: t\ndescription: d\nstate_changes: {}\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
+	body := "name: t\ndescription: d\ntasks: []\ninput:\n" + indentBlock(inputYAML, "  ")
 	_, _, diags, err := LoadScenarioManifestFromBytes("t.yml", []byte(body), ValidateOptions{})
 	if err != nil {
 		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)

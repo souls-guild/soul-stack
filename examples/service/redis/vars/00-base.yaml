@@ -94,8 +94,8 @@ binary_allow_private: false
 # ── Cloud-provision defaults: provider/profile/timeout/ssh for create default-on ──
 # create brings up a VM by default (input.provision default-on, decision 2026-06-30).
 # The operator does NOT choose provider/profile in the Run form (it's hidden) — they come FROM HERE:
-# redis-provision.yml reads default(input.provision.X, vars.provision_X), the covenant
-# state_changes provisioned_provider — the same. Author-context: a fleet with a different
+# redis-provision.yml reads default(input.provision.X, vars.provision_X), and its
+# provisioned_provider capture — the same. Author-context: a fleet with a different
 # provider/profile/timeout forks this repo and edits it here; the default is the prod environment.
 #
 # ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. For now

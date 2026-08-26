@@ -11,7 +11,7 @@ Folder `scenario/<name>/` in the service git repo, entry point `main.yml`. Versi
 Before [ADR-009](../adr/0009-scenario-dsl.md), the invariant "scenario only `apply: { destiny: … }`, without `module:`" was in effect. **This invariant has been removed.** Scenario receives:
 
 - **Complete DSL core of destiny tasks** - entirely from [destiny/tasks.md](../destiny/tasks.md): `module:` (including modifying modules, not only read-only), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `async:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:`. This kernel is **not duplicated** in the scenario spec - there is only one source of truth.
-- **The orchestration layer on top** is something that destiny doesn't have: targeting (`on:`/`where:`), cross-host coordination, `apply: { destiny: … }`, writing `incarnation.state` via `state_changes`. The delta regulatory specification is [orchestration.md](orchestration.md).
+- **The orchestration layer on top** is something that destiny doesn't have: targeting (`on:`/`where:`), cross-host coordination, `apply: { destiny: … }`, writing `incarnation.state` with a `core.state.<verb>` capture step ([orchestration.md §7.1](orchestration.md#71-the-capture-verbs)). The delta regulatory specification is [orchestration.md](orchestration.md).
 
 destiny **remains** an independent entity (see border below): reusable, independently-versionable (git ref, [ADR-007](../adr/0007-versioning-git-ref.md)), isolated, molecule-testable brick of "how to bring one host into state X".
 
@@ -33,7 +33,7 @@ All three "yes" → take it to destiny, call via `apply: { destiny: … }`. Othe
 |---|---|---|
 | **Level** | one host | one cluster (one incarnation) |
 | **Knows about other hosts?** | no | yes (via `on:`/`where:` and `soulprint.where`) |
-| **Writes state to the database?** | no | yes (`state_changes`) |
+| **Writes state to the database?** | no | yes (a `core.state.<verb>` step) |
 | **Access to the SERVICE's `vars.*`** | no — a destiny's `vars.*` is its own `vars.yml` and nothing else | yes — the resolved `vars/` sits at the bottom of the scenario's `vars.*` |
 | **Task DSL** | [destiny/tasks.md](../destiny/tasks.md) | same core + orchestration delta ([orchestration.md](orchestration.md)) |
 | **Version** | git ref destiny-repo | git ref service-repo |

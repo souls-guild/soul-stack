@@ -33,7 +33,7 @@ type TaskExecutedInput struct {
 	// PlanIndex — the GLOBAL end-to-end task index across the whole run plan (across
 	// all Passages), = RenderedTask.Index (echo of TaskEvent.plan_index, ADR-056 §S1
 	// fix Variant B). The correlation key of a CHANGED task with the plan in
-	// auditpg.SelectChangedTaskKeys (state_changes whitelist + audit changed_tasks).
+	// auditpg.SelectChangedTaskKeys (the audit changed_tasks set).
 	// The local TaskIdx under staged/per-host-where would point at a neighboring task
 	// (the same defect the register channel fixed with migration 079). keeper-side tasks
 	// (`on: keeper`) run before host fan-out → PlanIndex==TaskIdx==Index. N=1 / an old

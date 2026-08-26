@@ -86,7 +86,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -124,7 +124,7 @@ assert:
           node-3.example.com: { addr: "10.0.0.3:6379" }
           node-4.example.com: { addr: "10.0.0.4:6379" }
 
-  state_changes:
+  state_after:
     redis_type: cluster
     redis_version: "7.4.1"
     redis_config:

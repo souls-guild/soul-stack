@@ -113,9 +113,9 @@ Drivers (`harness/stack.go`):
   state (for mutating scenarios whose `create` is unavailable in L3a — cloud-spawn /
   declared-role / probe on a not-yet-started host, e.g. redis-cluster).
 - `WaitApplySuccess` — blocks until `apply_runs.status=success` for all rows of the run.
-- `WaitIncarnationReady` — blocks until `incarnation.status=ready` (state_changes are
-  committed AFTER the barrier across all hosts; you must wait for `ready`, not just
-  success).
+- `WaitIncarnationReady` — blocks until `incarnation.status=ready` (a capture standing
+  after the host work commits after those hosts report success; you must wait for
+  `ready`, not just success).
 
 Fixture helpers: `RegisterService`, `MaterializeDestinies`, `SeedSoulprint`,
 `AddMember` (roster via `incarnation_membership`, ADR-008 amendment/NIM-124),

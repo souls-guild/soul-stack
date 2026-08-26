@@ -18,7 +18,7 @@ import (
 //	     'password': generate_secret({ 'length': 32, 'charset': 'alphanumeric' })
 //	   })) }
 //
-// `core.state.present` resolves the request at write time — an existing value is kept,
+// `core.state.*` resolves the request at write time — an existing value is kept,
 // an empty field is minted per the policy ([ADR-0083] §4). The function itself is pure,
 // which is the whole point: render is re-run per passage and per retry, so a function
 // that returned a string would mint a different one on every evaluation and make
@@ -80,7 +80,7 @@ func (r *secretRequest) ConvertToType(t ref.Type) ref.Val {
 	if t == types.TypeType {
 		return secretRequestType
 	}
-	return types.NewErr("generate_secret(): a SecretRequest cannot be converted to %s — it is resolved by core.state.present, not rendered", t.TypeName())
+	return types.NewErr("generate_secret(): a SecretRequest cannot be converted to %s — it is resolved by core.state.*, not rendered", t.TypeName())
 }
 
 // ConvertToNative yields the marker map for map/any targets and an error for anything

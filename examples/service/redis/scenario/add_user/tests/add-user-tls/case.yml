@@ -11,7 +11,7 @@
 #   1. users.acl re-rendered with the merged set (alice — the incarnation's first user).
 #   2. hot-reload (community.redis.acl): addr 127.0.0.1:7379 (TLS port), tls=true,
 #      tls_ca = CA PEM (from state.tls.ca_ref).
-#   3. state_changes: redis_users = {alice}.
+#   3. state_after: redis_users = {alice}.
 name: add_user over TLS hot-reloads ACL on tls-port from incarnation.state
 
 fixtures:
@@ -52,7 +52,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.present` task resolves THIS list into the register.
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 
@@ -68,7 +68,7 @@ fixtures:
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -115,6 +115,6 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
-  state_changes:
+  state_after:
     redis_users:
       - { name: alice, perms: "~app:* +@read +@write", state: "on" }

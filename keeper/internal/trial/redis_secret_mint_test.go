@@ -5,7 +5,7 @@ package trial
 // step is present / read-set ⊆ generated-set" has no subject left. What survived, restated:
 //
 //  1. PRESENCE + ORDER — every field consumed as `register.<field>` is produced by a
-//     keeper-side `core.state.present` task in the SAME plan, in a strictly earlier Passage.
+//     keeper-side `core.state.set` task in the SAME plan, in a strictly earlier Passage.
 //     Under NIM-172 that order rested on the vault-emitter axis, invisible to the scenario
 //     author; now it is a plain register edge (shared/config.collectTaskReads), declared by
 //     the scenario itself.
@@ -48,10 +48,10 @@ const (
 	addUserSystemCase     = "../../../examples/service/redis/scenario/add_user/tests/add-user-preserves-system-users/case.yml"
 	updateUsersSystemCase = "../../../examples/service/redis/scenario/update_users/tests/preserves-system-users/case.yml"
 
-	// statePresentAddr — the keeper-side module that reads-or-mints a state field carrying
+	// stateSetAddr — the keeper-side module that reads-or-mints a state field carrying
 	// declared secrets ([ADR-0083] §4). It is the ONLY channel into the service's own Vault
-	// namespace, so "is there a mint for X" is exactly "is there a core.state.present for X".
-	statePresentAddr = "core.state.present"
+	// namespace, so "is there a mint for X" is exactly "is there a core.state.set for X".
+	stateSetAddr = "core.state.set"
 
 	systemUsersField = "system_acl_users"
 	redisUsersField  = "redis_users"
@@ -86,11 +86,11 @@ func mintIndexByRegister(t *testing.T, tasks []config.Task) map[string]int {
 	t.Helper()
 	out := map[string]int{}
 	for i := range tasks {
-		if tasks[i].Module == nil || tasks[i].Module.Module != statePresentAddr || tasks[i].Register == "" {
+		if tasks[i].Module == nil || tasks[i].Module.Module != stateSetAddr || tasks[i].Register == "" {
 			continue
 		}
 		if prev, dup := out[tasks[i].Register]; dup {
-			t.Fatalf("register %q is produced by two core.state.present tasks (idx %d and %d) — the consumers' edge is ambiguous", tasks[i].Register, prev, i)
+			t.Fatalf("register %q is produced by two core.state.set tasks (idx %d and %d) — the consumers' edge is ambiguous", tasks[i].Register, prev, i)
 		}
 		out[tasks[i].Register] = i
 	}
@@ -164,7 +164,7 @@ func assertMintPrecedesReaders(t *testing.T, caseFile string) {
 	tasks, passage := loadExpandedPlan(t, caseFile)
 	mints := mintIndexByRegister(t, tasks)
 	if len(mints) == 0 {
-		t.Fatalf("%s: no core.state.present task in the plan — nothing resolves the scenario's declared secrets ([ADR-0083] §4)", caseFile)
+		t.Fatalf("%s: no core.state.set task in the plan — nothing resolves the scenario's declared secrets ([ADR-0083] §4)", caseFile)
 	}
 
 	consumers := 0
@@ -225,13 +225,39 @@ func scenarioLabel(caseFile string) string {
 func TestRedisSecrets_RegisterEdgeIsLoadBearing(t *testing.T) {
 	tasks, _ := loadExpandedPlan(t, createSentinelCase)
 
+	// Two passes: the second drops the captures of what the first dropped.
+	// [ADR-0084] turned `provisioned_vm_ids` from an end-of-run block into a
+	// `core.state.set` task reading `register.provision`, so a capture is now part
+	// of the provision body — leaving it behind makes Stratify reject the plan on a
+	// dangling register instead of answering the A/B question.
+	dropped := map[string]bool{}
+	isProvisionBody := func(t config.Task) bool {
+		addr := ""
+		if t.Module != nil {
+			addr = t.Module.Module
+		}
+		return strings.HasPrefix(addr, "core.cloud") ||
+			strings.HasPrefix(addr, "core.bootstrap") ||
+			strings.HasPrefix(addr, "core.soul")
+	}
+	for i := range tasks {
+		if isProvisionBody(tasks[i]) && tasks[i].Register != "" {
+			dropped[tasks[i].Register] = true
+		}
+	}
 	var filtered []config.Task
 	for i := range tasks {
-		addr := ""
-		if tasks[i].Module != nil {
-			addr = tasks[i].Module.Module
+		if isProvisionBody(tasks[i]) {
+			continue
 		}
-		if strings.HasPrefix(addr, "core.cloud") || strings.HasPrefix(addr, "core.bootstrap") || strings.HasPrefix(addr, "core.soul") {
+		readsDropped := false
+		for _, ref := range config.ExtractRegisterRefs(passageReadText(&tasks[i])) {
+			if dropped[ref] {
+				readsDropped = true
+				break
+			}
+		}
+		if readsDropped {
 			continue
 		}
 		filtered = append(filtered, tasks[i])
@@ -266,7 +292,7 @@ func TestRedisSecrets_RegisterEdgeIsLoadBearing(t *testing.T) {
 	}
 }
 
-// mintedSet is the rendered `set` of one core.state.present task: account name → does this run
+// mintedSet is the rendered `value` of one core.state.set task: account name → does this run
 // request a NEW secret for it. The request travels as the `__secret_request` envelope
 // (shared/secretpolicy.MarkerKey), so "was a secret requested" is decidable on rendered params.
 func mintedSet(t *testing.T, caseFile string, tasks []*render.RenderedTask, field string) map[string]bool {
@@ -274,35 +300,35 @@ func mintedSet(t *testing.T, caseFile string, tasks []*render.RenderedTask, fiel
 	out := map[string]bool{}
 	found := false
 	for _, rt := range tasks {
-		if rt.Module != statePresentAddr || rt.Params == nil {
+		if rt.Module != stateSetAddr || rt.Params == nil {
 			continue
 		}
 		params := rt.Params.AsMap()
-		if key, _ := params["key"].(string); key != field {
+		if name, _ := params["field"].(string); name != field {
 			continue
 		}
 		if found {
-			t.Fatalf("%s: two rendered core.state.present tasks for key %q", caseFile, field)
+			t.Fatalf("%s: two rendered core.state.set tasks for field %q", caseFile, field)
 		}
 		found = true
-		set, ok := params["set"].([]any)
+		value, ok := params["value"].([]any)
 		if !ok {
-			t.Fatalf("%s: core.state.present[%s].set is %T, want a list", caseFile, field, params["set"])
+			t.Fatalf("%s: core.state.set[%s].value is %T, want a list", caseFile, field, params["value"])
 		}
-		for i, item := range set {
+		for i, item := range value {
 			obj, ok := item.(map[string]any)
 			if !ok {
-				t.Fatalf("%s: core.state.present[%s].set[%d] is %T, want an object", caseFile, field, i, item)
+				t.Fatalf("%s: core.state.set[%s].value[%d] is %T, want an object", caseFile, field, i, item)
 			}
 			name, _ := obj["name"].(string)
 			if name == "" {
-				t.Fatalf("%s: core.state.present[%s].set[%d] carries no name: %v", caseFile, field, i, obj)
+				t.Fatalf("%s: core.state.set[%s].value[%d] carries no name: %v", caseFile, field, i, obj)
 			}
 			out[name] = isSecretRequest(obj["password"])
 		}
 	}
 	if !found {
-		t.Fatalf("%s: no rendered core.state.present task for key %q — nothing resolves that field's declared secrets", caseFile, field)
+		t.Fatalf("%s: no rendered core.state.set task for field %q — nothing resolves that field's declared secrets", caseFile, field)
 	}
 	return out
 }
@@ -331,7 +357,7 @@ func renderPlan(t *testing.T, caseFile string) []*render.RenderedTask {
 }
 
 // TestRedisAddUser_MintsOnlyTheNewUser — invariant 2 for add_user: a secret is requested for
-// input.user and for nobody else. Mutation: drop the ternary in the mint's `set` (request for
+// input.user and for nobody else. Mutation: drop the ternary in the mint's `value` (request for
 // every element) and this fails on bob and on every system account.
 func TestRedisAddUser_MintsOnlyTheNewUser(t *testing.T) {
 	tasks := renderPlan(t, addUserSystemCase)

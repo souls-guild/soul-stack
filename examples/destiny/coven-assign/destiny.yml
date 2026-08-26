@@ -15,7 +15,7 @@ description: Bind a Soul to a set of stable Coven labels in the keeper registry
 # The coven-assign contract does NOT write the declared role (see
 # docs/scenario/orchestration.md §4.1: the declared role lives in
 # the host's Choir Voice (incarnation_choir_voices.role), actual host binding — in
-# incarnation.state via scenario state_changes, not here). So input: only has
+# incarnation.state via the scenario's core.state.* steps, not here). So input: only has
 # sid + coven, deliberately no role field.
 
 input:

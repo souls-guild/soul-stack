@@ -108,14 +108,13 @@ ORDER BY sid ASC, plan_index ASC
 // (single apply_id, multiple sid/plan_index pairs), sorted by (sid, plan_index).
 // Used by scenario-runner after the barrier: it groups rows per-host,
 // resolves plan_index → register_name from its []RenderedTask (by
-// RenderedTask.Index = global index) and builds RenderInput.Register for
-// rendering state_changes.sets. Sorting by global plan_index preserves
-// the "later task wins" semantics when register names collide.
+// RenderedTask.Index = global index) and builds RenderInput.Register. Sorting by
+// global plan_index preserves the "later task wins" semantics when register
+// names collide.
 //
-// Returns registers for ALL Passages in the run (staged-render, ADR-056):
-// the final state_changes.sets render aggregates registers from all passages
-// (after the last barrier). Rendering the next Passage in the stage-loop reads
-// registers from previous passages via [SelectTaskRegistersByApplyIDUpToPassage].
+// Returns registers for ALL Passages in the run (staged-render, ADR-056).
+// Rendering the next Passage in the stage-loop reads registers from previous
+// passages via [SelectTaskRegistersByApplyIDUpToPassage] instead.
 //
 // An empty result means a run with no registers: no tasks to accumulate; the caller
 // treats this as an empty register context.

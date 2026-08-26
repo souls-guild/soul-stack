@@ -24,7 +24,7 @@ description: >-
       user mongodb is NOT removed. This is a deliberate MVP boundary — extending the "depth" (purging data) is
       a separate decision.
 
-  * state_changes are DELIBERATELY ABSENT: destroy is terminal — the incarnation is deleted
+  * state capture is DELIBERATELY ABSENT: destroy is terminal — the incarnation is deleted
   (auto_destroy), so clearing state is pointless (it disappears with the incarnation). Mirrors create,
   where state is POPULATED; here we leave it untouched.
 

@@ -1510,18 +1510,141 @@
     {
       "name": "state",
       "states": {
-        "present": {
-          "description": "Keeper-side (on:keeper). The state field named by key holds set, with every property the service state_schema declares `type: secret` resolved present-not-set: an existing Vault value is kept, a missing one is minted from a generate_secret() request. Returns the effective state with each secret property replaced by its `vault:` reference ([ADR-0083] §4).",
+        "add": {
+          "description": "Keeper-side (on:keeper). Adds ONE element to the collection field named by field, idempotently: an element with the same identity (key or match) is not added twice (ADR-057).",
           "input": {
-            "key": {
+            "field": {
               "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
               "required": true,
               "type": "string"
             },
-            "set": {
-              "description": "The field's value: a list of elements, each an object carrying the declared key property. A secret property is written as generate_secret({'length': …, 'charset': …}); omitting it requires the value to already exist.",
+            "key": {
+              "description": "Identity of the element in a MAP field: the key it is stored under, an existing entry under the same key being the conflict. Mutually exclusive with match, which is the LIST-field spelling - which of the two the engine reads is decided by the field's kind, so writing the wrong one is an error, not a fallback.",
+              "type": "string"
+            },
+            "match": {
+              "description": "Identity of the element in a LIST field: a CEL predicate over `elem` and `value` deciding whether an existing element is the same one, e.g. `elem.name == value.name`. Omitted, identity is deep equality of the whole element. Mutually exclusive with key, which is the MAP-field spelling.",
+              "type": "string"
+            },
+            "on_conflict": {
+              "description": "What to do when the element already exists: skip (default, no-op), replace (overwrite it), error (fail the run).",
+              "enum": [
+                "skip",
+                "replace",
+                "error"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The element to add. A secret property of the element is written as generate_secret({'length': …, 'charset': …}).",
               "required": true,
-              "type": "list"
+              "type": "string"
+            }
+          }
+        },
+        "append": {
+          "description": "Keeper-side (on:keeper). Appends ONE element to the list field named by field, unconditionally — no identity check. For a sequence where the same element may legitimately occur twice; use add for a set.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The element to append. A secret property of the element is written as generate_secret({'length': …, 'charset': …}).",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "modify": {
+          "description": "Keeper-side (on:keeper). Patches every element of the collection field named by field that matches match (ADR-057). Writes no value of its own, so it mints no secret.",
+          "input": {
+            "expect": {
+              "description": "How many elements the match must select: any (default), one, at_most_one. A count outside it fails the run before the commit.",
+              "enum": [
+                "any",
+                "one",
+                "at_most_one"
+              ],
+              "type": "string"
+            },
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "match": {
+              "description": "CEL predicate over `elem` selecting which elements to patch, e.g. `elem.name == 'alice'`. Omitted, it matches NOTHING and the step is a no-op - write `true` to patch every element.",
+              "type": "string"
+            },
+            "patch": {
+              "description": "Path-inside-the-element -> new value. A value may be a CEL expression over `elem`, so a patch can be computed from what the element already holds.",
+              "required": true,
+              "type": "map"
+            }
+          }
+        },
+        "present": {
+          "description": "Keeper-side (on:keeper). Writes the state field named by field ONLY if it has no value yet; an existing value wins, including one written earlier in the same run. Nothing is minted for a write that is discarded.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The value to write if the field is empty. A secret property is written as generate_secret({'length': …, 'charset': …}).",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "remove": {
+          "description": "Keeper-side (on:keeper). Drops every element of the collection field named by field that matches match (ADR-057). Removes elements from inside the field; use unset to drop the field itself.",
+          "input": {
+            "expect": {
+              "description": "How many elements the match must select: any (default), one, at_most_one. A count outside it fails the run before the commit.",
+              "enum": [
+                "any",
+                "one",
+                "at_most_one"
+              ],
+              "type": "string"
+            },
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "match": {
+              "description": "CEL predicate over `elem` selecting which elements to drop, e.g. `elem.name == 'alice'`. Omitted, it matches NOTHING and the step is a no-op - a forgotten line drops nothing. Write `true` to drop every element, or use core.state.unset to drop the field itself.",
+              "type": "string"
+            }
+          }
+        },
+        "set": {
+          "description": "Keeper-side (on:keeper). Writes the state field named by field, replacing whatever it held. Returns the effective state with each declared secret property replaced by its `vault:` reference ([ADR-0084]).",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The field's whole value. A secret property is written as generate_secret({'length': …, 'charset': …}); omitting it requires the value to already exist.",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "unset": {
+          "description": "Keeper-side (on:keeper). Drops the state field named by field itself, as opposed to remove, which drops elements from inside a collection.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
             }
           }
         }

@@ -100,7 +100,7 @@ scenarios:
 | `<scenario>.apply_responses[]` | list | yes | List of scripted responses. Matching by `task_name` (not by index - order may vary). |
 | `apply_responses[].task_name` | string | yes | Complete `name:` tasks from destiny/scenario. |
 | `apply_responses[].run_result.status` | string | yes | The actual value of enum is `keeper/internal/applyrun.Status` (for example `success`, `failed`). Harness validates fail-early. |
-| `apply_responses[].run_result.state_changes` | map | no | An arbitrary jsonb-payload, placed in the `state_changes` field `FromSoul.RunResult`. |
+| `apply_responses[].run_result.state_changes` | map | no | An arbitrary jsonb-payload, placed in the `state_changes` field of `FromSoul.RunResult`. **A real Soul never populates it** — [ADR-0084](../adr/0084-explicit-state-capture.md) retired the end-of-run commit it fed, so a scenario's state comes from its `core.state.<verb>` capture steps, not from here. Keeper still forwards a non-nil value into the apply event payload ([ADR-012](../adr/0012-keeper-soul-grpc.md) is only-add), which is exactly what this key exercises. |
 
 ### `expectations/after-<scenario>.yaml`
 

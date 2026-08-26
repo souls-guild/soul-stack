@@ -5,7 +5,7 @@
 # core.soul.registered registers the created SIDs + await_online barrier + refresh_soulprint.
 #
 # * register.provision in L0 — from mocks.register (probe/cloud are not executed, ADR-023):
-# steps (b)/(c) of provision.yml and state_changes read register.provision.{vm_ids,hosts}
+# steps (b)/(c) of provision.yml and the provisioned_* captures read register.provision.{vm_ids,hosts}
 # from here. This is the L0 pass-through of the ready register-payload of core.cloud.created.
 #
 # The NUMBER of VMs from the sentinel topology = 1 + replicas_per_master. replicas_per_master=2
@@ -69,7 +69,7 @@ fixtures:
 
 # register.provision — the ready payload of core.cloud.created (L0 pass-through, step (a) is
 # not executed): vm_ids of created VMs + hosts[{sid,...,bootstrap_token}]. Steps (b)/(c) and
-# state_changes read it. sids of the created VMs = the roster's SIDs (in production
+# the provisioned_* captures read it. sids of the created VMs = the roster's SIDs (in production
 # refresh_soulprint would add them; here the roster already carries them).
 mocks:
   register:
@@ -80,7 +80,7 @@ mocks:
         - { sid: vm-2.example.com, vm_id: i-bbb222, primary_ip: 10.0.0.2, bootstrap_token: tok-vm2 }
         - { sid: vm-3.example.com, vm_id: i-ccc333, primary_ip: 10.0.0.3, bootstrap_token: tok-vm3 }
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
-  # `core.state.present` task, which L0 renders but does not execute. Seeding the
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
   # register here is the consumer's post-resolution view -- the plaintext a Soul-side
   # task sees after the pipeline resolved each `vault:` reference. No case authors a
   # Vault path any more; the path is derived from (service, incarnation, field, key).
@@ -124,10 +124,10 @@ assert:
       params_subset:
         path: /etc/dragonfly/dragonfly.conf
 
-  state_changes:
+  state_after:
     df_version: "1.39.0"
     # read-model: the FACT "these VMs were raised by this run" — vm_ids from register.provision,
-    # provider from input.provision (gated by input.provision.enabled, ternary in state_changes).
+    # provider from input.provision (read directly - the whole include is dropped when off).
     provisioned_vm_ids: [i-aaa111, i-bbb222, i-ccc333]
     # provisioned_sids: SID of each created VM (register.provision.hosts[].sid) — for
     # cascade-destroy teardown. The same guard+shape as provisioned_vm_ids.

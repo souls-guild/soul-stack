@@ -13,6 +13,12 @@ package validate
 //     the run would never have started.
 //   - passage structure (how many Passages, how many tasks each) — HINT
 //     (informational, for the author).
+//   - the two capture-ordering rules of [ADR-0084] — ERROR: a consumer that
+//     reads a register BEFORE the `core.state.<verb>` step that stores it
+//     ([config.StoreAfterUse]), and an interpolated `${ incarnation.state.<field> }`
+//     read that runs after a same-Passage capture of that field
+//     ([config.StaleStateRead]). Both need the EXPANDED task list, which is
+//     exactly what this pass has and the per-file task rules do not.
 //
 // serial: + staged (N>1 Passage) is no longer an error (ADR-056 §S4 amend,
 // S-2D1): 2D serial×passage is implemented — each Passage runs its serial
@@ -121,6 +127,27 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return out
 	}
 
+	// Wide match is a WARN, and unlike everything below it does NOT return: the
+	// wide form is legitimate ("clear every user"), it is just far more often a
+	// predicate the author meant to narrow. Emitted here, before the ordering
+	// errors short-circuit, so the author sees it even in a plan that also fails
+	// to stratify -- and emitted from the stage pass rather than a per-task rule
+	// because a capture routinely arrives through `include:`.
+	for _, info := range config.WideStateMatch(tasks) {
+		field := info.Ref
+		if field == "" {
+			field = "the field"
+		}
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelWarning,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    scenarioPath,
+			Code:    config.CodeStateWideMatch,
+			Message: fmt.Sprintf("task %q (core.state.%s) has no narrowing match: -- it selects EVERY element of %s", info.CaptureName, info.CaptureVerb, field),
+			Hint:    "give match: a predicate over elem/key/value; a constant-true or absent match: repatches or removes the whole collection",
+		})
+	}
+
 	plan, err := config.Stratify(tasks)
 	if err != nil {
 		var se *config.StratifyError
@@ -182,6 +209,41 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 			Code:    config.CodeCrossPassageWhenGating,
 			Message: fmt.Sprintf("task %q gates %s: by register %q from a different Passage (consumer passage %d, source passage %d) -- Soul-side gating sees only its own Passage, a cross-passage register is unavailable to it -> no such key", info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage),
 			Hint:    "when:/changed_when:/failed_when: by register from a different Passage is unsupported (Soul-side gating sees only its own Passage) -- use where: for cross-task register targeting, OR register.self for same-task gating",
+		})
+		return out
+	}
+
+	// Store-after-use is an ERROR ([ADR-0084], "The ordering guard"). A task
+	// consumes a register that a `core.state.<verb>` step captures, and consumes
+	// it FIRST: in the window between the two a crash leaves a live host
+	// configured with a value that exists nowhere else. Generate -> store -> use
+	// is recoverable at every crash point; this is the one order that is not.
+	if info, bad := config.StoreAfterUse(tasks, plan); bad {
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    scenarioPath,
+			Code:    config.CodeStateStoreAfterUse,
+			Message: fmt.Sprintf("task %q consumes register %q BEFORE the capture step %q (core.state.%s) stores it -- a crash between the two leaves a host configured with a value that exists nowhere else", info.OtherName, info.Ref, info.CaptureName, info.CaptureVerb),
+			Hint:    "move the core.state.<verb> step ahead of every consumer of that register: generate -> store -> use",
+		})
+		return out
+	}
+
+	// A stale same-Passage state read is an ERROR ([ADR-0084], same section). An
+	// interpolated `${ incarnation.state.<field> }` refreshes only at a Passage
+	// boundary, so a reader after a same-Passage capture of that field renders the
+	// PRE-capture value -- while the verb engine, which always reads live, would
+	// have written the new one. Rejected rather than letting the two mechanisms
+	// disagree in production.
+	if info, bad := config.StaleStateRead(tasks, plan); bad {
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelError,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    scenarioPath,
+			Code:    config.CodeStateStaleRead,
+			Message: fmt.Sprintf("task %q reads ${ incarnation.state.%s } in the SAME Passage (%d) where %q (core.state.%s) captures it -- an interpolated read refreshes only at a Passage boundary, so it renders the pre-capture value", info.OtherName, info.Ref, info.CapturePassage, info.CaptureName, info.CaptureVerb),
+			Hint:    "read the capture's effective output through register.<name>, or push the reader into a later Passage with a register: dependency on the capture",
 		})
 		return out
 	}

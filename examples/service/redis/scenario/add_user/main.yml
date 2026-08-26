@@ -85,17 +85,9 @@ compute:
           : [])
        + [{ 'name': input.user.name, 'perms': input.user.perms, 'state': default(input.user.state, 'on') }] }
 
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# The scenario commits the NEW ACL user set (array of AclUser [{name,perms,state}],
-# wave 1b, WITHOUT the password (it's keeper-side vault, ADR-012). The same
-# compute.users_new (array) that went into the users.acl render.
-state_changes:
-  - set: redis_users
-    value: "${ compute.users_new }"
-
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference.
@@ -108,32 +100,32 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
+      field: system_acl_users
       # ★★ DELIBERATELY read-only, never minted here: these are the credentials the LIVE
       # instance and its replicas already authenticate with (community.redis.acl AUTHs as
       # default_admin BEFORE ACL LOAD applies the new file). No `password` property on any
-      # element → present-semantics require an EXISTING value, so a broken incarnation
+      # element → secret resolution requires an EXISTING value, so a broken incarnation
       # fails loudly instead of being handed a fresh password nothing else knows.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Mint the new operator ACL user's password, keep the rest
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
+      field: redis_users
       # ★★ SCOPE — only input.user carries a request. The already-deployed operator users
-      # are passed WITHOUT a `password` property, so present-semantics require their
+      # are passed WITHOUT a `password` property, so secret resolution requires their
       # existing value: a missing one is a broken incarnation and must fail loudly rather
       # than silently rotating a working client's credential.
       #
       # ★★ RE-RUN: mint-if-empty, so re-running add_user for an EXISTING user upserts
       # perms/state only and KEEPS the password clients already hold. Rotation is not part
       # of add_user and is not expressible here by design.
-      set: >-
+      value: >-
         ${ compute.users_new.map(u, u.name == input.user.name
              ? { 'name': u.name, 'perms': u.perms, 'state': u.state,
                  'password': generate_secret({'length': 32, 'charset': 'alphanumeric'}) }

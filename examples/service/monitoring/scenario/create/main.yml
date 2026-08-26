@@ -111,16 +111,6 @@ input:
       --web.config.file=<path> for TLS/basic-auth, etc). Each element is a
       separate ExecStart argument. web.yml for TLS is a separate file.
 
-# ── incarnation.state mutation ─────────────────────────────────────────────────
-# After a successful apply, Keeper records what was deployed (ADR-009, §7.1).
-state_changes:
-  - set: node_exporter_version
-    value: "${ input.node_exporter_version }"
-  - set: redis_exporter_version
-    value: "${ input.redis_exporter_version }"
-  - set: redis_socket
-    value: "${ input.redis_socket }"
-
 tasks:
   # ── node_exporter ───────────────────────────────────────────────────────────
   # Delegated to the node-exporter destiny (apply:destiny, isolated render).
@@ -239,3 +229,24 @@ tasks:
     timeout: 30s
     params:
       name: redis_exporter
+
+  - name: Record the deployed node_exporter version
+    on: keeper
+    module: core.state.set
+    params:
+      field: node_exporter_version
+      value: "${ input.node_exporter_version }"
+
+  - name: Record the deployed redis_exporter version
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_exporter_version
+      value: "${ input.redis_exporter_version }"
+
+  - name: Record the Redis socket the exporter connects to
+    on: keeper
+    module: core.state.set
+    params:
+      field: redis_socket
+      value: "${ input.redis_socket }"

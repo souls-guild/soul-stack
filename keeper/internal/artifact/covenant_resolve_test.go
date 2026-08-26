@@ -209,17 +209,19 @@ tasks: []
 	}
 }
 
-// Cross-form state_changes: covenant in list form, scenario in map form (or
-// vice versa) -> state_changes_form_mismatch (S1 merge does not detect across
-// forms).
-func TestResolveCovenant_StateChangesFormMismatch(t *testing.T) {
+// TestResolveCovenant_StateChangesRejectedOnBothSides — ★ [ADR-0084] removed
+// `state_changes:` from the grammar on BOTH sides of the merge, and a removed key
+// has to be REJECTED, not ignored: a covenant that still carries one describes
+// writes that would silently stop happening, which is the failure mode the whole
+// ADR is written against. The covenant half raises covenant_unexpected_key, the
+// scenario half unknown_key (with the migration hint) — two different paths, so
+// both are pinned here.
+func TestResolveCovenant_StateChangesRejectedOnBothSides(t *testing.T) {
 	root := t.TempDir()
-	// covenant: list-form state_changes.
 	writeCovenant(t, root, "base", `state_changes:
   - set: shared_field
     value: "${ input.x }"
 `)
-	// scenario: map form (deprecated Sets).
 	writeScenario(t, root, "create", `name: create
 extends: base
 tasks: []
@@ -232,8 +234,10 @@ state_changes:
 `)
 
 	_, diags := loadResolved(t, root, "create")
-	if !hasCode(diags, "state_changes_form_mismatch") {
-		t.Fatalf("want state_changes_form_mismatch, codes: %v", diagCodes(diags))
+	for _, code := range []string{"covenant_unexpected_key", "unknown_key"} {
+		if !hasCode(diags, code) {
+			t.Fatalf("want %s, codes: %v", code, diagCodes(diags))
+		}
 	}
 }
 
@@ -256,7 +260,7 @@ compute:
 		t.Fatalf("without extends there should be no errors, codes: %v", diagCodes(diags))
 	}
 	for _, c := range diagCodes(diags) {
-		if strings.HasPrefix(c, "covenant") || c == "section_key_conflict" || c == "state_changes_form_mismatch" {
+		if strings.HasPrefix(c, "covenant") || c == "section_key_conflict" {
 			t.Errorf("covenant diagnostic without extends is not allowed: %s", c)
 		}
 	}

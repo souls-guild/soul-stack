@@ -15,29 +15,29 @@ import (
 // ScenarioManifest is the typed representation of `scenario/<name>/main.yml` per
 // the normative spec [`docs/scenario/orchestration.md`].
 //
-// It holds the scenario name/description, the `input:` contract (docs/input.md),
-// the `state_changes` declaration (what the scenario writes to `incarnation.state`
-// after a successful apply, §2), and the `tasks[]` list.
+// It holds the scenario name/description, the `input:` contract (docs/input.md)
+// and the `tasks[]` list. What the scenario writes to `incarnation.state` is a
+// `core.state.<verb>` task among the others ([ADR-0084]), not a section of its
+// own.
 //
 // The task DSL core is inherited from destiny (ADR-009): scenario supports all 22
 // keys from docs/destiny/tasks.md plus the scenario delta (on/where/serial/
 // run_once). Polymorphic task decode (module / apply / include / block) lives in
 // scenario_task.go.
 type ScenarioManifest struct {
-	Name         string         `yaml:"name"`
-	Description  string         `yaml:"description,omitempty"`
-	Input        InputSchemaMap `yaml:"input,omitempty"`
-	Validate     []ValidateRule `yaml:"validate,omitempty"`
-	StateChanges *StateChanges  `yaml:"state_changes,omitempty"`
-	Compute      ComputeBlock   `yaml:"compute,omitempty"`
-	Vars         map[string]any `yaml:"vars,omitempty"`
-	Tasks        []Task         `yaml:"tasks"`
+	Name        string         `yaml:"name"`
+	Description string         `yaml:"description,omitempty"`
+	Input       InputSchemaMap `yaml:"input,omitempty"`
+	Validate    []ValidateRule `yaml:"validate,omitempty"`
+	Compute     ComputeBlock   `yaml:"compute,omitempty"`
+	Vars        map[string]any `yaml:"vars,omitempty"`
+	Tasks       []Task         `yaml:"tasks"`
 
 	// Extends names a covenant fragment at the service-repo root (`covenant.yml`
 	// without extension, `<dir>/<name>` at most one directory deep, each segment
 	// matching refPathSegment — see reCovenantName in covenant.go, which is the
-	// authority) whose input/compute/
-	// state_changes/validate sections the scenario inherits (covenant.go). Empty /
+	// authority) whose input/compute/validate sections the scenario inherits
+	// (covenant.go). Empty /
 	// absent = no inheritance (forward-compat: existing scenarios without extends
 	// are unaffected). Resolving the fragment against the snapshot FS is keeper-side
 	// (S2 LoadScenarioManifest Resolved); the config layer gives types, mergeSections
@@ -106,19 +106,20 @@ type ValidateRule struct {
 // ComputeBlock holds scenario-level computed variables (`compute:`, ADR-009
 // amendment 2026-06-23). Each entry is `<name>: <CEL-expression>`: Keeper resolves
 // it ONCE per run in the RUN-LEVEL scenario context (input/vars/incarnation/
-// register), then the result is available as `compute.<name>` in both `apply.input`
-// and `state_changes` (cel_render.resolveCompute).
+// register), then the result is available as `compute.<name>` wherever a task
+// interpolates (cel_render.resolveCompute).
 //
 // Purpose: remove duplication of a shared expression otherwise written twice
-// (apply.input and state_changes do not see task-level `vars:`) — declare a big
-// merge() once and reference `${ compute.<name> }`.
+// (apply.input does not see task-level `vars:`) — declare a big merge() once and
+// reference `${ compute.<name> }`.
 //
 // Isolation barrier (architect aebb2d39 §5):
 //   - compute does NOT leak into the isolated destiny pass (destiny sees only the
 //     result via apply.input — RenderInput.Compute is not forwarded there, ADR-009 V2);
 //   - compute's resolve context is RUN-LEVEL (WITHOUT soulprint.self/soulprint.hosts):
 //     compute is host-invariant by construction, so the same value correctly flows
-//     to apply.input (resolved on targeted[0]) and to state_changes (per-run, not
+//     to apply.input (resolved on targeted[0]) and to every task's params
+//     (per-run, not
 //     per-host). Referencing soulprint.* in compute → CEL no-such-key (a structural
 //     barrier, not a textual guard).
 //
@@ -134,39 +135,6 @@ type ComputeBlock []ComputeVar
 type ComputeVar struct {
 	Name  string
 	Value any
-}
-
-// StateChanges declares the `incarnation.state` mutations a scenario commits after
-// a successful cross-host barrier (orchestration.md §7).
-//
-// Two decode forms (UnmarshalYAML discriminates by YAML node kind):
-//
-//   - NEW list form (sequence): `state_changes:` is an ordered list of verb
-//     operations (`- set:` / `- add:` / `- modify:` / `- remove:` / `- foreach:`)
-//     applied in declaration order to the intermediate state. Decoded into `Ops`
-//     (see StateChange); `IsList` = true. The target grammar of ADR-057 (all verbs
-//     implemented).
-//   - OLD map form (mapping, DEPRECATED): `state_changes: { sets: {...},
-//     appends: [...], modifies: [...] }`. Kept for backward-compat of existing
-//     scenarios — decoded into `Sets`/`Appends`/`Modifies`, `IsList` = false. Same
-//     semantics as before (orchestration.md §7.1): `Sets` is a map
-//     `<field> → <CEL-expression>`; cross-host fold is last-wins by SID.
-//     `Appends`/`Modifies` are not applied by the engine (a historical placeholder).
-//
-// An empty block is valid in either form (state unchanged): `state_changes: {}`
-// (old) or `state_changes: []` (new).
-type StateChanges struct {
-	// IsList discriminates the form (true for the new list form). Render/merge branch
-	// on it: list → ordered Ops; map → legacy Sets-overwrite.
-	IsList bool `yaml:"-"`
-
-	// Ops is the ordered operation list of the new list form. nil/empty in map form.
-	Ops []StateChange `yaml:"-"`
-
-	// Sets/Appends/Modifies are the old map form (DEPRECATED). nil in list form.
-	Sets     map[string]string `yaml:"sets,omitempty"`
-	Appends  []string          `yaml:"appends,omitempty"`
-	Modifies []string          `yaml:"modifies,omitempty"`
 }
 
 // UnmarshalYAML decodes `compute:` as a mapping `<name>: <expression>` into an
@@ -192,11 +160,14 @@ func (c *ComputeBlock) UnmarshalYAML(node ast.Node) error {
 	return nil
 }
 
-// StateVerb is the verb of one state_changes operation (new list form).
+// StateVerb is the operation a `core.state.<verb>` capture step performs on one
+// field of `incarnation.state` ([ADR-0084]). The state suffix of the module
+// address IS the verb — see [keeper/internal/stateop] for the author form and the
+// engine that applies it.
 type StateVerb string
 
 const (
-	// VerbSet overwrites a field wholesale (semantics of the old `sets`).
+	// VerbSet overwrites a field wholesale.
 	VerbSet StateVerb = "set"
 	// VerbAdd adds an element to a collection (map/list) idempotently.
 	VerbAdd StateVerb = "add"
@@ -205,9 +176,17 @@ const (
 	VerbModify StateVerb = "modify"
 	// VerbRemove removes ALL collection elements matching Match.
 	VerbRemove StateVerb = "remove"
-	// VerbForeach fans out N operations from a CEL list/map (render-time, the form
-	// from migration-DSL ADR-019). Expands into N RenderedOp before merge.
-	VerbForeach StateVerb = "foreach"
+	// VerbPresent writes a field ONLY if it has no value yet; an existing one
+	// wins. Field-level, unlike the secret-property rule of the same name in
+	// [ADR-0083] §4 — see the amendment there.
+	VerbPresent StateVerb = "present"
+	// VerbAppend appends an element to a list field unconditionally. `add` is
+	// idempotent by identity and is the right verb for a set; this one is for a
+	// sequence where the same element may legitimately occur twice.
+	VerbAppend StateVerb = "append"
+	// VerbUnset removes the field itself, as opposed to `remove`, which removes
+	// matching elements from inside a collection.
+	VerbUnset StateVerb = "unset"
 )
 
 // Expect is an optional runtime assert on match cardinality in modify/remove
@@ -236,162 +215,8 @@ const (
 	OnConflictError OnConflict = "error"
 )
 
-// StateChange is one operation of the ordered `state_changes` list (new list form).
-// The verb determines which fields are significant:
-//
-//   - set:     Field + Value (overwrite the field wholesale);
-//   - add:     Field + Value (+ Key for a map collection / Match|Key for list dedup,
-//   - OnConflict skip|replace|error, default skip);
-//   - modify:  Field + Match + Patch (+ optional Expect) — patch all matching;
-//   - remove:  Field + Match (+ optional Expect) — remove all matching;
-//   - foreach: In (CEL list/map) + As (binding name) + Do (nested verbs) —
-//     render-time fan-out of N operations (the form from migration-DSL ADR-019).
-//     Foreach carries its target field with Field=="" (the `foreach:` verb points
-//     not at a collection but at the CEL collection expression to iterate, held in In).
-//
-// Value/Patch is an arbitrary YAML value: a CEL string (`${ … }`), a literal, or a
-// nested object/list with CEL strings in cells (rendered recursively Keeper-side).
-// Key/Match are CEL strings (element identity/predicate).
-type StateChange struct {
-	Verb  StateVerb
-	Field string
-
-	Value      any
-	Key        string
-	Match      string
-	OnConflict OnConflict
-
-	// Patch — map of path-in-element → CEL/literal (modify only). Merge-time: each
-	// value is evaluated over the per-host scenario context + the current element's
-	// bindings (elem/key/value). A dotted path (`config.maxmemory`) is a nested merge,
-	// not a wholesale record overwrite (ADR-057 §a).
-	Patch any
-	// Expect — optional match-cardinality assert (modify/remove). "" → ExpectAny.
-	Expect Expect
-
-	// foreach: In is the CEL collection expression to iterate (`${ … }`); As is the
-	// current-element binding name; Do are the nested operations applied each
-	// iteration with the As binding active.
-	In string
-	As string
-	Do []StateChange
-}
-
-// stateOpVerbs are the known operation verbs (discriminator in decode/validation).
-// `expect` is NOT a verb — it is a modify/remove parameter (ADR-057 §c).
-var stateOpVerbs = map[string]StateVerb{
-	"set":     VerbSet,
-	"add":     VerbAdd,
-	"modify":  VerbModify,
-	"remove":  VerbRemove,
-	"foreach": VerbForeach,
-}
-
-// UnmarshalYAML DUAL-PARSEs StateChanges by YAML node kind:
-//
-//   - SequenceNode → new list form: decode each mapping element into a StateChange
-//     (by verb key), set IsList=true. Structural validation (required/inapplicable
-//     keys per verb) is raised by validateStateChanges over the AST — here only
-//     value decode.
-//   - MappingNode → old map form (DEPRECATED): the former sets/appends/modifies
-//     decode path (reusing setsFromNode/stringSeqFromNode).
-//   - other (scalar/null) → zero-value (walker/validator raises the diagnostic).
-//
-// A wrongly-shaped node inside an element is skipped without panic —
-// validateStateChanges raises a meaningful diagnostic by yaml_path.
-func (s *StateChanges) UnmarshalYAML(node ast.Node) error {
-	switch n := node.(type) {
-	case *ast.SequenceNode:
-		s.IsList = true
-		s.Ops = make([]StateChange, 0, len(n.Values))
-		for _, item := range n.Values {
-			if op, ok := stateOpFromNode(item); ok {
-				s.Ops = append(s.Ops, op)
-			}
-		}
-		return nil
-	case *ast.MappingNode:
-		for _, kv := range n.Values {
-			tok := kv.Key.GetToken()
-			if tok == nil {
-				continue
-			}
-			switch tok.Value {
-			case "sets":
-				s.Sets = setsFromNode(kv.Value)
-			case "appends":
-				s.Appends = stringSeqFromNode(kv.Value)
-			case "modifies":
-				s.Modifies = stringSeqFromNode(kv.Value)
-			}
-		}
-		return nil
-	default:
-		// state_changes: <scalar/null> — zero-value (validator raises type_mismatch).
-		return nil
-	}
-}
-
-// stateOpFromNode decodes one list-form element (a mapping with a verb key) into a
-// StateChange. The verb key (`set`/`add`/…) carries the target Field; the other keys
-// (`value`/`key`/`match`/`on_conflict`/`patch`/`in`/`as`/`do`) are op parameters. A
-// non-mapping element / a missing verb → (zero, false): the validator raises the
-// diagnostic by yaml_path.
-func stateOpFromNode(node ast.Node) (StateChange, bool) {
-	mm, ok := node.(*ast.MappingNode)
-	if !ok {
-		return StateChange{}, false
-	}
-	var op StateChange
-	var hasVerb bool
-	for _, kv := range mm.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil {
-			continue
-		}
-		key := tok.Value
-		if verb, isVerb := stateOpVerbs[key]; isVerb {
-			op.Verb = verb
-			// `foreach:` carries the CEL collection expression (→ In); the other
-			// verbs carry the target field name (→ Field). orchestration.md §7.1.
-			if verb == VerbForeach {
-				op.In = stringFromNode(kv.Value)
-			} else {
-				op.Field = stringFromNode(kv.Value)
-			}
-			hasVerb = true
-			continue
-		}
-		switch key {
-		case "value":
-			op.Value = nodeToAny(kv.Value)
-		case "key":
-			op.Key = stringFromNode(kv.Value)
-		case "match":
-			op.Match = stringFromNode(kv.Value)
-		case "on_conflict":
-			op.OnConflict = OnConflict(stringFromNode(kv.Value))
-		case "patch":
-			op.Patch = nodeToAny(kv.Value)
-		case "expect":
-			op.Expect = Expect(stringFromNode(kv.Value))
-		case "as":
-			op.As = stringFromNode(kv.Value)
-		case "do":
-			if seq, isSeq := kv.Value.(*ast.SequenceNode); isSeq {
-				for _, sub := range seq.Values {
-					if subOp, okSub := stateOpFromNode(sub); okSub {
-						op.Do = append(op.Do, subOp)
-					}
-				}
-			}
-		}
-	}
-	return op, hasVerb
-}
-
-// stringFromNode extracts a node's string value (for verb-Field, key, match,
-// on_conflict). Non-string → "" (the validator raises type_mismatch).
+// stringFromNode extracts a node's string value. Non-string → "" (the validator
+// raises type_mismatch).
 func stringFromNode(node ast.Node) string {
 	if sn, ok := node.(*ast.StringNode); ok {
 		return sn.Value
@@ -399,53 +224,16 @@ func stringFromNode(node ast.Node) string {
 	return ""
 }
 
-// nodeToAny decodes an arbitrary YAML node (value/patch) into a Go value via goccy
-// NodeToValue: a CEL string, a literal, or a nested object/list (CEL strings in
-// cells are rendered recursively Keeper-side). Decode failure → nil (the validator
-// raises the diagnostic by yaml_path).
+// nodeToAny decodes an arbitrary YAML node into a Go value via goccy NodeToValue:
+// a CEL string, a literal, or a nested object/list (CEL strings in cells are
+// rendered recursively Keeper-side). Decode failure → nil (the validator raises
+// the diagnostic by yaml_path).
 func nodeToAny(node ast.Node) any {
 	var v any
 	if err := yaml.NodeToValue(node, &v); err != nil {
 		return nil
 	}
 	return v
-}
-
-// setsFromNode decodes a mapping `<field>: <expression>` into map[string]string. A
-// non-mapping node (old seq form, scalar) → nil (validateStateChanges raises
-// type_mismatch). Non-string values are skipped — the validator raises the
-// diagnostic by yaml_path.
-func setsFromNode(node ast.Node) map[string]string {
-	mm, ok := node.(*ast.MappingNode)
-	if !ok {
-		return nil
-	}
-	out := make(map[string]string, len(mm.Values))
-	for _, kv := range mm.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil {
-			continue
-		}
-		if sn, ok := kv.Value.(*ast.StringNode); ok {
-			out[tok.Value] = sn.Value
-		}
-	}
-	return out
-}
-
-// stringSeqFromNode decodes a sequence of strings into []string. Non-sequence → nil.
-func stringSeqFromNode(node ast.Node) []string {
-	seq, ok := node.(*ast.SequenceNode)
-	if !ok {
-		return nil
-	}
-	vals := make([]string, 0, len(seq.Values))
-	for _, item := range seq.Values {
-		if sn, ok := item.(*ast.StringNode); ok {
-			vals = append(vals, sn.Value)
-		}
-	}
-	return vals
 }
 
 // reScenarioName — scenario name: snake_case or kebab-case (cluster operation names:
@@ -488,6 +276,11 @@ var deprecatedScenarioKeys = map[string]string{
 	"filter": "filter: removed (orchestration.md §4); use where: with register.<probe>.* predicate or stable soulprint.self.* facts",
 	// `version:` is a git ref, not a manifest field (ADR-007).
 	"version": "version is a git ref under which the scenario is committed, not a manifest field; see ADR-007",
+	// Removed by [ADR-0084]: a state field is written by an explicit
+	// `core.state.<verb>` step where its value becomes known, not by an
+	// end-of-run block that could only ever run after every host was already
+	// configured.
+	"state_changes": "state_changes: removed ([ADR-0084]); write each field with a `core.state.<verb>` task (module: core.state.set / present / add / append / modify / remove / unset, on: keeper) placed where the value becomes known",
 }
 
 // deprecatedTaskKeys — deprecated task-level keys (inside a `tasks[]` element or
@@ -501,48 +294,6 @@ var deprecatedTaskKeys = map[string]string{
 	// observable — which is narrower than no_log ever was and cannot be
 	// forgotten on a task.
 	"no_log": "no_log: removed (ADR-0083 §8); a module declares `secret: true` on the output fields it returns, and the platform masks them — delete the key",
-}
-
-// stateChangesKnownKeys — the closed key set of the old map form of `state_changes:`.
-var stateChangesKnownKeys = map[string]bool{
-	"sets":     true,
-	"appends":  true,
-	"modifies": true,
-}
-
-// stateOpKnownKeys — the closed key set of one list-form operation (verb +
-// parameters). Verbs come from stateOpVerbs; the rest are common op parameters. A
-// key outside the set → unknown_key. `expect` is a parameter (modify/remove), not a
-// verb; `as`/`do` are foreach parameters; `in` is not a key (foreach: carries the
-// expression).
-var stateOpKnownKeys = map[string]bool{
-	"set": true, "add": true, "modify": true, "remove": true,
-	"foreach": true,
-	"value":   true, "key": true, "match": true, "on_conflict": true,
-	"patch": true, "expect": true, "as": true, "do": true,
-}
-
-// stateOpConflictValues — the allowed `on_conflict` values.
-var stateOpConflictValues = map[string]bool{
-	"skip": true, "replace": true, "error": true,
-}
-
-// stateOpExpectValues — the allowed `expect` values (modify/remove).
-var stateOpExpectValues = map[string]bool{
-	"one": true, "at_most_one": true, "any": true,
-}
-
-// foreachReservedBindings — names `foreach.as:` must not shadow: the bare as-binding
-// is declared in the merge-time CEL context (render.renderForeach) and would clobber
-// the fixed scenario context OR the collection element's local bindings. Beyond
-// loopReservedNames (input/register/incarnation/soulprint/vars) it adds
-// elem/key/value — the current element's local bindings in add-match/modify-patch
-// (ADR-057 §b): `as: elem` would shadow the elem binding of a nested add operation
-// (reserved_binding_name).
-var foreachReservedBindings = map[string]bool{
-	"input": true, "register": true, "incarnation": true,
-	"soulprint": true, "vars": true,
-	"elem": true, "key": true, "value": true,
 }
 
 // schemaValidateScenario runs post-decode checks on a ScenarioManifest.
@@ -605,11 +356,6 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 			Hint:     "declare tasks: [...] — list of scenario tasks; empty list is allowed for no-op scenarios",
 			YAMLPath: "$.tasks",
 		})
-	}
-
-	// 4) `state_changes:` — structural validation (only if the key is present).
-	if topKeys["state_changes"] {
-		out = append(out, validateStateChanges(root, "$.state_changes")...)
 	}
 
 	// 4a) `compute:` — structural validation (only if the key is present).
@@ -757,411 +503,6 @@ func validateComputeBlock(root *ast.MappingNode, pathPrefix string) []diag.Diagn
 	return out
 }
 
-// validateStateChanges checks the structure of the `state_changes:` block. DUAL-FORM:
-//
-//   - a sequence in place of the block → new list form: each element is a verb
-//     operation (validateStateOp); all verbs (set/add/modify/remove/foreach) are
-//     validated against the full ADR-057 grammar.
-//   - a mapping → old map form (DEPRECATED): the former path (sets/appends/modifies).
-//     An empty `state_changes: {}` is valid.
-//   - other (scalar/null) — decode already raised type_mismatch; silent here.
-func validateStateChanges(root *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
-	node := findValueNode(root, "state_changes")
-	switch n := node.(type) {
-	case *ast.SequenceNode:
-		var out []diag.Diagnostic
-		for i, item := range n.Values {
-			out = append(out, validateStateOp(item, fmt.Sprintf("%s[%d]", pathPrefix, i))...)
-		}
-		return out
-	case *ast.MappingNode:
-		return validateStateChangesMap(n, pathPrefix)
-	default:
-		return nil
-	}
-}
-
-// validateStateChangesMap — old map form (sets/appends/modifies, DEPRECATED).
-//
-// ADR-057 transit safeguard (b): a valid map form is NOT an error (dual-parse for one
-// release) but must emit a DEPRECATION WARN — otherwise a scenario silently rides a
-// form the next release will remove. For appends/modifies a separate, stricter warn:
-// they were no-op placeholders (state does NOT grow) and must be rewritten as
-// add/modify, else a latent bug (ADR-057 §context).
-func validateStateChangesMap(node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
-	var out []diag.Diagnostic
-
-	// One deprecation warn for the whole block (anchored on the state_changes key —
-	// the position of the first known key), to avoid duplicating per sets/appends/modifies.
-	if pos := firstKnownStateChangeKeyPos(node); pos != nil {
-		out = append(out, diagAt(pos.Line, pos.Column, diag.Diagnostic{
-			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
-			Code:     "deprecated_form",
-			Message:  "state_changes map-form (sets/appends/modifies) is deprecated and will be removed next release",
-			Hint:     "rewrite as the ordered list-of-verbs form (- set: / - add: / - modify: / - remove:) — ADR-057",
-			YAMLPath: pathPrefix,
-		}))
-	}
-
-	for _, kv := range node.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil {
-			continue
-		}
-		keyName := tok.Value
-		if !stateChangesKnownKeys[keyName] {
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "unknown_key",
-				Message:  `unknown field "` + keyName + `"`,
-				Hint:     "state_changes (map-form, deprecated) allows only sets / appends / modifies; prefer the ordered list-form (- set: / - add:)",
-				YAMLPath: pathPrefix + "." + keyName,
-			}))
-			continue
-		}
-		if keyName == "sets" {
-			out = append(out, validateSetsMap(tok.Position.Line, tok.Position.Column, kv.Value, pathPrefix)...)
-			continue
-		}
-		// appends/modifies are no-op placeholders: state does NOT grow. A separate warn
-		// so the author does not think the declaration works (ADR-057 transit).
-		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
-			Code:     "noop_placeholder",
-			Message:  fmt.Sprintf("state_changes.%s is a no-op placeholder — it never applied, incarnation.state does not grow", keyName),
-			Hint:     "rewrite on the list-form: appends → - add: / modifies → - modify: (otherwise state will not change) — ADR-057",
-			YAMLPath: pathPrefix + "." + keyName,
-		}))
-		out = append(out, validateStringSeq(tok.Position.Line, tok.Position.Column, kv.Value, keyName, pathPrefix)...)
-	}
-	return out
-}
-
-// firstKnownStateChangeKeyPos returns the position of the first known map-form key
-// (sets/appends/modifies) to anchor the block's deprecation warn. nil for an empty
-// `state_changes: {}` (no deprecation warn needed: an empty block misleads no one and
-// is valid in both forms).
-func firstKnownStateChangeKeyPos(node *ast.MappingNode) *struct{ Line, Column int } {
-	for _, kv := range node.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil {
-			continue
-		}
-		if stateChangesKnownKeys[tok.Value] {
-			return &struct{ Line, Column int }{tok.Position.Line, tok.Position.Column}
-		}
-	}
-	return nil
-}
-
-// validateStateOp validates one list-form operation (element `state_changes[i]`).
-//
-// The element must be a mapping with EXACTLY one verb key (`set`/`add`/…) whose value
-// is a non-empty target field name. Parameters (`value`/`key`/`match`/`on_conflict`/
-// `patch`/`expect`/`as`/`do`) are checked for applicability to the verb:
-//
-//   - set:    needs value; match/key/on_conflict/patch/expect inapplicable;
-//   - add:    needs value; on_conflict ∈ {skip,replace,error}; key (map) / match
-//     (list dedup) optional; patch/expect inapplicable;
-//   - modify: needs match + patch; optional expect; value/key/on_conflict/as/do n/a;
-//   - remove: needs match; optional expect; value/key/on_conflict/patch/as/do n/a;
-//   - foreach: needs as + do (non-empty); a nested foreach in do is rejected.
-func validateStateOp(node ast.Node, path string) []diag.Diagnostic {
-	mm, ok := node.(*ast.MappingNode)
-	if !ok {
-		vt := node.GetToken()
-		line, col := 0, 0
-		if vt != nil {
-			line, col = vt.Position.Line, vt.Position.Column
-		}
-		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "type_mismatch",
-			Message:  "state_changes operation must be a mapping with a verb key (- set: / - add: / …)",
-			YAMLPath: path,
-		})}
-	}
-
-	var out []diag.Diagnostic
-	var verbTok = struct {
-		name string
-		line int
-		col  int
-		set  bool
-	}{}
-	seen := make(map[string]*ast.MappingValueNode, len(mm.Values))
-
-	for _, kv := range mm.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil {
-			continue
-		}
-		key := tok.Value
-		seen[key] = kv
-		if !stateOpKnownKeys[key] {
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "unknown_key",
-				Message:  `unknown field "` + key + `"`,
-				Hint:     "operation keys: <verb> (set/add/modify/remove/foreach) + value/key/match/on_conflict/patch/expect/as/do",
-				YAMLPath: path + "." + key,
-			}))
-			continue
-		}
-		if _, isVerb := stateOpVerbs[key]; isVerb {
-			if verbTok.set {
-				out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-					Code:     "invalid_value",
-					Message:  fmt.Sprintf("state_changes operation has multiple verbs (%q and %q) — exactly one expected", verbTok.name, key),
-					YAMLPath: path,
-				}))
-				continue
-			}
-			verbTok.name, verbTok.line, verbTok.col, verbTok.set = key, tok.Position.Line, tok.Position.Column, true
-			// `foreach:` carries the CEL collection expression; the other verbs carry
-			// the target field name. In both cases the value must be a non-empty string
-			// (foreach without an expression / a verb without a field is an error).
-			if stringFromNode(kv.Value) == "" {
-				msg := fmt.Sprintf("%s: target field must be a non-empty string", key)
-				if key == "foreach" {
-					msg = "foreach: requires a non-empty CEL collection expression (foreach: \"${ ... }\")"
-				}
-				out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-					Code:     "empty_value",
-					Message:  msg,
-					YAMLPath: path + "." + key,
-				}))
-			}
-		}
-	}
-
-	if !verbTok.set {
-		return append(out, diagAt(lineOf(mm), colOf(mm), diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "state_changes operation has no verb (expected one of set/add/modify/remove/foreach)",
-			YAMLPath: path,
-		}))
-	}
-
-	switch verbTok.name {
-	case "set":
-		out = append(out, validateSetOp(seen, path, verbTok.line, verbTok.col)...)
-	case "add":
-		out = append(out, validateAddOp(seen, path, verbTok.line, verbTok.col)...)
-	case "modify":
-		out = append(out, validateModifyOp(seen, path, verbTok.line, verbTok.col)...)
-	case "remove":
-		out = append(out, validateRemoveOp(seen, path, verbTok.line, verbTok.col)...)
-	case "foreach":
-		out = append(out, validateForeachOp(seen, path, verbTok.line, verbTok.col)...)
-	}
-	return out
-}
-
-// validateModifyOp — `modify` needs match + patch (map path→CEL); optional expect;
-// value/key/on_conflict/in/as/do inapplicable. patch must be a mapping. Wide-match
-// safeguard: a constant-true (`match: true`) or missing match → WARN "a wide
-// predicate patches the whole collection" (§7.1 (d)).
-func validateModifyOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	out = append(out, warnWideMatch(seen, path, vline, vcol, "modify")...)
-	if seen["patch"] == nil {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "modify: requires patch: { <path-in-element>: \"${ ... }\" } (orchestration.md §7.1)",
-			YAMLPath: path + ".patch",
-		}))
-	} else {
-		out = append(out, validatePatchMap(seen["patch"], path)...)
-	}
-	out = append(out, validateExpectValue(seen, path)...)
-	out = append(out, rejectKeys(seen, path, []string{"value", "key", "on_conflict", "as", "do"}, "modify:")...)
-	return out
-}
-
-// validateRemoveOp — `remove` needs match; optional expect; value/key/on_conflict/
-// patch/in/as/do inapplicable. Same wide-match safeguard.
-func validateRemoveOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	out = append(out, warnWideMatch(seen, path, vline, vcol, "remove")...)
-	out = append(out, validateExpectValue(seen, path)...)
-	out = append(out, rejectKeys(seen, path, []string{"value", "key", "on_conflict", "patch", "as", "do"}, "remove:")...)
-	return out
-}
-
-// validateForeachOp — `foreach` needs as: (binding name) + do: (non-empty list of
-// nested operations); value/key/match/on_conflict/patch/expect inapplicable. Each
-// nested do operation is validated recursively (validateStateOp).
-//
-// `as:` must not shadow a reserved CEL-context name or an element-local binding
-// (foreachReservedBindings) → reserved_binding_name.
-//
-// A nested foreach in do is out of grammar (ADR-057: do carries CRUD verbs, not a
-// re-loop). validateStateOp does NOT reject it (foreach is a valid top-level verb),
-// so each do element is checked explicitly here: a do-foreach would pass lint, and
-// render.renderForeach would expand it via renderOneStateOp with Verb=foreach → merge
-// would fail at runtime (`verb foreach not supported` → state_changes_apply_failed →
-// error_locked AFTER apply on the hosts). Caught at validation time (BUG-2).
-func validateForeachOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	if as := seen["as"]; as == nil || stringFromNode(as.Value) == "" {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "foreach: requires as: <name> (binding for the current iteration element)",
-			YAMLPath: path + ".as",
-		}))
-	} else if name := stringFromNode(as.Value); foreachReservedBindings[name] {
-		tok := as.Key.GetToken()
-		line, col := vline, vcol
-		if tok != nil {
-			line, col = tok.Position.Line, tok.Position.Column
-		}
-		out = append(out, diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "reserved_binding_name",
-			Message:  fmt.Sprintf("foreach.as %q shadows a reserved name (CEL context or per-element binding)", name),
-			Hint:     "reserved: input, register, incarnation, soulprint, vars, elem, key, value",
-			YAMLPath: path + ".as",
-		}))
-	}
-	doKV := seen["do"]
-	if doKV == nil {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "foreach: requires do: [<verb...>] (operations applied per iteration)",
-			YAMLPath: path + ".do",
-		}))
-	} else if seq, ok := doKV.Value.(*ast.SequenceNode); ok {
-		if len(seq.Values) == 0 {
-			out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "empty_value",
-				Message:  "foreach.do must contain at least one operation",
-				YAMLPath: path + ".do",
-			}))
-		}
-		for i, item := range seq.Values {
-			doPath := fmt.Sprintf("%s.do[%d]", path, i)
-			out = append(out, validateStateOp(item, doPath)...)
-			out = append(out, rejectNestedForeach(item, doPath)...)
-		}
-	} else {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "type_mismatch",
-			Message:  "foreach.do must be a sequence of operations",
-			YAMLPath: path + ".do",
-		}))
-	}
-	out = append(out, rejectKeys(seen, path, []string{"value", "key", "match", "on_conflict", "patch", "expect"}, "foreach:")...)
-	return out
-}
-
-// rejectNestedForeach rejects a foreach verb inside do: a nested loop is out of the
-// ADR-057 grammar (do carries CRUD verbs only). Checked over the AST — it looks for a
-// `foreach` key among the do element's keys.
-func rejectNestedForeach(node ast.Node, path string) []diag.Diagnostic {
-	mm, ok := node.(*ast.MappingNode)
-	if !ok {
-		return nil
-	}
-	for _, kv := range mm.Values {
-		tok := kv.Key.GetToken()
-		if tok == nil || tok.Value != "foreach" {
-			continue
-		}
-		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "nested_foreach_unsupported",
-			Message:  "nested foreach in do: is not supported (do: carries CRUD verbs set/add/modify/remove only) — ADR-057",
-			Hint:     "flatten the iteration: a single foreach with the combined collection, or precompute the list in vars:",
-			YAMLPath: path + ".foreach",
-		})}
-	}
-	return nil
-}
-
-// validatePatchMap checks that `patch:` is a mapping (path-in-element → value). An
-// empty patch is grammatically valid (no-op merge) but meaningless — allowed without
-// an error (symmetric with an empty state_changes).
-func validatePatchMap(patchKV *ast.MappingValueNode, path string) []diag.Diagnostic {
-	if _, ok := patchKV.Value.(*ast.MappingNode); ok {
-		return nil
-	}
-	tok := patchKV.Key.GetToken()
-	line, col := 0, 0
-	if tok != nil {
-		line, col = tok.Position.Line, tok.Position.Column
-	}
-	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-		Code:     "type_mismatch",
-		Message:  "modify.patch must be a mapping of <path-in-element> → CEL/literal",
-		YAMLPath: path + ".patch",
-	})}
-}
-
-// validateExpectValue checks that `expect` ∈ {one, at_most_one, any}.
-func validateExpectValue(seen map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
-	exp := seen["expect"]
-	if exp == nil {
-		return nil
-	}
-	val := stringFromNode(exp.Value)
-	if stateOpExpectValues[val] {
-		return nil
-	}
-	tok := exp.Key.GetToken()
-	line, col := 0, 0
-	if tok != nil {
-		line, col = tok.Position.Line, tok.Position.Column
-	}
-	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-		Code:     "invalid_value",
-		Message:  fmt.Sprintf("expect %q is invalid (expected one / at_most_one / any)", val),
-		YAMLPath: path + ".expect",
-	})}
-}
-
-// warnWideMatch — safeguard (a) ADR-057 §d: modify/remove without match: OR with a
-// constant-true predicate (`match: true`) will re-patch/remove the WHOLE collection.
-// Not an error (the author may have meant "all"), but WARN — intent must be explicit.
-// soul-lint prints the warn, exit code stays 0.
-func warnWideMatch(seen map[string]*ast.MappingValueNode, path string, vline, vcol int, verb string) []diag.Diagnostic {
-	m := seen["match"]
-	if m == nil {
-		return []diag.Diagnostic{diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
-			Code:     "wide_match",
-			Message:  fmt.Sprintf("%s without match: affects the WHOLE collection (all elements)", verb),
-			Hint:     "add match: \"<CEL-predicate>\" to scope the operation, or confirm bulk intent is desired",
-			YAMLPath: path,
-		})}
-	}
-	if isConstTrueMatch(stringFromNode(m.Value)) {
-		tok := m.Key.GetToken()
-		line, col := vline, vcol
-		if tok != nil {
-			line, col = tok.Position.Line, tok.Position.Column
-		}
-		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
-			Code:     "wide_match",
-			Message:  fmt.Sprintf("%s with constant-true match affects the WHOLE collection (all elements)", verb),
-			Hint:     "narrow the predicate (key == X / elem.id == Y), or confirm bulk intent is desired",
-			YAMLPath: path + ".match",
-		})}
-	}
-	return nil
-}
-
 // isConstTrueMatch recognizes a constant-true predicate (`true`, `1 == 1`) that
 // removes/patches the whole collection. A full CEL analysis is unnecessary — we catch
 // the obvious literal form `true` (allowing surrounding spaces / `${ }` wrapper).
@@ -1176,82 +517,6 @@ func isConstTrueMatch(expr string) bool {
 	s = strings.TrimPrefix(s, "${")
 	s = strings.TrimSuffix(s, "}")
 	return strings.TrimSpace(s) == "true"
-}
-
-// validateSetOp — `set` needs value; match/key/on_conflict/patch/expect inapplicable.
-// `expect` is a cardinality assert ONLY for modify/remove (ADR-057 §c); on set the
-// engine would silently ignore it (an operator trap, BUG-1).
-func validateSetOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	if seen["value"] == nil {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "set: requires value: (CEL-expression or literal to overwrite the field)",
-			YAMLPath: path + ".value",
-		}))
-	}
-	out = append(out, rejectKeys(seen, path, []string{"match", "key", "on_conflict", "patch", "expect", "in", "as", "do"}, "set:")...)
-	return out
-}
-
-// validateAddOp — `add` needs value; on_conflict ∈ {skip,replace,error}; key (map) /
-// match (list dedup) optional; patch/expect/in/as/do inapplicable. `expect` is a
-// cardinality assert ONLY for modify/remove (ADR-057 §c); on add the engine would
-// silently ignore it (a trap: the operator expects dup protection on add but there is
-// none — dedup is done by on_conflict, BUG-1).
-func validateAddOp(seen map[string]*ast.MappingValueNode, path string, vline, vcol int) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	if seen["value"] == nil {
-		out = append(out, diagAt(vline, vcol, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "add: requires value: (element to add — object or scalar)",
-			YAMLPath: path + ".value",
-		}))
-	}
-	if oc := seen["on_conflict"]; oc != nil {
-		val := stringFromNode(oc.Value)
-		if !stateOpConflictValues[val] {
-			tok := oc.Key.GetToken()
-			line, col := vline, vcol
-			if tok != nil {
-				line, col = tok.Position.Line, tok.Position.Column
-			}
-			out = append(out, diagAt(line, col, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "invalid_value",
-				Message:  fmt.Sprintf("on_conflict %q is invalid (expected skip / replace / error)", val),
-				YAMLPath: path + ".on_conflict",
-			}))
-		}
-	}
-	out = append(out, rejectKeys(seen, path, []string{"patch", "expect", "in", "as", "do"}, "add:")...)
-	return out
-}
-
-// rejectKeys raises unknown_key for each present but verb-inapplicable key (e.g.
-// patch: on add, match: on set).
-func rejectKeys(seen map[string]*ast.MappingValueNode, path string, keys []string, verb string) []diag.Diagnostic {
-	var out []diag.Diagnostic
-	for _, k := range keys {
-		kv := seen[k]
-		if kv == nil {
-			continue
-		}
-		tok := kv.Key.GetToken()
-		line, col := 0, 0
-		if tok != nil {
-			line, col = tok.Position.Line, tok.Position.Column
-		}
-		out = append(out, diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "unknown_key",
-			Message:  fmt.Sprintf("%s does not accept %q", verb, k),
-			YAMLPath: path + "." + k,
-		}))
-	}
-	return out
 }
 
 // lineOf/colOf — node position (fallback 0 when the token is absent).
@@ -1271,7 +536,7 @@ func colOf(node ast.Node) int {
 
 // findValueNode — the raw value node under the top-level key name (any form:
 // mapping/sequence/scalar). Parallel to findInputMapping/findSequenceValue but with
-// no kind filter — needed for dual-form dispatch (validateStateChanges).
+// no kind filter.
 func findValueNode(root *ast.MappingNode, name string) ast.Node {
 	if root == nil {
 		return nil
@@ -1284,94 +549,6 @@ func findValueNode(root *ast.MappingNode, name string) ast.Node {
 		return kv.Value
 	}
 	return nil
-}
-
-// validateSetsMap checks `sets` as a mapping `<field>: <expression>`: the block value
-// is a mapping and each value is a non-empty string expression (CEL/literal).
-// keyLine/keyCol — the `sets` key position (fallback when the value has no token).
-func validateSetsMap(keyLine, keyCol int, value ast.Node, pathPrefix string) []diag.Diagnostic {
-	mm, ok := value.(*ast.MappingNode)
-	if !ok {
-		vt := value.GetToken()
-		line, col := keyLine, keyCol
-		if vt != nil {
-			line, col = vt.Position.Line, vt.Position.Column
-		}
-		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "type_mismatch",
-			Message:  "state_changes.sets must be a mapping of field → CEL-expression",
-			Hint:     "sets: { <field>: \"${ ... }\" } — orchestration.md §7.1",
-			YAMLPath: pathPrefix + ".sets",
-		})}
-	}
-	var out []diag.Diagnostic
-	for _, kv := range mm.Values {
-		ftok := kv.Key.GetToken()
-		if ftok == nil {
-			continue
-		}
-		sn, isStr := kv.Value.(*ast.StringNode)
-		if !isStr {
-			vt := kv.Value.GetToken()
-			line, col := ftok.Position.Line, ftok.Position.Column
-			if vt != nil {
-				line, col = vt.Position.Line, vt.Position.Column
-			}
-			out = append(out, diagAt(line, col, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "type_mismatch",
-				Message:  fmt.Sprintf("state_changes.sets.%s must be a string expression", ftok.Value),
-				YAMLPath: fmt.Sprintf("%s.sets.%s", pathPrefix, ftok.Value),
-			}))
-			continue
-		}
-		if sn.Value == "" {
-			out = append(out, diagAt(ftok.Position.Line, ftok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "empty_value",
-				Message:  fmt.Sprintf("state_changes.sets.%s must be a non-empty expression", ftok.Value),
-				YAMLPath: fmt.Sprintf("%s.sets.%s", pathPrefix, ftok.Value),
-			}))
-		}
-	}
-	return out
-}
-
-// validateStringSeq checks `appends`/`modifies` as a sequence of strings (future).
-// keyLine/keyCol — the key position (fallback when an element has no token).
-func validateStringSeq(keyLine, keyCol int, value ast.Node, keyName, pathPrefix string) []diag.Diagnostic {
-	seq, ok := value.(*ast.SequenceNode)
-	if !ok {
-		vt := value.GetToken()
-		line, col := keyLine, keyCol
-		if vt != nil {
-			line, col = vt.Position.Line, vt.Position.Column
-		}
-		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "type_mismatch",
-			Message:  fmt.Sprintf("state_changes.%s must be a sequence of strings", keyName),
-			YAMLPath: pathPrefix + "." + keyName,
-		})}
-	}
-	var out []diag.Diagnostic
-	for i, item := range seq.Values {
-		if _, isStr := item.(*ast.StringNode); !isStr {
-			vt := item.GetToken()
-			line, col := keyLine, keyCol
-			if vt != nil {
-				line, col = vt.Position.Line, vt.Position.Column
-			}
-			out = append(out, diagAt(line, col, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "type_mismatch",
-				Message:  fmt.Sprintf("state_changes.%s[%d] must be a string", keyName, i),
-				YAMLPath: fmt.Sprintf("%s.%s[%d]", pathPrefix, keyName, i),
-			}))
-		}
-	}
-	return out
 }
 
 // findSequenceValue — the value node under key `name` if the value is a SequenceNode.

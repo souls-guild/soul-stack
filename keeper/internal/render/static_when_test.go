@@ -3,6 +3,7 @@ package render
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -512,5 +513,94 @@ func TestIsStaticWhen_Classification(t *testing.T) {
 		if got := isStaticWhen(c.when); got != c.want {
 			t.Errorf("isStaticWhen(%q) = %v, want %v", c.when, got, c.want)
 		}
+	}
+}
+
+// keeperWhenManifest — one `on: keeper` capture step carrying the given
+// predicate, and nothing else. The module is a real state verb: the guard exists
+// because [ADR-0084] made this family the only writer of incarnation state, and
+// a fixture using core.soul.registered would test the same code path while
+// naming the wrong stake.
+func keeperWhenManifest(when string) *config.ScenarioManifest {
+	return &config.ScenarioManifest{
+		Name: "keeper-when",
+		Tasks: []config.Task{
+			{
+				Name: "record the provisioned host",
+				On:   "keeper",
+				When: when,
+				Module: &config.ModuleTask{
+					Module: "core.state.set",
+					Params: map[string]any{"field": "provisioned", "value": "yes"},
+				},
+			},
+		},
+	}
+}
+
+func keeperWhenInput(m *config.ScenarioManifest) RenderInput {
+	return RenderInput{
+		Scenario:    m,
+		Input:       map[string]any{"provision": true},
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+	}
+}
+
+// TestRender_NonStaticWhenOnKeeperTaskRejected — ★ [ADR-0084] F-D. A `when:`
+// reading register/soulprint on an `on: keeper` task used to be copied onto the
+// RenderedTask and never read: `when:` is a Soul-side predicate and a keeper
+// task never reaches a Soul. The file said "conditionally", the step ran every
+// time — and since this ADR the step that runs every time is the one that writes
+// state. Fail-closed at render is the backstop; soul-lint says it offline.
+func TestRender_NonStaticWhenOnKeeperTaskRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		when string
+	}{
+		{"register", "register.provision.rc == 0"},
+		{"soulprint", "soulprint.self.os.family == 'debian'"},
+		{"mixed with input", "input.provision && register.provision.rc == 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewPipeline(nil, newEngine(t), nil, nil)
+			_, _, err := p.Render(context.Background(), keeperWhenInput(keeperWhenManifest(tc.when)))
+			if !errors.Is(err, ErrUnsupportedDSL) {
+				t.Fatalf("err = %v, want ErrUnsupportedDSL", err)
+			}
+			// The author has to be able to act on it: the message names the
+			// predicate it refused and the form that does work.
+			if !strings.Contains(err.Error(), tc.when) {
+				t.Errorf("the message must quote the refused predicate, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), "cond ? a : b") {
+				t.Errorf("the message must name the working form (the condition inside the value), got: %v", err)
+			}
+		})
+	}
+}
+
+// TestRender_StaticWhenOnKeeperTaskStillWorks — the other half of the guard, and
+// the half a too-wide rejection would break. A static predicate IS honoured on a
+// keeper task: emitStaticWhenSkip runs before the IsKeeperTask branch, so false
+// gates the step off and true renders it. Both outcomes are the working form and
+// must stay bit-for-bit.
+func TestRender_StaticWhenOnKeeperTaskStillWorks(t *testing.T) {
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+
+	tasks, _, err := p.Render(context.Background(), keeperWhenInput(keeperWhenManifest("input.provision")))
+	if err != nil {
+		t.Fatalf("static-true when: on a keeper task must render, got %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Params == nil {
+		t.Fatalf("static-true when: must take the normal path, got %d task(s) params=%v", len(tasks), tasks[0].Params)
+	}
+
+	tasks, _, err = p.Render(context.Background(), keeperWhenInput(keeperWhenManifest("!input.provision")))
+	if err != nil {
+		t.Fatalf("static-false when: on a keeper task must skip, not fail, got %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Params != nil {
+		t.Fatalf("static-false when: must emit a skip placeholder, got %d task(s) params=%v", len(tasks), tasks[0].Params)
 	}
 }

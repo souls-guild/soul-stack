@@ -1,5 +1,4 @@
 name: cross-passage-when
-state_changes: {}
 tasks:
   # probe роли — register: role. Сам по себе остаётся в Passage 0.
   - name: Probe redis role

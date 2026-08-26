@@ -11,8 +11,8 @@ import (
 
 // compute: — scenario-level computed vars (ADR-009 amendment 2026-06-23):
 // resolved ONCE in a run-level context (without soulprint), the result
-// `compute.<name>` is visible in apply.input and state_changes BIT-FOR-BIT (drift
-// eliminated).
+// `compute.<name>` is visible in apply.input and in a capture's params BIT-FOR-BIT
+// (drift eliminated).
 
 // resolveCompute: a chain (compute references an earlier compute) plus a
 // run-level input/vars context. Declaration order matters.
@@ -52,7 +52,7 @@ func TestResolveCompute_ChainAndContext(t *testing.T) {
 
 // ★ Isolation barrier #2: a compute expression referencing soulprint.self fails
 // with no-such-key — compute's resolve context is run-level (no soulprint), so
-// compute is host-invariant and safe in state_changes.
+// compute is host-invariant and safe in a capture.
 func TestResolveCompute_BarrierSoulprint(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -76,20 +76,15 @@ func TestResolveCompute_BarrierSoulprint(t *testing.T) {
 	}
 }
 
-// compute is available in apply.input (through the params/where render) AND in
-// state_changes, the same value (the drift guard is eliminated by compute itself).
-// Run through Render + RenderStateOps on one RenderInput.
-func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
+// compute is available in apply.input (through the params/where render) AND in a
+// `core.state.<verb>` capture, the same value (the drift guard is eliminated by
+// compute itself). [ADR-0084] made the capture an ordinary task, so both readers
+// now come out of the SAME Render pass rather than two.
+func TestCompute_SameValueInTasksAndCapture(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
 		Compute: config.ComputeBlock{
 			{Name: "cfg", Value: "${ merge(vars.base, { 'maxmemory': string(int(input.mb)) + 'mb' }) }"},
-		},
-		StateChanges: &config.StateChanges{
-			IsList: true,
-			Ops: []config.StateChange{
-				{Verb: config.VerbSet, Field: "redis_config", Value: "${ compute.cfg }"},
-			},
 		},
 		Tasks: []config.Task{
 			{
@@ -97,6 +92,14 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 				Module: &config.ModuleTask{
 					Module: "core.noop.run",
 					Params: map[string]any{"config": "${ compute.cfg }"},
+				},
+			},
+			{
+				Name: "capture",
+				On:   "keeper",
+				Module: &config.ModuleTask{
+					Module: "core.state.set",
+					Params: map[string]any{"field": "redis_config", "value": "${ compute.cfg }"},
 				},
 			},
 		},
@@ -115,24 +118,21 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if len(tasks) != 1 {
-		t.Fatalf("tasks = %d, want 1", len(tasks))
+	if len(tasks) != 2 {
+		t.Fatalf("tasks = %d, want 2", len(tasks))
 	}
 	taskCfg := tasks[0].Params.GetFields()["config"].GetStructValue().GetFields()
 	if taskCfg["appendonly"].GetStringValue() != "yes" || taskCfg["maxmemory"].GetStringValue() != "512mb" {
 		t.Fatalf("apply.input.config = %v, want {appendonly:yes, maxmemory:512mb}", taskCfg)
 	}
 
-	ops, err := p.RenderStateOps(in)
-	if err != nil {
-		t.Fatalf("RenderStateOps: %v", err)
+	capture := tasks[1].Params.GetFields()
+	if capture["field"].GetStringValue() != "redis_config" {
+		t.Fatalf("capture field = %v, want redis_config", capture["field"])
 	}
-	if len(ops) != 1 || ops[0].Field != "redis_config" {
-		t.Fatalf("ops = %+v, want one set redis_config", ops)
-	}
-	stateCfg, _ := ops[0].Value.(map[string]any)
-	if stateCfg["appendonly"] != "yes" || stateCfg["maxmemory"] != "512mb" {
-		t.Fatalf("state_changes.redis_config = %#v, want {appendonly:yes, maxmemory:512mb} (== apply.input.config)", ops[0].Value)
+	stateCfg := capture["value"].GetStructValue().GetFields()
+	if stateCfg["appendonly"].GetStringValue() != "yes" || stateCfg["maxmemory"].GetStringValue() != "512mb" {
+		t.Fatalf("capture value = %v, want {appendonly:yes, maxmemory:512mb} (== apply.input.config)", stateCfg)
 	}
 }
 

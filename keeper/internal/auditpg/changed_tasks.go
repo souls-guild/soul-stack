@@ -19,8 +19,8 @@ import (
 // The correlation key with the plan in buildChangedTasks (scenario.state) goes
 // by RenderedTask.Index — so the global `plan_index` is taken from payload, NOT
 // the local `task_idx` (under staged/per-host-where it can differ from the
-// global one, pointing at a neighboring task → mismatch in the state_changes
-// whitelist (secret hygiene) + audit). Old audit rows without `plan_index` →
+// global one, pointing at a neighboring task → the wrong task counted as
+// changed, in both secret hygiene and audit). Old audit rows without `plan_index` →
 // fall back to `task_idx` (N=1 matches).
 //
 // Secret hygiene (T3): only (sid, plan_index) are read from audit_log — the

@@ -10,7 +10,7 @@ description: >-
   apply_runs level), when = Soul-side per-task gating (SKIPPED event before Apply).
 
 # state_schema_version=1 → the migrations/ directory is not required (ADR-019).
-# Focus is Soul-side when-gating, not mutating incarnation.state: state_changes is empty.
+# Focus is Soul-side when-gating, not mutating incarnation.state: no capture step.
 state_schema:
   type: object
   properties: {}

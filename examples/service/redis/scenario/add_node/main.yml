@@ -47,7 +47,7 @@ input:
 
 tasks:
   # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
-  # No scenario writes a Vault path any more. `core.state.present` is the single
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
   # read-or-write of a state field that carries declared secrets: it DERIVES the path
   # from (service, incarnation, state field, account name) and returns the effective
   # state with every `type: secret` property replaced by its `vault:` reference. The
@@ -61,22 +61,22 @@ tasks:
 
   - name: Resolve the passwords of the service's own ACL accounts
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: system_acl_users
     params:
-      key: system_acl_users
-      # No `password` property on any element → present-semantics require an EXISTING
+      field: system_acl_users
+      # No `password` property on any element → secret resolution requires an EXISTING
       # value: an account whose secret was never minted fails loudly here, rather than
       # the live instance being handed a freshly generated one it does not know.
-      set: "${ default(incarnation.state.system_acl_users, []) }"
+      value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Resolve the passwords of the operator ACL users
     on: keeper
-    module: core.state.present
+    module: core.state.set
     register: redis_users
     params:
-      key: redis_users
-      set: "${ default(incarnation.state.redis_users, []) }"
+      field: redis_users
+      value: "${ default(incarnation.state.redis_users, []) }"
 
   # 1. GUARD — new_node_sid and seed_sid must be in the roster and distinct (assert:,
   #    ADR-009 amendment 2026-06-23; the same mechanism as create's size-guard). The

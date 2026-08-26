@@ -4,7 +4,8 @@
 // the already-trusted mTLS EventStream channel. Its contract differs from the
 // apply cycle:
 //
-//   - does NOT mutate incarnation.state (`state_changes` are ignored);
+//   - does NOT mutate incarnation.state — the state write is a keeper-side
+//     `core.state.<verb>` task ([ADR-0084]) an Errand never dispatches;
 //   - one [keeperv1.ErrandRequest] → one [keeperv1.ErrandResult], no
 //     intermediate TaskEvent / RunResult;
 //   - module admission is per-path (see [IsAllowed]): reaching Apply needs the
@@ -134,7 +135,7 @@ func (r *Runner) registerActive(errandID string, cancel context.CancelFunc) func
 //     modules or [sdkmodule.ErrandReadSafe]; otherwise MODULE_NOT_ALLOWED.
 //  5. Output capped at 64 KiB per stdout/stderr channel + masking via
 //     [MaskSecrets].
-//  6. state_changes are ignored (Errand doesn't write them).
+//  6. Nothing here writes incarnation.state (see the package doc).
 //
 // dryRun is read from the request ONCE, into a local, and that same local
 // picks both the admission condition (3/4) and the method actually invoked

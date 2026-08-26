@@ -89,7 +89,6 @@ func TestIntegration_RemapOnChanges_N1Where_NoMisfire(t *testing.T) {
 	// (one Passage), but config-change targets per-host ONLY host-a.
 	const scn = `name: create
 description: n=1 per-host where requisite remap fixture
-state_changes: {}
 tasks:
   - name: config-change
     module: core.exec.run

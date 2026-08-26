@@ -74,7 +74,7 @@ var coreModules = []schema.Module{
 	// Keeper-side core (ADR-017/ADR-044, on: keeper). State names aligned with the
 	// actual dispatch of keeper-side coremods: core.soul.registered,
 	// core.cloud.created/destroyed, core.bootstrap.issued/delivered,
-	// core.vault.kv-read, core.choir.present/absent, core.state.present.
+	// core.vault.kv-read, core.choir.present/absent, core.state.*.
 	modSoul,
 	modCloud,
 	modBootstrap,

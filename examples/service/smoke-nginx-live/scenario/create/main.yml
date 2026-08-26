@@ -22,20 +22,6 @@ input:
       the rendered nginx config). Taken from incarnation.spec / RunScenario
       input, checked by the test's audit-event asserts.
 
-# ── incarnation.state mutation ────────────────────────────────────────────────
-# state_changes record the post-apply snapshot (ADR-009 §7.1, ADR-057 list form).
-# Literals, not a CEL resolve — the state is "fully deployed", with no variation.
-# A literal without ${ … } is assigned as a string (the type in state is string, matching the
-# state_schema enum). For bool we use ${ true } — a lone ${…} yields the
-# native type (ADR-010).
-state_changes:
-  - set: nginx_package
-    value: installed
-  - set: nginx_service
-    value: active
-  - set: nginx_config_managed
-    value: "${ true }"
-
 # ── Tasks (inline, ADR-009) ─────────────────────────────────────────────────
 # All three core modules go inline — there is no reuse, setting up a separate destiny
 # for smoke would be overkill (see docs/scenario/concept.md "boundary is a
@@ -90,3 +76,27 @@ tasks:
     timeout: 30s
     params:
       name: nginx
+
+  - name: Record that the nginx package is installed
+    on: keeper
+    module: core.state.set
+    params:
+      field: nginx_package
+      value: installed
+
+  - name: Record that the nginx service is active
+    on: keeper
+    module: core.state.set
+    params:
+      field: nginx_service
+      value: active
+
+  # A lone ${…} yields the native type (ADR-010) — bool here, matching the
+  # state_schema; a bare literal like "active" above stays a string.
+  - name: Record that the nginx config is managed
+    on: keeper
+    module: core.state.set
+    params:
+      field: nginx_config_managed
+      value: "${ true }"
+

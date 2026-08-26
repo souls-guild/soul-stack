@@ -355,7 +355,7 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	spec := RunSpec{ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
 	// First committer (us) — actually finalizes applying → error_locked.
-	if finalized := r.lockIncarnation(context.Background(), spec, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); !finalized {
+	if finalized := r.lockIncarnation(context.Background(), spec, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); !finalized {
 		t.Fatalf("first lockIncarnation: finalized=false, want true (real finalizer)")
 	}
 
@@ -363,7 +363,7 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	// applying) → ErrAlreadyFinalized internally → finalized=false: the failure
 	// event is emitted by the winner, not this instance.
 	spec2 := RunSpec{ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
-	if finalized := r.lockIncarnation(context.Background(), spec2, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); finalized {
+	if finalized := r.lockIncarnation(context.Background(), spec2, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); finalized {
 		t.Errorf("second lockIncarnation on an already-finalized incarnation: finalized=true, want false (single-winner loser)")
 	}
 }

@@ -2,7 +2,6 @@ package render
 
 import (
 	"fmt"
-	"sort"
 
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -156,11 +155,11 @@ func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
 //
 // state is a read-only snapshot of incarnation.state at the run's row-lock
 // capture ([ADR-009]/[ADR-010]): scenario render context sees pre-run state as
-// `incarnation.state.<path>` in params/where/apply-input AND in state_changes
-// (stateChangesVars calls the same function). The snapshot is INVARIANT across
-// all staged-render passages (RenderInput.State is captured once as
-// stateBefore under FOR UPDATE, not accumulated between passages — unlike
-// register). nil State → key omitted: `incarnation.state.<x>` yields a normal
+// `incarnation.state.<path>` in params/where/apply-input, including the params of
+// a `core.state.<verb>` capture (keeperVars calls the same function). The snapshot
+// is INVARIANT WITHIN a Passage; a plan that captures state has it RE-READ at each
+// Passage boundary ([ADR-0084], run.go), so a capture in Passage N is visible from
+// Passage N+1 on. A plan with no capture keeps one snapshot for the whole run. nil State → key omitted: `incarnation.state.<x>` yields a normal
 // no-such-key (push/trial without State, backward-compat), not a compile error
 // (`incarnation` is DynType).
 func incarnationVars(in RenderInput, hostCount int) map[string]any {
@@ -212,7 +211,7 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 //
 // The KEEPER register is UNIONED into it ([ADR-0083] §5). A keeper-side task is
 // how a service state field carrying declared secrets is written
-// (`core.state.present`), and the Soul-side task that consumes the result — the
+// (`core.state.*`), and the Soul-side task that consumes the result — the
 // one that writes users.acl — has to read `register.<name>.effective` off it.
 // The host's own bucket WINS on a name collision: a register name is unique
 // within a scenario, so a collision means something is already wrong, and a
@@ -436,46 +435,6 @@ func hostLoopVars(in RenderInput, host *topology.HostFacts, hostCount int, loop 
 	v := hostVars(in, host, hostCount)
 	v.Loop = loop
 	return v
-}
-
-// stateChangesVars builds cel.Vars for rendering state_changes.sets on host
-// (orchestration.md §7.1). Context is input/incarnation/soulprint.self plus
-// this host's Register (grammar slice 2): probe-task register data
-// accumulated after the barrier and resolved by register name
-// (in.RegisterByHost[host.SID]) over the run-level backing of keeper-side task
-// register (bucket KeeperTargetSID, host-wins — ADR-056 amendment
-// 2026-07-02). nil register for a host with no keeper backing → `register.*`
-// in sets yields an eval "no such key" error, same as before.
-func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
-	reg := in.RegisterByHost[host.SID]
-	if keeperReg := in.RegisterByHost[KeeperTargetSID]; len(keeperReg) > 0 {
-		merged := make(map[string]any, len(keeperReg)+len(reg))
-		for k, v := range keeperReg {
-			merged[k] = v
-		}
-		for k, v := range reg { // host-wins on collision
-			merged[k] = v
-		}
-		reg = merged
-	}
-	return cel.Vars{
-		Input:         in.Input,
-		Register:      reg,
-		Incarnation:   incarnationVars(in, len(in.Hosts)),
-		SoulprintSelf: soulprintSelfMap(host),
-		Vars:          in.ServiceVars,
-		Compute:       in.Compute,
-		Ctx:           in.Ctx,
-	}
-}
-
-// sortedHostsBySID returns a copy of hosts sorted lexicographically by SID
-// (determinism for state_changes.sets' last-wins fold, orchestration.md §7.1).
-func sortedHostsBySID(hosts []*topology.HostFacts) []*topology.HostFacts {
-	out := make([]*topology.HostFacts, len(hosts))
-	copy(out, hosts)
-	sort.Slice(out, func(i, j int) bool { return out[i].SID < out[j].SID })
-	return out
 }
 
 func joinKey(path, key string) string {

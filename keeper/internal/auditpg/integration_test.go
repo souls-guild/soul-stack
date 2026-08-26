@@ -549,8 +549,7 @@ func TestIntegration_Reader_ChangedTaskKeys(t *testing.T) {
 // path): under staged/per-host-where the GLOBAL plan_index ≠ the LOCAL
 // task_idx; the CHANGED-task aggregation MUST use plan_index (the correlation
 // key with RenderedTask.Index), NOT task_idx — otherwise the key would point
-// at a neighboring task (mismatch in the state_changes whitelist + audit
-// changed_tasks).
+// at a neighboring task (a hole in the audit changed_tasks).
 //
 // Seed: one CHANGED task with plan_index=7, task_idx=2 (simulating a second
 // Passage, where local position 2 corresponds to global plan position 7).

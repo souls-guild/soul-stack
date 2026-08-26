@@ -26,7 +26,7 @@ func scenarioWithAssert(create bool, when, predicate string) string {
 	if create {
 		b.WriteString("create: true\n")
 	}
-	b.WriteString("state_changes: {}\ntasks:\n  - name: Guard\n")
+	b.WriteString("tasks:\n  - name: Guard\n")
 	if when != "" {
 		b.WriteString("    when: " + when + "\n")
 	}
@@ -93,7 +93,6 @@ func TestAssertReachability(t *testing.T) {
 func TestAssertReachability_PointsAtTheAssert(t *testing.T) {
 	src := `name: create
 create: true
-state_changes: {}
 tasks:
   - name: Echo
     module: core.exec.run

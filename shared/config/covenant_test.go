@@ -46,9 +46,6 @@ input:
     secret: true
 compute:
   base: "${ merge(vars.cfg, {}) }"
-state_changes:
-  - set: provisioned
-    value: "${ true }"
 validate:
   - that: "input.password_ref != ''"
     message: "password_ref required"
@@ -60,9 +57,6 @@ input:
     type: integer
 compute:
   full: "${ merge(compute.base, { 'x': 'y' }) }"
-state_changes:
-  - set: size
-    value: "${ input.size }"
 validate:
   - that: "input.size > 0"
     message: "size positive"
@@ -89,14 +83,6 @@ tasks: []
 		t.Errorf("merged compute order wrong: %+v", local.Compute)
 	}
 
-	// state_changes: covenant first → [set provisioned, set size].
-	if local.StateChanges == nil || len(local.StateChanges.Ops) != 2 {
-		t.Fatalf("merged state_changes: want 2 ops, got %+v", local.StateChanges)
-	}
-	if local.StateChanges.Ops[0].Field != "provisioned" || local.StateChanges.Ops[1].Field != "size" {
-		t.Errorf("merged state_changes order wrong: %+v", local.StateChanges.Ops)
-	}
-
 	// validate: covenant first, both rules accumulated.
 	if len(local.Validate) != 2 || local.Validate[0].Message != "password_ref required" || local.Validate[1].Message != "size positive" {
 		t.Errorf("merged validate order/content wrong: %+v", local.Validate)
@@ -111,9 +97,6 @@ input:
     type: string
 compute:
   c: "${ 1 }"
-state_changes:
-  - set: s
-    value: "${ 1 }"
 validate:
   - that: "input.a != ''"
     message: "a"
@@ -126,9 +109,6 @@ validate:
 	if len(local.Input) != 1 || len(local.Compute) != 1 || len(local.Validate) != 1 {
 		t.Errorf("covenant-only sections not adopted: input=%d compute=%d validate=%d",
 			len(local.Input), len(local.Compute), len(local.Validate))
-	}
-	if local.StateChanges == nil || len(local.StateChanges.Ops) != 1 {
-		t.Errorf("covenant-only state_changes not adopted: %+v", local.StateChanges)
 	}
 }
 
@@ -148,27 +128,6 @@ func TestMergeCovenant_ComputeNameConflict(t *testing.T) {
 
 	err := MergeCovenant(*frag, local)
 	assertSectionConflict(t, err, "compute", "dup")
-}
-
-func TestMergeCovenant_StateSetFieldConflict(t *testing.T) {
-	frag := loadFragment(t, "state_changes:\n  - set: field\n    value: \"${ 1 }\"\n")
-	local := loadScenario(t, "name: create\nstate_changes:\n  - set: field\n    value: \"${ 2 }\"\ntasks: []\n")
-
-	err := MergeCovenant(*frag, local)
-	assertSectionConflict(t, err, "state_changes", "set field")
-}
-
-// Non-set verbs on the same field do NOT conflict (multiple add/modify are legitimate).
-func TestMergeCovenant_NonSetSameFieldNoConflict(t *testing.T) {
-	frag := loadFragment(t, "state_changes:\n  - add: users\n    value: \"${ 'a' }\"\n")
-	local := loadScenario(t, "name: create\nstate_changes:\n  - add: users\n    value: \"${ 'b' }\"\ntasks: []\n")
-
-	if err := MergeCovenant(*frag, local); err != nil {
-		t.Fatalf("two add ops on same field must not conflict: %v", err)
-	}
-	if len(local.StateChanges.Ops) != 2 {
-		t.Errorf("want 2 add ops, got %d", len(local.StateChanges.Ops))
-	}
 }
 
 // --- forward-compat: scenario without extends ----------------------------
@@ -325,7 +284,10 @@ func TestReadCovenantFile_ClampedToServiceRoot(t *testing.T) {
 // --- covenant fragment form: unexpected scenario keys ----------------------
 
 func TestLoadCovenant_UnexpectedKey(t *testing.T) {
-	for _, key := range []string{"name", "tasks", "create", "form", "extends", "vars", "description"} {
+	// state_changes is in the list on purpose: [ADR-0084] removed it from the
+	// grammar, so a covenant still carrying one must be rejected like any other
+	// foreign key rather than silently ignored.
+	for _, key := range []string{"name", "tasks", "create", "form", "extends", "vars", "description", "state_changes"} {
 		key := key
 		t.Run(key, func(t *testing.T) {
 			src := "input:\n  a:\n    type: string\n" + key + ": " + unexpectedKeyValue(key) + "\n"
@@ -342,7 +304,7 @@ func TestLoadCovenant_UnexpectedKey(t *testing.T) {
 	}
 }
 
-// covenant with only the 4 sections — no errors.
+// covenant with only the 3 sections — no errors.
 func TestLoadCovenant_OnlySectionsOK(t *testing.T) {
 	src := `
 input:
@@ -350,9 +312,6 @@ input:
     type: string
 compute:
   c: "${ 1 }"
-state_changes:
-  - set: s
-    value: "${ 1 }"
 validate:
   - that: "input.a != ''"
     message: "a"
@@ -360,9 +319,9 @@ validate:
 	frag, _, diags := LoadCovenantFragmentFromBytes("covenant.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("4-section covenant must be valid")
+		t.Fatalf("3-section covenant must be valid")
 	}
-	if len(frag.Input) != 1 || len(frag.Compute) != 1 || len(frag.Validate) != 1 || frag.StateChanges == nil {
+	if len(frag.Input) != 1 || len(frag.Compute) != 1 || len(frag.Validate) != 1 {
 		t.Errorf("fragment sections not decoded: %+v", frag)
 	}
 }
@@ -401,7 +360,7 @@ func assertSectionConflict(t *testing.T, err error, section, key string) {
 // YAML parses (covenant_unexpected_key is raised on the form, not on the value type).
 func unexpectedKeyValue(key string) string {
 	switch key {
-	case "tasks":
+	case "tasks", "state_changes":
 		return "[]"
 	case "create":
 		return "true"

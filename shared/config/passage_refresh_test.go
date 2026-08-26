@@ -18,7 +18,6 @@ import (
 // soulprint.hosts consumer into the next Passage.
 const refreshThenSoulprintHosts = `
 name: create
-state_changes: {}
 tasks:
   - name: Register and await created hosts
     module: core.soul.registered
@@ -43,7 +42,6 @@ tasks:
 // targeting alone is NOT a roster read and is NOT forced past the refresh boundary.
 const refreshThenOnSubCoven = `
 name: create
-state_changes: {}
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
@@ -64,7 +62,6 @@ tasks:
 // so this is also a roster read → next Passage.
 const refreshThenSoulprintSelf = `
 name: create
-state_changes: {}
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
@@ -86,7 +83,6 @@ tasks:
 // must move to the next Passage, else it runs on the old roster.
 const refreshThenOmittedOn = `
 name: create
-state_changes: {}
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
@@ -167,7 +163,6 @@ func TestStratify_RefreshThenOmittedOn(t *testing.T) {
 func TestStratify_NoRefreshConsumerSamePassage(t *testing.T) {
 	const src = `
 name: create
-state_changes: {}
 tasks:
   - name: Register hosts WITHOUT refresh
     module: core.soul.registered
@@ -199,7 +194,6 @@ tasks:
 func TestStratify_RefreshFalseNotEmitter(t *testing.T) {
 	const src = `
 name: create
-state_changes: {}
 tasks:
   - name: Register hosts with refresh disabled
     module: core.soul.registered
@@ -226,7 +220,6 @@ tasks:
 func TestStratify_RefreshBeforeAndAfterRoster(t *testing.T) {
 	const src = `
 name: create
-state_changes: {}
 tasks:
   - name: Act on initial roster
     module: core.exec.run
@@ -263,7 +256,6 @@ tasks:
 func TestStratify_RefreshThenAssertTopology(t *testing.T) {
 	const src = `
 name: create
-state_changes: {}
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
@@ -305,7 +297,6 @@ func TestStratify_RefreshIsRosterAxisNotRegisterEdges(t *testing.T) {
 	// must come ONLY from the roster boundary.
 	const src = `
 name: create
-state_changes: {}
 tasks:
   - name: Register a fixed host and refresh roster
     module: core.soul.registered
@@ -382,7 +373,6 @@ func TestHasRefreshEmitter(t *testing.T) {
 	// Baseline: refresh emitter + a host deploy task (the target mixed bypass plan).
 	const mixedWithRefresh = `
 name: create
-state_changes: {}
 tasks:
   - name: Provision and refresh
     module: core.soul.registered
@@ -398,7 +388,6 @@ tasks:
 `
 	const noFlag = `
 name: create
-state_changes: {}
 tasks:
   - name: Register without refresh
     module: core.soul.registered
@@ -408,7 +397,6 @@ tasks:
 `
 	const refreshFalse = `
 name: create
-state_changes: {}
 tasks:
   - name: Register with refresh disabled
     module: core.soul.registered
@@ -421,7 +409,6 @@ tasks:
 	// module is only core.soul.registered).
 	const otherKeeperModule = `
 name: create
-state_changes: {}
 tasks:
   - name: Cloud provision
     module: core.cloud.created
@@ -432,7 +419,6 @@ tasks:
 `
 	const hostOnly = `
 name: create
-state_changes: {}
 tasks:
   - name: Deploy role
     module: core.exec.run
@@ -443,7 +429,6 @@ tasks:
 	// A refresh emitter nested in block: — recognized recursively.
 	const refreshInBlock = `
 name: create
-state_changes: {}
 tasks:
   - name: Provision group
     block:
@@ -506,7 +491,7 @@ func TestAssertReadsRoster(t *testing.T) {
 		return &m.Tasks[0]
 	}
 	scenario := func(body string) string {
-		return "name: create\nstate_changes: {}\ntasks:\n" + body
+		return "name: create\ntasks:\n" + body
 	}
 
 	// The redis/dragonfly size-guard: reads the run roster.

@@ -387,26 +387,32 @@ func taskRegisterReads(t *Task) []string {
 // passage-DEFINING. This asymmetry (refs ⊋ passage-reads) is deliberate; a guard
 // invariant pins it (TestStratify_FlowControlInRefsNotPassageReads).
 func collectTaskReads(t *Task, seen map[string]bool) {
+	taskOwnReads(t, seen)
+	if t.Block != nil {
+		for i := range t.Block.Block {
+			collectTaskReads(&t.Block.Block[i], seen)
+		}
+	}
+}
+
+// taskOwnReads is collectTaskReads for ONE node, without descending into
+// block: children — the split exists for the state-capture ordering guards,
+// which pair nodes against each other and would double-count a block parent
+// that inherited its children's reads.
+func taskOwnReads(t *Task, seen map[string]bool) {
 	addCELRefs(t.Where, seen)
 	if t.Loop != nil {
 		addCELRefs(t.Loop.When, seen)
+		addValueRefs(t.Loop.Items, seen)
 	}
 
 	addMapRefs(t.Vars, seen)
 	addMapRefs(t.Output, seen)
-	if t.Loop != nil {
-		addValueRefs(t.Loop.Items, seen)
-	}
 	if t.Module != nil {
 		addMapRefs(t.Module.Params, seen)
 	}
 	if t.Apply != nil {
 		addMapRefs(t.Apply.Input, seen)
-	}
-	if t.Block != nil {
-		for i := range t.Block.Block {
-			collectTaskReads(&t.Block.Block[i], seen)
-		}
 	}
 }
 

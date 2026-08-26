@@ -13,12 +13,6 @@ input:
     required: true
     description: Name of the host on which the scenario tasks are expected to run.
 
-state_changes:
-  - set: nginx_package
-    value: nginx
-  - set: nginx_service
-    value: nginx
-
 tasks:
   - name: Install nginx package
     module: core.pkg.installed
@@ -30,3 +24,17 @@ tasks:
     params:
       name: nginx
       enabled: true
+
+  - name: Record the nginx package name
+    on: keeper
+    module: core.state.set
+    params:
+      field: nginx_package
+      value: nginx
+
+  - name: Record the nginx service name
+    on: keeper
+    module: core.state.set
+    params:
+      field: nginx_service
+      value: nginx

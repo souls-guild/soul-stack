@@ -139,7 +139,6 @@ func ScanOwnNamespaceVault(file, service string, m *ScenarioManifest, tasks []Ta
 		for i := range m.Validate {
 			s.scanString("$.validate["+strconv.Itoa(i)+"].that", m.Validate[i].That, false)
 		}
-		s.scanStateChanges(m.StateChanges)
 	}
 	s.scanTasks(tasks, "$.tasks")
 	return s.out
@@ -181,7 +180,7 @@ func (s *vaultScan) add(where, path string) {
 		File:    s.file,
 		Code:    VaultOwnNamespaceCode,
 		Message: "vault path " + strconv.Quote(path) + " addresses the service's own namespace, which the platform derives and owns",
-		Hint: "declare the value as a `state_schema` field with `type: secret` and read it back from the register of the `core.state.present` task that writes it ([ADR-083] §1); " +
+		Hint: "declare the value as a `state_schema` field with `type: secret` and read it back from the register of the `core.state.set` task that writes it ([ADR-083] §1); " +
 			"`vault()`, `vault:` refs and `core.vault.*` stay available for paths outside `<mount>/" + s.service + "/`",
 		YAMLPath: where,
 	})
@@ -241,42 +240,6 @@ func (s *vaultScan) scanValue(where string, v any, allLiterals bool) {
 		for i, sub := range t {
 			s.scanValue(where+"["+strconv.Itoa(i)+"]", sub, allLiterals)
 		}
-	}
-}
-
-// scanStateChanges walks `state_changes:` in both forms. It is the one authoring
-// surface where a fenced path would not merely be READ but written into
-// incarnation.state as plaintext — the exact second copy [ADR-0083] exists to
-// remove, in the place the ADR calls the source of truth.
-func (s *vaultScan) scanStateChanges(sc *StateChanges) {
-	if sc == nil {
-		return
-	}
-	if sc.IsList {
-		s.scanStateOps(sc.Ops, "$.state_changes")
-		return
-	}
-	keys := make([]string, 0, len(sc.Sets))
-	for k := range sc.Sets {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		s.scanString("$.state_changes.sets."+k, sc.Sets[k], false)
-	}
-}
-
-// scanStateOps walks the list form, recursing through `foreach.do`.
-func (s *vaultScan) scanStateOps(ops []StateChange, prefix string) {
-	for i := range ops {
-		op := &ops[i]
-		where := prefix + "[" + strconv.Itoa(i) + "]"
-		s.scanValue(where+".value", op.Value, false)
-		s.scanString(where+".key", op.Key, false)
-		s.scanString(where+".match", op.Match, false)
-		s.scanValue(where+".patch", op.Patch, false)
-		s.scanString(where+".in", op.In, false)
-		s.scanStateOps(op.Do, where+".do")
 	}
 }
 

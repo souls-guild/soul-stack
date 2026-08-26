@@ -346,7 +346,7 @@ func (s *L2Stand) runVerify(ctx context.Context, applyID string, v Verify) ([]st
 // RunResult). Distinguishes by presence of apply_id+status: RunResult carries
 // RunStatus, TaskEvent — TaskStatus+task_idx. Simple parse: try TaskEvent; line
 // without task-fields but with status — RunResult. More reliable — by exclusive
-// field: RunResult has state_changes/status only; TaskEvent — task_idx.
+// field: RunResult has status only; TaskEvent — task_idx.
 func parseNDJSON(stdout string, out *applyOutcome) error {
 	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
 		line = strings.TrimSpace(line)

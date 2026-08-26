@@ -14,7 +14,7 @@ import (
 // flat in.Register and never to the keeper bucket, so a host could not read
 // `register.<keeper-task>.*` at all. [ADR-0083] §5 needs exactly that read — a
 // service state field carrying declared secrets is written by a keeper-side task
-// (`core.state.present`), and the Soul-side task that consumes the result reads
+// (`core.state.*`), and the Soul-side task that consumes the result reads
 // `register.<name>.effective` off it.
 //
 // What Slice 2 was protecting against was the FALLBACK, not the visibility: an
@@ -38,7 +38,7 @@ func TestKeeperRegisterChannel_KeeperVisibleToHosts(t *testing.T) {
 	}
 
 	// A host task now READS the keeper register ([ADR-0083] §5): without this the
-	// scenario that writes users.acl has no way to reach what core.state.present
+	// scenario that writes users.acl has no way to reach what core.state.*
 	// wrote.
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	hr := hostRegister(in, host)

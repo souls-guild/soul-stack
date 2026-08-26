@@ -11,8 +11,9 @@ import (
 
 // handleErrandResult — handler for the [keeperv1.ErrandResult] payload
 // (ADR-033, slice E2). Symmetric to handleRunResult, but WITHOUT
-// state_changes / apply_runs / an incarnation commit: an Errand does NOT
-// mutate incarnation.state (ADR-033 §4).
+// apply_runs or any incarnation write: an Errand does NOT mutate
+// incarnation.state (ADR-033 §4). It dispatches host-side modules only, so a
+// keeper-side `core.state.<verb>` capture ([ADR-0084]) is unreachable from it.
 //
 // Responsibilities:
 //

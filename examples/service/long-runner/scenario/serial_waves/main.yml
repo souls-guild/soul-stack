@@ -9,12 +9,6 @@ description: >-
   timestamps come in blocks of 3). state is committed ONCE after all waves
   (serial does NOT split the commit - section 2.2.1 invariant).
 
-state_changes:
-  - set: last_run
-    value: "serial_waves"
-  - set: runner_marker
-    value: /tmp/long-runner-wave.txt
-
 tasks:
   - name: Serial wave sleep then write wave marker
     # Whole incarnation (all members) = omitted on: (ADR-008 amendment NIM-124:
@@ -26,3 +20,17 @@ tasks:
         sleep 12;
         echo "wave-done on $(hostname) at $(date -u +%H:%M:%S)" > /tmp/long-runner-wave.txt;
         true
+
+  - name: Record which scenario ran last
+    on: keeper
+    module: core.state.set
+    params:
+      field: last_run
+      value: "serial_waves"
+
+  - name: Record the marker file this scenario writes
+    on: keeper
+    module: core.state.set
+    params:
+      field: runner_marker
+      value: /tmp/long-runner-wave.txt

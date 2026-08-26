@@ -545,7 +545,7 @@ func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefi
 // validateSecretFields turns the refusals of [CollectSecretFields] into positional
 // diagnostics ([ADR-0083] §1). The rules themselves live there, in a pure function over
 // the decoded schema, because keeper resolves the same declarations at runtime — reveal
-// and `core.state.present` — and a second implementation would drift from this one.
+// and `core.state.*` — and a second implementation would drift from this one.
 func validateSecretFields(root *ast.MappingNode, schema map[string]any, pathPrefix string) []diag.Diagnostic {
 	_, issues := CollectSecretFields(schema)
 	out := make([]diag.Diagnostic, 0, len(issues))

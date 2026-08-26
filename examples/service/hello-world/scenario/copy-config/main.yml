@@ -6,10 +6,6 @@ description: >
   The render-only L0-case verifies that src passes through the render pipeline as an
   absolute path unchanged (the whole cell is a literal, CEL interpolation only in the content path).
 
-# state_changes is not set: the scenario does not commit anything to incarnation.state,
-# this is a demonstration of copying file content.
-state_changes: {}
-
 input:
   src:
     type: string

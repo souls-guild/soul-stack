@@ -10,8 +10,8 @@
 # a separate entity (redis consolidation .pm/tasks/2026-06-22-redis-consolidation).
 #
 # apply_runs/incarnation_state/audit/metrics — the same contract checks as in
-# smoke-nginx-live. incarnation_state comes from scenario.state_changes (keeper-side
-# render from input/essence AFTER the barrier), NOT from RunResult.
+# smoke-nginx-live. incarnation_state comes from the scenario's core.state.<verb>
+# steps (keeper-side, each committing its field at its own step), NOT from RunResult.
 #
 # host_state — real verification via Exec inside the container: package redis-server
 # installed + systemd active, redis.conf rendered with merged directives.
