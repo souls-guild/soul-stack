@@ -249,6 +249,48 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 	return out
 }
 
+// registerHosts inverts the run's per-host register buckets by register name for
+// the keeper-side `register.hosts.<name>` root (NIM-711, amendment to [ADR-0084]):
+// {SID → {name → payload}} becomes {name → {SID → payload}}. It is the only route a
+// per-host value has into `incarnation.state` — the capture that writes state is a
+// keeper task, which binds no host and would otherwise see one host's value at best.
+//
+// The synthetic keeper bucket ([KeeperTargetSID]) is SKIPPED: it is not a host, and
+// including it would put a `"keeper"` entry into a map the author iterates as hosts
+// (a `foreach` over it in a migration, a size() check against host_count) — wrong in
+// a way nothing downstream could detect.
+//
+// The flat in.Register fallback that [hostRegister] applies has no analogue here:
+// that fallback exists to keep single-bucket callers (trial/push) reading
+// `register.<name>` unchanged, and a flat map carries no SID to key by. A caller
+// that sets only Register therefore yields an empty register.hosts, and
+// `register.hosts.<name>` fails as no-such-key rather than silently resolving to a
+// host-less payload.
+//
+// Values are secret-safe on the same terms as [hostRegister]: a declared secret has
+// already been rewritten into a `vault:` reference at the pass boundary ([ADR-0083]
+// §6), so projecting the buckets cannot widen plaintext exposure.
+func registerHosts(in RenderInput) map[string]any {
+	if len(in.RegisterByHost) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in.RegisterByHost))
+	for sid, byName := range in.RegisterByHost {
+		if sid == KeeperTargetSID {
+			continue
+		}
+		for name, payload := range byName {
+			bySID, ok := out[name].(map[string]any)
+			if !ok {
+				bySID = make(map[string]any, len(in.RegisterByHost))
+				out[name] = bySID
+			}
+			bySID[sid] = payload
+		}
+	}
+	return out
+}
+
 // buildRenderContext builds the per-host root of the text/template context for
 // the core.file.rendered step (templating.md §3.2): `{ vars, self, role }`
 // + CONDITIONALLY `input`. Soul passes it as the ROOT to

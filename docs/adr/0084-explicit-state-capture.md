@@ -1,8 +1,8 @@
 ## ADR-0084. Explicit state capture — `core.state.<verb>` replaces end-of-run `state_changes`
 
-**Status:** accepted, implementing (NIM-699)
+**Status:** accepted, implemented (NIM-699); amended 2026-08-26 (NIM-711)
 **Amends:** [ADR-0083](0083-declared-secret-state-fields.md) §4 (the module's address becomes `core.state.set`, the secret rule stops being the verb's, and the record no longer reaches Postgres through an end-of-run commit), [ADR-057](0057-state-changes-crud-verbs.md) (the CRUD verbs move from a scenario section to a module address, and gain `present`/`append`/`unset`), [ADR-009](0009-scenario-dsl.md) (the `state_changes:` section leaves the scenario grammar), [ADR-017](0017-keeper-side-core.md) (`core.state` gains six more states)
-**Implemented by:** NIM-699
+**Implemented by:** NIM-699; amendment 2026-08-26 — NIM-711
 
 ---
 
@@ -352,6 +352,115 @@ false red: a step reading a field an earlier capture wrote in the SAME Passage r
 under the harness and the old one in production. The resolution is to make that shape unreachable
 rather than to model Passages in L0 — the ordering guard above rejects it statically, so no case can
 be written that depends on it. That is the substance of fork F-C.
+
+## Amendment 2026-08-26 (NIM-711): `register.hosts.<name>` — the per-host route into state
+
+**A per-host value reaches `incarnation.state` through one accessor, `register.hosts.<name>`,
+readable only from an `on: keeper` task.**
+
+### The gap this closes
+
+The Problem section above lists "it cannot see the roster" as one of the *smaller* structural
+awkwardnesses of `state_changes:`. That was an understatement in one direction: the retired block
+rendered **per host**, so a per-host register was at least reachable — it folded the map last-wins by
+SID, which is wrong for anything that differs per host, but not empty. A capture is a keeper task,
+and a keeper task binds no soulprint, targets no host and reads only the keeper register bucket
+([ADR-056](0056-staged-render-passage.md) slice 2). So the verbs shipped with a hole the block did
+not have: a probed node id, a generated port, a member address that exists only per host had **no**
+route into state at all. NIM-699 shipped anyway and left this open on purpose.
+
+### The accessor
+
+`register.hosts.<name>` is the run's register buckets inverted by name: the map **{SID → payload}**
+for register `<name>` across the hosts that produced it, the payload being the whole register value
+as `register.<name>` has it on the host. One capture writes the whole set in one expression:
+
+```yaml
+- name: probe the node id
+  module: core.exec.run
+  on: [redis]
+  register: node_id
+  params: { cmd: redis-cli, args: ["cluster", "myid"] }
+
+- name: record all node ids
+  module: core.state.set
+  on: keeper
+  params:
+    field: node_ids
+    value: "${ register.hosts.node_id }"   # → { "<sid>": {stdout: …, exit_code: 0}, … }
+```
+
+Three properties are worth stating because each is a place a reader would otherwise guess:
+
+- **It is an accessor, not a task key.** The dependency it declares is on `<name>` — the same
+  register, read across hosts rather than on one — so the same `ExtractRegisterRefs` parser that
+  feeds `render.Stratify` puts the capture in a **later Passage** than the probe. Without the
+  accessor's hop through `hosts.` the extracted name would be `hosts`, which nothing emits: a bogus
+  `unknown_register_reference`, and — the dangerous half — **no Passage edge**, collapsing probe and
+  capture into one Passage where the capture reads an empty map while soul-lint exits 0.
+- **The keeper's own bucket is excluded.** `RegisterByHost` carries a synthetic `keeper` entry
+  (`render.KeeperTargetSID`) alongside the real SIDs. It is not a host, so it is not in the map — a
+  capture writing `register.hosts.<name>` into state must not put a fake host key into the state
+  contract.
+- **Secret safety is inherited for [ADR-0083](0083-declared-secret-state-fields.md) §6, but §8 had
+  to be taught the shape.** The map is built from the same per-host buckets `hostRegister` reads, so
+  a `type: secret` field still lands in state as a `vault:` reference — a DECLARED state secret has
+  no plaintext form to leak here. A **module-declared** `secret: true` output (§8) is the other case:
+  it does reach `apply_task_register` in the clear by design, and what keeps it out of
+  `apply_run_plan.params` / `status_details` is the render-time seal, which taints a cell reading
+  `register.<name>` for a sealed `<name>`. That detector matches `<ident>.<field>`, and
+  `register.hosts.<name>` is two hops — its inner field is `hosts`, a name reserved at parse and so
+  never sealed. Left alone, the accessor would have been the one route by which a sealed register
+  reached an unmasked audit surface, since before this amendment a keeper task could not read a host
+  register at all. The two hops are flattened in `selectBaseField` so the taint is decided on the
+  register name the author actually read; the guard is
+  `TestRegisterHosts_SealedRegisterStaysSealedAcrossHosts`.
+
+### The isolation gate is the decision, not the plumbing
+
+Outside a keeper task, `register.hosts` is a **compile error**
+(`cel.ErrUnsupported`), not an empty map — in a host task, in the destiny pass, in
+`when:`/`changed_when:`/`until:`, in migration-CEL. An empty map would be worse than an error in the
+specific way this ADR keeps arguing about: `.size() == 0` and an empty `foreach` would read as
+facts. The reason a host task in particular is closed is that `register.<name>` there is
+deliberately its OWN value ([ADR-0083](0083-declared-secret-state-fields.md) §5); an accessor that
+quietly widened that to every host's value would invert the one-way channel the same §5 establishes.
+
+The gate is a separate flag from `soulprint.hosts`'s `AllowHosts`, and that is not tidiness:
+`AllowHosts` is **true** for host tasks in the scenario pass, which is exactly the context
+`register.hosts` must stay closed in. It is fail-closed by zero value — a context that does not opt
+in gets the error — and it joins the compile-cache key, because one Engine is shared across a run's
+keeper and host tasks and a cache that ignored the flag would let whichever task compiled first
+decide the isolation for the other.
+
+### `register: hosts` is refused at parse (`register_name_reserved`)
+
+A register named `hosts` is unreadable from **either** side. The accessor is injected at a fixed
+field of the `register` root and wins there, so inside a keeper task `register.hosts` is the
+SID-keyed map, not the author's payload; on a host task the same expression is refused at compile as
+the keeper-only accessor, because that cut-off is syntactic and does not consult what the run
+registered. Two different failures, one confusing and one misleading, and neither names the line
+that chose the name. Refusing the name at parse replaces both with a diagnostic that does. The check
+sits at parse rather than among the soul-lint rules for the reason recorded in
+"The routing guard" above: only a parse-time validator descends into a resolved `include:` and
+reports at the included file's own line and column. It applies across the whole register address
+space — scenario, destiny and `block:` children share `validateTaskNode`.
+
+### What this does NOT add
+
+**Per-host values into *different* state fields.** One capture writes one field, and the field it
+writes here is the whole SID-keyed map. Fanning a per-host value out into per-host *fields* would
+need a task that repeats per host on the keeper side — a new task key **and** a new CEL root, buying
+a case with no user in the corpus. Rejected on those grounds, not deferred as an oversight.
+
+Also rejected, with the reasons, so they are not re-proposed:
+
+- **`soulprint.hosts.registers(...)`.** A register is volatile per run; the soulprint root is
+  stable-only by [ADR-018](0018-soulprint-typed.md). Hanging run-scoped data off it makes the one
+  reliable statement about that root false.
+- **Dispatching `core.state` to hosts.** Impossible by construction, not merely undesirable: `soul`
+  does not link a Postgres client and [ADR-011](0011-go-layout.md) makes that a compiler-enforced
+  isolation, not a convention.
 
 ## Forks
 

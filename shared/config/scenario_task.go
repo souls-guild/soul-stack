@@ -362,6 +362,15 @@ var loopReservedNames = map[string]bool{
 	"vars":        true,
 }
 
+// registerHostsAccessor — the register name reserved for the keeper-side per-host
+// root `register.hosts.<name>` (NIM-711, amendment to ADR-0084; the field is
+// injected by shared/cel.Vars.registerRoot). A register under this name is
+// unreadable from either side: on the keeper the accessor wins the field, and on a
+// host `register.hosts` is refused at compile as the keeper-only accessor whether
+// or not the register exists. Refused at parse (register_name_reserved) so the
+// diagnostic names the line that chose the name.
+const registerHostsAccessor = "hosts"
+
 // loopReservedPrefixes — name prefixes reserved for the engine's internal iter
 // variables. `__host` is the filter-comprehension iter variable that
 // `soulprint.hosts.where(...)` expands to (shared/cel/hosts.go, hostIterPrefix). A
@@ -1516,7 +1525,16 @@ func validateSerialField(kv *ast.MappingValueNode, pathPrefix string) []diag.Dia
 }
 
 // validateRegisterField — identifier. The type check (string) is done in the
-// common block 1a of validateTaskNode; here — only the format.
+// common block 1a of validateTaskNode; here — the format, then the reserved name.
+//
+// `register: hosts` is refused because the keeper-side context injects the per-host
+// root under exactly that field ([registerHostsAccessor], NIM-711), which makes such
+// a register unreadable from either side — the accessor wins on the keeper, and on a
+// host the syntactic cut-off refuses the expression regardless. Parse level, not
+// soul-lint: only a parse-time
+// validator descends into a resolved `include:` and reports at the included file's
+// own line/column (the routing-guard argument recorded in ADR-0084 §"The routing
+// guard").
 func validateRegisterField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	sn, ok := kv.Value.(*ast.StringNode)
 	if !ok {
@@ -1529,6 +1547,16 @@ func validateRegisterField(kv *ast.MappingValueNode, pathPrefix string) []diag.D
 			Code:     "register_identifier_invalid",
 			Message:  fmt.Sprintf("register %q does not match %s", sn.Value, reRegisterID),
 			Hint:     "snake_case identifier: starts with a-z; only [a-z0-9_]",
+			YAMLPath: pathPrefix + ".register",
+		})}
+	}
+	if sn.Value == registerHostsAccessor {
+		tok := sn.GetToken()
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "register_name_reserved",
+			Message:  fmt.Sprintf("register %q is reserved: register.hosts is the keeper-side per-host accessor (register.hosts.<name>)", sn.Value),
+			Hint:     "rename the register (e.g. host_list); to read one register across all hosts from an `on: keeper` task use register.hosts.<name>",
 			YAMLPath: pathPrefix + ".register",
 		})}
 	}

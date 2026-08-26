@@ -196,6 +196,22 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		State: c.Fixtures.State,
 	}
 
+	// Mocks.Register — a single L0 payload for the probe (probe-per-host = dispatch
+	// layer L3, outside pilot): the same register context applied to every host of
+	// the roster by its SID. On a single-host roster exactly {trialHostSID:
+	// register}.
+	//
+	// Seeded BEFORE the render, not after: `register.hosts.<name>` (NIM-711) is
+	// projected from this map when a keeper task renders, so an L0 case could not
+	// reach the accessor at all if it were filled afterwards. For host tasks nothing
+	// changes — [render.hostRegister] unions the per-host bucket over an empty
+	// keeper bucket, which is the flat Register content it already returned.
+	mockReg := orEmptyMap(c.Mocks.Register)
+	in.RegisterByHost = make(map[string]map[string]any, len(in.Hosts))
+	for _, h := range in.Hosts {
+		in.RegisterByHost[h.SID] = mockReg
+	}
+
 	tasks, _, err := pipeline.Render(ctx, in)
 	if err != nil {
 		return rc, fmt.Errorf("trial: render: %w", err)
@@ -245,15 +261,6 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	res.Failures = append(res.Failures, compareTaskPresence(c.Assert.TaskPresent, c.Assert.TaskAbsent, tasks)...)
 
 	in.Ctx = ctx
-	// Mocks.Register — single L0-payload probe (probe-per-host = dispatch layer L3,
-	// outside pilot): same register context applied to each host
-	// of roster by its SID. On single-host roster exactly {trialHostSID: register}
-	// (back-compat bit-for-bit).
-	mockReg := orEmptyMap(c.Mocks.Register)
-	in.RegisterByHost = make(map[string]map[string]any, len(in.Hosts))
-	for _, h := range in.Hosts {
-		in.RegisterByHost[h.SID] = mockReg
-	}
 
 	// The `core.state.<verb>` steps of the plan, in the order they run
 	// ([ADR-0084]). This is the offline half of the capture: prod runs each step

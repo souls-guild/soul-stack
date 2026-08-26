@@ -90,7 +90,39 @@ type Vars struct {
 	// isolation error ([orchestration.md §4.1]). Part of the compile-cache key (the
 	// compile outcome depends on the flag).
 	AllowHosts bool
+
+	// RegisterHosts — the run's register buckets INVERTED by name: name → {SID →
+	// payload}. In CEL available as `register.hosts.<name>` and ONLY when
+	// [Vars.AllowRegisterHosts] is set (NIM-711, [ADR-0084] amendment). It is the
+	// one route a per-host value has into `incarnation.state`: a keeper-side
+	// `core.state.<verb>` capture reads the whole SID-keyed map in a single
+	// expression, because a keeper task binds no soulprint and no host.
+	//
+	// The synthetic keeper bucket ([render.KeeperTargetSID]) is NOT a host and is
+	// excluded by the producer; a name a host never registered is simply absent
+	// (normal no-such-key). nil/empty ⇒ `register.hosts` is an empty map.
+	RegisterHosts map[string]any
+
+	// AllowRegisterHosts permits `register.hosts.<name>` in the expression. true —
+	// a keeper-side task ([dispatch.go] keeperVars, the only producer); false
+	// (zero-value) — EVERY other context: host tasks in the scenario pass, the
+	// destiny pass, flow-control, migration. Fail-closed by construction: a context
+	// that does not opt in gets a compile-time isolation error, not a silent empty
+	// map. Part of the compile-cache key (the compile outcome depends on the flag),
+	// like [Vars.AllowHosts].
+	//
+	// Deliberately NOT folded into AllowHosts: that flag is TRUE for host tasks in
+	// the scenario pass, which is exactly where register.hosts must be unavailable.
+	AllowRegisterHosts bool
 }
+
+// registerHostsKey is the field under which [Vars.RegisterHosts] is exposed inside
+// the `register` root, where it OVERWRITES a same-named entry of [Vars.Register].
+// Reserved as a register name at parse time (register_name_reserved,
+// [scenario_task.go]): a register called `hosts` is unreadable from either side —
+// here the accessor wins, and on a host task [guardRegisterHosts] refuses the
+// expression outright, since the cut-off is syntactic.
+const registerHostsKey = "hosts"
 
 // activation builds the map for cel.NewActivation. soulprint is wrapped in
 // {"self": …, "hosts": […]} so the canonical form soulprint.self.<path> and the
@@ -117,7 +149,7 @@ func (v Vars) activation(migration bool) map[string]any {
 	} else {
 		act = map[string]any{
 			"input":       orEmpty(v.Input),
-			"register":    orEmpty(v.Register),
+			"register":    v.registerRoot(),
 			"incarnation": orEmpty(v.Incarnation),
 			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
 			"vars":        orEmpty(v.Vars),
@@ -128,6 +160,27 @@ func (v Vars) activation(migration bool) map[string]any {
 		act[name] = val
 	}
 	return act
+}
+
+// registerRoot builds the `register` activation root. Without
+// [Vars.AllowRegisterHosts] it is [Vars.Register] unchanged (hot path, no copy).
+// With it, a COPY carrying the extra `hosts` field — a copy because Register is the
+// run's live bucket owned by the caller, and the activation must not write into it.
+//
+// `hosts` is placed even when RegisterHosts is empty: `register.hosts.<name>` for a
+// name nobody registered must fail as `no such key: <name>` (the author's actual
+// mistake), not as `no such key: hosts` (which reads as "the accessor does not
+// exist here").
+func (v Vars) registerRoot() map[string]any {
+	if !v.AllowRegisterHosts {
+		return orEmpty(v.Register)
+	}
+	out := make(map[string]any, len(v.Register)+1)
+	for k, val := range v.Register {
+		out[k] = val
+	}
+	out[registerHostsKey] = orEmpty(v.RegisterHosts)
+	return out
 }
 
 // loopNames returns the sorted list of loop-variable names (the key of the child env

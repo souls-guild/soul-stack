@@ -361,8 +361,23 @@ func checkRefList(kind string, value ast.Node, known map[string]bool, taskPath s
 // `.` (so `myregister.x` and `foo.register.y` do NOT match: `register` must be a
 // root identifier, as in the CEL context grammar). The name is a snake_case register
 // id (matches reRegisterID). Dynamic access `register["x"]` is not covered by this
-// form — there is no dot, the regex does not match (a safe skip).
-var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.([a-z][a-z0-9_]*)`)
+// form — there is no dot, the regex does not match (a safe skip); the same holds for
+// `register.hosts["x"]`, which therefore declares no Passage edge and fails loudly at
+// render ("no such key") rather than reading a stale value.
+//
+// The optional `hosts.` hop covers the keeper-side per-host root
+// `register.hosts.<name>` (NIM-711): the DEPENDENCY is still `<name>` — the same
+// register, read across hosts instead of on one — so group 3 (the last capture) is
+// the name in both forms. Without this hop the ref would read as `hosts`, which
+// nothing emits: a bogus unknown_register_reference AND, worse, a missing Passage
+// edge, putting the capture in the same Passage as the probe it reads (silently
+// empty).
+//
+// Group 4 is a lookahead stand-in (RE2 has none): an immediately following `(` means
+// the name is a METHOD on the root, not a register — `register.hosts.size()` counts
+// the registers the hosts produced, it does not read a register called `size`. The
+// hop makes that shape reachable in ordinary authoring, so the caller drops it.
+var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.(hosts\.)?([a-z][a-z0-9_]*)(\()?`)
 
 // celStringLiteral — a CEL string literal (single/double quotes). Mirrors
 // shared/cel.stringLiteralRe; we strip the contents before the textual identifier
@@ -430,8 +445,18 @@ func ExtractRegisterRefs(expr string) []string {
 	stripped := celStringLiteral.ReplaceAllString(expr, `""`)
 	seen := map[string]struct{}{}
 	for _, m := range reRegisterCELRef.FindAllStringSubmatch(stripped, -1) {
-		name := m[2]
-		if name == "self" {
+		name := m[3]
+		// `register.self.*` — the task's own result, not a cross-task edge. A bare
+		// `register.hosts` with nothing after it is the accessor itself, not a
+		// register name (an author's `register: hosts` is refused at parse time,
+		// register_name_reserved), so it names no dependency either.
+		//
+		// The trailing `(` is only consulted AFTER the hosts hop: `register.hosts
+		// .size()` is a method on the accessor and names no register, whereas
+		// `register.size()` has always extracted `size` here (a bogus ref, caught
+		// as unknown_register_reference) and keeping that unchanged keeps this
+		// ticket out of the plain form's behaviour.
+		if name == "self" || (m[2] != "" && m[4] == "(") || (m[2] == "" && name == registerHostsAccessor) {
 			continue
 		}
 		seen[name] = struct{}{}

@@ -129,6 +129,14 @@ func isVaultCall(n ast.Expr) bool {
 // identifier (input/vars/compute) plus the next field name are detected at this
 // level. Returns ok=false when the operand is not a bare ident (e.g. a call
 // result): then the secret source is determined by its own sub-node in the walk.
+//
+// `register.hosts.<name>` (NIM-711) is the one shape that must NOT fall through
+// to its sub-nodes: the level below is `register.hosts`, whose field is `hosts`
+// — a name reserved at parse ([scenario_task.go], register_name_reserved) and so
+// never in [SealSources.SealedRegisters]. Left alone, a sealed register read
+// across hosts would be seen as two unsealed hops and the cell holding every
+// host's secret would go unmasked. The two hops are flattened here so the taint
+// is decided on the register name the author actually read.
 func selectBaseField(n ast.Expr) (base, field string, ok bool) {
 	s := n.AsSelect()
 	if s.IsTestOnly() {
@@ -136,6 +144,9 @@ func selectBaseField(n ast.Expr) (base, field string, ok bool) {
 	}
 	op := s.Operand()
 	if op.Kind() != ast.IdentKind {
+		if isRegisterHosts(op) {
+			return "register", s.FieldName(), true
+		}
 		return "", "", false
 	}
 	return op.AsIdent(), s.FieldName(), true

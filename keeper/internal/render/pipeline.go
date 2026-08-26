@@ -1460,7 +1460,14 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 	rel, ok := tv.(string)
 	if !ok || rel == "" {
 		// non-string/`${}` path: resolve via CEL in the keeper context.
-		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, keeperVars(in))
+		// The keeper context, but with register.hosts explicitly closed: this
+		// resolves a HOST task's param, and the accessor is keeper-only (NIM-711).
+		// The per-host pass would reject it a moment later anyway; closing it here
+		// keeps the isolation from depending on that ordering, and stops a
+		// cross-host value from choosing which template file gets read.
+		kv := keeperVars(in)
+		kv.RegisterHosts, kv.AllowRegisterHosts = nil, false
+		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, kv)
 		if err != nil {
 			return "", false, fmt.Errorf("resolving template path: %w", err)
 		}

@@ -1226,13 +1226,57 @@ Passage — see the `provisioned_*` captures in
     value: "${ register.provision.vm_ids }"
 ```
 
-A capture cannot reach into a host's register bucket, and there is no other per-host root to
-reach for either: a keeper task binds no soulprint at all, so `soulprint.self` and the
+A capture cannot reach into a host's register bucket **by name**, and there is no other per-host
+root to reach for either: a keeper task binds no soulprint at all, so `soulprint.self` and the
 scenario-only `soulprint.hosts` (§4.1) are both unavailable there, and `incarnation.host_count`
-reads 0. What a capture can carry into state is what a **keeper** task produced. A value that
-exists only per host has no route into `incarnation.state` today — the retired `state_changes:`
-block had one (it rendered per host and folded the register map last-wins by SID), and closing
-that gap is a separate decision, not something to assume works.
+reads 0. `register.<task>` in a keeper task is the keeper bucket, full stop. The one way a per-host
+value reaches `incarnation.state` is the explicit accessor below.
+
+#### `register.hosts.<name>` — one register across every host
+
+`register.hosts.<name>` is the map **{SID → payload}** for register `<name>` across the hosts that
+produced it, and it is readable **only from an `on: keeper` task**. One capture writes the whole
+per-host set in one expression:
+
+```yaml
+- name: probe the node id
+  module: core.exec.run
+  on: [redis]
+  register: node_id
+  changed_when: "false"
+  params: { cmd: redis-cli, args: ["cluster", "myid"] }
+
+- name: record all node ids
+  module: core.state.set
+  on: keeper
+  params:
+    field: node_ids
+    value: "${ register.hosts.node_id }"   # → { "<sid>": {stdout: …, exit_code: 0}, … }
+```
+
+The payload under each SID is the whole register value, the same shape `register.<name>` has on the
+host that produced it — `.stdout`, `.exit_code`, whatever the module returned. Hosts that never ran the
+task (filtered out by `on:`/`where:`, or skipped) simply have no key; the map is not padded.
+
+*It is an accessor, not a task key.* The dependency it declares is on `<name>` — the same
+register, read across hosts instead of on one — so the capture lands in a **later Passage** than
+the probe ([ADR-056](../adr/0056-staged-render-passage.md), `render.Stratify`), exactly as
+`register.<name>` would. Working example and its L0 case:
+[`examples/service/state-verbs/scenario/per-host-capture/`](../../examples/service/state-verbs/scenario/per-host-capture/main.yml).
+
+*Only from `on: keeper`.* Anywhere else — a host task, the destiny pass, `when:`/`changed_when:`/
+`until:`, a migration — it is a **compile error**, not an empty map: a host task reading
+`register.<name>` is deliberately reading its OWN value
+([ADR-0083](../adr/0083-declared-secret-state-fields.md) §5), and a silent empty map would make
+`.size() == 0` and an empty `foreach` read as facts. For the same reason `register: hosts` on a task
+is refused at parse (`register_name_reserved`): such a register is unreadable from either side — in
+a keeper task the accessor wins over it, and on a host task `register.hosts` is refused at compile
+whether or not the register exists.
+
+*Per-host values into **different** state fields* is still not a thing — one capture writes one
+field, and the field it writes here is the whole SID-keyed map. Splitting it per host would need a
+task that repeats per host on the keeper side, which is a different decision
+([ADR-0084](../adr/0084-explicit-state-capture.md), amendment 2026-08-26).
 
 Referring to a register name that no keeper task of an earlier Passage issued is an eval error
 ("no such key") → the task fails → `error_locked`, like any undeclared key in CEL. A conditional
@@ -1244,7 +1288,9 @@ short-circuit, **not** `has(register.…)`.
 dropped from the per-host register map, so `register.<task>.*` read "no such key" and the value
 could not reach `incarnation.state`. That source-side drop is gone with the key: the same fold feeds
 the next Passage's render ([ADR-056](../adr/0056-staged-render-passage.md)), so dropping a row to
-protect one field breaks the register chain for every consumer of that task.
+protect one field breaks the register chain for every consumer of that task. What keeps that
+plaintext off the audit surfaces is the render-time seal, and reading such a register through
+`register.hosts.<name>` seals the cell exactly as reading it directly does.
 
 What protects state instead is that the value is never in it. A field declared `type: secret` in
 `state_schema` lives in Vault and the capture writes a `vault:` reference rather than plaintext —

@@ -151,8 +151,18 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 //
 // The reverse direction is no longer closed: since [ADR-0083] §5 a HOST task
 // also reads the keeper bucket, as a union in which its own bucket wins
-// ([hostRegister]). The channel stays one-way here — host register never leaks
-// into a keeper task's roots.
+// ([hostRegister]). The channel stays one-way for the `register.<name>` root —
+// host register never leaks into it.
+//
+// register.hosts.<name> is the DECLARED exception (NIM-711, amendment to
+// [ADR-0084]): the per-host buckets inverted by name ([registerHosts]), readable
+// only here. A keeper task is the only place `incarnation.state` is written and
+// the only place that can see all hosts at once, so a per-host value reaches
+// state through one capture reading the whole SID-keyed map. It is a separate
+// root, not a widening of `register.<name>`: a keeper task's own chaining
+// semantics are unchanged, and every other context ([hostVars], the destiny
+// pass, flow-control, migration) is cut off at compile time
+// ([cel.Vars.AllowRegisterHosts]).
 //
 // compute — [Pipeline.resolveCompute] runs once per run, BEFORE the task loop,
 // in exactly this soulprint-free run-level context, so `compute.<name>` is the
@@ -176,12 +186,14 @@ func keeperVars(in RenderInput) cel.Vars {
 		reg = in.KeeperRegister
 	}
 	return cel.Vars{
-		Input:       in.Input,
-		Register:    reg,
-		Incarnation: inc,
-		Vars:        in.ServiceVars,
-		Compute:     in.Compute,
-		Ctx:         in.Ctx,
+		Input:              in.Input,
+		Register:           reg,
+		RegisterHosts:      registerHosts(in),
+		AllowRegisterHosts: true,
+		Incarnation:        inc,
+		Vars:               in.ServiceVars,
+		Compute:            in.Compute,
+		Ctx:                in.Ctx,
 	}
 }
 

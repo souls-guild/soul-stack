@@ -365,17 +365,22 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 // (rewriteHostsWhere) into a native filter-comprehension BEFORE compile — the
 // rewritten result is cached.
 //
-// The cache key includes the env discriminator (loopKey) and allowHosts: a
-// program compiled against a child loop-env is incompatible with the base
-// (different declared-variable set); allowHosts changes the outcome for the same
-// text (rewrite vs isolation error). loopKey == "" — the base env.
-func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (cel.Program, error) {
-	// flow-control mode ([NewFlowControl]) forces host-accessor isolation:
-	// soulprint.hosts/soulprint.where are unavailable regardless of Vars.AllowHosts
-	// (cross-host, scenario-only — the Soul has none). Guards against a caller that
-	// accidentally set Vars.AllowHosts=true.
+// allowRegisterHosts permits register.hosts.<name> (true only in a keeper task —
+// [register_hosts.go]); it is a SEPARATE flag from allowHosts, which is true for
+// host tasks in the scenario pass.
+//
+// The cache key includes the env discriminator (loopKey), allowHosts and
+// allowRegisterHosts: a program compiled against a child loop-env is incompatible
+// with the base (different declared-variable set); either flag changes the outcome
+// for the same text (rewrite/accept vs isolation error). loopKey == "" — the base env.
+func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts, allowRegisterHosts bool) (cel.Program, error) {
+	// flow-control mode ([NewFlowControl]) forces cross-host isolation:
+	// soulprint.hosts/soulprint.where and register.hosts are unavailable regardless
+	// of the Vars flags (cross-host, keeper-side — the Soul has neither). Guards
+	// against a caller that accidentally set them.
 	if e.flowControl {
 		allowHosts = false
+		allowRegisterHosts = false
 	}
 
 	cacheKey := expr
@@ -384,6 +389,9 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 	}
 	if !allowHosts {
 		cacheKey = "\x02" + cacheKey
+	}
+	if allowRegisterHosts {
+		cacheKey = "\x03" + cacheKey
 	}
 
 	e.mu.RLock()
@@ -399,6 +407,12 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts bool) (c
 
 	compiled, err := e.rewriteHostsWhere(expr, allowHosts)
 	if err != nil {
+		return nil, err
+	}
+
+	// After the rewrite, so a register.hosts reference hidden inside a
+	// `.where("<predicate>")` string literal is scanned too (Unparse inlines it).
+	if err := e.guardRegisterHosts(expr, compiled, allowRegisterHosts); err != nil {
 		return nil, err
 	}
 

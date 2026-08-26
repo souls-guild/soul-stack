@@ -1,0 +1,48 @@
+# L0 for `register.hosts.<name>` (NIM-711). The subject is the SHAPE the keeper
+# capture writes: a map keyed by SID, one entry per host of the roster, from a
+# register the hosts produced and a keeper task cannot otherwise see.
+#
+# What this case does NOT pin: that the payloads are per-host. The harness
+# applies ONE `mocks.register` payload to every host by SID (probe-per-host is
+# L3, outside pilot), so both entries below carry identical values and only the
+# KEYS differ. The per-host distinctness of the values is pinned in Go instead -
+# keeper/internal/render/register_hosts_test.go, which renders two hosts with
+# different registers.
+name: per-host-capture writes one register across two hosts, keyed by SID
+
+fixtures:
+  hosts:
+    - sid: node-a.example.com
+      covens: [state-verbs]
+      soulprint:
+        network: { primary_ip: 10.0.0.21 }
+        os: { arch: amd64, version: "12" }
+    - sid: node-b.example.com
+      covens: [state-verbs]
+      soulprint:
+        network: { primary_ip: 10.0.0.22 }
+        os: { arch: amd64, version: "12" }
+
+  state: {}
+  input: {}
+
+mocks:
+  # What the probe leaves in each host's bucket. Strings only: the assertion
+  # below compares the folded state, and a YAML integer and a protobuf number
+  # are not the same value.
+  register:
+    node_id:
+      stdout: "7f3a91"
+
+assert:
+  task_present:
+    - module: core.state.set
+      params_subset:
+        field: node_ids
+
+  # The whole point: ONE capture, one field, one entry per host. A `register.
+  # <name>` read in the same place would have produced nothing at all.
+  state_after:
+    node_ids:
+      node-a.example.com: { stdout: "7f3a91" }
+      node-b.example.com: { stdout: "7f3a91" }

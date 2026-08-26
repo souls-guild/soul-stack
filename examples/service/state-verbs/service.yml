@@ -21,6 +21,7 @@ state_schema:
     topology:        { type: string }
     members:         { type: object }
     nodes:           { type: array }
+    node_ids:        { type: object }
     events:          { type: array }
 
 # No dependencies: the scenario uses only core modules (ADR-015), which are not

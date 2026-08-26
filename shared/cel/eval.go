@@ -74,7 +74,7 @@ func (e *Engine) EvalExpression(expr string, vars Vars) (ref.Val, error) {
 	if err != nil {
 		return nil, err
 	}
-	prg, err := e.compile(env, strings.Join(loopNames, "\x00"), norm, vars.AllowHosts)
+	prg, err := e.compile(env, strings.Join(loopNames, "\x00"), norm, vars.AllowHosts, vars.AllowRegisterHosts)
 	if err != nil {
 		return nil, err
 	}
