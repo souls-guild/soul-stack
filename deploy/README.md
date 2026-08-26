@@ -6,7 +6,7 @@ build and run wrappers.
 
 ## docker/
 
-Three multi-stage Dockerfiles. Builder — `golang:1.26.3` (synchronized with
+Three multi-stage Dockerfiles. Builder — `golang:1.26.6` (synchronized with
 `go.work` / `go.mod`), runtime — `gcr.io/distroless/static:nonroot`: a static
 binary without shell/libc/package manager, unprivileged user
 (uid 65532). Static build (`CGO_ENABLED=0`), `-trimpath`, `-ldflags "-s -w"`.

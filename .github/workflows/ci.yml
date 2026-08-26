@@ -60,7 +60,7 @@ env:
   # it — a developer's toolchain honours go.work. A CI that is red for a reason the
   # tree has already fixed teaches everyone to stop reading it, which is the whole
   # problem NIM-238 is about.
-  GO_VERSION: "1.26.5"
+  GO_VERSION: "1.26.6"
 
 jobs:
   # Main required gate. Fully reproduces `make check`:
@@ -75,7 +75,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          # Explicit version from go.work (toolchain 1.26.4). go-version-file: go.work
+          # Explicit version from go.work (toolchain 1.26.6). go-version-file: go.work
           # is also supported by setup-go, but an explicit pin is clearer and doesn't depend on
           # parsing the `toolchain` string.
           go-version: ${{ env.GO_VERSION }}
