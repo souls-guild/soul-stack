@@ -457,8 +457,8 @@ type Deps struct {
 	AuditReader ChangedTaskReader
 
 	// InputDenyPaths — config extension to the system-floor hard deny-list
-	// (keeper.yml → vault.input_deny_paths). Adds to
-	// [config.VaultInputFloor], doesn't replace it.
+	// (keeper.yml → vault.input_deny_paths). Adds to the reserved-namespace floor
+	// ([config.PathUnderReservedNamespace]), doesn't replace it.
 	InputDenyPaths []string
 
 	// Metrics — keeper_scenario_* collectors (ADR-024). nil → run metrics

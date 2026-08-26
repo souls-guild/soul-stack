@@ -1167,6 +1167,12 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			}
 			return ""
 		},
+		CertKVMount: func() string {
+			if c := d.store.Get(); c != nil {
+				return c.Vault.KVMount
+			}
+			return ""
+		},
 		// `core.bootstrap.delivered` teleport mode (ADR-063 amendment): dialer
 		// from keeper.yml::push.teleport. nil/"" → direct, and since the direct
 		// set (providers/host-CA) is not filled in here, the module does not
@@ -6324,6 +6330,7 @@ func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) rea
 		return out
 	}
 	out.DefaultPKIMount = cfg.Vault.PKIMount
+	out.KVMount = cfg.Vault.KVMount
 	if cfg.Reaper == nil || cfg.Reaper.Rules == nil {
 		return out
 	}

@@ -49,6 +49,12 @@ func ValidAlias(name string) bool { return reAlias.MatchString(name) }
 //
 // Tier 2 is the Soul Stack dictionary (docs/naming-rules.md) plus the four words every
 // ecosystem eventually collides on (`local`, `default`, `internal`, `test`, `example`).
+// `herald` and `provider` joined it in NIM-706: they are dictionary entities on the same
+// footing as the rest, and the platform writes Vault path families under both
+// (keeper/internal/secretwrite), which is why they are ALSO refused as service names —
+// see [shared/config.IsReservedVaultNamespace], a separate and deliberately narrower
+// list, because a service name that collides destroys a secret whereas an alias that
+// collides only shadows an address.
 // These are not shadowing risks today — they are reserved because an operator reading
 // `scenario.something.present` in a diff would reasonably assume it came from the
 // engine, and because taking a dictionary word back later is a breaking rename.
@@ -60,6 +66,8 @@ var reservedAliases = map[string]struct{}{
 
 	// Tier 2 — the dictionary and the usual collisions.
 	"destiny":     {},
+	"herald":      {},
+	"provider":    {},
 	"scenario":    {},
 	"service":     {},
 	"incarnation": {},

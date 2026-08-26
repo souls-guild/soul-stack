@@ -75,11 +75,26 @@ func (w *fakeKV) WriteKV(_ context.Context, path string, data map[string]any) er
 }
 
 func TestVaultPath(t *testing.T) {
-	if got := VaultPath("redis", "inc-1", keepercert.KindCert); got != "secret/redis/inc-1/tls/cert" {
+	if got := VaultPath("", "redis", "inc-1", keepercert.KindCert); got != "secret/redis/inc-1/tls/cert" {
 		t.Errorf("cert path = %q", got)
 	}
-	if got := VaultPath("redis", "inc-1", keepercert.KindKey); got != "secret/redis/inc-1/tls/key" {
+	if got := VaultPath("", "redis", "inc-1", keepercert.KindKey); got != "secret/redis/inc-1/tls/key" {
 		t.Errorf("key path = %q", got)
+	}
+}
+
+// TestVaultPath_HonoursKVMount — NIM-706: the mount is keeper.yml's `vault.kv_mount`,
+// not the literal `secret/` this used to emit. A deployment on any other KV mount had
+// its TLS material written outside the mount the Keeper's own Vault policy covers, so
+// the guard is on the mount reaching the path, not on the path merely being well formed.
+func TestVaultPath_HonoursKVMount(t *testing.T) {
+	if got := VaultPath("kv-prod", "redis", "inc-1", keepercert.KindCert); got != "kv-prod/redis/inc-1/tls/cert" {
+		t.Errorf("cert path on a non-default mount = %q, want kv-prod/redis/inc-1/tls/cert", got)
+	}
+	// A mount with stray slashes resolves the same way the derived-secret path does
+	// (config.EffectiveVaultMount), so write and read cannot disagree on the name.
+	if got := VaultPath("/kv-prod/", "redis", "inc-1", keepercert.KindKey); got != "kv-prod/redis/inc-1/tls/key" {
+		t.Errorf("key path on a slash-wrapped mount = %q, want kv-prod/redis/inc-1/tls/key", got)
 	}
 }
 
@@ -101,7 +116,7 @@ func TestVaultPath_RejectsUnsafeSegment(t *testing.T) {
 					t.Errorf("VaultPath(%q,%q) should panic (unsafe segment)", tc.service, tc.incarnation)
 				}
 			}()
-			_ = VaultPath(tc.service, tc.incarnation, keepercert.KindCert)
+			_ = VaultPath("", tc.service, tc.incarnation, keepercert.KindCert)
 		}()
 	}
 }

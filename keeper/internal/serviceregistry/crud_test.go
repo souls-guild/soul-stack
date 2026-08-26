@@ -57,6 +57,17 @@ func TestValidateFields(t *testing.T) {
 		{"bad-name-upper", "Web", "g", "r", nil, ErrInvalidName},
 		{"bad-name-underscore", "web_svc", "g", "r", nil, ErrInvalidName},
 		{"bad-name-leading-digit", "1web", "g", "r", nil, ErrInvalidName},
+		// ★ NIM-706. Well-formed kebab-case, so ValidName passes — the refusal has to
+		// come from the reserved rule standing on its own, and it must be a DISTINCT
+		// sentinel from ErrInvalidName: "invalid service name" would send an operator
+		// looking for a typo in a name that has none.
+		{"reserved-keeper", "keeper", "g", "r", nil, ErrReservedName},
+		{"reserved-herald", "herald", "g", "r", nil, ErrReservedName},
+		{"reserved-provider", "provider", "g", "r", nil, ErrReservedName},
+		{"reserved-internal", "internal", "g", "r", nil, ErrReservedName},
+		// Whole-word: a neighbouring name is a different Vault namespace.
+		{"ok-name-resembling-reserved", "heralds", "g", "r", nil, nil},
+		{"ok-name-prefixed-reserved", "keeper-notes", "g", "r", nil, nil},
 		{"empty-git", "web", "", "r", nil, ErrInvalidGit},
 		{"empty-ref", "web", "g", "", nil, ErrInvalidRef},
 		{"bad-refresh", "web", "g", "r", ptr("notaduration"), ErrInvalidRefresh},
@@ -168,6 +179,41 @@ func TestService_CreateValidationBeforeDB(t *testing.T) {
 	})
 	if !errors.Is(gotErr, ErrInvalidName) {
 		t.Fatalf("CreateService = %v, want ErrInvalidName", gotErr)
+	}
+}
+
+// ★ NIM-706. The whole point of refusing at REGISTRATION is that the name never enters
+// the cluster: once the row exists the name is the primary key and immutable, so every
+// secret that service ever derives is already inside `secret/herald/…`. fakeDB.QueryRow
+// would return ErrNoRows on any real call — reaching it at all would mean the check runs
+// after the write rather than before it.
+func TestService_CreateRefusesReservedName(t *testing.T) {
+	svc, err := NewService(ServiceDeps{Pool: &fakeDB{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	for _, name := range []string{"keeper", "herald", "provider", "internal"} {
+		_, gotErr := svc.CreateService(t.Context(), CreateServiceInput{Name: name, Git: "g", Ref: "r"})
+		if !errors.Is(gotErr, ErrReservedName) {
+			t.Fatalf("CreateService(%q) = %v, want ErrReservedName", name, gotErr)
+		}
+		if !strings.Contains(gotErr.Error(), name) {
+			t.Errorf("CreateService(%q) error %q does not name the offending word — an operator cannot tell what to change", name, gotErr)
+		}
+	}
+}
+
+// The same rule on the update path. Name is immutable on update, so this guards the
+// other half of the choke point rather than a second way in: a route that validated only
+// on create would admit the name through any future path that reuses UpdateService.
+func TestService_UpdateRefusesReservedName(t *testing.T) {
+	svc, err := NewService(ServiceDeps{Pool: &fakeDB{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	_, gotErr := svc.UpdateService(t.Context(), UpdateServiceInput{Name: "herald", Git: "g", Ref: "r"})
+	if !errors.Is(gotErr, ErrReservedName) {
+		t.Fatalf("UpdateService = %v, want ErrReservedName", gotErr)
 	}
 }
 

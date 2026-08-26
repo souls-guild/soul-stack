@@ -476,8 +476,11 @@ func (h *ServiceHandler) invalidateCompat(name string) {
 //   - ErrAlreadyExists      → service-already-exists (409).
 //   - ErrNotFound           → not-found (404; update of a nonexistent entry).
 //   - ErrOperatorNotFound   → not-found (404; CallerAID missing from operators).
-//   - ErrInvalidName / ErrInvalidGit / ErrInvalidRef / ErrInvalidRefresh →
-//     validation-failed (422).
+//   - ErrInvalidName / ErrReservedName / ErrInvalidGit / ErrInvalidRef /
+//     ErrInvalidRefresh → validation-failed (422). ErrReservedName is a validation
+//     failure and not a conflict: nothing holds the name, it is unusable by
+//     construction (NIM-706), and 409 would send the operator hunting for the
+//     service that supposedly owns it.
 //
 // For unknown errors — internal-error (500) + a generic detail (the raw err.Error()
 // is not surfaced to the client; diagnostics go to the logs).
@@ -490,6 +493,7 @@ func (h *ServiceHandler) mapServiceError(op, name, callerAID string, err error) 
 	case errors.Is(err, serviceregistry.ErrOperatorNotFound):
 		return &problemError{problem.New(problem.TypeNotFound, "", "caller AID "+callerAID+" not found in operators registry")}
 	case errors.Is(err, serviceregistry.ErrInvalidName),
+		errors.Is(err, serviceregistry.ErrReservedName),
 		errors.Is(err, serviceregistry.ErrInvalidGit),
 		errors.Is(err, serviceregistry.ErrInvalidRef),
 		errors.Is(err, serviceregistry.ErrInvalidRefresh):

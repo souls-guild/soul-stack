@@ -12,6 +12,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // svcFakePool — a narrow mock of [serviceregistry.ServicePool] for ServiceHandler
@@ -190,6 +191,37 @@ func TestServiceHandler_Register_BadRefresh_422(t *testing.T) {
 	_, err := h.RegisterTyped(context.Background(), claimsService(),
 		ServiceRegisterInput{Name: "web", Git: "g", Ref: "v1", Refresh: &bad})
 	wantProblem(t, err, problem.TypeValidationFailed)
+}
+
+// A reserved service name is refused at the REST surface, not merely inside the
+// registry (NIM-706). The name is the first path segment of every secret the platform
+// derives for the service, and `keeper`/`herald`/`provider` already name path families
+// the platform writes itself; an operator who registers one collides with them.
+//
+// 422 rather than 409: nothing exists to conflict with — the name is unusable by
+// construction, and a conflict status would send the operator looking for the other
+// service holding it.
+func TestServiceHandler_Register_ReservedName_422(t *testing.T) {
+	for _, name := range config.ReservedVaultNamespaceNames() {
+		h := newServiceHandler(t, &svcFakePool{})
+		_, err := h.RegisterTyped(context.Background(), claimsService(),
+			ServiceRegisterInput{Name: name, Git: "https://git/x.git", Ref: "v1"})
+		wantProblem(t, err, problem.TypeValidationFailed)
+	}
+}
+
+// The refusal is on the whole word. A name that merely starts with a reserved one owns
+// a disjoint prefix (`<mount>/keeper-notes/` never meets `<mount>/keeper/`), so refusing
+// it would be this gate widening into a prefix ban.
+func TestServiceHandler_Register_ReservedNameIsWholeWord(t *testing.T) {
+	for _, name := range []string{"keeper-notes", "heralds", "my-provider"} {
+		h := newServiceHandler(t, &svcFakePool{})
+		_, err := h.RegisterTyped(context.Background(), claimsService(),
+			ServiceRegisterInput{Name: name, Git: "https://git/x.git", Ref: "v1"})
+		if err != nil {
+			t.Errorf("Register(%q) refused: %v", name, err)
+		}
+	}
 }
 
 func TestServiceHandler_Register_Duplicate_409(t *testing.T) {

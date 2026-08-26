@@ -30,13 +30,21 @@ func TestMatchesVaultScope(t *testing.T) {
 
 // TestDeniedByVaultFloor — the system floor is unconditional, extra adds to it.
 //
-// DeniedByVaultFloor is a pure prefix check over an ALREADY-normalized path:
-// normalization (collapse `//`, reject `.`/`..`) is vault.ParseRef's job higher
-// up the stack (Soul-safe shared/config with no vault client). This pins that:
-// normalized equivalents of bypass paths are caught by the floor, while a raw
-// un-normalized `secret//keeper/x` does NOT match on its own — so without
-// normalization in ParseRef there would be a bypass (see parseref_test,
-// security-regress).
+// ★ NIM-706 moved two expectations in this test, deliberately, and both in the
+// safe direction:
+//
+//   - The floor is now a RESERVED-SEGMENT check ([PathUnderReservedNamespace]), not a
+//     literal `secret/keeper/` prefix. It therefore bites on any KV mount. The old form
+//     spelled the mount, so a deployment with `vault.kv_mount: kv-prod` had no floor at
+//     all — the case pinned below as `kv-prod/keeper/…`.
+//   - `secret//keeper/x` is now DENIED where it was previously allowed. The old contract
+//     leaned on vault.ParseRef normalising first; the new one does its own segment
+//     normalisation (the same three rewrites [PathAddressesOwnNamespace] documents),
+//     so the floor no longer depends on a caller upstream having run. The bypass the
+//     old comment described is closed at BOTH ends rather than one.
+//
+// `extra` (keeper.yml → vault.input_deny_paths) stays a literal prefix match — it is
+// operator-written config naming concrete paths, not a namespace rule.
 func TestDeniedByVaultFloor(t *testing.T) {
 	cases := []struct {
 		logical string
@@ -45,13 +53,22 @@ func TestDeniedByVaultFloor(t *testing.T) {
 	}{
 		{"secret/keeper/jwt-signing-key", nil, true},      // system-floor
 		{"secret/internal/anything", nil, true},           // system-floor
+		{"secret/herald/h1/token", nil, true},             // NIM-706: herald joined the floor
+		{"secret/provider/p1/credentials", nil, true},     // NIM-706: provider joined the floor
 		{"secret/services/redis/prod", nil, false},        // outside floor
 		{"secret/team/x", []string{"secret/team/"}, true}, // config extension
 		{"secret/team/x", []string{""}, false},            // empty extra ignored
-		// normalized bypass equivalent → caught by the floor.
 		{"secret/keeper/x", nil, true},
-		// a raw un-normalized path is NOT caught by the floor (normalization is in ParseRef).
-		{"secret//keeper/x", nil, false},
+		// NIM-706: mount-agnostic — the floor holds on a non-default `vault.kv_mount`,
+		// and on the mount-omitted form vault.Client.ReadKV accepts.
+		{"kv-prod/keeper/x", nil, true},
+		{"keeper/jwt-signing-key", nil, true},
+		// NIM-706: self-normalising — an un-normalized path resolves to the very entry
+		// the floor protects, so the floor refuses it without waiting for ParseRef.
+		{"secret//keeper/x", nil, true},
+		// Whole-segment, not prefix: a neighbouring name is NOT the reserved namespace.
+		{"secret/keeper-notes/x", nil, false},
+		{"secret/heralds/x", nil, false},
 	}
 	for _, c := range cases {
 		if got := DeniedByVaultFloor(c.logical, c.extra); got != c.want {

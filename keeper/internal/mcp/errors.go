@@ -15,6 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // MCP error code suffixes from docs/keeper/mcp-tools.md § Errors.
@@ -534,8 +535,8 @@ func mapSigilKeyErrorToMCP(err error) (code, detail string) {
 //   - ErrNotFound           → not-found (REST TypeNotFound: no such record).
 //   - ErrOperatorNotFound   → not-found (REST TypeNotFound: CallerAID missing
 //     from the operators registry, FK violation).
-//   - ErrInvalidName / ErrInvalidGit / ErrInvalidRef / ErrInvalidRefresh →
-//     validation-failed (REST TypeValidationFailed).
+//   - ErrInvalidName / ErrReservedName / ErrInvalidGit / ErrInvalidRef /
+//     ErrInvalidRefresh → validation-failed (REST TypeValidationFailed).
 //
 // Unknown errors → internal-error + generic detail (raw err.Error() isn't
 // forwarded — oracle-attack protection, as in the neighboring mappers).
@@ -551,6 +552,14 @@ func mapServiceRegistryErrorToMCP(err error) (code, detail string) {
 		return mcpCodeNotFound, "caller AID not found in operators registry"
 	case errors.Is(err, serviceregistry.ErrInvalidName):
 		return mcpCodeValidationFailed, "invalid service name"
+	case errors.Is(err, serviceregistry.ErrReservedName):
+		// The list is safe to spell out: it is closed and documented
+		// (docs/naming-rules.md), not a fact about this deployment, and an agent that
+		// is not told WHICH names are off-limits retries the same one. err.Error() is
+		// deliberately not forwarded — it carries the `serviceregistry:` prefix the
+		// neighbouring mappers exist to keep off the wire.
+		return mcpCodeValidationFailed, "service name is reserved by the platform: " +
+			strings.Join(config.ReservedVaultNamespaceNames(), ", ")
 	case errors.Is(err, serviceregistry.ErrInvalidGit):
 		return mcpCodeValidationFailed, "git is empty"
 	case errors.Is(err, serviceregistry.ErrInvalidRef):

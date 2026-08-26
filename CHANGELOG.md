@@ -62,9 +62,59 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `set:` → `value:` (with the register echo key). Both old names collide with
   the verb grammar: there `key:` addresses an element **inside** a collection,
   while the module spelled the containing field the same way.
+- **`keeper`, `herald`, `provider` and `internal` are reserved service names**
+  ([ADR-0083](docs/adr/0083-declared-secret-state-fields.md) amendment
+  2026-08-26, NIM-706). A service's name becomes the first path segment after
+  the KV mount of every secret the platform derives for it, and each of those
+  four words already opens a path family the platform writes itself:
+  `<mount>/keeper/<name>` for keeper's own runtime secrets, and
+  `<mount>/herald/<entity>/<field>` / `<mount>/provider/<name>/credentials` for
+  the [ADR-064](docs/adr/0064-secret-write-path.md) write path. The two
+  derivations met on one KV entry — and Vault KV v2 **replaces** an entry rather
+  than merging into it, so on the `secretwrite` path the second write deleted
+  the first one's fields with no error at either end. Refused offline
+  (`service_name_reserved`), at REST and MCP registration (**422**, not 409 —
+  nothing holds the name), and by the derivation itself, which now returns an
+  error rather than emitting a colliding path. The comparison is on the whole
+  name: `keeper-notes` is still a perfectly good service. **Breaking** — a
+  service already registered under one of the four names stops loading and must
+  be renamed. `herald` and `provider` also join the reserved registration
+  aliases, which are a separate and wider list.
+- **`tls` is reserved as the name of a `state_schema` field that declares a
+  secret** (same amendment). Keeper issues an incarnation's certificate and
+  private key to `<mount>/<service>/<incarnation>/tls/{cert,key}`, which a
+  collection secret on a field named `tls` with element key `cert` reproduces
+  exactly — and that path lives *inside* the service's own namespace, out of
+  reach of any rule about service names. The element key is state data and
+  cannot be constrained, so the fence is on the field name
+  (`secret_field_reserved_state_name`). Only a field declaring a secret is
+  checked: a plain `tls:` object of ports and cipher lists derives nothing and
+  is untouched.
+- `keeper/internal/secretwrite`'s domain set is closed and enforced: `Writer.path`
+  refuses a domain outside `WriteDomains()`, where it previously took any safe path
+  segment. Both call sites already pass `DomainHerald` / `DomainProvider`, so nothing
+  at runtime changes — but a domain added later must now join the set, and the set is
+  what the reserved-name coupling guard iterates. A guard naming today's two members
+  would have stayed green for a third domain, which is the change that reopens the
+  collision (NIM-706).
+- `certissue` no longer spells its KV mount as the literal `"secret"`. On a
+  deployment with a non-default `vault.kv_mount` it wrote an incarnation's TLS
+  material outside the configured mount entirely; the mount now comes from
+  `keeper.yml`, threaded through both callers.
+- The cert rotator reads its config once per tick. `issueMaterial` re-read
+  `keeper.yml` to find the KV mount, so a hot-reload landing between the CSR and
+  the write signed against one config and wrote against another — the rotated
+  certificate would land outside the mount the run started with, and the
+  incarnation's ref would point at the old entry (NIM-706).
 
 ### Removed
 
+- **`config.VaultInputFloor`** — a list of literal Vault path prefixes guarding
+  operator input. It spelled the default mount, so a deployment with a
+  non-default `vault.kv_mount` lost the floor entirely, and it named neither
+  `herald` nor `provider`. Replaced by `config.PathUnderReservedNamespace`:
+  mount-agnostic, comparing whole segments, and reading the same closed reserved
+  list as every other surface (NIM-706).
 - **`revealable_secrets` in `service.yml`.** The reveal endpoints, the
   `incarnation.view-secrets` right and the `incarnation.secret_revealed` audit
   event are unchanged — what goes is the author-written `vault_ref`, replaced by

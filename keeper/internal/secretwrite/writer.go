@@ -9,15 +9,41 @@ package secretwrite
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Secret domains — first segment of deterministic path secret/<domain>/…
+// Secret domains — first segment of deterministic path secret/<domain>/… .
+//
+// The set is CLOSED and [Writer.path] refuses a domain outside it. That is what keeps
+// this package tied to the reserved-service-name list (NIM-706): every domain here is
+// also a name no service may register, because a service by that name derives its
+// secrets onto these paths and [Writer.WriteString] replaces rather than merges. A new
+// domain declared as a bare constant, without joining writeDomains, would write into a
+// namespace nothing reserves — so the constant alone is deliberately not enough, and
+// TestWriteDomains_AreReservedServiceNames iterates the set rather than naming today's
+// two members.
 const (
 	DomainHerald   = "herald"
 	DomainProvider = "provider"
 )
+
+var writeDomains = map[string]struct{}{
+	DomainHerald:   {},
+	DomainProvider: {},
+}
+
+// WriteDomains returns the closed domain set, sorted, for error text and guards.
+func WriteDomains() []string {
+	out := make([]string, 0, len(writeDomains))
+	for d := range writeDomains {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // defaultMount is the default KV-mount (matches vault.defaultKVMount).
 const defaultMount = "secret"
@@ -91,11 +117,13 @@ func (w *Writer) WriteMap(ctx context.Context, domain, entity, field string, dat
 }
 
 // path builds and validates the deterministic logical path
-// <mount>/<domain>/<entity>/<field>. domain/entity/field must be safe segments
-// (matching [config.ValidVaultPathSegment]).
+// <mount>/<domain>/<entity>/<field>. entity/field must be safe segments (matching
+// [config.ValidVaultPathSegment]); domain is checked against the closed set instead,
+// which is strictly narrower — a segment-safe word that is not a known domain would
+// write outside every namespace the platform reserves.
 func (w *Writer) path(domain, entity, field string) (string, error) {
-	if !config.ValidVaultPathSegment(domain) {
-		return "", fmt.Errorf("secretwrite: invalid domain %q", domain)
+	if _, ok := writeDomains[domain]; !ok {
+		return "", fmt.Errorf("secretwrite: unknown domain %q (known: %s)", domain, strings.Join(WriteDomains(), ", "))
 	}
 	if !config.ValidVaultPathSegment(entity) {
 		return "", fmt.Errorf("secretwrite: invalid entity %q", entity)

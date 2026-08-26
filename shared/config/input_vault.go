@@ -10,21 +10,15 @@ package config
 // `vault_scope` (prefix-glob) and only if the resolved path matches the scope AND
 // is not in the hard deny-list (a safety net against a scope authoring mistake).
 //
+// The deny-list is the reserved Vault namespaces ([PathUnderReservedNamespace]) — one
+// list, shared with the rule that refuses the same words as SERVICE names, so the end
+// that mints and the end that reads back cannot drift (NIM-706).
+//
 // The single-ref check (scope-match + deny) is a pure function of strings, so it
 // lives in shared/config (Soul-safe, no vault client). KV reads and audit are
 // keeper-side (keeper/internal/scenario), where this floor is wired in.
 
 import "strings"
-
-// VaultInputFloor — system-floor hard deny-list (fork C): paths under these
-// prefixes are NEVER resolved via operator input, even if a field author
-// mistakenly declared a `vault_scope` covering them. Checked AFTER the scope match,
-// always, unconditionally. Extended by config (keeper.yml → vault.input_deny_paths)
-// but not disabled by it — the system-floor cannot be turned off.
-var VaultInputFloor = []string{
-	"secret/keeper/",
-	"secret/internal/",
-}
 
 // validVaultScopeGlob — the prefix-glob form for `vault_scope`: one trailing `*`
 // preceded by a non-empty logical prefix like `<mount>/<path>` (has a `/`
@@ -57,14 +51,22 @@ func MatchesVaultScope(scope, logical string) bool {
 	return logical == scope
 }
 
-// DeniedByVaultFloor — a logical path falls under the hard deny-list (system-floor
-// + optional config extension extra). Checked AFTER the scope match,
-// unconditionally. extra may be nil (system-floor only).
+// DeniedByVaultFloor — a logical path falls under the hard deny-list. Checked AFTER
+// the scope match, always, unconditionally. extra may be nil.
+//
+// The system floor is [PathUnderReservedNamespace] — the reserved Vault namespaces, the
+// same closed list registration refuses as a service name (NIM-706). It replaces the
+// literal `secret/keeper/`, `secret/internal/` prefixes this check carried since NIM-74:
+// those spelled the mount, so an operator who configured `vault.kv_mount` to anything
+// other than `secret` silently lost the floor entirely, and they named neither `herald`
+// nor `provider`, the two namespaces whose writer destroys rather than merges.
+//
+// extra (keeper.yml → vault.input_deny_paths) stays a literal prefix match: it is
+// operator-written config naming concrete paths, not a namespace rule. It EXTENDS the
+// floor and cannot disable it — the system floor cannot be turned off.
 func DeniedByVaultFloor(logical string, extra []string) bool {
-	for _, p := range VaultInputFloor {
-		if strings.HasPrefix(logical, p) {
-			return true
-		}
+	if PathUnderReservedNamespace(logical) {
+		return true
 	}
 	for _, p := range extra {
 		if p != "" && strings.HasPrefix(logical, p) {

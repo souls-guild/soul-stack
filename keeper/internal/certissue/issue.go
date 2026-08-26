@@ -17,6 +17,7 @@ import (
 	"time"
 
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // SignedCert — result of the PKI signing (mirrors vault.SignedCertificate; the package
@@ -65,17 +66,42 @@ type Material struct {
 	KeyRef       string
 }
 
-// VaultPath — E3 path of the incarnation's TLS material: secret/<service>/<incarnation>/tls/<kind>.
+// VaultPath — E3 path of the incarnation's TLS material:
+// <mount>/<service>/<incarnation>/tls/<kind>.
+//
 // Single source of convention for issuance (core.cert.issued) and rotation (Reaper):
 // issue and rotate must build the SAME path, otherwise the cert is written to one and read
-// from the other. For service="redis" matches the old hardcode (backcompat).
-func VaultPath(service, incarnation string, kind keepercert.Kind) string {
+// from the other.
+//
+// mount is keeper.yml's `vault.kv_mount`; "" means the default ([config.EffectiveVaultMount],
+// the same resolution the derived-secret path uses). NIM-706: this used to spell `secret/`
+// literally, so a deployment that configured any other KV mount had its certs written
+// outside the mount the rest of the system — and the Keeper's own Vault policy — works in.
+//
+// The `tls/` segment makes this the one platform-derived path that lives INSIDE a service's
+// own namespace rather than beside it. The collision it can cause is therefore intra-service
+// — this path against a declared secret of the same service — and no rule about service
+// NAMES addresses that. It is fenced at the other end instead: [config.IsReservedStateField]
+// refuses a declared secret on a state field named `tls`, which is the only other way a
+// derivation reaches `<mount>/<service>/<incarnation>/tls/…`.
+//
+// This function deliberately does NOT carry the reserved-service-name floor that
+// [config.SecretField.VaultPath] does, and the asymmetry is intentional rather than an
+// oversight. Registration and manifest load both refuse a reserved name, so only a row
+// predating the rule reaches here with one; at THIS depth such a row collides with nothing
+// (`<mount>/keeper/<name>` is three segments, `<mount>/<domain>/<entity>/<field>` four, this
+// path five, and KV v2 keeps all three as separate entries); and the cert refs written here
+// are read back through [vault.ParseRef] directly, never through the floor. Refusing the
+// name here would therefore break a legacy deployment's certificates while protecting
+// nothing — the wrong direction to be wrong in, unlike the derived-secret path, where the
+// same name really does land on top of a namespace another writer replaces.
+func VaultPath(mount, service, incarnation string, kind keepercert.Kind) string {
 	// Defense-in-depth: service/incarnation are validated identifiers; `/`,
-	// `..`, or empty is a caller bug, otherwise the path would escape secret/<svc>/<inc>/.
+	// `..`, or empty is a caller bug, otherwise the path would escape <mount>/<svc>/<inc>/.
 	if !safeVaultSegment(service) || !safeVaultSegment(incarnation) {
 		panic(fmt.Sprintf("certissue.VaultPath: unsafe segment (service=%q incarnation=%q)", service, incarnation))
 	}
-	return "secret/" + service + "/" + incarnation + "/tls/" + string(kind)
+	return config.EffectiveVaultMount(mount) + "/" + service + "/" + incarnation + "/tls/" + string(kind)
 }
 
 // safeVaultSegment rejects an empty segment and anything that could escape secret/

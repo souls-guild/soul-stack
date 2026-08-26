@@ -152,6 +152,19 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 		return zero, revealNotFound(secretID, name)
 	}
 
+	// FLOOR, first half (NIM-706): a service whose NAME is a reserved namespace. It is
+	// refused at registration and refused again by the derivation below, so reaching
+	// here means a row that predates the rule or a corrupted `service` column — deny
+	// before deriving, so the audit records WHY rather than the derivation's generic
+	// "something unsafe". Checked on the name because that is what the derivation
+	// compares; the path-shaped half below stays for what a name cannot see.
+	if config.IsReservedVaultNamespace(inc.Service) {
+		h.logger.Warn("incarnation.reveal-secret: service name is a reserved vault namespace",
+			slog.String("name", name), slog.String("service", inc.Service))
+		h.auditReveal(ctx, claims.Subject, name, secretID, key, "denied", "floor_denied", "")
+		return zero, revealNotFound(secretID, name)
+	}
+
 	// The derivation ([ADR-0083] §1) checks every segment itself and fails closed;
 	// a refusal here means state or the manifest carries something unsafe.
 	logical, derr := field.VaultPath(h.vaultMount, inc.Service, inc.Name, key)
@@ -176,9 +189,11 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 		return zero, revealNotFound(secretID, name)
 	}
 
-	// FLOOR backstop (NIM-74 C1, parity scenario/input_vault.go §3): a safeguard for the
-	// edge-case of a service with a reserved name (secret/keeper/, secret/internal/).
-	// Unconditionally BEFORE ReadKV.
+	// FLOOR, second half (NIM-74 C1, parity scenario/input_vault.go §3). The name check
+	// above cannot see a MOUNT that spells a reserved word: `vault.kv_mount: keeper`
+	// puts every service's secrets under `keeper/…` while each service name is
+	// blameless. [config.PathUnderReservedNamespace] reads segment 0 as well as 1, so
+	// this catches it. Unconditionally BEFORE ReadKV.
 	if config.DeniedByVaultFloor(logical, nil) {
 		h.logger.Warn("incarnation.reveal-secret: vault floor denied",
 			slog.String("name", name), slog.String("secret_id", secretID), slog.String("path", logical))

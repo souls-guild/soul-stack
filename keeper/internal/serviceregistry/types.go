@@ -23,6 +23,7 @@ import (
 //   - ErrAlreadyExists  → 409 (UNIQUE on PK service_registry.name);
 //   - ErrNotFound       → 404 (no row for the PK);
 //   - ErrInvalidName    → 422 (name doesn't match the format);
+//   - ErrReservedName   → 422 (name is a reserved Vault namespace, NIM-706);
 //   - ErrInvalidGit     → 422 (git is empty);
 //   - ErrInvalidRef     → 422 (ref is empty);
 //   - ErrInvalidRefresh → 422 (refresh doesn't parse as a duration);
@@ -32,6 +33,7 @@ var (
 	ErrAlreadyExists    = errors.New("serviceregistry: service name already exists")
 	ErrNotFound         = errors.New("serviceregistry: service name not found")
 	ErrInvalidName      = errors.New("serviceregistry: invalid service name")
+	ErrReservedName     = errors.New("serviceregistry: reserved service name")
 	ErrInvalidGit       = errors.New("serviceregistry: git is empty")
 	ErrInvalidRef       = errors.New("serviceregistry: ref is empty")
 	ErrInvalidRefresh   = errors.New("serviceregistry: invalid refresh duration")

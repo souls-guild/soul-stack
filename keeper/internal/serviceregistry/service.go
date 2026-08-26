@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
@@ -252,6 +253,19 @@ func (s *Service) DeleteSetting(ctx context.Context, key string) error {
 func validateFields(name, git, ref string, refresh *string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("%w: %q must match %s", ErrInvalidName, name, NamePattern)
+	}
+	// NIM-706. The service name becomes the first path segment after the KV mount of
+	// every secret the platform derives for it ([ADR-0083] §1), and a handful of words
+	// already name a path family keeper writes under itself — `secret/keeper/*`
+	// ([ADR-014]), `secret/herald/*` and `secret/provider/*` (keeper/internal/secretwrite).
+	// A service admitted under one of them derives on top of that family, and the
+	// secretwrite writer REPLACES a KV entry rather than merging into it, so the second
+	// write of the two destroys the first one's fields with no error anywhere. This is
+	// the choke point: create and update are the only two writers of the name, and the
+	// name is the primary key, immutable afterwards.
+	if config.IsReservedVaultNamespace(name) {
+		return fmt.Errorf("%w: %q is reserved (%s) — the platform derives its own secrets under `<mount>/%s/`",
+			ErrReservedName, name, strings.Join(config.ReservedVaultNamespaceNames(), ", "), name)
 	}
 	if git == "" {
 		return ErrInvalidGit

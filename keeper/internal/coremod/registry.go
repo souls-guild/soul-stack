@@ -134,6 +134,7 @@ type Deps struct {
 	CertPolicy      cert.IssuePolicyResolver // resolves the rotation policy from the manifest
 	CertCSRGen      certissue.CSRGenFunc     // generates keypair+CSR (keeper-side, R2)
 	CertPKIMount    func() string            // hot-reload keeper.yml Vault.PKIMount
+	CertKVMount     func() string            // hot-reload keeper.yml Vault.KVMount
 
 	// BootstrapTransport is token delivery mode for `core.bootstrap.delivered`
 	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) or
@@ -233,7 +234,7 @@ func Default(d Deps) *Registry {
 	if d.CertStore != nil && d.Vault != nil {
 		m := cert.New(d.Vault, d.CertStore, d.Audit, d.KID)
 		m.Signer, m.VaultWriter, m.Policy = d.CertSigner, d.CertVaultWriter, d.CertPolicy
-		m.CSRGen, m.PKIMount = d.CertCSRGen, d.CertPKIMount
+		m.CSRGen, m.PKIMount, m.KVMount = d.CertCSRGen, d.CertPKIMount, d.CertKVMount
 		mods[cert.Name] = m
 	}
 	// `core.bootstrap` is registered when either the transactional issuer is

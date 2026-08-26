@@ -92,6 +92,53 @@ state_schema:
 	}
 }
 
+// ★ NIM-706, the offline half. A service name becomes the first path segment after the
+// KV mount of every secret the platform derives for it, and these words already name a
+// path family keeper writes under itself. Reported at PARSE — not only at registration —
+// because the artifact is authored long before anyone registers it, and this is the one
+// mistake that is a one-line edit now and a rename later.
+func TestLoadServiceManifest_ReservedName(t *testing.T) {
+	for _, name := range ReservedVaultNamespaceNames() {
+		t.Run(name, func(t *testing.T) {
+			src := "name: " + name + `
+state_schema_version: 1
+state_schema:
+  type: object
+`
+			_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+			if !hasCodeAt(diags, ServiceNameReservedCode, "$.name") {
+				dump(t, diags)
+				t.Fatalf("expected %s at $.name for reserved service name %q", ServiceNameReservedCode, name)
+			}
+			// The grammar is satisfied — these are well-formed kebab-case names. A
+			// `name_invalid_format` here would mean the guard is riding on the format
+			// check rather than standing on its own.
+			if hasCode(diags, "name_invalid_format") {
+				dump(t, diags)
+				t.Fatalf("%q is well-formed; the refusal must be the reserved rule, not the grammar", name)
+			}
+		})
+	}
+}
+
+// A name that merely resembles a reserved one is a different namespace and stays
+// accepted — the comparison is whole-word, and over-refusing here would cost authors
+// ordinary names for nothing.
+func TestLoadServiceManifest_ReservedNameIsWholeWord(t *testing.T) {
+	for _, name := range []string{"heralds", "keeper-notes", "my-provider"} {
+		src := "name: " + name + `
+state_schema_version: 1
+state_schema:
+  type: object
+`
+		_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, ServiceNameReservedCode) {
+			dump(t, diags)
+			t.Fatalf("%q is not a reserved namespace but was refused as one", name)
+		}
+	}
+}
+
 // TestLoadServiceManifest_Lifecycle — a lifecycle block with both flags is accepted
 // (NOT unknown_key), the flags decode into *bool.
 func TestLoadServiceManifest_Lifecycle(t *testing.T) {

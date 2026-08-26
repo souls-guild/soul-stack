@@ -254,6 +254,19 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 			Message: msg,
 			Hint:    "kebab-case: lowercase letters, digits, dashes; must start with letter",
 		}))
+	} else if IsReservedVaultNamespace(m.Name) {
+		// NIM-706. Offline half of the rule serviceregistry.validateFields enforces at
+		// registration: the service name becomes the first path segment of every secret
+		// the platform derives for it, and these words already name a path family the
+		// platform writes under itself. Reported here as well as there because the
+		// artifact is authored long before anyone registers it, and a name is the one
+		// mistake that is cheap now and a rename later.
+		out = append(out, atPath(root, "$.name", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    ServiceNameReservedCode,
+			Message: fmt.Sprintf("name %q is reserved: the platform derives its own secrets under `<mount>/%s/`", m.Name, m.Name),
+			Hint:    "pick another name — reserved names are " + strings.Join(ReservedVaultNamespaceNames(), ", "),
+		}))
 	}
 
 	// 3) state_schema_version — required + integer ≥ 1.

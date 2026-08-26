@@ -566,3 +566,65 @@ modify-write verbs only mean anything if the write is observable, so ADR-0084 ta
 The three lines of §5 that this does **not** touch stand unchanged — the keeper register is still
 unioned into every per-host bucket, duplicate register names are still a load error, and a consumer
 still lands in a later Passage than its producer.
+
+### Amendment 2026-08-26 (NIM-706): §7's fence has a second axis — the name that opens the namespace
+
+§7 fences every authoring channel out of `<mount>/<service>/`. It assumed the prefix
+*belongs* to the service that names it. Nothing enforced that assumption, and two words
+break it in opposite directions.
+
+**A service name can BE a platform namespace.** The derivation of §1 opens
+`<mount>/<service>/…`, and three other path families in the same mount fix their own
+first segment: `<mount>/keeper/<name>` for keeper's own runtime secrets
+([ADR-014](0014-operator-identity.md)), and `<mount>/herald/<entity>/<field>` /
+`<mount>/provider/<name>/credentials` for the [ADR-064](0064-secret-write-path.md) write
+path. A service named `herald` derives its incarnation onto that family's `<entity>`
+slot and its state field onto its `<field>` slot — one KV entry, two writers, and Vault
+KV v2 replaces an entry rather than merging into it, so on the `secretwrite` path the
+second write deletes the first one's fields with no error anywhere. The `keeper` family
+is milder only by accident: the mint reads before it writes.
+
+Nothing reserved those words. `serviceregistry.ValidName` checks a grammar, and every
+one of them satisfies it.
+
+The rule is therefore a **closed list of reserved Vault namespaces** —
+`keeper`, `herald`, `provider`, `internal` — refused as a service name at every surface
+that names one, and enforced last by the derivation itself
+(`config.SecretField.VaultPath` returns an error rather than emitting a colliding path).
+It is deliberately narrower than the registration-alias list of
+[ADR-020](0020-plugin-infrastructure.md): an alias that collides shadows an *address*, a
+service name that collides destroys a *secret*, and the two lists answer different
+questions even where they overlap. `internal` is on it while nothing writes there — the
+name is free today and reserving it costs nothing, where taking it back later renames
+every incarnation of a live service. The tables live in
+[naming-rules.md § Reserved Vault namespaces](../naming-rules.md#reserved-vault-namespaces).
+
+**And one platform path lives INSIDE a service's namespace, where no rule about service
+names can reach it.** Keeper issues an incarnation's TLS material to
+`<mount>/<service>/<incarnation>/tls/{cert,key}` (`keeper/internal/certissue`). A
+collection secret declared on a state field named `tls`, with an element key `cert`,
+derives that identical path. The element key is state *data* and cannot be constrained,
+so the fence goes on the state field name — the last static point there is — as a second
+closed list, today just `tls`, diagnosed `secret_field_reserved_state_name`. Only a field
+that *declares a secret* is checked; the plain `tls:` object of
+`examples/service/redis` holds ports and cipher lists, derives nothing, and is
+untouched.
+
+`certissue.VaultPath` also spelled its mount as the literal `"secret"`, so on a
+deployment with a non-default `vault.kv_mount` it wrote outside the configured mount
+entirely. It now takes the mount from `keeper.yml`, threaded through both callers. The
+same defect class is what removed `config.VaultInputFloor`: a list of literal path
+prefixes, spelling the default mount and naming neither `herald` nor `provider`, has been
+replaced by `config.PathUnderReservedNamespace` — mount-agnostic, segment-whole, and
+reading the same closed list as everything else.
+
+Four surfaces, one predicate: the manifest load (`service_name_reserved`), registration
+over REST and MCP (422, not 409 — nothing holds the name), the derivation, and reveal
+(denied before Vault is read, `reason=floor_denied`). Reveal keeps a second, path-shaped
+half of the check, because a **mount** that spells a reserved word
+(`vault.kv_mount: keeper`) puts every service's secrets under `keeper/…` while each
+service name is blameless — a comparison on the name structurally cannot see it.
+
+**Breaking, deliberately, and cheaply**: a service already registered under one of the
+four names stops loading and must be renamed. This lands before the release, and the
+`examples/` tree names none of them.

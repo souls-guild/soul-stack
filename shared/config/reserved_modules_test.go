@@ -133,6 +133,11 @@ func TestReservedNames_MatchTheSettledList(t *testing.T) {
 		// Tier 2 — the Soul Stack dictionary and the usual collisions.
 		"destiny": true, "scenario": true, "service": true, "incarnation": true,
 		"soulprint": true, "coven": true, "archon": true, "sigil": true,
+		// NIM-706: `herald` and `provider` joined tier 2. Both are dictionary entities,
+		// and the platform writes a Vault path family under each name
+		// (keeper/internal/secretwrite), which is what made them worth taking before
+		// someone registers an alias by them. docs/naming-rules.md moved with this.
+		"herald": true, "provider": true,
 		"soulstack": true, "soul-stack": true, "local": true, "default": true,
 		"internal": true, "test": true, "example": true,
 	}

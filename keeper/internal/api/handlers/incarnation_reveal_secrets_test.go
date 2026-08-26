@@ -495,6 +495,49 @@ func TestRevealSecret_FloorBackstop_ServiceNamedKeeper(t *testing.T) {
 	}
 }
 
+// TestRevealSecret_FloorBackstop_MountNamedKeeper — the half of the floor a service
+// name cannot reach (NIM-706). Here the service is blameless (`redis`) and the KV MOUNT
+// is `keeper`, so every derived path opens `keeper/redis/…` and lands in the namespace
+// [ADR-014] gives keeper's own runtime secrets. The name check upstream sees nothing;
+// [config.PathUnderReservedNamespace] reads segment 0 as well as 1 and denies.
+//
+// Without this the branch is unreachable and the guard rots into decoration.
+func TestRevealSecret_FloorBackstop_MountNamedKeeper(t *testing.T) {
+	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row {
+		return makeIncRowSvc(name, "redis", redisUsersState("alice"))
+	}}
+	aw := &fakeAuditWriter{}
+	vr := &fakeVaultReader{data: map[string]any{"password": "leak"}}
+	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true},
+		&fakeLoader{stateSchema: redisSecretSchema()}, aw, fakeIncScoper{unrestricted: true}, nil)
+	h.SetVaultReader(vr, "keeper")
+
+	_, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", userPasswordID, "alice")
+	assertRevealStatus(t, err, 404)
+	if len(vr.calledWith) != 0 {
+		t.Fatalf("★ FLOOR-BACKSTOP BREACHED: ReadKV called for keeper/*: %#v", vr.calledWith)
+	}
+	if len(aw.events) != 1 || aw.events[0].Payload["reason"] != "floor_denied" {
+		t.Errorf("expected audit denied/floor_denied: %#v", aw.events)
+	}
+}
+
+// TestRevealSecret_OrdinaryMountAndService_Reads — the two floor halves must not have
+// widened into "reveal is denied". An ordinary service on an ordinary mount still reads.
+func TestRevealSecret_OrdinaryMountAndService_Reads(t *testing.T) {
+	vr := &fakeVaultReader{data: map[string]any{"password": "s3cr3t"}}
+	h := revealHandler(redisUsersState("alice"), redisSecretSchema(),
+		vr, fakeIncScoper{unrestricted: true}, &fakeAuditWriter{})
+
+	res, err := h.RevealSecretTyped(context.Background(), revealClaims(), "redis-prod", userPasswordID, "alice")
+	if err != nil {
+		t.Fatalf("RevealSecretTyped: %v", err)
+	}
+	if res.Value != "s3cr3t" {
+		t.Errorf("value = %q, want s3cr3t", res.Value)
+	}
+}
+
 // TestRevealSecret_DeniedAudit_KeyNotInState — a denied reveal (key not in state)
 // writes audit with a reason and WITHOUT the value.
 func TestRevealSecret_DeniedAudit_KeyNotInState(t *testing.T) {

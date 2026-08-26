@@ -100,3 +100,20 @@ Operator API Herald/Provider CRUD + OpenAPI (drift-regen) + companion UI (`types
 The `secretwrite` segment grammar `^[a-zA-Z0-9_-]+$` gains a second, load-bearing job: it validates every segment of a **derived** secret path `secret/<service>/<incarnation>/<state-field>/<key>` ([ADR-0083](0083-declared-secret-state-fields.md) §1). `<key>` is operator-influenced data — a user's name out of `incarnation.state` — so a `/`, a `.` or a `..` inside it must never become a path segment, and the check **fails closed** rather than sanitising: a gate that normalises its input decides on a path different from the one it was given.
 
 The operator write path in this ADR is untouched. What changes is that a service's own secrets no longer need one: a `core.state.<verb>` capture step ([ADR-0084](0084-explicit-state-capture.md)) mints and writes them keeper-side, and the author declares the field instead of a path.
+
+## Amendment 2026-08-26 (NIM-706, [ADR-0083](0083-declared-secret-state-fields.md)): `herald` and `provider` are reserved service names
+
+This ADR's two domains fix the first segment of a path family — `secret/herald/<entity>/<field>` and `secret/provider/<name>/credentials` — in the same KV mount into which [ADR-0083](0083-declared-secret-state-fields.md) §1 derives `<mount>/<service>/<incarnation>/<field>[/<key>]`. A service named `herald` or `provider` therefore lands its incarnation on this path's `<entity>` slot and its state field on its `<field>` slot: **one KV entry, two writers.**
+
+The asymmetry that makes it worse here than under `keeper`: `Writer.WriteString` writes `{field: value}` outright and Vault KV v2 **replaces** an entry rather than merging into it, where the declared-secret mint reads the entry first and merges. So on this path the second write silently deletes the first one's fields — no error, no warning, at either end.
+
+Both words are now refused as service names ([naming-rules.md § Reserved Vault namespaces](../naming-rules.md#reserved-vault-namespaces)). **The write path itself is unchanged.** `WriteString` deliberately keeps replace semantics: the collision it would defend against can no longer be constructed, and `WriteMap` next to it *must* replace — rotating a provider's credentials from `{access_key, secret_key}` to `{token}` has to leave the old pair dead, and a merge would keep a working stale credential alive. Two writers in one small package with opposite semantics would be a trap for every future reader, bought against a case that cannot arise.
+
+What holds the two apart instead is a coupling guard: `TestWriteDomains_AreReservedServiceNames` asserts `config.IsReservedVaultNamespace` over every member of `WriteDomains()`, so renaming a domain here without moving the reserved list fails the build rather than quietly reopening the collision.
+
+For that guard to keep holding, **the domain set is now closed and enforced.** `writeDomains` is the set, `WriteDomains()` exposes it sorted, and `Writer.path` refuses a domain outside it — previously `domain` only had to be a safe path segment, so any word at all was accepted. Two reasons, and the second is the load-bearing one:
+
+- A domain that is not on the reserved list writes into a namespace nothing defends, which is the whole subject of this amendment.
+- A guard that named today's two members would stay green for a **third** domain added later — the one change that reopens the collision without touching a line the guard mentions. Iterating a set the writer enforces makes the guard grow with the package instead.
+
+Both existing call sites already pass the constants (`keeper/internal/herald/secret.go:109`, `keeper/internal/provider/service.go:174`), so nothing at runtime changes; adding a domain now means adding it to `writeDomains`, and the guard then requires it be reserved.

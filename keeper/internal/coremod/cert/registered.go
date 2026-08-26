@@ -102,6 +102,7 @@ type Module struct {
 	Policy      IssuePolicyResolver  // rotation policy resolver from the manifest
 	CSRGen      certissue.CSRGenFunc // keypair+CSR generation (keeper-side, R2)
 	PKIMount    func() string        // hot-reload keeper.yml Vault.PKIMount
+	KVMount     func() string        // hot-reload keeper.yml Vault.KVMount (cert+key write target)
 }
 
 // New — wire-helper. issued-dependencies (Signer/VaultWriter/Policy/CSRGen/

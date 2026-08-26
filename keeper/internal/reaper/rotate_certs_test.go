@@ -577,3 +577,54 @@ func TestCertRotator_MissingDeps(t *testing.T) {
 		t.Fatal("Run without deps must error")
 	}
 }
+
+// GUARD (NIM-706): the KV mount for the cert+key write travels from the cfg snapshot Run
+// already took, rather than being read a second time inside the write path. A re-read is
+// the hot-reload race the issueMaterial call site documents — the CSR signed against one
+// keeper.yml and the material written against another — and it is invisible in production,
+// where both reads all but always return the same value.
+//
+// Cfg here hands out a DIFFERENT mount after the first call, so a re-read stops being a
+// matter of timing and moves the path on the very first rotation. The write count is
+// asserted before the paths: with no writes at all the loop below would pass vacuously.
+func TestCertRotator_KVMountComesFromTheRunSnapshot(t *testing.T) {
+	calls := 0
+	vw := &fakeVaultWriter{}
+	r := newCertRotatorFromDB(&fakeCertDB{
+		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
+		casResults: []int64{1},
+	}, CertRotatorDeps{
+		Signer: &fakeSigner{cert: makeTestCertPEM(t)},
+		Vault:  vw,
+		CSRGen: fakeCSRGen,
+		Cfg: func() CertRotatorConfig {
+			calls++
+			c := testRotatorCfg()
+			c.KVMount = "kv-reloaded"
+			if calls == 1 {
+				c.KVMount = "kv-snapshot"
+			}
+			return c
+		},
+		Policy: &fakePolicyResolver{pol: enabledCertPolicy()},
+		Audit:  &fakeAuditWriter{},
+		Logger: silentLogger(),
+	})
+
+	if _, err := r.Run(context.Background(), 0, 0); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(vw.writes) != 2 {
+		t.Fatalf("expected 2 Vault writes (cert+key), got %d: %v", len(vw.writes), vw.writes)
+	}
+	for _, p := range vw.writes {
+		if !strings.HasPrefix(p, "kv-snapshot/") {
+			t.Errorf("cert material written to %q — the KV mount was re-read instead of "+
+				"travelling from the Run snapshot", p)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("r.cfg() called %d times in one tick, want 1: every extra read is another "+
+			"chance for a hot-reload to split one tick across two configs", calls)
+	}
+}

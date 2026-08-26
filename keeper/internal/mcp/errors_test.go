@@ -10,7 +10,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 func TestMapIncarnationErrorToMCP(t *testing.T) {
@@ -168,5 +170,32 @@ func TestIncarnationRBACContext(t *testing.T) {
 	// create/list — no selector.
 	if incarnationRBACContext("") != nil {
 		t.Errorf("empty name must yield nil selector (NoSelector parity with REST)")
+	}
+}
+
+// TestMapServiceRegistryErrorToMCP_ReservedName — a reserved service name reaches the
+// agent as validation-failed (NIM-706), on the same code as every other name refusal,
+// and the detail names the closed list so a retry can pick a different word.
+//
+// The detail must not carry the `serviceregistry:` prefix: the whole point of this
+// mapper is that internal error text does not reach the wire, and a sentinel forwarded
+// verbatim is the one way that happens by accident.
+func TestMapServiceRegistryErrorToMCP_ReservedName(t *testing.T) {
+	for _, err := range []error{
+		serviceregistry.ErrReservedName,
+		fmt.Errorf("%w: %q is reserved", serviceregistry.ErrReservedName, "keeper"),
+	} {
+		code, detail := mapServiceRegistryErrorToMCP(err)
+		if code != mcpCodeValidationFailed {
+			t.Errorf("code = %q, want %q", code, mcpCodeValidationFailed)
+		}
+		if strings.Contains(detail, "serviceregistry:") {
+			t.Errorf("detail leaks the internal prefix: %q", detail)
+		}
+		for _, name := range config.ReservedVaultNamespaceNames() {
+			if !strings.Contains(detail, name) {
+				t.Errorf("detail %q does not name the reserved word %q", detail, name)
+			}
+		}
 	}
 }

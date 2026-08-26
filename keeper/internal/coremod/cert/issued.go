@@ -60,14 +60,22 @@ func applyIssued(m *Module, req *pluginv1.ApplyRequest, stream grpc.ServerStream
 
 	mount := m.PKIMount()
 
+	// KV mount for the cert+key WRITE, separate from the PKI mount that signs. nil
+	// provider → "" → certissue.VaultPath falls back to the default mount, which is what
+	// this call did unconditionally before NIM-706.
+	kvMount := ""
+	if m.KVMount != nil {
+		kvMount = m.KVMount()
+	}
+
 	// Signing role - pol.PKIRole (MANIFEST), Vault paths - by service from the policy.
 	mat, err := certissue.Issue(ctx, m.Signer, m.VaultWriter, m.CSRGen, certissue.Params{
 		CommonName: incarnation + ".tls",
 		DNSNames:   []string{incarnation + ".tls", incarnation},
 		Mount:      mount,
 		Role:       pol.PKIRole,
-		CertPath:   certissue.VaultPath(pol.Service, incarnation, keepercert.KindCert),
-		KeyPath:    certissue.VaultPath(pol.Service, incarnation, keepercert.KindKey),
+		CertPath:   certissue.VaultPath(kvMount, pol.Service, incarnation, keepercert.KindCert),
+		KeyPath:    certissue.VaultPath(kvMount, pol.Service, incarnation, keepercert.KindKey),
 	})
 	if err != nil {
 		return util.SendFailed(stream, err.Error())

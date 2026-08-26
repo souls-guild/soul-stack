@@ -1061,9 +1061,10 @@ type KeeperVault struct {
 	// resolution of `vault:`-refs in operator input (docs/input.md → "vault_scope",
 	// fork C). Logical-path prefixes (`<mount>/<prefix>`) that are NEVER resolved
 	// via an input-ref, even if a field declared a `vault_scope` covering them.
-	// Augments the system-floor [config.VaultInputFloor] (`secret/keeper/*`,
-	// `secret/internal/*`); the system-floor itself is NOT disabled by config,
-	// only extended. This does NOT affect authored `vault:`-refs in task params.
+	// Augments the system-floor [config.PathUnderReservedNamespace] (the reserved
+	// Vault namespaces `keeper`, `herald`, `provider`, `internal`, on any mount); the
+	// system-floor itself is NOT disabled by config, only extended. This does NOT
+	// affect authored `vault:`-refs in task params.
 	InputDenyPaths []string `yaml:"input_deny_paths,omitempty"`
 }
 

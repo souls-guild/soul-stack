@@ -48,6 +48,10 @@ const SecretTypeName = "secret"
 // reasoning in keeper/internal/secretwrite.WriteString).
 const ScalarSecretVaultField = "value"
 
+// SecretFieldReservedStateCode — a declared secret on a state field the platform
+// already derives under (NIM-706).
+const SecretFieldReservedStateCode = "secret_field_reserved_state_name"
+
 // defaultVaultMount — the KV mount assumed when a caller passes "" (matches
 // keeper/internal/secretwrite.defaultMount and vault.defaultKVMount).
 const defaultVaultMount = "secret"
@@ -148,6 +152,19 @@ func (f SecretField) VaultField() string {
 // constrain it as well; the platform does not rely on a service having done so.
 func (f SecretField) VaultPath(mount, service, incarnation, key string) (string, error) {
 	mount = EffectiveVaultMount(mount)
+	// Namespace floor (NIM-706): a service whose name is one the platform writes under
+	// as a fixed first segment derives on top of that family, and secretwrite REPLACES
+	// a KV entry rather than merging into it. Registration refuses the name
+	// ([IsReservedVaultNamespace] at serviceregistry.validateFields and at
+	// `service_name_reserved`), so reaching this is either a service admitted before the
+	// rule existed or a route that skipped it — both are cases for failing closed rather
+	// than emitting the path. The mount is deliberately not part of the comparison, for
+	// the same reason [PathAddressesOwnNamespace] leaves it out: what makes the path
+	// collide is the service segment, not which mount it lives on.
+	if IsReservedVaultNamespace(service) {
+		return "", fmt.Errorf("secret field %s: service %q is a reserved Vault namespace (%s) — its derived path would collide with the platform's own",
+			f.ID(), service, strings.Join(ReservedVaultNamespaceNames(), ", "))
+	}
 	segs := []struct{ name, value string }{
 		{"mount", mount},
 		{"service", service},
@@ -257,6 +274,22 @@ func CollectSecretFields(schema map[string]any) ([]SecretField, []SecretFieldIss
 	return fields, issues
 }
 
+// reservedStateFieldIssue rejects a declared secret whose state field is a name the
+// platform already derives under inside the service's own namespace (NIM-706). Shared by
+// both shapes: the collision is decided by the field name alone, and a collection's
+// element key — the segment that would actually complete it — is state DATA, unknown at
+// authoring time, so the field name is the last static point where this can be refused.
+func reservedStateFieldIssue(state, path string) []SecretFieldIssue {
+	if !IsReservedStateField(state) {
+		return nil
+	}
+	return []SecretFieldIssue{{
+		Path: path, Code: SecretFieldReservedStateCode,
+		Message: fmt.Sprintf("state field %q is reserved: the platform already derives secrets under `<mount>/<service>/<incarnation>/%s/`", state, state),
+		Hint:    "rename the state field — reserved names are " + strings.Join(ReservedStateFieldNames(), ", "),
+	}}
+}
+
 // scalarSecretField builds the field for a top-level `type: secret` property.
 func scalarSecretField(name string, node map[string]any, path string) (SecretField, []SecretFieldIssue) {
 	issues := checkSecretNodeGrammar(node, path)
@@ -274,6 +307,7 @@ func scalarSecretField(name string, node map[string]any, path string) (SecretFie
 			Hint:    "letters, digits, `_` and `-` only — the field name becomes a path segment",
 		})
 	}
+	issues = append(issues, reservedStateFieldIssue(name, path)...)
 	label, labelIssue := secretNodeLabel(node, path)
 	issues = append(issues, labelIssue...)
 	return SecretField{State: name, Label: label, Path: path}, issues
@@ -293,6 +327,7 @@ func collectionSecretField(state, prop string, node, itemProps, items map[string
 			})
 		}
 	}
+	issues = append(issues, reservedStateFieldIssue(state, path)...)
 
 	key, _ := node["key"].(string)
 	switch {
