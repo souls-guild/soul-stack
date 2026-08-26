@@ -112,6 +112,15 @@ func TestScanDuplicateSecretKeysQuiet(t *testing.T) {
 			Module: "core.state.add",
 			Params: map[string]any{"field": "redis_users", "key": "alice", "value": map[string]any{"name": "alice"}},
 		}}},
+		// `remove` declares no `value:` at all, so a list there is a param error
+		// and the elements it holds are a collection no run ever forms.
+		"verb that takes no value": {{Name: "capture", On: "keeper", Module: &ModuleTask{
+			Module: "core.state.remove",
+			Params: map[string]any{"field": "redis_users", "value": []any{
+				map[string]any{"name": "alice"},
+				map[string]any{"name": "alice"},
+			}},
+		}}},
 		"not a capture": {{Name: "run", Module: &ModuleTask{
 			Module: "core.exec.run",
 			Params: map[string]any{"field": "redis_users", "value": []any{

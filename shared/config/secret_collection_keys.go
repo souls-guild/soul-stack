@@ -69,19 +69,25 @@ func scanTasksForDuplicateKeys(file string, fields []SecretField, tasks []Task, 
 		if t.Block != nil {
 			scanTasksForDuplicateKeys(file, fields, t.Block.Block, where+".block", out)
 		}
-		if _, isCapture := stateCaptureVerb(t); !isCapture {
+		// Only the two verbs that write a WHOLE field. The rest either declare no
+		// `value:` at all (`modify`/`remove`/`unset`) or carry one element
+		// (`add`/`append`), so a list under `value:` there is a param error, and
+		// naming a collision inside it would describe a collection the run never
+		// forms. The flip side is that a duplicate `add`/`append` creates against
+		// the STORED collection is invisible here AND to the apply-time half,
+		// which never reads the stored value either -- neither guards it, and the
+		// shared credential is live before any later whole-field write could
+		// report it.
+		switch verb, isCapture := stateCaptureVerb(t); {
+		case !isCapture:
+			continue
+		case StateVerb(verb) != VerbSet && StateVerb(verb) != VerbPresent:
 			continue
 		}
 		field, known := captureField(t)
 		if !known {
 			continue
 		}
-		// Only a whole-field write carries a list. `add`/`append` hand over ONE
-		// element, which cannot collide with itself; a duplicate they create
-		// against the STORED collection is invisible here AND to the apply-time
-		// half, which never reads the stored value either. Neither guards it: the
-		// shared credential is already live by the time a later whole-field write
-		// would report it, and that write may never come.
 		items, isList := t.Module.Params["value"].([]any)
 		if !isList {
 			continue
