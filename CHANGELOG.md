@@ -120,6 +120,36 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `include:` is covered like an inline one — linted inside its service tree, where
   the include resolves the way the keeper resolves it (NIM-652).
 
+### Fixed
+
+- **A renamed file in the artifact reddened nobody, so the rename was found one
+  consumer at a time.** `NIM-377` replaced the plugin's hand-written
+  `manifest.yaml` with a generated document, and the consumers naming that file
+  were a **list** with no single gate over it. Two were found by hand, months
+  apart, each by somebody who had already lost the day to it: `dev/provision.sh`
+  killed `make dev-provision` before the service registry was ever seeded
+  (`NIM-516`), and the L3b harness killed three live tests at setup while
+  reporting it as "the stand didn't come up" (`NIM-515`). Both fixes shipped a
+  guard over the consumer just found, which is why the class stayed open — and
+  why the third consumer was still broken a release later:
+  `scripts/e2e-cloud/lib/preflight.sh` went on requiring `mod-manifest.yaml` in
+  `$ARTIFACTS_DIR`, a hard preflight `FAIL` (exit 2, before a single call
+  reaches the cloud) on a file that cannot exist any more.
+
+  The default artifact list is binaries now and nothing beside them. Nothing
+  replaces the dropped entry: a module carries its own contract in a trailer
+  stamped into the artifact, so there is no separate document to stage, and an
+  environment that does stage the published `schema.json` adds it through
+  `$E2E_ARTIFACTS` — a preflight that demanded it by default would have traded a
+  stale name for a new false blocker.
+
+  What closes the class is a sweep rather than a fourth per-consumer guard:
+  every committed script, Makefile recipe and CI workflow, whole-line comments
+  dropped, checked against the filenames the artifact model has deleted. These
+  are the blind spot by construction — a filename there is an unchecked string in
+  a file no test binary loads and no compiler reads — and the sweep covers a
+  consumer the day it is committed instead of the day it breaks (`NIM-520`).
+
 ### Removed
 
 - **`config.VaultInputFloor`** — a list of literal Vault path prefixes guarding

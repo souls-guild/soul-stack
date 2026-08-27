@@ -54,8 +54,14 @@ preflight() {
 				_e2e_log "  ✗ bring-up script not found/not executable: ${scripts_dir}/${step}"; fails=1
 			fi
 		done
+		# The default list is BINARIES and nothing beside them: since NIM-377 a module
+		# carries its own contract in a trailer stamped into the artifact, so there is
+		# no separate document to stage. This list went on demanding `mod-manifest.yaml`
+		# for a whole release after that change - a hard FAIL here on a file that cannot
+		# exist any more (NIM-520). An environment that does stage the published
+		# document adds it via $E2E_ARTIFACTS.
 		local art_dir="${ARTIFACTS_DIR:-/opt/soul-stack}" art
-		for art in ${E2E_ARTIFACTS:-soul-cloud-example-linux soul-mod-redis mod-manifest.yaml}; do
+		for art in ${E2E_ARTIFACTS:-soul-cloud-example-linux soul-mod-redis}; do
 			if [[ -e "${art_dir}/${art}" ]]; then
 				_e2e_log "  ✓ artifact is in place: ${art_dir}/${art}"
 			else

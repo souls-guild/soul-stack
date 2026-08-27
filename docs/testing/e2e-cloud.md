@@ -64,9 +64,14 @@ Checks only **presence**, does not collect anything:
 → "do `tsh login`"), resolve proxy host;
 - if `$E2E_BRINGUP_STEPS` is non-empty - execution of each step in `$SCRIPTS_DIR`
 **and** presence of pre-collected artifacts in `$ARTIFACTS_DIR`
-(`soul-cloud-example-linux` / `soul-mod-redis` / `mod-manifest.yaml` - overridden
-via `$E2E_ARTIFACTS`). The orchestrator **checks artifacts, but does not collect them** -
-collect them in advance.
+(`soul-cloud-example-linux` / `soul-mod-redis` - overridden via `$E2E_ARTIFACTS`).
+The orchestrator **checks artifacts, but does not collect them** - collect them in advance.
+The default list is binaries and nothing beside them: since
+[NIM-377](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)
+a module's contract is a generated document stamped into the artifact itself, so
+there is no manifest to stage beside it. The default names are an example like the
+rest of this section - an environment naming its binaries differently, or staging
+the published `schema.json` too, sets `$E2E_ARTIFACTS`.
 
 **Credits - only from env or from `/root/.env` on the VM (within local scripts).
 NEVER from `~/.zsh_wb`.**
