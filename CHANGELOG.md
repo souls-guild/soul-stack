@@ -106,6 +106,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   the write signed against one config and wrote against another — the rotated
   certificate would land outside the mount the run started with, and the
   incarnation's ref would point at the old entry (NIM-706).
+- **`block:` and `on: keeper` on the same task no longer panic the render.** The
+  render loop tests `on: keeper` before it tests `block:`, so such a task went to
+  the keeper renderer with no `module:` at all and the nil dereference took the
+  process down instead of naming the mistake. Two layers refuse it now — the
+  config validator, which is what `soul-lint` reports offline
+  (`block_on_keeper_invalid`), and the render itself, fail-closed
+  (`ErrUnsupportedDSL`) — and at **both** levels,
+  because moving the key down onto the block's children does not work either: a
+  block fans its children out over the run's hosts and `keeper` is not one. Keeper
+  tasks go flat, in the scenario's own task list. The offline half reads the AST
+  of every task, an included file's included, so a service whose body lives behind
+  `include:` is covered like an inline one — linted inside its service tree, where
+  the include resolves the way the keeper resolves it (NIM-652).
 
 ### Removed
 

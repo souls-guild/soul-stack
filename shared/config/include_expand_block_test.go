@@ -271,3 +271,79 @@ func TestExpandIncludes_WithinBlockKeepsSourceIntact(t *testing.T) {
 		t.Fatalf("source block was mutated by expansion: %v", taskNames(root))
 	}
 }
+
+// TestExpandIncludes_BlockOnKeeperInsideAnIncludedFile — `block:` + `on: keeper`
+// (NIM-652) is refused in an INCLUDED file too, and reported at that file's own
+// coordinates.
+//
+// This is the layer guard, not a second copy of
+// TestLoadScenarioManifest_BlockOnKeeper. The combination is refused three
+// times: soul-lint offline, at config parse, and fail-closed at render
+// (ErrUnsupportedDSL, keeper/internal/render). Only the first two are offline,
+// and both come from validateTaskNode — which the bare-sequence loader runs over
+// an included body (LoadDestinyTasksFromBytes). Move the check up into a
+// per-task rule over a manifest's own `tasks:` and it goes silent here, because
+// at that level `tasks:` holds the `- include:` node and not the tasks it
+// splices in: the rule would then cover the shape the fixtures are written in
+// and miss the shape a service is written in (a thin main.yml over a body of
+// included files). The panic it stands in front of is reachable from either
+// shape.
+func TestExpandIncludes_BlockOnKeeperInsideAnIncludedFile(t *testing.T) {
+	cases := []struct {
+		name     string
+		yamlPath string
+		body     string
+	}{
+		{
+			name:     "on the block",
+			yamlPath: "$[0].block",
+			body: `
+- name: record the topology
+  on: keeper
+  block:
+    - name: probe the node
+      module: core.exec.run
+      params: { cmd: "true" }
+`,
+		},
+		{
+			name:     "on a block child",
+			yamlPath: "$[0].block[0].on",
+			body: `
+- name: record the topology
+  block:
+    - name: the field
+      on: keeper
+      module: core.state.set
+      params: { field: mode, value: sentinel }
+`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := []Task{{Include: &IncludeTask{Include: "capture.yml"}}}
+			_, diags := ExpandIncludes(root, mapResolver(map[string]string{"capture.yml": tc.body}))
+			if !hasCode(diags, "block_on_keeper_invalid") {
+				dump(t, diags)
+				t.Fatalf("expected block_on_keeper_invalid for a keeper task in a block arriving via include:")
+			}
+			for _, d := range diags {
+				if d.Code != "block_on_keeper_invalid" {
+					continue
+				}
+				if d.File != "capture.yml" {
+					t.Errorf("File = %q, want the included file the author has to edit", d.File)
+				}
+				if d.Line == 0 {
+					t.Errorf("Line = 0, want the offending line inside the included file")
+				}
+				// Both levels raise the same code; the path is what separates
+				// them, and it must be rebased onto the included file's own
+				// bare-sequence root, not onto the parent's `$.tasks[...]`.
+				if d.YAMLPath != tc.yamlPath {
+					t.Errorf("YAMLPath = %q, want %q", d.YAMLPath, tc.yamlPath)
+				}
+			}
+		})
+	}
+}
