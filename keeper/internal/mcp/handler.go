@@ -807,49 +807,44 @@ func (h *Handler) checkIncarnationContexts(claims *jwt.Claims, action string, co
 	return lastErr
 }
 
-// checkSoulHostScope — RBAC OR-Check for the per-host Soul tools (forget /
-// issue-token / ssh-target-update). Mirrors the REST gate
+// hostContexts — the RBAC context set for one host: `host=<sid>` plus one
+// context per Coven label it carries, read through the same [soul.CovenBySID]
+// and built by the same [soul.HostContexts] the REST selector uses (single
+// source of truth). An unreadable row yields the `{host}` context alone —
+// coven-scoped grants fail closed, `host=`/bare/`*` still pass.
+func (h *Handler) hostContexts(ctx context.Context, sid string) []map[string]string {
+	if h.deps.SoulDB == nil {
+		return soul.HostContexts(sid, nil)
+	}
+	return soul.HostContextsBySID(ctx, h.deps.SoulDB, sid)
+}
+
+// checkHostScope — RBAC OR-Check for the per-host tools: the per-host Soul
+// mutations (forget / issue-token / ssh-target-update, NIM-588) and the
+// execution pair `errand.run` / `soul.console` (NIM-650). Mirrors the REST gate
 // [middleware.RequirePermissionMulti] + [handlers.SoulSIDScopeSelector]:
-// `host=<sid>` plus one context per Coven label of the host, granted if ANY ONE
-// matches (NIM-588).
+// granted if ANY ONE context matches.
 //
-// Without this the MCP surface would keep the pre-NIM-588 behaviour of the REST
-// one — `soul.forget on coven=web` denying every call — and the two operator
+// Without this the MCP surface would keep the pre-fix behaviour of the REST one
+// — `soul.forget on coven=web` denying every call — and the two operator
 // interfaces would disagree about what the same grant means. ADR-004 makes
 // OpenAPI and MCP equally primary; a permission that narrows over one and denies
 // over the other is a bug on whichever surface the operator happens to use.
-//
-// Contexts come from the same [handlers.SoulHostCovenContexts] REST uses (single
-// source of truth), over the same `souls.coven` column, read through the same
-// [soul.CovenBySID]. An unreadable row yields the `{host}` context alone —
-// coven-scoped grants fail closed, `host=`/bare/`*` still pass.
-func (h *Handler) checkSoulHostScope(ctx context.Context, claims *jwt.Claims, action, sid string) error {
-	var covens []string
-	if h.deps.SoulDB != nil {
-		if got, err := soul.CovenBySID(ctx, h.deps.SoulDB, sid); err == nil {
-			covens = got
-		}
-	}
-	return h.checkSoulContexts(claims, action, handlers.SoulHostCovenContexts(sid, covens))
+func (h *Handler) checkHostScope(ctx context.Context, claims *jwt.Claims, resource, action, sid string) error {
+	return h.checkContexts(claims, resource, action, h.hostContexts(ctx, sid))
 }
 
-// checkSoulContexts runs the OR over a prepared context set. An empty set → one
+// checkSoulHostScope is [Handler.checkHostScope] on the `soul` resource.
+func (h *Handler) checkSoulHostScope(ctx context.Context, claims *jwt.Claims, action, sid string) error {
+	return h.checkHostScope(ctx, claims, "soul", action, sid)
+}
+
+// checkContexts runs the OR over a prepared context set. An empty set → one
 // attempt with a nil context: bare/`*` pass, scoped is denied (fail-closed,
-// parity with the middleware) — the [Handler.checkIncarnationContexts] shape for
-// the `soul` resource.
-func (h *Handler) checkSoulContexts(claims *jwt.Claims, action string, contexts []map[string]string) error {
-	if len(contexts) == 0 {
-		contexts = []map[string]string{nil}
-	}
-	var lastErr error
-	for _, ctx := range contexts {
-		err := h.deps.RBAC.Check(claims.Subject, "soul", action, ctx)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-	}
-	return lastErr
+// parity with the middleware) — the [Handler.checkIncarnationContexts] shape,
+// generalized over the resource.
+func (h *Handler) checkContexts(claims *jwt.Claims, resource, action string, contexts []map[string]string) error {
+	return soul.AllowAnyContext(h.deps.RBAC, claims.Subject, resource, action, contexts)
 }
 
 // toolError builds an MCP-tool error response over the JSON-RPC error

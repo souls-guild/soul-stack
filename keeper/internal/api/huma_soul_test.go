@@ -722,12 +722,12 @@ func (hExecOutbound) SendErrand(context.Context, string, *keeperv1.ErrandRequest
 func (hExecOutbound) SendCancelErrand(context.Context, string, string) error            { return nil }
 
 // humaExecRouter — a chi router with the huma exec route (prod mirror of router.go): RequirePermission
-// (errand.run, ErrandSIDSelector) + huma audit middleware errand.invoked. injectClaims
+// (errand.run, SoulSIDScopeSelector) + huma audit middleware errand.invoked. injectClaims
 // replaces RequireJWT.
 func humaExecRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, d *errand.Dispatcher) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	errandH := handlers.NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil)
+	errandH := handlers.NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -737,7 +737,7 @@ func humaExecRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, d
 	}
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/souls", func(r chi.Router) {
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "errand", "run", handlers.ErrandSIDSelector)).Group(func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "errand", "run", handlers.SoulSIDScopeSelector(nil))).Group(func(r chi.Router) {
 				registerHumaSoulExec(newHumaSoulAPI(r, auditW, audit.EventTypeErrandInvoked, nil), errandH)
 			})
 		})
@@ -992,7 +992,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		nil, // pushProviderH
 		nil, // providerH
 		nil, // profileH
-		handlers.NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil), // errandH non-nil → exec is mounted on huma
+		handlers.NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil), // errandH non-nil → exec is mounted on huma
 		nil, // voyageH
 		nil, // cadenceH
 		nil, // auditH

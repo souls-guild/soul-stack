@@ -158,6 +158,14 @@ FROM souls
 WHERE sid = $1
 `
 
+// selectCovenBySIDsSQL — the batch form of [selectCovenBySIDSQL], for the gates
+// that authorize a whole resolved target at once (see [CovenBySIDs]).
+const selectCovenBySIDsSQL = `
+SELECT sid, coven
+FROM souls
+WHERE sid = ANY($1)
+`
+
 const deleteBySIDSQL = `
 DELETE FROM souls
 WHERE sid = $1
@@ -503,6 +511,42 @@ func CovenBySID(ctx context.Context, db ExecQueryRower, sid string) ([]string, e
 		return nil, fmt.Errorf("soul: select coven by sid: %w", err)
 	}
 	return coven, nil
+}
+
+// CovenBySIDs is [CovenBySID] over a batch: one round-trip for a whole resolved
+// target (Voyage / Cadence spawn, NIM-650), where a query per host would put a
+// round-trip on every element of a scope that may run to hundreds.
+//
+// Only the hosts that HAVE a row appear in the result. A caller reads a missing
+// key as "the coven is unknown", which is what an absent row means and also what
+// [CovenBySID] reports through [ErrSoulNotFound] — so the batch and the single
+// read agree, and a `coven=`-scoped grant fails closed either way. An empty
+// input is not a query.
+func CovenBySIDs(ctx context.Context, db ExecQueryRower, sids []string) (map[string][]string, error) {
+	if len(sids) == 0 {
+		return map[string][]string{}, nil
+	}
+	rows, err := db.Query(ctx, selectCovenBySIDsSQL, sids)
+	if err != nil {
+		return nil, fmt.Errorf("soul: select coven by sids: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]string, len(sids))
+	for rows.Next() {
+		var (
+			sid   string
+			coven []string
+		)
+		if err := rows.Scan(&sid, &coven); err != nil {
+			return nil, fmt.Errorf("soul: scan coven by sids: %w", err)
+		}
+		out[sid] = coven
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("soul: iterate coven by sids: %w", err)
+	}
+	return out, nil
 }
 
 // SoulprintRecord — last received SoulprintReport for one host

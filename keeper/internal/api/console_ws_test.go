@@ -300,24 +300,24 @@ type consoleRBAC interface {
 	apimiddleware.ActionHolder
 }
 
-func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits) *consoleTestServer {
+func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
-	return newConsoleTestServerWriteWait(t, rbac, limits, 0)
+	return newConsoleTestServerWriteWait(t, rbac, limits, 0, opts...)
 }
 
 // newConsoleTestServerWriteWait is newConsoleTestServer with the socket's write
 // budget compressed, so a test can reach its expiry without waiting out the
 // production value. Zero keeps the default.
-func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration) *consoleTestServer {
+func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
 	return newConsoleTestServerLogging(t, rbac, limits, writeWait,
-		slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
 }
 
 // newConsoleTestServerLogging is newConsoleTestServerWriteWait with Keeper's own
 // logger supplied, for tests that assert on what the socket plane REPORTS
 // rather than on what it does.
-func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, logger *slog.Logger) *consoleTestServer {
+func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, logger *slog.Logger, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
 
 	soul := &fakeSoul{autoOpen: true}
@@ -371,10 +371,14 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.
 		// Check here would deny host-scoped roles before they can name a host.
 		r.With(apimiddleware.RequireAction(rbac, "soul", "console")).
 			Group(func(r chi.Router) {
-				registerConsoleWS(r, &consoleWSDeps{
+				deps := &consoleWSDeps{
 					Hub: hub, Enforcer: rbac, Logger: logger, WriteWait: writeWait,
 					Metrics: metrics,
-				})
+				}
+				for _, o := range opts {
+					o(deps)
+				}
+				registerConsoleWS(r, deps)
 			})
 	})
 

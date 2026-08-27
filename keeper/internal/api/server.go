@@ -807,7 +807,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// skips registering the whole routing block (router.go).
 	var errandH *handlers.ErrandHandler
 	if deps.ErrandDispatcher != nil && deps.ErrandStore != nil {
-		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, deps.RBAC, deps.ShellGate, logger)
+		// deps.SoulDB is the souls read surface the console gate resolves the
+		// target's covens through (NIM-650) — the same pool the route's
+		// `errand.run` middleware reads, so both layers see one answer.
+		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, deps.RBAC, deps.ShellGate, deps.SoulDB, logger)
 	}
 
 	// auditH is optional: when nil AuditReader the audit route isn't wired (the
@@ -888,6 +891,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 			deps.VoyageCommandResolver,
 			deps.IncarnationDB,
 			deps.RBAC,
+			// soulReader: the target hosts' covens for the console gate (NIM-650).
+			// The same pool the exec route reads, so the single-host and batch
+			// forms of the same gate cannot disagree about a host's covens.
+			deps.SoulDB,
 			// scoper: target ∩ Purview command-path (ADR-047 S4). FOOTGUN: the scoper
 			// MUST be non-nil in prod — when nil the command path falls back to a cluster-
 			// wide resolve (silent scope-leak: a scoped Archon would run a command on
@@ -955,6 +962,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleDeps = &consoleWSDeps{
 			Hub:          deps.ConsoleHub,
 			Enforcer:     deps.RBAC,
+			SoulReader:   deps.SoulDB,
 			Metrics:      deps.ConsoleMetrics,
 			Logger:       logger,
 			PlaneEnabled: deps.ConsolePlaneEnabled,

@@ -1002,11 +1002,16 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			// Dispatch (single source of truth) — the middleware event is a navigation-trail. When
 			// errandH is nil it is not mounted. The huma op carries the full path /{sid}/exec (NOT nested in
 			// r.Route("/{sid}") — otherwise chi would double the {sid} prefix; huma binds {sid} itself,
-			// the chi-RBAC selector ErrandSIDSelector reads it from the humachi pattern). All
+			// the chi-RBAC selector reads it from the humachi pattern). All
 			// soul-detail routes on huma.
+			//
+			// It shares soulHostScope with the three per-host mutations, so
+			// `errand.run on coven=web` narrows to the hosts of that coven instead
+			// of denying every call (NIM-650); the module-dependent `soul.console`
+			// half of the same gate resolves the same context set in-handler.
 			if errandH != nil {
 				r.With(
-					apimiddleware.RequirePermission(enforcer, "errand", "run", handlers.ErrandSIDSelector),
+					apimiddleware.RequirePermissionMulti(enforcer, "errand", "run", soulHostScope),
 				).Group(func(r chi.Router) {
 					registerHumaSoulExec(newHumaSoulAPI(r, auditWriter, audit.EventTypeErrandInvoked, logger), errandH)
 				})

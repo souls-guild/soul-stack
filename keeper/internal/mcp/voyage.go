@@ -45,6 +45,7 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 		h.deps.VoyageCommandResolver,
 		h.deps.IncarnationDB,
 		h.deps.RBAC,
+		h.deps.SoulDB,          // soulReader: target covens for the console gate (NIM-650); same pool as REST
 		h.deps.PurviewResolver, // scoper: target ∩ Purview command-paths (ADR-047 S4); same rbac.Holder as REST
 		h.deps.ShellGate,       // console gate over a verb-shell kind=command Voyage (NIM-197); same instance as REST
 		h.deps.AuditWriter,

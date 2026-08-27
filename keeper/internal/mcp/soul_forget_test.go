@@ -474,12 +474,20 @@ func TestSoulForget_RBACForbidden(t *testing.T) {
 // satisfy the refuse half alone; only the pair distinguishes a grant that is
 // compared from one that is merely fetched or ignored.
 func TestSoulForget_CovenGrantNarrowsHere_Too(t *testing.T) {
-	webOnly := &rbactest.Config{
-		Roles: []rbactest.Role{
-			{Name: "web-forgetter", Operators: []string{"archon-alice"},
-				Permissions: []string{"soul.forget on coven=web"}},
-		},
+	for _, form := range covenScopeForms() {
+		t.Run(form.name, func(t *testing.T) {
+			forgetCovenGrantNarrows(t, form.cfg("soul.forget"))
+		})
 	}
+}
+
+// forgetCovenGrantNarrows is the body of TestSoulForget_CovenGrantNarrowsHere_Too,
+// run once per way of expressing the scope (NIM-650): the `on coven=web` suffix
+// and the role `default_scope`. The suffix form was all this fixture could
+// express until rbactest.Role grew DefaultScope, so the role-default route to
+// the same check went untested here.
+func forgetCovenGrantNarrows(t *testing.T, webOnly *rbactest.Config) {
+	t.Helper()
 
 	t.Run("host in the granted coven is forgotten", func(t *testing.T) {
 		pool := &mcpForgetPool{status: "connected", coven: []string{"web"}, seeds: 1}

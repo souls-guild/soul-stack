@@ -5,11 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
@@ -42,12 +39,20 @@ type ErrandHandler struct {
 
 	// enforcer / gate — the console gate over the exec route (ADR-0074
 	// amendment, NIM-197). The route's own middleware already checked
-	// `errand.run` with [ErrandSIDSelector]; the second right is checked HERE
+	// `errand.run` with [SoulSIDScopeSelector]; the second right is checked HERE
 	// and not in middleware because it depends on the module, which lives in
 	// the body — the same reason the Voyage route picks its permission
 	// in-handler. nil enforcer → the gate is told nothing was verified.
 	enforcer middleware.PermissionChecker
 	gate     *shellgate.Gate
+
+	// soulReader resolves the target host's Coven labels for that second check,
+	// so it lands the SAME `{host}` + `{host, coven}` context set the route's
+	// middleware built (NIM-650). Without it the in-handler half would stay
+	// host-only and a `soul.console on coven=web` would deny a verb-shell
+	// module on a host that IS in coven web, after `errand.run` had already
+	// admitted it one layer up. nil → the `{host}` context alone.
+	soulReader SoulHostContextReader
 
 	logger *slog.Logger
 }
@@ -56,12 +61,14 @@ type ErrandHandler struct {
 // production calls; in a drift/unit test nil is allowed only if the routes do
 // not invoke the handler. enforcer/gate carry the console gate (NIM-197) and are
 // nil-safe: a nil enforcer makes the gate count the decision as `unconfigured`
-// rather than silently allow or deny it.
-func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, enforcer middleware.PermissionChecker, gate *shellgate.Gate, logger *slog.Logger) *ErrandHandler {
+// rather than silently allow or deny it. soulReader is the souls read surface
+// the console gate resolves the host's covens through (NIM-650); nil-safe, and
+// nil means coven-scoped `soul.console` fails closed on this route.
+func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, enforcer middleware.PermissionChecker, gate *shellgate.Gate, soulReader SoulHostContextReader, logger *slog.Logger) *ErrandHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ErrandHandler{dispatcher: dispatcher, store: store, enforcer: enforcer, gate: gate, logger: logger}
+	return &ErrandHandler{dispatcher: dispatcher, store: store, enforcer: enforcer, gate: gate, soulReader: soulReader, logger: logger}
 }
 
 // ErrandSpecStub — a non-empty *ErrandHandler stub for generating the huma OpenAPI
@@ -175,7 +182,7 @@ func (h *ErrandHandler) ExecTyped(ctx context.Context, claims *keeperjwt.Claims,
 	if !soul.ValidSID(sid) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'sid' must match "+soul.SIDPattern)}
 	}
-	if err := h.authorizeShell(claims.Subject, sid, req.Module); err != nil {
+	if err := h.authorizeShell(ctx, claims.Subject, sid, req.Module); err != nil {
 		return zero, err
 	}
 
@@ -491,16 +498,22 @@ func validErrandStatus(s string) bool {
 
 // authorizeShell applies the console gate to one exec call (ADR-0074 amendment,
 // NIM-197). A non-verb-shell module returns nil without touching the enforcer;
-// a verb-shell one additionally requires `soul.console` under the SAME
-// `host=<sid>` selector the route's `errand.run` middleware used.
+// a verb-shell one additionally requires `soul.console` under the SAME context
+// set the route's `errand.run` middleware used — `host=<sid>` plus one context
+// per Coven label of the host, granted if ANY ONE of them matches (NIM-650).
+//
+// The covens are read INSIDE the probe, not before it: an ordinary Errand is not
+// narrowed by this gate at all, and it must not pay a round-trip for a check
+// that never runs.
 //
 // nil enforcer → no probe is supplied, and the gate records `unconfigured`
 // rather than assuming an answer.
-func (h *ErrandHandler) authorizeShell(aid, sid, module string) error {
+func (h *ErrandHandler) authorizeShell(ctx context.Context, aid, sid, module string) error {
 	var check func() error
 	if h.enforcer != nil {
 		check = func() error {
-			return h.enforcer.Check(aid, "soul", "console", map[string]string{"host": sid})
+			return soul.AllowAnyContext(h.enforcer, aid, "soul", "console",
+				soul.HostContextsBySID(ctx, h.soulReader, sid))
 		}
 	}
 	if err := h.gate.Authorize(shellgate.SurfaceREST, module, check); err != nil {
@@ -508,23 +521,4 @@ func (h *ErrandHandler) authorizeShell(aid, sid, module string) error {
 			"module "+module+" runs an arbitrary command line; it additionally requires permission soul.console")}
 	}
 	return nil
-}
-
-// ErrandSIDSelector — a middleware helper for RBAC: extracts the SID from the
-// path parameter `/v1/souls/{sid}/exec` for the permission check
-// (rbac.md §Errand → selectors `host=<sid>`).
-//
-// A separate helper so router.go does not depend on the errand package
-// internals. This one is still host-ONLY: unlike the three per-host Soul
-// mutations, which NIM-588 moved to [SoulSIDScopeSelector], `errand.run on
-// coven=<label>` therefore denies every call rather than narrowing to that
-// coven, and `soul.console` has the same shape one layer deeper in
-// authorizeShell. Fixing those needs both layers moved together and a reader
-// threaded through NewErrandHandler — tracked separately.
-func ErrandSIDSelector(r *http.Request) map[string]string {
-	sid := chi.URLParam(r, "sid")
-	if sid == "" {
-		return nil
-	}
-	return map[string]string{"host": sid}
 }

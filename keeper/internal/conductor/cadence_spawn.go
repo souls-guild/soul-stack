@@ -11,6 +11,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -50,6 +51,17 @@ type CadenceSpawner struct {
 	// only witness is the schedule itself. Both nil-safe.
 	enforcer ConsoleChecker
 	gate     *shellgate.Gate
+	// soulReader resolves the target hosts' Coven labels for that gate, so the
+	// recipe author's `soul.console on coven=web` narrows the spawn instead of
+	// killing it (NIM-650). nil-safe, and nil means coven-scoped grants fail
+	// closed here.
+	//
+	// The POOL and not the tick's own tx, deliberately: a failed statement
+	// poisons its transaction, and this one runs between the FOR UPDATE select
+	// and AdvanceSchedule. Read it on the tx and a transient error would turn a
+	// recorded skip into a rolled-back tick that stalls every other due
+	// schedule — the exact failure mode this path is written to avoid.
+	soulReader soul.ExecQueryRower
 
 	logger *slog.Logger
 }
@@ -76,7 +88,7 @@ func NewCadenceSpawner(
 	gate *shellgate.Gate,
 	logger *slog.Logger,
 ) *CadenceSpawner {
-	return &CadenceSpawner{
+	s := &CadenceSpawner{
 		pool:      pool,
 		scenarioR: scenarioR,
 		commandR:  commandR,
@@ -85,6 +97,13 @@ func NewCadenceSpawner(
 		gate:      gate,
 		logger:    logger,
 	}
+	// Guarded assignment: a nil *pgxpool.Pool stored straight into the interface
+	// would be a non-nil interface holding a nil pointer, and the coven read
+	// would panic instead of falling back to the host-only context.
+	if pool != nil {
+		s.soulReader = pool
+	}
+	return s
 }
 
 // newCadenceSpawnerFromBeginner is an internal constructor for unit tests.
@@ -276,7 +295,7 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 	// (parity with an overlap skip) so the series does not wedge, and
 	// `cadence.skipped_forbidden` says why — the one thing this path must not do
 	// is stop working quietly.
-	if !s.authorizeShell(c, resolved) {
+	if !s.authorizeShell(ctx, c, resolved) {
 		if aerr := cadence.AdvanceSchedule(ctx, tx, c.ID, nextRun, nil); aerr != nil {
 			return nil, false, aerr
 		}
@@ -316,7 +335,14 @@ func (s *CadenceSpawner) processOne(ctx context.Context, tx pgx.Tx, c *cadence.C
 // The probe requires `soul.console` on EVERY resolved host, matching the
 // all-or-nothing rule of the interactive Voyage path — a partial spawn would
 // quietly change the recipe the operator wrote.
-func (s *CadenceSpawner) authorizeShell(c *cadence.Cadence, resolved []string) bool {
+//
+// The identity checked is the recipe's author (`created_by_aid`), so this is an
+// operator's grant like any other and reads the same context shape: `host=<sid>`
+// plus one context per Coven label of that host, granted if ANY ONE matches
+// (NIM-650). A host-only context here would have made a coven-scoped author's
+// schedule stop spawning silently the day enforcement turned on — the one
+// surface where nobody is watching an HTTP status.
+func (s *CadenceSpawner) authorizeShell(ctx context.Context, c *cadence.Cadence, resolved []string) bool {
 	module := derefStr(c.Module)
 	if !shellgate.Required(module) {
 		return true
@@ -324,8 +350,9 @@ func (s *CadenceSpawner) authorizeShell(c *cadence.Cadence, resolved []string) b
 	var check func() error
 	if s.enforcer != nil {
 		check = func() error {
+			contexts := soul.HostContextsBySIDs(ctx, s.soulReader, resolved)
 			for _, sid := range resolved {
-				if err := s.enforcer.Check(c.CreatedByAID, "soul", "console", map[string]string{"host": sid}); err != nil {
+				if err := soul.AllowAnyContext(s.enforcer, c.CreatedByAID, "soul", "console", contexts[sid]); err != nil {
 					return err
 				}
 			}

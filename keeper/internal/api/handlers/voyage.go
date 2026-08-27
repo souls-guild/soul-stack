@@ -85,6 +85,11 @@ type VoyageHandler struct {
 	commandResolver  VoyageCommandResolver
 	incReader        IncarnationContextReader
 	enforcer         middleware.PermissionChecker
+	// soulReader — the souls read surface the console gate resolves the target
+	// hosts' Coven labels through (NIM-650), so `soul.console on coven=web`
+	// narrows a kind=command Voyage instead of denying it outright. nil → the
+	// `{host}` context alone per host, i.e. coven-scoped grants fail closed.
+	soulReader SoulHostContextReader
 	// scoper — the read surface of the operator's scope boundary (ADR-047 S4). Used by
 	// the command path to intersect target ∩ Purview (errand.run): the same resolver
 	// that filters `GET /v1/souls`. nil → command resolve degrades to cluster-
@@ -114,7 +119,9 @@ type VoyageHandler struct {
 // NewVoyageHandler builds the handler. logger=nil → discard. store /
 // scenarioResolver / commandResolver / enforcer are required for production
 // routes; incReader is needed by the RBAC-by-kind scenario gate (without it
-// scenario-create fail-closed rejects scoped roles). scoper is needed by the command path for
+// scenario-create fail-closed rejects scoped roles). soulReader is the souls
+// read surface the console gate resolves target covens through (NIM-650); nil →
+// coven-scoped `soul.console` fails closed on the command path. scoper is needed by the command path for
 // target ∩ Purview (ADR-047 S4); nil → command resolve cluster-wide (backcompat
 // for unit tests). auditW may be nil. tidingInvalidator flushes the dispatcher's
 // TTL snapshot after committing a voyage-tx with ephemeral notify (ADR-052(g) race-fix);
@@ -129,6 +136,7 @@ func NewVoyageHandler(
 	commandResolver VoyageCommandResolver,
 	incReader IncarnationContextReader,
 	enforcer middleware.PermissionChecker,
+	soulReader SoulHostContextReader,
 	scoper PurviewResolver,
 	gate *shellgate.Gate,
 	auditW audit.Writer,
@@ -146,6 +154,7 @@ func NewVoyageHandler(
 		commandResolver:   commandResolver,
 		incReader:         incReader,
 		enforcer:          enforcer,
+		soulReader:        soulReader,
 		scoper:            scoper,
 		gate:              gate,
 		auditW:            auditW,
@@ -870,7 +879,7 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 	if err := h.scopeExceedsCapErr(len(resolved)); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeShellErr(claims.Subject, req.Module, resolved); err != nil {
+	if err := h.authorizeShellErr(ctx, claims.Subject, req.Module, resolved); err != nil {
 		return nil, err
 	}
 	return resolved, nil
@@ -881,15 +890,24 @@ func (h *VoyageHandler) resolveCommandScopeErr(ctx context.Context, claims *jwt.
 // ordinary Errands is not narrowed by this gate.
 //
 // For a verb-shell module the operator must hold `soul.console` on EVERY host
-// the target resolved to, with the same `host=<sid>` selector shape the
-// single-host exec route uses. All-or-nothing rather than trimming the scope:
+// the target resolved to, with the same context shape the single-host exec route
+// uses: `host=<sid>` plus one context per Coven label of that host, granted if
+// ANY ONE matches (NIM-650). All-or-nothing rather than trimming the scope:
 // silently dropping hosts from a batch the operator submitted would answer a
 // different question than the one they asked, and the `errand.run` resolve above
 // already treats a foreign explicit host as a 403 rather than a trim.
 //
+// Without the coven half this gate contradicted the `errand.run` resolve it sits
+// behind: that one narrows by coven through [PurviewResolver], so a
+// coven-scoped operator got past it and was then refused by a host-only
+// `soul.console` on the very hosts the purview had just admitted.
+//
+// The covens of the whole target are read in ONE round-trip, and only for a
+// verb-shell module — a batch of ordinary Errands never reaches the probe.
+//
 // Runs AFTER the scope cap, so an over-sized target is still refused for its
 // size — the gate never walks a scope the request was not allowed to have.
-func (h *VoyageHandler) authorizeShellErr(aid, module string, resolved []string) error {
+func (h *VoyageHandler) authorizeShellErr(ctx context.Context, aid, module string, resolved []string) error {
 	if !shellgate.Required(module) {
 		return nil
 	}
@@ -897,8 +915,9 @@ func (h *VoyageHandler) authorizeShellErr(aid, module string, resolved []string)
 	var check func() error
 	if h.enforcer != nil {
 		check = func() error {
+			contexts := soul.HostContextsBySIDs(ctx, h.soulReader, resolved)
 			for _, sid := range resolved {
-				if err := h.enforcer.Check(aid, "soul", "console", map[string]string{"host": sid}); err != nil {
+				if err := soul.AllowAnyContext(h.enforcer, aid, "soul", "console", contexts[sid]); err != nil {
 					denied = sid
 					return err
 				}

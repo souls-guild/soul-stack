@@ -38,11 +38,21 @@ type Role struct {
 	Name        string
 	Operators   []string
 	Permissions []string
+
+	// DefaultScope is the role's raw `default_scope` (ADR-047 §S1) — the OTHER
+	// way an operator ends up scoped, and until NIM-650 the one no fixture in
+	// this repo could express. `rbac.effectiveScope` unifies it with a
+	// permission's own `on <expr>` suffix, so a guard written with the suffix
+	// alone proves nothing about a role whose scope is set here: they are
+	// different columns and reach the resolver by different routes. Empty =
+	// NULL, i.e. the role introduces no scope.
+	DefaultScope string
 }
 
 // Snapshot builds an [rbac.Snapshot] from the test config: role → permissions
-// (Roles) and AID → roles (Membership). A nil config yields an empty snapshot
-// (default deny), same as a nil snapshot in [rbac.NewEnforcerFromSnapshot].
+// (Roles), role → default_scope (RoleScopes) and AID → roles (Membership). A nil
+// config yields an empty snapshot (default deny), same as a nil snapshot in
+// [rbac.NewEnforcerFromSnapshot].
 func Snapshot(cfg *Config) *rbac.Snapshot {
 	if cfg == nil {
 		return nil
@@ -54,6 +64,12 @@ func Snapshot(cfg *Config) *rbac.Snapshot {
 	}
 	for _, r := range cfg.Roles {
 		snap.Roles[r.Name] = r.Permissions
+		if r.DefaultScope != "" {
+			if snap.RoleScopes == nil {
+				snap.RoleScopes = make(map[string]string, len(cfg.Roles))
+			}
+			snap.RoleScopes[r.Name] = r.DefaultScope
+		}
 		for _, aid := range r.Operators {
 			snap.Membership[aid] = append(snap.Membership[aid], r.Name)
 		}

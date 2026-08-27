@@ -109,10 +109,11 @@ func (h *Handler) callSoulRunCommand(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'command' is required")
 	}
 
-	// RBAC: soul.console, selector host=<sid> (ADR-0074 amendment, rbac.md
-	// §Console). NOT errand.run — that right gates named modules, and this tool
-	// runs whatever the caller typed.
-	if err := h.deps.RBAC.Check(claims.Subject, "soul", "console", map[string]string{"host": a.SID}); err != nil {
+	// RBAC: soul.console, selector host=<sid> plus the host's Coven labels
+	// (ADR-0074 amendment, rbac.md §Console; NIM-650 for the coven half). NOT
+	// errand.run — that right gates named modules, and this tool runs whatever
+	// the caller typed.
+	if err := h.checkHostScope(ctx, claims, "soul", "console", a.SID); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.console")
 	}

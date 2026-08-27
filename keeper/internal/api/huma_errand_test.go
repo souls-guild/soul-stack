@@ -260,7 +260,7 @@ func buildHErrandDispatcher(t *testing.T, statuses map[string]errand.Status) *er
 func humaErrandRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *errand.Store, dispatcher *errand.Dispatcher) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	errandH := handlers.NewErrandHandler(dispatcher, store, nil /*enforcer*/, nil /*gate*/, nil)
+	errandH := handlers.NewErrandHandler(dispatcher, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

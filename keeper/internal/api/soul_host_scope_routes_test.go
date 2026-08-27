@@ -1,11 +1,12 @@
 package api
 
-// Coven-narrowing guard for the OTHER two per-host Soul mutations (NIM-588):
-// POST /v1/souls/{sid}/issue-token and PUT /v1/souls/{sid}/ssh-target.
+// Coven-narrowing guard for the per-host routes that share soulHostScope:
+// POST /v1/souls/{sid}/issue-token and PUT /v1/souls/{sid}/ssh-target
+// (NIM-588), plus POST /v1/souls/{sid}/exec (NIM-650).
 //
 // `soul.forget` has its own file (soul_forget_route_permission_test.go) because
-// it also destroys rows. These two share nothing with it but the selector, and
-// the selector is exactly what a mount can be left out of: the three routes are
+// it also destroys rows. These share nothing with it but the selector, and
+// the selector is exactly what a mount can be left out of: the routes are
 // wired one by one in router.go, so a change that moves two of them and forgets
 // the third leaves every guard on the moved routes green. Each mount is
 // therefore asserted through the REAL buildRouter, on its own.
@@ -35,22 +36,44 @@ type soulHostScopeRoute struct {
 	method     string
 	path       string
 	body       string
+
+	// admitStatus — what the route answers once the gate has let the call
+	// through. Not always 200: the exec route reaches a handler whose
+	// dispatcher is nil here and answers 500, which is precisely the proof
+	// that the router gate admitted it. Asserting "not 403" instead would
+	// also pass on a 404 from an unmounted route.
+	admitStatus int
 }
 
 func soulHostScopeRoutes() []soulHostScopeRoute {
 	return []soulHostScopeRoute{
 		{
-			name:       "issue-token",
-			permission: "soul.issue-token",
-			method:     http.MethodPost,
-			path:       "/v1/souls/" + forgetGateHost + "/issue-token",
+			name:        "issue-token",
+			permission:  "soul.issue-token",
+			method:      http.MethodPost,
+			path:        "/v1/souls/" + forgetGateHost + "/issue-token",
+			admitStatus: http.StatusOK,
 		},
 		{
-			name:       "ssh-target-update",
-			permission: "soul.ssh-target-update",
-			method:     http.MethodPut,
-			path:       "/v1/souls/" + forgetGateHost + "/ssh-target",
-			body:       `{"ssh_port":22,"ssh_user":"deploy","soul_path":"/opt/soul"}`,
+			name:        "ssh-target-update",
+			permission:  "soul.ssh-target-update",
+			method:      http.MethodPut,
+			path:        "/v1/souls/" + forgetGateHost + "/ssh-target",
+			body:        `{"ssh_port":22,"ssh_user":"deploy","soul_path":"/opt/soul"}`,
+			admitStatus: http.StatusOK,
+		},
+		{
+			// NIM-650. `errand.run` used to be mounted with a host-only
+			// selector, so `errand.run on coven=web` refused every host it
+			// named. It now shares soulHostScope with the mutations above —
+			// and shares this guard, because the whole failure mode was one
+			// route being wired differently from its neighbours.
+			name:        "errand-exec",
+			permission:  "errand.run",
+			method:      http.MethodPost,
+			path:        "/v1/souls/" + forgetGateHost + "/exec",
+			body:        `{"module":"core.cmd.shell"}`,
+			admitStatus: http.StatusInternalServerError,
 		},
 	}
 }
@@ -93,10 +116,10 @@ func TestSoulHostRoutes_CovenGrantAdmitsHostInThatCoven(t *testing.T) {
 			h := soulHostScopeRouter(t, []string{rt.permission + " on coven=web"}, []string{"web"})
 
 			rec := soulHostScopeCall(t, h, rt)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s %s = %d for `%s on coven=web` against a host IN coven web, want 200 — "+
+			if rec.Code != rt.admitStatus {
+				t.Fatalf("%s %s = %d for `%s on coven=web` against a host IN coven web, want %d — "+
 					"this mount is still resolving the host without its covens; body=%s",
-					rt.method, rt.path, rec.Code, rt.permission, rec.Body.String())
+					rt.method, rt.path, rec.Code, rt.permission, rt.admitStatus, rec.Body.String())
 			}
 		})
 	}
@@ -130,10 +153,10 @@ func TestSoulHostRoutes_HostGrantStillWorks(t *testing.T) {
 			h := soulHostScopeRouter(t, []string{rt.permission + " on host=" + forgetGateHost}, []string{"web"})
 
 			rec := soulHostScopeCall(t, h, rt)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("%s %s = %d for `%s on host=%s`, want 200 — a host-scoped grant stopped "+
+			if rec.Code != rt.admitStatus {
+				t.Fatalf("%s %s = %d for `%s on host=%s`, want %d — a host-scoped grant stopped "+
 					"working once the host also had a coven; body=%s",
-					rt.method, rt.path, rec.Code, rt.permission, forgetGateHost, rec.Body.String())
+					rt.method, rt.path, rec.Code, rt.permission, forgetGateHost, rt.admitStatus, rec.Body.String())
 			}
 		})
 	}

@@ -199,8 +199,44 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   value for the next task. Writing the key is now `unknown_key` with a hint,
   and `no_log_on_block_invalid` / `no_log_on_apply_invalid` are gone with it.
 
+### Fixed
+
+- **`coven=` on `errand.run` and on a live `soul.console` denied every call
+  instead of narrowing it.** `NIM-650`. NIM-588 moved the three per-host Soul
+  mutations onto a context that carries the host's Coven labels and left these
+  two behind, so the same fail-closed rule kept refusing them: an ad-hoc Errand
+  (`POST /v1/souls/{sid}/exec`, `keeper.errand.run`), an interactive console
+  session (the `open` frame on `/v1/souls/{sid}/console`,
+  `keeper.soul.run-command`), a verb-shell `kind: command` Voyage and a Cadence
+  spawn of one all answered 403 for a grant scoped to the very coven the target
+  is in — while the recording playback of those same sessions, which resolves
+  scope through `ResolvePurview`, narrowed correctly. All of them now resolve
+  `host=<sid>` **plus one context per Coven label the host carries** and admit on
+  any of them, through the one primitive
+  ([`soul.HostContextsBySID`](keeper/internal/soul/rbac_scope.go)) the mutations
+  use; the exec route shares their selector outright. Both ways a coven attaches
+  are covered — the `on coven=…` suffix and a bare permission under a role whose
+  `default_scope` is a coven — since they meet at the same scope expression
+  before the check. MCP resolves the identical contexts, because a fix on one
+  surface leaves the operator with the same 403 one surface over
+  ([ADR-004](docs/adr/0004-binaries.md)). The batch surfaces — a Voyage over many
+  hosts, a Cadence spawn — read every target's labels in one `= ANY($1)` and stay
+  all-or-nothing: one uncovered host refuses the batch, as before. A host whose
+  row cannot be read (unknown SID, database unreachable) still asserts the host
+  alone, so `coven=` grants fail closed and `on host=` grants are untouched. The
+  read happens inside the shell gate's probe, so an ordinary (non-verb-shell)
+  Errand still costs no database round-trip.
+
 ### Upgrade notes
 
+- **A `coven=`-scoped `errand.run` or `soul.console` becomes live over that
+  coven's hosts** (`NIM-650`) without a role edit — it was inert before. Review
+  every role carrying either one narrowed by a coven **before** upgrading:
+  `errand.run` runs a module of the caller's choosing on the host and
+  `soul.console` opens an interactive shell on it, so a grant that used to refuse
+  everything now reaches every host of that coven. Nothing else widens — `on
+  host=`, bare and `*` grants behave exactly as they did, and a host whose
+  registry row cannot be read still asserts the host alone.
 - **`type: secret` is breaking, deliberately, with no migration.** Derived paths
   do not match what existing incarnations wrote by hand, so an incarnation
   created before this change fails closed on its next day-2 run. This lands
@@ -394,7 +430,8 @@ order to act in.
   `default_scope` is a coven. Grants written `on host=` are unchanged, and a host
   whose row cannot be read (unknown SID, database unreachable) still asserts only
   the host, so nothing widens when Postgres is down. `errand.run` and the live
-  `soul.console` keep the old shape — a `coven=` on either still denies.
+  `soul.console` were left on the old shape here; NIM-650, above, moves them onto
+  this one.
 
 - **`GET /v1/roles` and `keeper.role.list` no longer return the whole catalog.**
   A caller sees a role exactly when the caller could grant what that role grants.
@@ -2147,8 +2184,8 @@ order to act in.
   one of them leaves the operator with the same 403 one surface over. A host whose
   row cannot be read still asserts the host alone: coven-scoped grants fail closed,
   `on host=` grants keep working, and a database outage widens nothing. Note the
-  scope of the fix — `errand.run` and the live `soul.console` still build a
-  host-only context, so a `coven=` on either continues to deny.
+  scope of the fix — `errand.run` and the live `soul.console` were out of it and
+  kept building a host-only context; NIM-650 moves them onto the same primitive.
 
 - **A second of clock drift between Keeper instances answered `401 invalid
   token` on a token seconds old.** `NIM-621`. Keeper runs as several stateless

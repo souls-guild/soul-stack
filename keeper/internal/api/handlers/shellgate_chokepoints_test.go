@@ -66,8 +66,8 @@ func TestErrandExec_ShellGate(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := NewErrandHandler(nil, nil, perms(c.granted...), shellgate.New(c.mode, nil, nil), nil)
-			err := h.authorizeShell("archon-alice", "host.test", c.module)
+			h := NewErrandHandler(nil, nil, perms(c.granted...), shellgate.New(c.mode, nil, nil), nil /*soulReader*/, nil)
+			err := h.authorizeShell(context.Background(), "archon-alice", "host.test", c.module)
 			if got := isConsoleForbidden(err); got != c.wantDenied {
 				t.Fatalf("console-forbidden = %v, want %v (err = %v)", got, c.wantDenied, err)
 			}
@@ -81,7 +81,7 @@ func TestErrandExec_ShellGate(t *testing.T) {
 func TestErrandExec_ShellGate_WiredIntoExec(t *testing.T) {
 	t.Parallel()
 	h := NewErrandHandler(buildCancelDispatcher(t, nil), nil, perms("errand.run"),
-		shellgate.New(shellgate.ModeEnforce, nil, nil), nil)
+		shellgate.New(shellgate.ModeEnforce, nil, nil), nil /*soulReader*/, nil)
 	_, err := h.ExecTyped(context.Background(), claimsFor("archon-alice"), "host.test",
 		ErrandRunInput{Module: "core.cmd.shell"})
 	if !isConsoleForbidden(err) {
@@ -120,7 +120,7 @@ func TestVoyageCommand_ShellGate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := &VoyageHandler{enforcer: perms(c.granted...), gate: shellgate.New(c.mode, nil, nil)}
-			err := h.authorizeShellErr("archon-alice", c.module, []string{"host-a", "host-b"})
+			err := h.authorizeShellErr(context.Background(), "archon-alice", c.module, []string{"host-a", "host-b"})
 			if got := isConsoleForbidden(err); got != c.wantDenied {
 				t.Fatalf("console-forbidden = %v, want %v (err = %v)", got, c.wantDenied, err)
 			}
@@ -136,7 +136,7 @@ func TestVoyageCommand_ShellGate_AllOrNothing(t *testing.T) {
 	// Console on host-a only; the resolved scope also contains host-b.
 	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}, consoleHosts: map[string]bool{"host-a": true}}
 	h := &VoyageHandler{enforcer: enf, gate: shellgate.New(shellgate.ModeEnforce, nil, nil)}
-	err := h.authorizeShellErr("archon-alice", "core.cmd.shell", []string{"host-a", "host-b"})
+	err := h.authorizeShellErr(context.Background(), "archon-alice", "core.cmd.shell", []string{"host-a", "host-b"})
 	if !isConsoleForbidden(err) {
 		t.Fatalf("err = %v, want a console-forbidden 403 naming the uncovered host", err)
 	}
@@ -188,10 +188,10 @@ func TestShellGate_NilEnforcerDoesNotPanic(t *testing.T) {
 	if err := (&CadenceHandler{gate: gate}).checkShellGateErr("archon-alice", &shell); err != nil {
 		t.Errorf("cadence: %v, want nil", err)
 	}
-	if err := (&VoyageHandler{gate: gate}).authorizeShellErr("archon-alice", shell, []string{"host-a"}); err != nil {
+	if err := (&VoyageHandler{gate: gate}).authorizeShellErr(context.Background(), "archon-alice", shell, []string{"host-a"}); err != nil {
 		t.Errorf("voyage: %v, want nil", err)
 	}
-	if err := (&ErrandHandler{gate: gate}).authorizeShell("archon-alice", "host-a", shell); err != nil {
+	if err := (&ErrandHandler{gate: gate}).authorizeShell(context.Background(), "archon-alice", "host-a", shell); err != nil {
 		t.Errorf("errand: %v, want nil", err)
 	}
 }

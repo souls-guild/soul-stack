@@ -189,7 +189,7 @@ func humaVoyageRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, au
 func humaVoyageRouterScen(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *fakeVoyageStore, cmd handlers.VoyageCommandResolver, scen handlers.VoyageScenarioResolver) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	voyageH := handlers.NewVoyageHandler(store, scen, cmd, nil, enforcer, nil, nil /*gate*/, auditW, nil, 0, 0, nil)
+	voyageH := handlers.NewVoyageHandler(store, scen, cmd, nil, enforcer, nil /*soulReader*/, nil /*scoper*/, nil /*gate*/, auditW, nil, 0, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

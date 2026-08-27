@@ -34,7 +34,7 @@ func (c *captureAudit) Write(_ context.Context, ev *audit.Event) error {
 }
 
 func newVoyageHandlerWithAudit(store *fakeVoyageStore, sc VoyageScenarioResolver, cmd VoyageCommandResolver, enf middleware.PermissionChecker, aw audit.Writer) *VoyageHandler {
-	return NewVoyageHandler(store, sc, cmd, nil, enf, nil /*scoper*/, nil /*gate*/, aw, nil /*tidingInvalidator*/, 0 /*maxScope*/, 0 /*maxBatchSize → unlimited*/, nil)
+	return NewVoyageHandler(store, sc, cmd, nil, enf, nil /*soulReader*/, nil /*scoper*/, nil /*gate*/, aw, nil /*tidingInvalidator*/, 0 /*maxScope*/, 0 /*maxBatchSize → unlimited*/, nil)
 }
 
 func TestVoyageCreate_Scenario_AuditSourceMCP(t *testing.T) {

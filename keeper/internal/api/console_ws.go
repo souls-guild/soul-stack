@@ -16,6 +16,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
@@ -41,8 +42,13 @@ import (
 type consoleWSDeps struct {
 	Hub      *console.Hub
 	Enforcer middleware.PermissionChecker
-	Metrics  *console.Metrics
-	Logger   *slog.Logger
+	// SoulReader resolves the target host's Coven labels for the per-`open`
+	// scope check (NIM-650). nil → the `{host}` context alone, i.e. a
+	// `coven=`-scoped `soul.console` fails closed, which is what this endpoint
+	// did for every operator before.
+	SoulReader soul.ExecQueryRower
+	Metrics    *console.Metrics
+	Logger     *slog.Logger
 	// PlaneEnabled answers `console.enabled` as it stands right now (NIM-292).
 	// Resolved per request, not captured at wire-up, so an operator's edit takes
 	// effect without a restart. nil → on, the pre-NIM-292 behaviour.
@@ -522,10 +528,19 @@ func (c *consoleConn) handleOpen(ctx context.Context, f *console.ClientFrame) {
 	}
 
 	// Per-host scope. The socket-level `soul.console` gate already ran as chi
-	// middleware; this is the `host=<sid>` half, which only becomes checkable
-	// once the target arrives in the frame.
+	// middleware; this is the per-host half, which only becomes checkable once
+	// the target arrives in the frame: `host=<sid>` plus one context per Coven
+	// label of the host, granted if ANY ONE matches (NIM-650) — the same set
+	// [handlers.SoulSIDScopeSelector] builds for the routes where the SID is in
+	// the path.
+	//
+	// One indexed single-row SELECT per `open`. An `open` frame creates a
+	// session; keystrokes and resizes arrive as their own frame types and never
+	// reach here, so this is not on the per-character path — the socket's actual
+	// hot loop is untouched.
 	if c.deps.Enforcer != nil {
-		if err := c.deps.Enforcer.Check(c.aid, "soul", "console", map[string]string{"host": f.SID}); err != nil {
+		contexts := soul.HostContextsBySID(ctx, c.deps.SoulReader, f.SID)
+		if err := soul.AllowAnyContext(c.deps.Enforcer, c.aid, "soul", "console", contexts); err != nil {
 			c.sendError(f.SessionID, console.ErrCodeForbidden, "no console permission for this host")
 			return
 		}

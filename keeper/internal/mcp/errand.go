@@ -77,18 +77,21 @@ func (h *Handler) callSoulErrandRun(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'module' is required")
 	}
 
-	// RBAC: errand.run, selector host=<sid> (rbac.md §Errand).
-	selector := map[string]string{"host": a.SID}
-	if err := h.deps.RBAC.Check(claims.Subject, "errand", "run", selector); err != nil {
+	// RBAC: errand.run, selector host=<sid> plus the host's Coven labels
+	// (rbac.md §Errand; NIM-650 for the coven half). Resolved ONCE and reused by
+	// the console gate below: both rights are asked about the same host, and two
+	// reads could only differ by making the two halves disagree.
+	contexts := h.hostContexts(ctx, a.SID)
+	if err := h.checkContexts(claims, "errand", "run", contexts); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.run")
 	}
 	// Console gate (ADR-0074 amendment, NIM-197): a verb-shell module carries an
 	// arbitrary command line, so `errand.run` stops being sufficient — the same
-	// `host=<sid>` selector must also satisfy `soul.console`. The sibling tool
+	// context set must also satisfy `soul.console`. The sibling tool
 	// keeper.soul.run-command has always required it; this closes the way around.
 	if err := h.deps.ShellGate.Authorize(shellgate.SurfaceMCP, a.Module, func() error {
-		return h.deps.RBAC.Check(claims.Subject, "soul", "console", selector)
+		return h.checkContexts(claims, "soul", "console", contexts)
 	}); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"module "+a.Module+" runs an arbitrary command line; it additionally requires permission soul.console")

@@ -231,6 +231,32 @@ func TestConsoleRecordingGet_OutOfScopeMatchesUnknownID(t *testing.T) {
 	}
 }
 
+// TestConsoleRecordingGet_CovenScopeNarrows — playback was the ONE half of
+// `soul.console` that already narrowed by Coven when NIM-650 opened: it reads
+// the recording's stored `covens` through [soulpurview.InScope] instead of
+// building an RBAC context by hand, so it never had the fail-closed-on-a-missing-
+// dimension bug the live path had. NIM-650 moved the live path onto a different
+// primitive and deliberately left this one alone; the acceptance asks for the
+// working half to be pinned separately, because "we did not touch it" is a claim
+// about the diff, not about behaviour.
+//
+// Both directions, for the same reason as everywhere else: a scope that admitted
+// everything would satisfy the first case alone.
+func TestConsoleRecordingGet_CovenScopeNarrows(t *testing.T) {
+	// The fixture's recording is held on a host in coven prod.
+	inCoven := NewConsoleRecordingHandler(newFakeRecordingReader(),
+		fakeScoper{exprs: []string{"coven=prod"}}, nil, nil)
+	if _, err := inCoven.GetTyped(context.Background(), testClaims("archon-alice"), testRecordingID); err != nil {
+		t.Fatalf("GetTyped for `soul.console on coven=prod` against a recording from coven prod: %v — "+
+			"playback stopped narrowing and now refuses a coven grant outright", err)
+	}
+
+	outOfCoven := NewConsoleRecordingHandler(newFakeRecordingReader(),
+		fakeScoper{exprs: []string{"coven=web"}}, nil, nil)
+	_, err := outOfCoven.GetTyped(context.Background(), testClaims("archon-alice"), testRecordingID)
+	assertConsoleRecordingNotFound(t, err)
+}
+
 // TestConsoleRecordingCast_ScopedToAnotherHostServesNothing — the refusal holds
 // on the route that actually discloses content: no bytes, and no audit event
 // either (nothing was disclosed to record).

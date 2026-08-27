@@ -1901,42 +1901,6 @@ func (h *SoulHandler) ContextReader() SoulHostContextReader {
 	return h.pool
 }
 
-// SoulHostCovenContexts expands a host's scope into the per-candidate RBAC
-// context set for an OR-check ([middleware.RequirePermissionMulti] over REST,
-// the same loop in MCP).
-//
-// `host` is in EVERY context: the SID comes from the path and is known whether
-// or not the row could be read. Each Coven label of the host adds a context
-// `{host, coven=<label>}` — a host may carry several, and a single flat context
-// can hold only one value per dimension ([rbac.Permission.Matches]), so the OR
-// over the set is what makes `on coven=<one of them>` match.
-//
-// No labels → the single `{host}` context, which is the honest answer in both
-// cases that produce it: the host really carries no coven, or the row could not
-// be read at all. A `coven=` condition then fails closed (a dimension absent
-// from the context does not satisfy a condition on it), and `host=`/bare/`*`
-// grants keep working — which is the pre-NIM-588 behaviour of every call, now
-// confined to the case where the coven genuinely is unknown.
-//
-// Note the deliberate difference from [incarnationCovenContexts], which returns
-// nil for a row it could not read: there BOTH scope dimensions (service,
-// incarnation) come from the row, so without it the gate knows nothing about the
-// request. Here the host dimension survives, and dropping it would turn a
-// working `soul.forget on host=web-1` into a denial the moment Postgres hiccups.
-func SoulHostCovenContexts(sid string, covens []string) []map[string]string {
-	if sid == "" {
-		return nil
-	}
-	if len(covens) == 0 {
-		return []map[string]string{{"host": sid}}
-	}
-	out := make([]map[string]string, 0, len(covens))
-	for _, c := range covens {
-		out = append(out, map[string]string{"host": sid, "coven": c})
-	}
-	return out
-}
-
 // SoulSIDScopeSelector builds a [middleware.MultiSelectorExtractor] for the
 // per-host Soul routes (forget / issue-token / ssh-target-update): SID from the
 // path plus the host's Coven labels read through reader, landed into the RBAC
@@ -1960,24 +1924,14 @@ func SoulHostCovenContexts(sid string, covens []string) []map[string]string {
 // before anything happens becomes 404/empty after the handler has looked).
 //
 // A nil reader (stub construction) or an unreadable row yields the `{host}`
-// context alone — see [SoulHostCovenContexts] for why that, and not nil.
+// context alone — see [soul.HostContexts] for why that, and not nil.
 func SoulSIDScopeSelector(reader SoulHostContextReader) middleware.MultiSelectorExtractor {
 	return func(r *http.Request) []map[string]string {
 		sid := chi.URLParam(r, "sid")
 		if sid == "" {
 			return nil
 		}
-		if reader == nil {
-			return SoulHostCovenContexts(sid, nil)
-		}
-		covens, err := soul.CovenBySID(r.Context(), reader, sid)
-		if err != nil {
-			// Not found / DB error → the coven stays unknown, so only the host
-			// dimension is asserted. Scoped-by-coven grants fail closed; the
-			// handler still answers 404 for a host that is not there.
-			return SoulHostCovenContexts(sid, nil)
-		}
-		return SoulHostCovenContexts(sid, covens)
+		return soul.HostContextsBySID(r.Context(), reader, sid)
 	}
 }
 
