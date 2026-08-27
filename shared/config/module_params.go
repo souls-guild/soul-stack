@@ -76,7 +76,88 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 	var out []diag.Diagnostic
 	out = append(out, checkUnknownAndType(def, paramsNode, pathPrefix)...)
 	out = append(out, checkRequired(def, paramsNode, moduleKV, pathPrefix)...)
+	// Keyed on the BASE ADDRESS, through the same constant the synthesizer matches on.
+	// `name` is a param of nine core states; only this one takes a registration alias.
+	if "core."+mod+"."+state == moduleInstalledAddr {
+		out = append(out, checkInstallAliasParam(paramsNode, pathPrefix)...)
+	}
 	return out
+}
+
+// checkInstallAliasParam — `core.module.installed` takes a REGISTRATION ALIAS in
+// `params.name`: address level 1 alone, the name of the slot the artifact installs
+// into. The Soul rejects anything else before it does any work
+// (soul/internal/coremod/module: reAlias), so without this the author learns on a
+// host, from a `failed` event, that the value they wrote can never work anywhere.
+//
+// The predicate is [plugin.ValidAlias] rather than a local "has no dot" test: this is
+// the same rule the Soul applies and the same rule a registration is accepted under,
+// and a check that agrees with the runtime only on the case somebody remembered is
+// how the two ends drift (NIM-524 was exactly that drift, one level up).
+//
+// A FORM check only. Whether the alias is reserved, granted, or registered at all is
+// decided elsewhere — at registration on the Keeper, and by the allow-check on the
+// host — and none of it is knowable from the definition alone.
+func checkInstallAliasParam(paramsNode *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+	if paramsNode == nil {
+		return nil
+	}
+	for _, kv := range paramsNode.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil || tok.Value != "name" {
+			continue
+		}
+		var v string
+		switch kv.Value.(type) {
+		case *ast.StringNode, *ast.LiteralNode:
+			// Read through scalarText, the same accessor checkParamType uses: a block
+			// scalar carries a string the Soul will judge, so a check that only saw
+			// the plain form would be silent on a value it must reject.
+			//
+			// Read RAW. Trimming would make this looser than the runtime — `reAlias`
+			// runs on the untrimmed param — and a padded value is doubly lost: refused
+			// on the host, and no match for the takeover key either, so a second
+			// install is synthesized beside the operator's step.
+			v = scalarText(kv.Value)
+		case *ast.NullNode:
+			// `name:` with nothing after it. Nobody else offline speaks for this:
+			// checkParamType returns nil for a null and checkRequired counts the key
+			// as present, so without this arm the author learns on a host.
+			v = ""
+		default:
+			return nil // param_type_mismatch already spoke.
+		}
+		// A `${…}` cell resolves at render; what it renders to is not knowable here
+		// (ADR-010). The predicate is the takeover half's, verbatim.
+		if containsCELCell(v) || plugin.ValidAlias(v) {
+			return nil
+		}
+		hint := "the alias is " + plugin.AliasPattern + " - lowercase kebab-case, starting with a letter"
+		// Only when level 1 is itself a legal alias: `Community.redis` or a padded
+		// `" community.redis"` would otherwise be answered with `name: Community` /
+		// `name:  community`, and an author copying the hint earns a second error.
+		// A hint that teaches a value the runtime refuses is this ticket's own defect
+		// in prose form.
+		if alias, dotted := ModuleAlias(v); dotted && plugin.ValidAlias(alias) {
+			// The documented trap: `modules[].name` is `<alias>.<module>` and the
+			// pre-NIM-377 spelling was `<namespace>.<name>`, so the two-level form is
+			// what an author reaches for. Name the alias they meant.
+			hint = fmt.Sprintf("the step installs an artifact into the slot %q, and level 2 addresses a module inside it - write `name: %s` (ADR-065(c), NIM-524)", alias, alias)
+		}
+		vtok := kv.Value.GetToken()
+		line, col := 0, 0
+		if vtok != nil {
+			line, col = vtok.Position.Line, vtok.Position.Column
+		}
+		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "module_install_name_not_an_alias",
+			Message:  fmt.Sprintf("%s takes a registration alias in `name`, got %q", moduleInstalledAddr, v),
+			Hint:     hint,
+			YAMLPath: pathPrefix + ".params.name",
+		})}
+	}
+	return nil
 }
 
 // checkUnknownAndType — for each present param key: known? + type.

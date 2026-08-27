@@ -177,6 +177,25 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   a file no test binary loads and no compiler reads — and the sweep covers a
   consumer the day it is committed instead of the day it breaks (`NIM-520`).
 
+- **An explicit `core.module.installed` step now takes over the slot whatever way
+  its `params.name` is spelled** (NIM-543). The synthesizer reduced its own output
+  to address level 1 and kept comparing against the literal an author typed, so the
+  documented escape hatch worked only for one who happened to write a bare alias:
+  `name: community.redis` — the form ADR-065(e) itself showed, and the form every
+  pre-NIM-377 example carries — took over nothing, and a **second** install of the
+  same artifact landed beside it. Both halves now reduce through one function.
+
+- **A `core.module.installed` `params.name` that no host can accept is now an
+  offline error** (`module_install_name_not_an_alias`, NIM-543). The param is a free
+  string in the schema, so the whole class parsed, linted and passed `service.yml`
+  validation before failing on every host. The predicate is `plugin.ValidAlias` —
+  the Soul's own rule, read raw and through block scalars, including a `name:` left
+  empty. A `${…}` cell is not judged, wholly or in part.
+
+- The synthesizer's reserved-name skip reads the shared reserved list instead of a
+  `core.` prefix (NIM-543): `keeper.*` and `soul.*` sit beside `core` on that list
+  and were being given install steps no registration could satisfy.
+
 ### Removed
 
 - **`config.VaultInputFloor`** — a list of literal Vault path prefixes guarding

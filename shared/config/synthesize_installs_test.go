@@ -478,3 +478,100 @@ tasks:
 		}
 	}
 }
+
+// TestSynthesizeModuleInstalls_TakeoverKeyIsAddressLevel1 — NIM-543, stated as the
+// property that the two halves of the takeover comparison meet.
+//
+// The manifest entry is `<alias>.<module>`, the explicit step writes a bare alias, so
+// the only place they can agree is address level 1. Keying the map on the literal as
+// written and reading it by alias made the documented escape hatch silently
+// conditional on spelling: `name: community` worked, `name: community.redis` — the
+// pre-NIM-377 form still shown in older material — took over nothing, and the
+// synthesizer inserted a SECOND install of the same artifact beside the operator's,
+// with both steps failing on the host for the value's own sake.
+//
+// Tasks are built directly rather than parsed: since the offline half of this fix a
+// dotted `params.name` is a validation error, and the point here is that the runtime
+// function is right on a plan that reached it anyway (render_host and the trial
+// harness replay a stored artifact, they do not re-validate).
+func TestSynthesizeModuleInstalls_TakeoverKeyIsAddressLevel1(t *testing.T) {
+	for _, literal := range []string{"community", "community.redis", "community.redis.config"} {
+		tasks := []Task{
+			{Name: "Operator installs plugin explicitly", Module: &ModuleTask{
+				Module: moduleInstalledAddr, Params: map[string]any{"name": literal}}},
+			{Name: "Configure redis", Module: &ModuleTask{
+				Module: "community.redis.config", Params: map[string]any{}}},
+		}
+		out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+		if len(aliases) != 0 || len(out) != 2 {
+			t.Errorf("explicit install name %q: aliases=%v len(out)=%d, want empty/2 — "+
+				"the operator's own step was not recognized and a second install of slot %q was inserted beside it (NIM-543)",
+				literal, aliases, len(out), "community")
+		}
+	}
+}
+
+// TestSynthesizeModuleInstalls_TakeoverIsAnotherSlot — the other side of the same
+// property: level 1 must MATCH. A step installing a different slot suppresses
+// nothing, or one explicit install would silence the whole manifest.
+func TestSynthesizeModuleInstalls_TakeoverIsAnotherSlot(t *testing.T) {
+	for _, literal := range []string{"acme-tools", "acme-tools.probe", "communityx"} {
+		tasks := []Task{
+			{Name: "Install something else", Module: &ModuleTask{
+				Module: moduleInstalledAddr, Params: map[string]any{"name": literal}}},
+			{Name: "Configure redis", Module: &ModuleTask{
+				Module: "community.redis.config", Params: map[string]any{}}},
+		}
+		out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+		if !reflect.DeepEqual(aliases, []string{"community"}) || len(out) != 3 {
+			t.Errorf("explicit install name %q: aliases=%v len(out)=%d, want [community]/3 — "+
+				"a step naming another slot suppressed synthesis for community", literal, aliases, len(out))
+		}
+	}
+}
+
+// TestSynthesizeModuleInstalls_TakeoverKeyedOnTheBaseAddress — the negative case that
+// pins WHAT makes a task a takeover.
+//
+// `core.pkg.installed` also has state `installed` and also takes `name`. Only
+// `core.module.installed` installs a module slot, so only it can take one over;
+// recognizing a takeover by the state suffix or by the presence of a `name` param
+// would let an unrelated package step delete the install the service depends on.
+func TestSynthesizeModuleInstalls_TakeoverKeyedOnTheBaseAddress(t *testing.T) {
+	for _, addr := range []string{"core.pkg.installed", "core.service.running", "community.redis.installed"} {
+		tasks := []Task{
+			{Name: "Not an install step", Module: &ModuleTask{
+				Module: addr, Params: map[string]any{"name": "community"}}},
+			{Name: "Configure redis", Module: &ModuleTask{
+				Module: "community.redis.config", Params: map[string]any{}}},
+		}
+		out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "community.redis", Ref: "v1.0.0"}})
+		if !reflect.DeepEqual(aliases, []string{"community"}) {
+			t.Errorf("a %s task was read as a takeover of the community slot: aliases=%v, want [community]", addr, aliases)
+		}
+		if len(out) != 3 {
+			t.Errorf("%s: len(out) = %d, want 3", addr, len(out))
+		}
+	}
+}
+
+// TestSynthesizeModuleInstalls_EveryReservedNameIsSkipped — the second-line defence
+// covers the whole reserved list, not just `core.`.
+//
+// `service.yml` validation rejects all of them (`plugin.IsReserved`, 19 names); this
+// end used to re-check `core.` alone, so `keeper.*` and `soul.*` — Tier 1 engine
+// namespaces sitting beside `core` on the same list — would have been synthesized
+// into an install step by any path that reached the synthesizer without that
+// validation. Both ends now read the one list.
+func TestSynthesizeModuleInstalls_EveryReservedNameIsSkipped(t *testing.T) {
+	for _, reserved := range plugin.ReservedNames() {
+		dep := reserved + ".thing"
+		tasks := []Task{{Name: "Consumer", Module: &ModuleTask{
+			Module: dep + ".present", Params: map[string]any{}}}}
+		out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: dep, Ref: "v1.0.0"}})
+		if len(aliases) != 0 || len(out) != 1 {
+			t.Errorf("reserved name %q was synthesized an install step: aliases=%v len(out)=%d, want empty/1 — "+
+				"no plugin can be registered under it, so the step could only fail", dep, aliases, len(out))
+		}
+	}
+}

@@ -952,7 +952,7 @@
             "name": {
               "type": "string",
               "required": true,
-              "description": "Full plugin name \"\u003cnamespace\u003e.\u003cname\u003e\" (e.g. community.redis)."
+              "description": "Registration alias of the plugin - address level 1, the slot the artifact installs into (e.g. community). Not a two-level module address: since NIM-377 the artifact carries no self-name."
             },
             "ref": {
               "type": "string",

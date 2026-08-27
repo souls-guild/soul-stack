@@ -172,7 +172,7 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 
 - **A module without consumer tasks is not synthesized in the script.**
 - **One install per alias.** Two entries of one artifact (`community.redis`, `community.sentinel`) produce a single step, before the earlier of their consumers.
-- **Takeover:** an explicit step `core.module.installed` whose literal `params.name` is that alias disables synthesis for it - the operator itself controls the position, `ref` and `when:`.
+- **Takeover:** an explicit step `core.module.installed` naming that slot disables synthesis for it - the operator itself controls the position, `ref` and `when:`. The comparison is on address level 1 at both ends, so a step written `name: community.redis` still takes over `community` (NIM-543) - though the spelling itself is an error, reported as `module_install_name_not_an_alias`.
 - `ref` records go into the params of the synthesis step as **pin-verification**: the active Sigil tolerance must be on this ref.
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
 

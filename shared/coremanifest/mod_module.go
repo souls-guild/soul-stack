@@ -11,7 +11,7 @@ var modModule = schema.Module{
 		"installed": {
 			Description: "The SoulModule plugin from the active Sigil grant is pulled from Keeper (FetchModule), verified, and atomically installed into a catalog slot of the module cache. Idempotent by the binary's sha256 (ADR-065).",
 			Input: schema.Input{
-				"name": {Type: schema.String, Required: true, Description: "Full plugin name \"<namespace>.<name>\" (e.g. community.redis)."},
+				"name": {Type: schema.String, Required: true, Description: "Registration alias of the plugin - address level 1, the slot the artifact installs into (e.g. community). Not a two-level module address: since NIM-377 the artifact carries no self-name."},
 				"ref":  {Type: schema.String, Description: "Pin check (NOT a version selector): the active Sigil grant must be on this ref, otherwise module_not_allowed."},
 			},
 		},
