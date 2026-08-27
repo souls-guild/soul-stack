@@ -73,7 +73,8 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 
 	// Verify with a verifier on a DIFFERENT key from the same marker family
 	// returns bad-signature. err.Error() wraps the internal golang-jwt message
-	// (verifier.go:138), but the key must not appear there.
+	// (the ErrInvalidToken default in Verify's parse-error switch), but the key
+	// must not appear there.
 	tok, err := iss.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)

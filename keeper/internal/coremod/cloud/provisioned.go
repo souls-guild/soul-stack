@@ -20,6 +20,12 @@
 //
 // Replaces pattern "destiny `cloud-provision` with `on: keeper`" (ADR-017):
 // this is keeper-side operation, not task package for Soul.
+//
+// Every state takes its driver from one of two sources — `provider: <name>` out
+// of the providers registry, or `driver` + `credentials` carried by the step
+// itself (NIM-668, source.go). They meet at one *ResolvedProvider before any
+// plugin call, so the driver, the audit event and the output are the same either
+// way, and a fleet can provision with zero rows in the registries.
 package cloud
 
 import (
@@ -144,8 +150,10 @@ type Module struct {
 
 // New is wire-helper. `cascade` may be nil in test builds where
 // destroyed-state is not used; applyDestroyed returns explicit error.
-// `resolver` is required: both created and destroyed resolve Provider registry to
-// driver-name + credentials (A-flow); nil returns explicit error at Apply.
+// `resolver` is what reads the Provider and Profile registries (A-flow:
+// driver-name + credentials); nil is legal and leaves the inline source
+// (`driver` + `credentials`, NIM-668) working — a step that names a registry
+// entry then fails with an explicit error at Apply.
 //
 // UserdataProvider is not passed through New (optional dependency,
 // added after first 6 cloud providers fixed) — wire-up done via
@@ -163,17 +171,29 @@ func (m *Module) WithUserdata(p UserdataProvider) *Module {
 	return &cp
 }
 
+// Validate is the static half of the contract. The rules it states are the same
+// functions Apply enforces (source.go): a keeper-side core module is dispatched
+// straight to Apply and no ValidateRequest is built for it in production, so a
+// rule living only here would read as a guard and never run.
+//
+// What it does NOT share is the shape of `credentials` — it reads the step
+// BEFORE vault-resolve, where the correct value is the `vault:` ref an author
+// typed, while Apply reads it after, where the correct value is the secret map
+// that phase put there. Hence [authoredParams] here and [resolvedParams] there:
+// judging both with one predicate made this half refuse the only form an author
+// can legitimately write.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	switch req.State {
 	case StateCreated:
-		if _, err := util.StringParam(req.Params, "provider"); err != nil {
-			errs = append(errs, err.Error())
-		}
-		// profile = NAME of Profile in profiles registry (Variant A, ADR-017
-		// amendment 2026-06-29). Optional; empty/absent → VM without registry spec.
-		// Name resolution → params — in applyCreated.
-		if _, err := util.OptStringParam(req.Params, "profile"); err != nil {
+		src, serrs := parseProviderParams(req.Params, authoredParams)
+		errs = append(errs, serrs...)
+		errs = append(errs, checkProviderParams(src)...)
+		// profile = the VM spec itself (an object, handed to the driver as-is)
+		// or the NAME of a Profile in the profiles registry (a string; Variant A,
+		// ADR-017 amendment 2026-06-29). Optional; absent → VM without a spec.
+		// Resolution → params — in applyCreated.
+		if _, _, err := profileValue(req.Params); err != nil {
 			errs = append(errs, err.Error())
 		}
 		if n, ok, err := util.OptIntParam(req.Params, "count"); err != nil {
@@ -220,18 +240,25 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 			if userdata != "" {
 				errs = append(errs, "params \"userdata\" and \"self_onboard: true\" are mutually exclusive (self-onboard renders userdata with per-VM tokens)")
 			}
+			// The suffix keeper predicts the FQDN from. Inline it is a param of
+			// this step, so its absence is visible here; in registry mode it is
+			// a column nothing can read without resolving, so that half of the
+			// check lives in applyCreatedSelfOnboard.
+			if src.inline() && src.fqdnSuffix == "" {
+				errs = append(errs, fmt.Sprintf("param \"self_onboard: true\" requires %q with an inline driver (keeper predicts FQDN=<name>-<i>.<suffix>)", paramFQDNSuffix))
+			}
 		}
 	case StateDestroyed:
-		if _, err := util.StringParam(req.Params, "provider"); err != nil {
-			errs = append(errs, err.Error())
-		}
+		src, serrs := parseProviderParams(req.Params, authoredParams)
+		errs = append(errs, serrs...)
+		errs = append(errs, checkProviderParams(src)...)
 		if _, err := util.StringSliceParam(req.Params, "vm_ids"); err != nil {
 			errs = append(errs, err.Error())
 		}
 	case StateResized:
-		if _, err := util.StringParam(req.Params, "provider"); err != nil {
-			errs = append(errs, err.Error())
-		}
+		src, serrs := parseProviderParams(req.Params, authoredParams)
+		errs = append(errs, serrs...)
+		errs = append(errs, checkProviderParams(src)...)
 		if _, err := util.StringSliceParam(req.Params, "vm_ids"); err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -294,12 +321,9 @@ func maskErr(err error) string {
 //     (no delivery). CreateRequest.name = base name (driver names `<name>-<i>`).
 func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
-	provider, err := util.StringParam(req.Params, "provider")
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
-	}
-	profileName, err := util.OptStringParam(req.Params, "profile")
-	if err != nil {
+	// First, and without touching anything external: this is where `provider`
+	// used to be read (see checkSourceParams).
+	if err := checkSourceParams(req.Params); err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
 	count, ok, err := util.OptIntParam(req.Params, "count")
@@ -351,30 +375,29 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		userdata = rendered
 	}
 
-	// A-flow: Keeper resolves Provider registry to driver-name + plain-credentials
-	// (+ FQDNSuffix for self-onboard prediction) and Profile registry to VM-spec params.
-	if m.Resolver == nil {
-		return util.SendFailed(stream, "cloud created: provider resolver not configured (wire CredentialsResolverPG in main)")
-	}
-	var profileMap map[string]any
-	if profileName != "" {
-		profileMap, err = m.Resolver.ResolveProfile(ctx, profileName)
-		if err != nil {
-			return util.SendFailed(stream, fmt.Sprintf("resolve profile %q: %s", profileName, maskErr(err)))
-		}
-	}
-	resolved, err := m.Resolver.Resolve(ctx, provider)
+	// Profile first, then the driver tuple — the order the registry path has
+	// always had. A name that is not in the profiles registry is refused without
+	// reading a provider row and its Vault secret.
+	profileMap, err := m.resolveProfileParam(ctx, req.Params)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("resolve provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, err.Error())
+	}
+	// The driver tuple: resolved from the providers registry (A-flow — keeper
+	// reads the credentials, the driver never touches Vault) or carried inline by
+	// the step (NIM-668). Both produce the same *ResolvedProvider; nothing below
+	// this line knows which.
+	src, err := m.resolveProviderSource(ctx, req.Params, StateCreated)
+	if err != nil {
+		return util.SendFailed(stream, err.Error())
 	}
 
 	if selfOnboard {
-		return m.applyCreatedSelfOnboard(ctx, stream, provider, name, int(count), resolved, profileMap)
+		return m.applyCreatedSelfOnboard(ctx, stream, src, name, int(count), profileMap)
 	}
 
-	vms, err := m.Plugins.Create(ctx, resolved.Driver, profileMap, resolved.Credentials, int32(count), userdata, name)
+	vms, err := m.Plugins.Create(ctx, src.resolved.Driver, profileMap, src.resolved.Credentials, int32(count), userdata, name)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("cloud create via provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, fmt.Sprintf("cloud create via provider %q: %s", src.label, maskErr(err)))
 	}
 
 	incarnationName := util.IncarnationFrom(ctx)
@@ -384,7 +407,7 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	for _, vm := range vms {
 		sid := vm.GetFqdn()
 		if sid == "" {
-			return util.SendFailed(stream, fmt.Sprintf("provider %q returned VM %q without fqdn (cannot use as SID)", provider, vm.GetVmId()))
+			return util.SendFailed(stream, fmt.Sprintf("provider %q returned VM %q without fqdn (cannot use as SID)", src.label, vm.GetVmId()))
 		}
 		soul := &keepersoul.Soul{
 			SID:       sid,
@@ -450,7 +473,7 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		vmIDs = append(vmIDs, vm.GetVmId())
 	}
 
-	if werr := m.writeCreatedAudit(ctx, provider, len(vms), vmIDs); werr != nil {
+	if werr := m.writeCreatedAudit(ctx, src, len(vms), vmIDs); werr != nil {
 		return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
 	}
 
@@ -473,9 +496,14 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 // userdata, creates VM (passing base name in CreateRequest.name) and validates
 // actual FQDN against predicted. Plain tokens NOT placed in register —
 // no delivery, VM onboards from cloud-init.
-func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], provider, name string, count int, resolved *ResolvedProvider, profileMap map[string]any) error {
-	if resolved.FQDNSuffix == "" {
-		return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard requires provider %q to have fqdn_suffix (keeper predicts FQDN=<name>-<i>.<suffix>); set providers.fqdn_suffix", provider))
+func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], src providerSource, name string, count int, profileMap map[string]any) error {
+	if src.resolved.FQDNSuffix == "" {
+		// The suffix comes from wherever the driver came from, and so does the
+		// fix: a step param inline, a registry column otherwise.
+		if src.inline {
+			return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard requires param %q (keeper predicts FQDN=<name>-<i>.<suffix>)", paramFQDNSuffix))
+		}
+		return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard requires provider %q to have fqdn_suffix (keeper predicts FQDN=<name>-<i>.<suffix>); set providers.fqdn_suffix", src.label))
 	}
 	if m.Userdata == nil {
 		return util.SendFailed(stream, "cloud created: self_onboard=true but no UserdataProvider configured (set keeper.yml cloud_init block + wire cloudinit.Resolver in main)")
@@ -527,7 +555,7 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	onboarded := make(map[string]bool, count)
 	reused, existing := 0, 0
 	for i := 0; i < count; i++ {
-		sid := fmt.Sprintf("%s-%d.%s", name, i, resolved.FQDNSuffix)
+		sid := fmt.Sprintf("%s-%d.%s", name, i, src.resolved.FQDNSuffix)
 		if !keepersoul.ValidSID(sid) {
 			return util.SendFailed(stream, fmt.Sprintf("cloud created: predicted FQDN %q is not a valid SID (check name/fqdn_suffix)", sid))
 		}
@@ -590,9 +618,9 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		userdata = rendered
 	}
 
-	vms, err := m.Plugins.Create(ctx, resolved.Driver, profileMap, resolved.Credentials, int32(count), userdata, name)
+	vms, err := m.Plugins.Create(ctx, src.resolved.Driver, profileMap, src.resolved.Credentials, int32(count), userdata, name)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("cloud create via provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, fmt.Sprintf("cloud create via provider %q: %s", src.label, maskErr(err)))
 	}
 
 	// Validate actual FQDN against predicted: if provider named VM differently,
@@ -608,10 +636,10 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	for _, vm := range vms {
 		sid := vm.GetFqdn()
 		if sid == "" {
-			return util.SendFailed(stream, fmt.Sprintf("provider %q returned VM %q without fqdn (cannot use as SID)", provider, vm.GetVmId()))
+			return util.SendFailed(stream, fmt.Sprintf("provider %q returned VM %q without fqdn (cannot use as SID)", src.label, vm.GetVmId()))
 		}
 		if !predictedSet[sid] {
-			return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard: provider %q named VM %q, not among predicted FQDN %v — token in userdata will not match VM hostname (driver must honor CreateRequest.name)", provider, sid, predicted))
+			return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard: provider %q named VM %q, not among predicted FQDN %v — token in userdata will not match VM hostname (driver must honor CreateRequest.name)", src.label, sid, predicted))
 		}
 		// NO bootstrap_token in register: self-onboard delivered token via userdata,
 		// no separate delivery step. Onboarding done from cloud-init on VM.
@@ -631,7 +659,7 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		vmIDs = append(vmIDs, vm.GetVmId())
 	}
 
-	if werr := m.writeCreatedAudit(ctx, provider, len(vms), vmIDs); werr != nil {
+	if werr := m.writeCreatedAudit(ctx, src, len(vms), vmIDs); werr != nil {
 		return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
 	}
 
@@ -652,20 +680,36 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 
 // writeCreatedAudit writes audit-event `cloud.provisioned` for created phase
 // (shared by B-flat and self-onboard paths). nil Audit → no-op.
-func (m *Module) writeCreatedAudit(ctx context.Context, provider string, n int, vmIDs []any) error {
+//
+// What identifies the provider in the payload is [auditPayloadSource]: the
+// registry name, or the driver alias when the step carried the driver itself.
+// Credentials never appear — the event names WHO was called, not with what.
+func (m *Module) writeCreatedAudit(ctx context.Context, src providerSource, n int, vmIDs []any) error {
 	if m.Audit == nil {
 		return nil
 	}
+	payload := auditPayloadSource(src)
+	payload["action"] = StateCreated
+	payload["count"] = float64(n)
+	payload["vm_ids"] = vmIDs
 	return m.Audit.Write(ctx, &audit.Event{
 		EventType: audit.EventCloudProvisioned,
 		Source:    audit.SourceKeeperInternal,
-		Payload: map[string]any{
-			"action":   StateCreated,
-			"provider": provider,
-			"count":    float64(n),
-			"vm_ids":   vmIDs,
-		},
+		Payload:   payload,
 	})
+}
+
+// auditPayloadSource is the provider identity every cloud.provisioned event
+// carries. `provider` keeps its meaning — what the operator wrote to select the
+// driver — and reads as the driver alias inline, where no registry name exists.
+// `driver` always carries the alias, so an auditor reading the two together can
+// tell an inline step from a registry entry that happens to be named after its
+// driver. Neither is a secret; the credentials are not here in either mode.
+func auditPayloadSource(src providerSource) map[string]any {
+	return map[string]any{
+		"provider": src.label,
+		"driver":   src.resolved.Driver,
+	}
 }
 
 // applyDestroyed implements state=destroyed. See package doc-comment.
@@ -675,10 +719,6 @@ func (m *Module) writeCreatedAudit(ctx context.Context, provider string, n int, 
 // perspective, premature to transition souls→destroyed.
 func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
-	provider, err := util.StringParam(req.Params, "provider")
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
-	}
 	vmIDs, err := util.StringSliceParam(req.Params, "vm_ids")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -690,17 +730,14 @@ func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		return util.SendFailed(stream, err.Error())
 	}
 
-	if m.Resolver == nil {
-		return util.SendFailed(stream, "cloud destroyed: provider resolver not configured (wire CredentialsResolverPG in main)")
-	}
-	resolved, err := m.Resolver.Resolve(ctx, provider)
+	src, err := m.resolveProviderSource(ctx, req.Params, StateDestroyed)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("resolve provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, err.Error())
 	}
 
-	destroyed, err := m.Plugins.Destroy(ctx, resolved.Driver, resolved.Credentials, vmIDs)
+	destroyed, err := m.Plugins.Destroy(ctx, src.resolved.Driver, src.resolved.Credentials, vmIDs)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("cloud destroy via provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, fmt.Sprintf("cloud destroy via provider %q: %s", src.label, maskErr(err)))
 	}
 
 	var counts CascadeCounts
@@ -724,18 +761,17 @@ func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	}
 
 	if m.Audit != nil {
+		payload := auditPayloadSource(src)
+		payload["action"] = StateDestroyed
+		payload["vm_ids"] = destroyedAny
+		payload["sids"] = sidsAny
+		payload["souls_updated"] = float64(counts.SoulsUpdated)
+		payload["seeds_orphaned"] = float64(counts.SeedsOrphaned)
+		payload["tokens_burned"] = float64(counts.TokensBurned)
 		ev := &audit.Event{
 			EventType: audit.EventCloudProvisioned,
 			Source:    audit.SourceKeeperInternal,
-			Payload: map[string]any{
-				"action":         StateDestroyed,
-				"provider":       provider,
-				"vm_ids":         destroyedAny,
-				"sids":           sidsAny,
-				"souls_updated":  float64(counts.SoulsUpdated),
-				"seeds_orphaned": float64(counts.SeedsOrphaned),
-				"tokens_burned":  float64(counts.TokensBurned),
-			},
+			Payload:   payload,
 		}
 		if werr := m.Audit.Write(ctx, ev); werr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
@@ -791,10 +827,6 @@ func parseDesired(params *structpb.Struct) (cpu int32, ramMB, diskGB int64, err 
 // untouched: resize changes VM resources, not souls registry.
 func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
-	provider, err := util.StringParam(req.Params, "provider")
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
-	}
 	vmIDs, err := util.StringSliceParam(req.Params, "vm_ids")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -808,18 +840,15 @@ func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		return util.SendFailed(stream, err.Error())
 	}
 
-	if m.Resolver == nil {
-		return util.SendFailed(stream, "cloud resized: provider resolver not configured (wire CredentialsResolverPG in main)")
-	}
-	resolved, err := m.Resolver.Resolve(ctx, provider)
+	src, err := m.resolveProviderSource(ctx, req.Params, StateResized)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("resolve provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, err.Error())
 	}
 
 	desired := &pluginv1.ResizeSpec{CpuCores: cpu, RamMb: ramMB, DiskGb: diskGB}
-	results, err := m.Plugins.Resize(ctx, resolved.Driver, resolved.Credentials, vmIDs, desired, allowDowntime)
+	results, err := m.Plugins.Resize(ctx, src.resolved.Driver, src.resolved.Credentials, vmIDs, desired, allowDowntime)
 	if err != nil {
-		return util.SendFailed(stream, fmt.Sprintf("cloud resize via provider %q: %s", provider, maskErr(err)))
+		return util.SendFailed(stream, fmt.Sprintf("cloud resize via provider %q: %s", src.label, maskErr(err)))
 	}
 
 	resultsOut := make([]any, 0, len(results))
@@ -841,18 +870,17 @@ func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	}
 
 	if m.Audit != nil {
+		payload := auditPayloadSource(src)
+		payload["action"] = StateResized
+		payload["vm_ids"] = toAnySlice(vmIDs)
+		payload["cpu_cores"] = float64(cpu)
+		payload["ram_mb"] = float64(ramMB)
+		payload["disk_gb"] = float64(diskGB)
+		payload["caused_downtime"] = causedDowntime
 		ev := &audit.Event{
 			EventType: audit.EventCloudProvisioned,
 			Source:    audit.SourceKeeperInternal,
-			Payload: map[string]any{
-				"action":          StateResized,
-				"provider":        provider,
-				"vm_ids":          toAnySlice(vmIDs),
-				"cpu_cores":       float64(cpu),
-				"ram_mb":          float64(ramMB),
-				"disk_gb":         float64(diskGB),
-				"caused_downtime": causedDowntime,
-			},
+			Payload:   payload,
 		}
 		if werr := m.Audit.Write(ctx, ev); werr != nil {
 			return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))

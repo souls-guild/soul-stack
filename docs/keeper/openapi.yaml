@@ -1089,7 +1089,7 @@ components:
       additionalProperties: false
       properties:
         dry_run:
-          description: only for PlanReadSafe modules; target soul must announce the dry_run capability -> 409 otherwise
+          description: only for PlanReadSafe modules; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400; target soul must announce the dry_run capability -> 409 otherwise
           type: boolean
         input:
           additionalProperties: {}
@@ -5464,6 +5464,7 @@ components:
           minimum: 1
           type: integer
         dry_run:
+          description: for kind=command - each per-host Errand asks the module for a Plan instead of Apply; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400
           type: boolean
         fail_threshold:
           format: int64
@@ -9178,7 +9179,7 @@ paths:
         - incarnation
   /v1/incarnations/{name}/traits:
     put:
-      description: "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set."
+      description: "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set, over two gates: the incarnation lies inside the operator scope, and every pair stamped must lie inside the operator's own trait-scope - an incarnation-attached pair grants every role scoped on it sight of the incarnation, so a pair the operator does not hold is refused 422 (the same rule the per-host soul.traits-assign applies)."
       operationId: setIncarnationTraits
       parameters:
         - description: incarnation name
@@ -12724,7 +12725,7 @@ paths:
         - soul
   /v1/souls/{sid}/exec:
     post:
-      description: Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).
+      description: Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 400 - dry_run requested for a verb-shell module (no pure-read Plan exists on any host, so no upgrade fixes it). 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).
       operationId: ErrandExec
       parameters:
         - description: SID (FQDN) of the target Soul
@@ -14036,7 +14037,7 @@ paths:
       tags:
         - voyage
     post:
-      description: "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit."
+      description: "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host."
       operationId: createVoyage
       requestBody:
         content:
@@ -14096,7 +14097,7 @@ paths:
         - voyage
   /v1/voyages/preview:
     post:
-      description: Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create. Without revealing the SID list. Read-like - no audit.
+      description: Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module. Without revealing the SID list. Read-like - no audit.
       operationId: previewVoyage
       requestBody:
         content:

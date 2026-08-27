@@ -38,6 +38,21 @@ func IsVerbShell(fullName string) bool {
 	return ok
 }
 
+// ReasonDryRunUnsupported is the reject reason for a `dry_run` Errand on a module
+// with no pure-read Plan (ADR-033 contract row). It lives here, next to the set that
+// provably has no such Plan, because BOTH sides of the Errand contour now name it
+// and neither may import the other (ADR-011):
+//
+//   - the Soul-side runner returns it as the per-target terminal reason
+//     (soul/internal/runtime/errandrunner);
+//   - the Keeper refuses a verb-shell dry_run outright and quotes it in the 400, so
+//     the operator can tie a create-time refusal to the terminal status the fleet
+//     would otherwise have reported host by host (NIM-489).
+//
+// Two independent literals would have drifted the moment one side reworded it, and
+// the whole point of quoting the token is that the two match.
+const ReasonDryRunUnsupported = "errand_dry_run_unsupported"
+
 // VerbShellModules returns the full addresses of the verb-shell modules in
 // deterministic (lexicographic) order — for diagnostics, docs and consistency
 // tests. The returned slice is a fresh copy; mutating it does not affect the set.

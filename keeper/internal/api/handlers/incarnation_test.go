@@ -43,6 +43,11 @@ type fakeIncDB struct {
 	// updateTraitsArg — jsonb arg $2 of UPDATE incarnation SET traits (PUT .../traits,
 	// ADR-060 amend R1): a wholesale replacement of incarnation.traits.
 	updateTraitsArg []byte
+	// canonicalizeCalls — how many times gate (b) reached `SELECT $1::jsonb`
+	// (soul.CanonicalTraitPayload). Zero on an unrestricted caller by design: the
+	// gate returns before touching the database, so this also distinguishes
+	// "admitted after checking" from "never asked".
+	canonicalizeCalls int
 
 	// Get/History/Run existence-probe + Unlock SELECT FOR UPDATE
 	selectByNameRow func(name string) pgx.Row
@@ -120,6 +125,20 @@ func (f *fakeIncDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comman
 }
 
 func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	// Gate (b) canonicalization probe — soul.CanonicalTraitPayload's `SELECT
+	// $1::jsonb`, reached by [ScreenTraitPairsInScope] for every caller that is not
+	// Unrestricted. The fake ECHOES the bytes it was handed and canonicalizes
+	// NOTHING, for the same reason as the UPDATE … SET traits branch below: no fake
+	// re-implements jsonb. So a test in this package may pin the gate's VERDICT —
+	// which pair was refused, and that nothing was written — and never the SPELLING
+	// of a value (`1e+06` vs `1000000`, NIM-529). Spelling is
+	// mcp.TestIntegration_TraitWriteGate_AllSurfacesAgree's job, against a real
+	// database.
+	if strings.Contains(sql, "SELECT $1::jsonb") {
+		f.canonicalizeCalls++
+		raw, _ := args[0].([]byte)
+		return staticRow{values: []any{raw}}
+	}
 	if strings.Contains(sql, "INSERT INTO incarnation") {
 		f.insertCalls++
 		f.insertArgs = args
@@ -1719,6 +1738,27 @@ func (s fakeIncScoper) ResolvePurview(_, _, _ string) rbac.Purview {
 		}
 	}
 	return rbac.Purview{Exprs: exprs}
+}
+
+// TraitScope projects the fake's trait-scope for gate (b) of a trait write
+// ([ScreenTraitPairsInScope], mirrors [rbac.Enforcer.TraitScope]). Derived from
+// the same traitExprs the purview is built from, so a test that scopes the fake
+// with `tier:gold` gets a gate admitting exactly that pair — no second knob to
+// keep in sync. Symmetric with soul_test.fakeScoper.TraitScope.
+func (s fakeIncScoper) TraitScope(_, _, _ string) (map[string][]string, bool) {
+	if s.unrestricted {
+		return nil, true
+	}
+	out := map[string][]string{}
+	for _, te := range s.traitExprs {
+		if k, v, ok := strings.Cut(te, ":"); ok {
+			out[k] = append(out[k], v)
+		}
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, false
 }
 
 // unrestrictedScoper — a typical Unrestricted scoper for existing List/Get

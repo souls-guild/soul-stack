@@ -369,11 +369,14 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 // [register_hosts.go]); it is a SEPARATE flag from allowHosts, which is true for
 // host tasks in the scenario pass.
 //
-// The cache key includes the env discriminator (loopKey), allowHosts and
-// allowRegisterHosts: a program compiled against a child loop-env is incompatible
-// with the base (different declared-variable set); either flag changes the outcome
-// for the same text (rewrite/accept vs isolation error). loopKey == "" — the base env.
-func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts, allowRegisterHosts bool) (cel.Program, error) {
+// The cache key includes the env discriminator (the loop names), allowHosts,
+// allowRegisterHosts and computeScope: a program compiled against a child loop-env
+// is incompatible with the base (different declared-variable set); either host flag
+// changes the outcome for the same text (rewrite/accept vs isolation error); and
+// computeScope decides whether a `compute` reference is admissible at all
+// ([ComputeScope.cacheTag] — the key must carry it, the cache is consulted before
+// any guard). Empty loopNames — the base env.
+func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope) (cel.Program, error) {
 	// flow-control mode ([NewFlowControl]) forces cross-host isolation:
 	// soulprint.hosts/soulprint.where and register.hosts are unavailable regardless
 	// of the Vars flags (cross-host, keeper-side — the Soul has neither). Guards
@@ -384,15 +387,19 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts, allowRe
 	}
 
 	cacheKey := expr
-	if loopKey != "" {
-		cacheKey = loopKey + "\x01" + expr
+	if len(loopNames) > 0 {
+		cacheKey = strings.Join(loopNames, "\x00") + "\x01" + expr
 	}
 	if !allowHosts {
 		cacheKey = "\x02" + cacheKey
 	}
+	// \x04, not \x03: [ComputeScope.cacheTag] already owns \x03, and sharing the
+	// byte would give an allowRegisterHosts program and an out-of-scope-compute one
+	// the same key.
 	if allowRegisterHosts {
-		cacheKey = "\x03" + cacheKey
+		cacheKey = "\x04" + cacheKey
 	}
+	cacheKey = computeScope.cacheTag() + cacheKey
 
 	e.mu.RLock()
 	prg, ok := e.cache[cacheKey]
@@ -402,6 +409,10 @@ func (e *Engine) compile(env *cel.Env, loopKey, expr string, allowHosts, allowRe
 	}
 
 	if err := guardUnsupported(expr, e.kv != nil, e.genSecret); err != nil {
+		return nil, err
+	}
+
+	if err := e.guardComputeScope(expr, computeScope, loopNames); err != nil {
 		return nil, err
 	}
 

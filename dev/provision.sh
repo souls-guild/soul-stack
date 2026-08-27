@@ -77,6 +77,34 @@ fi
 
 log_stand
 
+# Postgres wrappers, symmetric to vault_cli. Defined here rather than next to the
+# reachability check in step 8 because step 1b has to ask Postgres what it remembers
+# BEFORE step 2 generates anything: the whole point of that guard is to run before the
+# first write. psql_admin - the always-existing bootstrap DB `keeper` (reachability +
+# CREATE DATABASE for the stand); psql_stand - the stand's DB ${PG_DB} (seed); psql_db -
+# an arbitrary DB by name, which neither of the other two can express and step 1b needs
+# because one Vault serves every stand on this host. For default all three hit `keeper`.
+# NIM-25.
+PG_ADMIN_DSN="postgres://keeper:keeper@localhost:${PG_PORT}/keeper?sslmode=disable"
+PG_REACHABLE=0
+if command -v psql >/dev/null 2>&1; then
+    psql_admin() { psql "${PG_ADMIN_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_stand() { psql "${PG_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_db() { local db="$1"; shift; psql "postgres://keeper:keeper@localhost:${PG_PORT}/${db}?sslmode=disable" -v ON_ERROR_STOP=1 -q "$@"; }
+    if psql "${PG_ADMIN_DSN}" -c 'SELECT 1' >/dev/null 2>&1; then
+        PG_REACHABLE=1
+        log "postgres reachable via host psql"
+    fi
+else
+    psql_admin() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d keeper -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_stand() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -v ON_ERROR_STOP=1 -q "$@"; }
+    psql_db() { local db="$1"; shift; docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d "${db}" -v ON_ERROR_STOP=1 -q "$@"; }
+    if docker exec "${STACK_PREFIX}-postgres" pg_isready -U keeper -d keeper >/dev/null 2>&1; then
+        PG_REACHABLE=1
+        log "postgres reachable via docker exec pg_isready"
+    fi
+fi
+
 # Sanity: Vault is reachable and unsealed.
 if ! vault_cli status >/dev/null 2>&1; then
     fail "vault not reachable at ${VAULT_ENDPOINT_DESC} (run 'make dev-up' first)"
@@ -90,6 +118,197 @@ else
     log "writing ${VAULT_KV_PREFIX}/postgres"
     vault_cli kv put "${VAULT_KV_PREFIX}/postgres" dsn="${PG_DSN}" >/dev/null
 fi
+
+# 1b. Trust-anchor consistency: what Vault still holds vs what Postgres still remembers.
+#
+# The dev Vault runs in dev-mode with in-memory storage, Postgres runs on a volume. That
+# asymmetry is the bug (NIM-365): a container restart - machine reboot, `docker restart`,
+# a crashed daemon - empties Vault while every registry survives. Each step below is
+# idempotent "by its own state", so against an empty Vault not one of them skips, and
+# provision used to quietly mint NEW anchors under live databases. Nothing errored: the
+# operator's token simply started answering 401 and souls stopped establishing mTLS, with
+# no line anywhere naming the cause. Neither loss can be repaired in place: a token has to
+# be re-minted, and a soul whose seed no longer chains to the root has to be re-onboarded -
+# NIM-365 records 16 hosts lost that way on a single restart of the default stand.
+#
+# So before anything is generated: refuse when Vault has lost an anchor that a live
+# database still depends on, and name what proceeding would destroy. Softening this to a
+# warning would leave the stand in exactly the state the ticket describes, only with a
+# line nobody reads at the moment of failure.
+#
+# The PKI root is checked against EVERY keeper database on this Postgres, not just this
+# stand's. In lightweight mode the stands share one Vault and therefore one `pki/`, so
+# provisioning a brand-new stand after a restart would regenerate the root out from under
+# the souls of every other stand on the host - the same silent break, one stand removed
+# from whoever triggered it.
+DEV_VAULT_REISSUE_ANCHORS="${DEV_VAULT_REISSUE_ANCHORS:-0}"
+
+# db_row_count <db> <table> - rows in <table> of <db>; 0 when the database or the table is
+# absent. Two queries rather than one CASE over to_regclass: Postgres still parses the
+# branch it will not take, so a missing relation is an error before it is a zero.
+#
+# A count that does not come back is 0 too, and both halves of that matter under
+# `set -euo pipefail`. Unguarded, a failing psql pipeline makes the assignment at the
+# call site non-zero and kills provision on the spot, with no line printed - the guard
+# below exists precisely to replace silent deaths with named ones. And an empty result
+# substituted into `[ "${n}" != "0" ]` reads as "not zero", which would refuse the
+# provision over a registry nobody has shown to hold anything.
+db_row_count() {
+    local db="$1" table="$2" n
+    if [ "$(psql_db "${db}" -tAc "SELECT to_regclass('public.${table}') IS NOT NULL" 2>/dev/null | tr -d '[:space:]')" != "t" ]; then
+        printf '0'
+        return 0
+    fi
+    n="$(psql_db "${db}" -tAc "SELECT count(*) FROM ${table}" 2>/dev/null | tr -d '[:space:]')" || n=""
+    if [ -z "${n}" ]; then
+        # >&2 because stdout is this function's return channel: `log` writes there, and a
+        # warning captured into the count would read as a very large non-zero row count.
+        log "[warn] could not count ${db}.${table} - treating it as empty; if it does hold rows, the trust-anchor check below is blind to them" >&2
+        printf '0'
+        return 0
+    fi
+    printf '%s' "${n}"
+}
+
+# keeper_databases - every stand DB on this Postgres: the default `keeper` plus the
+# per-stand `keeper_<slug>` of NIM-25. One name per line; non-zero when the list could not
+# be read at all.
+#
+# That second half is the point. The caller consults this only when the PKI root is gone,
+# and it is the one loss that reaches other people's stands. A query that failed and a
+# Postgres with nothing on it are the same empty string, so returning it either way would
+# let "psql is broken" read as "no stand depends on the root" and wave through exactly the
+# regeneration this guard exists to stop. `pg_isready` answers 0 for a server that responds
+# at all, rejected connections included, so PG_REACHABLE=1 does not make the query safe.
+# The connection itself uses `keeper`, so a query that worked always names at least that
+# one - an empty result means it did not work.
+keeper_databases() {
+    local out
+    out="$(psql_admin -tAc "SELECT datname FROM pg_database WHERE datname = 'keeper' OR datname LIKE 'keeper\\_%'" 2>/dev/null | tr -d '[:blank:]')" || out=""
+    [ -n "${out}" ] || return 1
+    printf '%s\n' "${out}"
+}
+
+check_vault_anchors_against_registries() {
+    local jwt_gone=0 pki_gone=0 sigil_gone=0
+    vault_cli kv get -field=signing_key "${VAULT_KV_PREFIX}/jwt-signing-key" >/dev/null 2>&1 || jwt_gone=1
+    vault_cli read pki/cert/ca >/dev/null 2>&1 || pki_gone=1
+    vault_cli kv get -field=signing_key "${VAULT_KV_PREFIX}/sigil-signing-key" >/dev/null 2>&1 || sigil_gone=1
+    if [ "${jwt_gone}${pki_gone}${sigil_gone}" = "000" ]; then
+        skip "vault trust anchors present (jwt-signing-key, pki root, sigil-signing-key)"
+        return 0
+    fi
+
+    if [ "${PG_REACHABLE}" != "1" ]; then
+        log "[warn] vault is missing a trust anchor and postgres is unreachable, so a first-ever stand cannot be told apart from a wiped Vault - generating anyway; if this stand already had Archons or souls, stop and re-run provision once postgres is up"
+        return 0
+    fi
+
+    # foreign_loss - at least one of the losses belongs to a stand that is not this one.
+    # It decides whether the surgical way out exists at all: `pki/` is shared, so nothing
+    # done to THIS stand's database keeps the root from being regenerated under a
+    # neighbour's souls. Offering the drop there would be advice that quietly costs
+    # someone else their fleet.
+    local losses=() foreign_loss=0 n db seeds dbs
+    if [ "${jwt_gone}" = "1" ]; then
+        n="$(db_row_count "${PG_DB}" operators)"
+        if [ "${n}" != "0" ]; then
+            losses+=("${VAULT_KV_PREFIX}/jwt-signing-key is gone while ${PG_DB}.operators still holds ${n} Archon(s) - every JWT ever issued to them stops verifying (401), ${STAND_DEV_DIR}/archon-alice.jwt included; the Archon keeps its rights in the registry, only the signature no longer matches")
+        fi
+    fi
+    if [ "${sigil_gone}" = "1" ]; then
+        n="$(db_row_count "${PG_DB}" plugin_sigils)"
+        if [ "${n}" != "0" ]; then
+            losses+=("${VAULT_KV_PREFIX}/sigil-signing-key is gone while ${PG_DB}.plugin_sigils still holds ${n} grant(s) - they were signed by an anchor that no longer exists, so no plugin they cover can be admitted (ADR-026)")
+        fi
+    fi
+    if [ "${pki_gone}" = "1" ]; then
+        # `if dbs=...` and not a bare assignment: the condition context suspends errexit, so
+        # a failed listing is handled here instead of killing provision without a word.
+        if dbs="$(keeper_databases)"; then
+            for db in ${dbs}; do
+                seeds="$(db_row_count "${db}" soul_seeds)"
+                if [ "${seeds}" != "0" ]; then
+                    if [ "${db}" = "${PG_DB}" ]; then
+                        losses+=("the pki root is gone while ${db}.soul_seeds still holds ${seeds} seed(s) signed by it - those souls cannot establish mTLS and have to be re-onboarded")
+                    else
+                        foreign_loss=1
+                        losses+=("the pki root is gone while ${db}.soul_seeds still holds ${seeds} seed(s) signed by it - that is ANOTHER stand, and one Vault serves them all, so regenerating the root here breaks its souls, not yours")
+                    fi
+                fi
+            done
+        else
+            # Unknown, not empty. foreign_loss=1 with it: with the list unread, this stand's
+            # database cannot be shown to be the only one at risk, and the surgical way out
+            # is exactly the advice that must not be given on a guess.
+            foreign_loss=1
+            losses+=("the pki root is gone and the keeper database list could not be read (psql failed against ${STACK_PREFIX}-postgres), so whether any stand still holds seeds signed by that root is UNKNOWN - proceeding would regenerate it blind")
+        fi
+    fi
+
+    if [ "${#losses[@]}" -eq 0 ]; then
+        log "vault trust anchors missing, but no registry depends on them yet - generating"
+        return 0
+    fi
+
+    if [ "${DEV_VAULT_REISSUE_ANCHORS}" = "1" ]; then
+        log "[warn] DEV_VAULT_REISSUE_ANCHORS=1 - reissuing trust anchors and destroying:"
+        for n in "${losses[@]}"; do
+            log "[warn]   - ${n}"
+        done
+        return 0
+    fi
+
+    printf '[provision] [fail] vault lost a trust anchor that a live database still depends on:\n' >&2
+    for n in "${losses[@]}"; do
+        printf '[provision] [fail]   - %s\n' "${n}" >&2
+    done
+    printf '[provision] [fail] cause: the dev Vault keeps secrets in memory (dev/docker-compose.yml), so a\n' >&2
+    printf '[provision] [fail]   container restart empties it while Postgres survives on its volume.\n' >&2
+    printf '[provision] [fail] ways out, narrowest blast radius first:\n' >&2
+    if [ "${foreign_loss}" = "1" ]; then
+        printf '[provision] [fail]   1. (no surgical option here: the losses above either name another stand'"'"'s souls or\n' >&2
+        printf '[provision] [fail]      leave it unknown whether they do, and one `pki/` serves every stand - regenerating\n' >&2
+        printf '[provision] [fail]      the root breaks whatever is there, whatever you do to this stand'"'"'s database.\n' >&2
+        printf '[provision] [fail]      Ask whoever runs it before taking 2 or 3.)\n' >&2
+    elif [ "${PG_DB}" != "keeper" ]; then
+        printf '[provision] [fail]   1. drop this stand'"'"'s database and re-provision - consistent again, no other stand touched.\n' >&2
+        printf '[provision] [fail]      Stop this stand'"'"'s keeper first: Postgres refuses to drop a database that still\n' >&2
+        printf '[provision] [fail]      has a session on it, and a restarted Vault leaves the keeper running - which is\n' >&2
+        printf '[provision] [fail]      exactly the state you are in right now.\n' >&2
+        printf '[provision] [fail]        docker exec -i %s-postgres psql -U keeper -d keeper -c '"'"'DROP DATABASE "%s"'"'"' && make dev-provision\n' "${STACK_PREFIX}" "${PG_DB}" >&2
+    else
+        printf '[provision] [fail]   1. (not available on the default stand: `keeper` is created once by the postgres\n' >&2
+        printf '[provision] [fail]      container at first init and by nothing afterwards, so dropping it leaves a stand\n' >&2
+        printf '[provision] [fail]      that cannot be provisioned back - run under DEV_STAND=<slug> for a droppable one)\n' >&2
+    fi
+    printf '[provision] [fail]   2. accept the loss listed above on purpose, keeping every database:\n' >&2
+    printf '[provision] [fail]        DEV_VAULT_REISSUE_ANCHORS=1 make dev-provision\n' >&2
+    printf '[provision] [fail]      then re-mint an operator token (AID=archon-alice dev/mint-jwt.sh) and re-onboard the souls.\n' >&2
+    # dev-reset is `docker compose down -v`, and which volumes that reaches depends on the
+    # mode: DEDICATED_INFRA gives the stand its own compose project, lightweight stands
+    # share the default one. Saying "wipes everything" in the dedicated case would push an
+    # operator away from the cheapest correct action and toward option 2.
+    #
+    # The flag alone does not make a stand dedicated. stand-env.sh suffixes STACK_PREFIX with
+    # the slug only when there is one, so DEDICATED_INFRA=1 without DEV_STAND still lands on
+    # the shared `soul-stack-*` containers - compose pins container_name to that prefix, so
+    # the slug is the only thing separating one stand's containers from another's - and on
+    # the shared `keeper` database with them. Calling that "wipes this stand and nothing
+    # else" would recommend destroying every neighbour's data as the cheap option. Key off
+    # the prefix, which is what dev-reset exports as the compose project.
+    if [ "${DEDICATED_INFRA:-0}" = "1" ] && [ "${STACK_PREFIX}" != "soul-stack" ]; then
+        printf '[provision] [fail]   3. make dev-reset - this stand runs its own docker project (DEDICATED_INFRA=1),\n' >&2
+        printf '[provision] [fail]      so it wipes this stand and nothing else. Cheapest way back to a clean stand.\n' >&2
+    else
+        printf '[provision] [fail]   3. make dev-reset - WIPES THE SHARED POSTGRES VOLUME: every stand that shares it,\n' >&2
+        printf '[provision] [fail]      not only this one (a stand with DEDICATED_INFRA=1 AND a slug has its own and\n' >&2
+        printf '[provision] [fail]      survives; this one does not). Check who else is running before you do.\n' >&2
+    fi
+    fail "refusing to mint new trust anchors under a live database"
+}
+
+check_vault_anchors_against_registries
 
 # 2. KV: ${VAULT_KV_PREFIX}/jwt-signing-key (field `signing_key`).
 # signing_key - 32 bytes of random data in base64, generated once
@@ -252,30 +471,10 @@ fi
 # 8. Sanity: Postgres reachable. Applying migrations is done by `keeper init`/`keeper run`
 # itself (idempotently, via migrate.Apply in the stand's DB ${PG_DB}), so a separate
 # schema-bootstrap in provision.sh isn't needed - that would be a duplicate.
-#
-# Two wrappers (symmetric to vault_cli): psql_admin - the always-existing bootstrap DB
-# `keeper` (reachability + CREATE DATABASE for the stand); psql_stand - the stand's DB
-# ${PG_DB} (seed). For default both hit `keeper` (identical to the old psql_cli). NIM-25.
-PG_ADMIN_DSN="postgres://keeper:keeper@localhost:${PG_PORT}/keeper?sslmode=disable"
-PG_REACHABLE=0
-if command -v psql >/dev/null 2>&1; then
-    psql_admin() { psql "${PG_ADMIN_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
-    psql_stand() { psql "${PG_DSN}" -v ON_ERROR_STOP=1 -q "$@"; }
-    if psql "${PG_ADMIN_DSN}" -c 'SELECT 1' >/dev/null 2>&1; then
-        PG_REACHABLE=1
-        log "postgres reachable via host psql"
-    else
-        log "postgres NOT reachable via host psql (keeper init will retry)"
-    fi
-else
-    psql_admin() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d keeper -v ON_ERROR_STOP=1 -q "$@"; }
-    psql_stand() { docker exec -i "${STACK_PREFIX}-postgres" psql -U keeper -d "${PG_DB}" -v ON_ERROR_STOP=1 -q "$@"; }
-    if docker exec "${STACK_PREFIX}-postgres" pg_isready -U keeper -d keeper >/dev/null 2>&1; then
-        PG_REACHABLE=1
-        log "postgres reachable via docker exec pg_isready"
-    else
-        log "postgres NOT ready yet (keeper init will retry)"
-    fi
+# The psql_* wrappers themselves are defined above, next to vault_cli - step 1b needs
+# them before the first Vault write. This step only re-establishes reachability.
+if [ "${PG_REACHABLE}" != "1" ]; then
+    log "postgres NOT reachable (keeper init will retry)"
 fi
 
 # 8b. Stand DB ${PG_DB} - create idempotently (CREATE DATABASE without IF NOT EXISTS).

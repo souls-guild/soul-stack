@@ -241,6 +241,9 @@ func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 		Vars:           in.ServiceVars,
 		Loop:           loopVars,
 		AllowHosts:     !in.destinyIsolated,
+		// compute is not in the loop axis (NIM-619): declared, so a reference names
+		// the namespace and this context instead of a key that isn't the problem.
+		ComputeScope: cel.ComputeOutOfScopeLoopAxis,
 	}
 }
 

@@ -24,6 +24,15 @@ const (
 // via t.Cleanup - the caller doesn't need a defer.
 func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, memoryMB int) (stack *harness.Stack, inc, adminPass string) {
 	t.Helper()
+	return setupRedisStandaloneWith(t, false, persistence, maxmemoryPolicy, memoryMB)
+}
+
+// setupRedisStandaloneWith is setupRedisStandalone with the artifact source as a
+// parameter. upstream=true takes the release tarballs from the public internet
+// instead of the harness's local mirror (NIM-542) — exactly one caller does that,
+// and it is deliberately not in E2E_GATE_TESTS.
+func setupRedisStandaloneWith(t *testing.T, upstream bool, persistence, maxmemoryPolicy string, memoryMB int) (stack *harness.Stack, inc, adminPass string) {
+	t.Helper()
 
 	repoURL := harness.BuildCommunityRedisPlugin(t)
 
@@ -34,6 +43,7 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 		SoulModules: []harness.SoulModuleEntry{
 			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
 		},
+		UpstreamArtifacts: upstream,
 	})
 	t.Cleanup(stack.Cleanup)
 

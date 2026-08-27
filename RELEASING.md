@@ -68,6 +68,45 @@ In [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format) transfer what has been
 
 The value is what the tag will be, without the `v` prefix and without the pre-release suffix (`v0.2.0-beta.1` → `0.2.0`) — a window is declared at release granularity. Getting this wrong is not cosmetic: a missing stamp silently disables the cross-check that catches a `compat:` window promising more than the definition can deliver, and a stamp naming an unreleased version would reject definitions that render correctly today.
 
+### (c3) Confirm the embedded UI is the one being released
+
+**Required step before tag creation, and it must be run explicitly.** `keeper`
+ships the operator UI inside the binary (`go:embed`, [ADR-055](docs/adr/0055-embed-ui-bundle.md)),
+vendored from the companion `soul-stack-web`. If the companion moved and the
+vendored copy was never re-synced, the release binary serves a UI nobody built
+from current sources — silently, because a stale bundle carries its own correct
+fingerprint. That has happened three times, and every time a human found it, not
+a gate ([docs/web/README.md](docs/web/README.md#what-the-guards-do-and-do-not-cover)).
+
+`make check-webui-freshness` is the check that sees it, and it is **binding on
+`release/*` and `hotfix/*`, not on `main`** — deliberately, since third-party
+clones sit on `main` and must not red because the companion moved. A tag is cut
+from `main`, so the one place the check would matter most is the one place it
+does not bind on its own. Hence: run it here, by hand, against the branch this
+release came from, and treat its answer as blocking.
+
+```sh
+REL=<REL>                                    # e.g. R5, spelled as the branch spells it
+export GITHUB_REF_NAME="release/${REL}"
+test "$(scripts/check-webui-freshness.sh --context)" = required &&
+  make check-webui-freshness
+```
+
+The first line is not ceremony. `GITHUB_REF_NAME` is what makes this run binding, and
+anything that is not literally `release/…` or `hotfix/…` — `Release/R5`, `releases/R5`,
+a shell that ate the variable — comes out **advisory and exits 0**, which is the same
+answer a clean tree gives. A typo in the one variable this step turns on would therefore
+read as a pass, on the step whose whole purpose is to be blocking. Asking `--context`
+first makes the two outcomes different: with the name misspelled the `&&` short-circuits,
+the check never runs, and nothing prints a green.
+
+A red here means re-vendor before tagging (`make sync-webui` in core with the
+companion checked out next to it, on `release/<REL>`, clean and with its
+dependencies installed), then commit the updated `assets/` + `WEBUI_SOURCE`
+along with the release commit. `WEBUI_FRESHNESS_SKIP=1` exists for working
+offline; using it to get past this step is cutting a release without knowing
+which UI is in it.
+
 ### (d) Verifying the relevance of documentation (docs-currency gate)
 
 **Required step before tag creation.** `docs-writer` audits

@@ -1268,6 +1268,13 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 		SoulprintSelf: flowSection(flowContextSelfKey),
 		Register:      register,
 		// AllowHosts intentionally false: NewFlowControl enforces soulprint.hosts isolation.
+		//
+		// ComputeScope stays ComputeAvailable, and that is not a claim that compute
+		// is readable here: the flow-control env does not DECLARE the name
+		// (cel.flowControlVars), so `compute.x` in a when: is an undeclared-reference
+		// compile error from cel-go itself — already unambiguous, already naming the
+		// namespace. Overriding it would replace that with our message for no gain.
+		ComputeScope: cel.ComputeAvailable,
 	}
 }
 
@@ -1607,13 +1614,23 @@ func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (StateMatchFunc, StateOpEvalFunc) {
 	ctx = WithVaultFence(ctx, service)
 
+	// ComputeScope is out of scope on both closures, and it is not the same claim
+	// as "the map is empty": merge runs after the param render, so `${ compute.x }`
+	// in a match:/patch: was already substituted — a `compute.x` still standing in
+	// the text is one the author meant to be read HERE, per element, where no run
+	// context exists. Saying so at compile beats the no-such-key it used to give
+	// about a name that was spelled correctly (NIM-619).
 	match := func(predicate string, elem, value any) (bool, error) {
-		vars := cel.Vars{Ctx: ctx, Loop: map[string]any{"elem": elem, "value": value}}
+		vars := cel.Vars{
+			Ctx:          ctx,
+			Loop:         map[string]any{"elem": elem, "value": value},
+			ComputeScope: cel.ComputeOutOfScopeStateMatch,
+		}
 		return evalBoolExpr(p.cel, "core.state.add.match", predicate, vars)
 	}
 
 	opEval := func(expr string, binds map[string]any, boolOut bool) (any, error) {
-		vars := cel.Vars{Ctx: ctx, Loop: binds}
+		vars := cel.Vars{Ctx: ctx, Loop: binds, ComputeScope: cel.ComputeOutOfScopeStateMatch}
 		if boolOut {
 			return evalBoolExpr(p.cel, "core.state.match", expr, vars)
 		}

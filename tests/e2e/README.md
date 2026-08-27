@@ -28,17 +28,38 @@ contract gives a fast-loop (L3a — seconds to minutes, every PR) versus a smoke
 ## Running
 
 ```sh
-make e2e
-# equivalent to:
-cd tests/e2e && go test -tags=e2e -timeout=10m ./...
+make e2e            # builds keeper first, then runs the tier
+# by hand, when you want one test:
+cd tests/e2e && go build -C ../.. -o keeper/bin/keeper ./keeper/cmd/keeper  # or: make build
+cd tests/e2e && go test -tags=e2e -count=1 -timeout=30m -run TestX ./...
 ```
 
 Pre-flight in `harness.NewStack`:
 
 - **keeper binary** is required. Source — env `KEEPER_BIN`, otherwise the default
-  build `keeper/bin/keeper` (`make build`). Without the binary the test Skips BEFORE
-  spawning testcontainers (so a developer without a build doesn't wait through a
-  5-minute timeout).
+  build `keeper/bin/keeper` (`make build`). Without it the tier **fails** before
+  spawning testcontainers — it used to skip, and NIM-533 removed that: a tier that
+  runs nothing reported `ok` for the package, which reads as "all of it passed".
+- **the binary must be THIS tree** (NIM-490). The harness does not compile keeper,
+  it runs a file, and until NIM-490 nothing checked which code was inside it: the
+  tier reported on whatever the last `make build` left behind. On NIM-456 that cost
+  a session twice — deleted wiring stayed green, and a test "reproduced" a defect
+  the source had already fixed. Now `NewStack` asks the binary for its version
+  (stamped by `KEEPER_LDFLAGS` from `git describe`) and **fails** if it names another
+  commit, or if a keeper-side source is uncommitted and younger than the binary.
+  Remedy is always `make build`.
+  Two things this deliberately does NOT do: it ignores the repo-wide `-dirty`
+  marker (a README edit must not redden a correct binary), and it times only files
+  git reports as uncommitted (a branch switch rewrites mtimes on files that are
+  then clean). The residue is an edit built into the binary and then reverted —
+  `make e2e` closes that by building.
+
+  Both of the above are **declared bring-up failures** (`STAND-SETUP`), because
+  both answer "can this machine stand up a valid L3a stand", not "is the code
+  right". The refusal's own text is what you act on; the marker only stops ~40
+  tests' worth of red from reading as ~40 findings. Placement is guarded both
+  ways in `provenance_test.go`: below the declaration, and above `infraUp = true`
+  so the refusal lands before the containers are paid for.
 - **docker** is required for testcontainers. If docker is present but spawning
   PG/Redis/Vault fails — the test fails explicitly (the developer requested E2E
   intentionally, absence of docker = fail, not skip).

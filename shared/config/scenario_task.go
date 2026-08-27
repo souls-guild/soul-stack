@@ -354,12 +354,20 @@ func SplitModuleAddr(addr string) (name, state string, ok bool) {
 // shadow: a bare loop variable is declared at the top level of the activation
 // (shared/cel) and would overwrite the fixed context. Symmetric to contextVars in
 // shared/cel/engine.go.
+//
+// `compute` joined the list in NIM-619: it is a contextVars entry like the rest
+// (the list was drifting from the symmetry its own comment claims), and shadowing
+// it would additionally blind the compute-scope guard — a loop variable of that
+// name legitimately suppresses the guard (shared/cel.guardComputeScope), so
+// allowing the name here would leave `compute.x` in the loop body reading an
+// iteration element under the same spelling the namespace uses.
 var loopReservedNames = map[string]bool{
 	"input":       true,
 	"register":    true,
 	"incarnation": true,
 	"soulprint":   true,
 	"vars":        true,
+	"compute":     true,
 }
 
 // registerHostsAccessor — the register name reserved for the keeper-side per-host
@@ -1761,7 +1769,7 @@ func validateLoopVar(sub *ast.MappingValueNode, key, pathPrefix string) []diag.D
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "loop_var_reserved",
 			Message:  fmt.Sprintf("loop.%s %q shadows a reserved CEL context name", key, sn.Value),
-			Hint:     "reserved: input, register, incarnation, soulprint, vars",
+			Hint:     "reserved: input, register, incarnation, soulprint, vars, compute",
 			YAMLPath: pathPrefix + ".loop." + key,
 		})}
 	}

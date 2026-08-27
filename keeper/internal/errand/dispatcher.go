@@ -252,7 +252,8 @@ func NewDispatcher(deps Deps) (*Dispatcher, error) {
 // Dispatch — main flow. See package doc-comment (one Errand circuit).
 //
 // Steps:
-//  1. Validate (sid/module/timeout), clamp TimeoutSec to [Min, Max].
+//  1. Validate (sid/module/timeout), clamp TimeoutSec to [Min, Max]; on dry_run also
+//     the module admission keeper can decide alone (dryrunshell.go).
 //  2. dry_run only — gate on the target's dry_run capability (soulcompat.go).
 //     Fail-closed, and ahead of the INSERT: a host that would apply for real is
 //     refused without an errands row or an `errand.invoked` event.
@@ -277,6 +278,18 @@ func (d *Dispatcher) Dispatch(ctx context.Context, req DispatchRequest) (Dispatc
 	// Soul keeps, not keeper, so it is verified against the target's
 	// announcement before anything leaves this process.
 	if req.DryRun {
+		// The one refusal keeper can make from the request alone: a verb-shell module
+		// has no pure-read Plan on ANY host, so no announcement can rescue it. Ahead of
+		// the capability gate on purpose — a stale agent is not the operator's mistake
+		// here, and reporting a capability problem for an impossible pair would send
+		// them to upgrade an agent that would refuse it too (dryrunshell.go).
+		if err := ValidateDryRunModule(req.Module, req.DryRun); err != nil {
+			d.deps.Logger.Warn("errand: dry_run refused for a verb-shell module",
+				slog.String("sid", req.SID),
+				slog.String("module", req.Module),
+				slog.String("started_by_aid", req.StartedByAID))
+			return DispatchResult{}, err
+		}
 		if err := d.gateDryRun(ctx, req.SID); err != nil {
 			// Logged here rather than in the gate: the refusal writes no errands
 			// row and no audit event (both come later, and a refused request

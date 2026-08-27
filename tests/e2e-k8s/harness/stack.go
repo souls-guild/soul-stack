@@ -91,8 +91,21 @@ type Stack struct {
 
 // NewStack creates the kind cluster for this test and initializes
 // client-go. Further steps (DeployInfra/DeployKeeper) are separate methods.
+//
+// Pre-flight first (NIM-490): the tier deploys the `keeper:e2e-k8s` image, and
+// `kind load docker-image` takes whatever image of that name the daemon holds,
+// however old. `make e2e-k8s` rebuilds it; a bare `go test -tags=e2e_k8s` does
+// not, and `make build` does not either - it produces the host binary, which
+// is not what runs in the cluster. Asked here rather than in DeployKeeper
+// because the answer is already known, and a refusal is worth more before the
+// kind cluster is built than after.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
+
+	// Environment first, subject second: a machine without docker is skipped
+	// (it cannot run L3c at all), a machine with a stale image is failed.
+	requireClusterTooling(t)
+	assertKeeperImageMatchesTree(t, "L3c", keeperE2EImage)
 
 	cluster := NewCluster(t)
 
@@ -175,7 +188,7 @@ func (s *Stack) DeployKeeper(t *testing.T, replicas int, certPEM, keyPEM, caPEM 
 	}
 
 	// 1. Load image.
-	s.Cluster.LoadDockerImage(t, "keeper:e2e-k8s")
+	s.Cluster.LoadDockerImage(t, keeperE2EImage)
 
 	// 2. Render keeper.yml with in-cluster addresses.
 	keeperYAML := renderKeeperYAML(keeperYAMLInputs{

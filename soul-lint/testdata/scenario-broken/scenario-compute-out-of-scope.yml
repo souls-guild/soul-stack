@@ -1,0 +1,33 @@
+name: compute-out-of-scope
+compute:
+  node_count: ${ 1 + 2 }
+tasks:
+  # on: [covens] resolves once per run, before any host is chosen — the run-level
+  # compute: block is not in that context (NIM-619).
+  - name: Roll the computed coven
+    module: core.exec.run
+    on:
+      - ${ "web-" + string(compute.node_count) }
+    params:
+      cmd: /usr/bin/true
+
+  # The loop axis is host-invariant and equally without the namespace.
+  - name: Fan out over the computed axis
+    module: core.exec.run
+    loop:
+      items: ${ compute.node_count }
+      as: idx
+      when: compute.node_count > 1
+    params:
+      cmd: echo ${ idx }
+
+  # The flow-control keys are not rendered by the Keeper at all: they travel into
+  # the RenderedTask verbatim and Soul evaluates them in its own sandbox, which
+  # declares no `compute`. The name below is spelled correctly and IS declared —
+  # the diagnostic must still be about the namespace, not about the name.
+  - name: Gate on a computed value
+    module: core.exec.run
+    when: compute.node_count > 1
+    changed_when: compute.node_count > 1
+    params:
+      cmd: /usr/bin/true

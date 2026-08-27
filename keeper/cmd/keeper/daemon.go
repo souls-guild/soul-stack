@@ -91,6 +91,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 	"github.com/souls-guild/soul-stack/shared/diag"
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -5902,15 +5903,23 @@ type voyageCommandSpawner struct {
 	bridge *errandRunSpawnerBridge
 }
 
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
+// SpawnCommand adapts the Voyage kind=command fan-out onto the Errand bridge: one
+// Errand per resolved SID, blocking until terminal. Every field the Voyage row
+// carries about WHAT to run must be forwarded here — including dryRun, which picks
+// the module method the Soul invokes (Plan instead of Apply). Dropping it is not a
+// lost optimisation, it is a preview that changes the fleet (NIM-559).
 //
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// standalone (parity single-SID /exec, ADR-033).
-func (s *voyageCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte) (string, string, error) {
-	_ = voyageID // Keeper daemon runtime wiring note.
-	errandID, status, _, err := s.bridge.SpawnErrand(ctx, "", sid, module, startedByAID, input)
+// voyageID is deliberately unused: the back-link lives in voyage_targets.errand_id,
+// and the errands row is standalone (parity single-SID /exec, ADR-033).
+//
+// The dropped third value is the refusal reason ([classifyDispatchErr]). It is dropped
+// because there is nowhere to put it: voyage_targets (migration 059) has no reason
+// column and VoyageTargetEntry no field, so a host refused before its errands row
+// exists reports `failed` with no back-link and no cause anywhere in the API. Not
+// widened here — that is a column plus a reply field, tracked on its own.
+func (s *voyageCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (string, string, error) {
+	_ = voyageID
+	errandID, status, _, err := s.bridge.SpawnErrand(ctx, "", sid, module, startedByAID, input, dryRun)
 	return errandID, status, err
 }
 
@@ -5936,8 +5945,18 @@ type errandTerminalSource interface {
 // Keeper daemon runtime wiring note.
 //
 // Keeper daemon runtime wiring note.
+// errandDispatchAPI is the narrow surface of *errand.Dispatcher the bridge uses.
+// It exists so the DispatchRequest the bridge BUILDS can be asserted in a unit
+// test: the request is where the Voyage's dry_run either survives or is silently
+// dropped (NIM-559), and a *errand.Dispatcher cannot be stood up without PG, Redis
+// and a live Soul stream. The real dispatcher satisfies it automatically.
+type errandDispatchAPI interface {
+	Dispatch(ctx context.Context, req errand.DispatchRequest) (errand.DispatchResult, error)
+	Cancel(ctx context.Context, req errand.CancelRequest) error
+}
+
 type errandRunSpawnerBridge struct {
-	dispatcher     *errand.Dispatcher
+	dispatcher     errandDispatchAPI
 	terminalSource errandTerminalSource
 	pollInterval   time.Duration
 	clock          func() time.Time
@@ -5955,7 +5974,7 @@ type errandRunSpawnerBridge struct {
 //   - StatusFailed / StatusModuleNotAllowed / StatusTimedOut / StatusCancelled →
 //
 // Keeper daemon runtime wiring note.
-func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, module, startedByAID string, input []byte) (string, string, string, error) {
+func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, module, startedByAID string, input []byte, dryRun bool) (string, string, string, error) {
 	inputMap := map[string]any{}
 	if len(input) > 0 {
 		if err := json.Unmarshal(input, &inputMap); err != nil {
@@ -5963,17 +5982,19 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 		}
 	}
 
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	_ = runID // Keeper daemon runtime wiring note.
+	// runID is unused: the errands row is standalone and the caller keeps its own
+	// back-link (voyage_targets.errand_id).
+	//
+	// DryRun must be set from the caller's flag and never defaulted here: a Go
+	// composite literal that omits it compiles to false, which is precisely how a
+	// dry_run Voyage came to run Apply on every target (NIM-559).
+	_ = runID
 	res, err := b.dispatcher.Dispatch(ctx, errand.DispatchRequest{
 		SID:          sid,
 		Module:       module,
 		Input:        inputMap,
 		StartedByAID: startedByAID,
+		DryRun:       dryRun,
 	})
 	if err != nil {
 		return res.ErrandID, "failed", classifyDispatchErr(err), err
@@ -6098,11 +6119,39 @@ func (b *errandRunSpawnerBridge) CancelErrand(ctx context.Context, errandID stri
 	return nil
 }
 
-// Keeper daemon runtime wiring note.
+// classifyDispatchErr projects a dispatch refusal onto a stable snake_case reason
+// token — the one place in the tree that makes that mapping.
+//
+// NO CALLER READS THE RESULT TODAY, and the doc must not pretend otherwise:
+// [errandRunSpawnerBridge.SpawnErrand] returns it, its only caller
+// [voyageCommandSpawner.SpawnCommand] discards it with `_`, and `voyage_targets`
+// (migration 059) has no column to hold it — the row carries `status` and the
+// `errand_id` back-link, nothing else. So a host refused before dispatch shows
+// `failed` with no back-link and no reason, and the cause survives only in the
+// Keeper log. Widening that needs a column plus a reply field; it is tracked
+// separately, not smuggled in here.
+//
+// The mapping is kept correct regardless, because it is the projection whoever adds
+// that column will inherit. The three dry_run tokens became reachable at all only
+// when a `kind=command` Voyage started putting the flag on each per-host request
+// (NIM-559); before that the path never sent one. They answer three different
+// questions and must stay distinguishable: the module can never be planned, this
+// host's agent is too old, or we could not find out. Only the middle one is fixed by
+// upgrading that host.
+//
+// The verb-shell token is reachable despite the `400` at Voyage creation: a run
+// created before that check existed, or one parked on `schedule_at`, reaches the
+// worker without ever passing through it.
 func classifyDispatchErr(err error) string {
 	switch {
 	case errors.Is(err, errand.ErrSoulNotConnected):
 		return "soul_not_connected"
+	case errors.Is(err, errand.ErrDryRunVerbShell):
+		return coremanifest.ReasonDryRunUnsupported
+	case errors.Is(err, errand.ErrDryRunNotAnnounced):
+		return "soul_capability_unsupported"
+	case errors.Is(err, errand.ErrDryRunUnverifiable):
+		return "soul_capability_unverifiable"
 	case errors.Is(err, errand.ErrSIDEmpty), errors.Is(err, errand.ErrModuleEmpty), errors.Is(err, errand.ErrTimeoutOutOfRange):
 		return "invalid_request"
 	default:

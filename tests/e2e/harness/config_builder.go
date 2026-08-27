@@ -227,8 +227,21 @@ func (s *Stack) reserveLoopback() string {
 // produces. `token issuer not trusted` is UNREACHABLE between two stacks of this
 // harness and must not be relied on to tell them apart. assertOwnKeeper
 // (probe.go) is what detects a wrong endpoint, and it needs no help from the
-// issuer: any 401 at all, against a token this stack's own keeper minted seconds
-// earlier, already means the answering process is not ours.
+// issuer to do it.
+//
+// What it must not do is read the bare status code as the answer. "Any 401 at
+// all, against a token this stack's own keeper minted seconds earlier, already
+// means the answering process is not ours" was the earlier reading, and it does
+// not hold: `invalid token` is the catch-all for every validation failure the
+// keeper does not name, and it names only three — expiry, clock skew, and the
+// issuer pin that the paragraph above rules out here. So a malformed token, a
+// missing claim, and —
+// until NIM-621 — a wall clock that stepped backwards between minting and
+// verifying all produce those same bytes. The last one is not hypothetical on
+// this machine; it was caught twice in one session (NIM-611). Since NIM-621 the
+// verifier absorbs a minute of skew and answers `token issued in the future`
+// past it, so the detail string now carries the difference — which is why
+// assertOwnKeeper branches on it rather than on the 401.
 //
 // The port is the source of uniqueness because the kernel already guarantees
 // it: no two stacks alive at the same moment hold the same one.

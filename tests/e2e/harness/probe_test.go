@@ -7,9 +7,85 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// TestIdentityFailureCauseSeparatesAClockFromAStranger — assertOwnKeeper's
+// verdict must come from the keeper's detail string, not from the 401.
+//
+// Until NIM-621 it could not: a wall clock that stepped backwards between
+// `keeper init` minting the token and this request produced the same
+// `invalid token` a foreign keeper produces, and this check answered "this
+// process is not the keeper this stack started" with an address to go and
+// investigate. That is not a hypothetical on this box — the step was caught
+// twice in one session (NIM-611) — and the reader is sent after a port
+// collision that never happened, on a stack that is in fact its own.
+//
+// The detail strings are READ out of the keeper rather than written down here,
+// for the reason suiteTimeoutFromMakefile reads its number: a copy stops
+// matching the moment someone renames the original, and the test keeps passing
+// against its copy while the harness silently falls back to the default reading.
+func TestIdentityFailureCauseSeparatesAClockFromAStranger(t *testing.T) {
+	skew := keeperPublicDetail(t, "publicDetailClockSkew")
+	issuer := keeperPublicDetail(t, "publicDetailInvalidIssuer")
+	generic := keeperPublicDetail(t, "publicDetailInvalidToken")
+
+	defaultHint, defaultAdvice := identityFailureCause("")
+
+	for _, tc := range []struct {
+		name   string
+		body   string
+		expect string
+	}{
+		{"clock skew", `{"detail":"` + skew + `"}`, "clock"},
+		{"foreign issuer", `{"detail":"` + issuer + `"}`, "issuer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hint, advice := identityFailureCause(tc.body)
+			if hint == defaultHint || advice == defaultAdvice {
+				t.Fatalf("body %q lands on the default reading (%q / %q). The keeper names this "+
+					"cause exactly, and answering it with the address is how a %s problem gets "+
+					"read as a port collision — the reader goes looking at ports on a stack that "+
+					"is talking to its own keeper.", tc.body, hint, advice, tc.expect)
+			}
+			if !strings.Contains(hint+" "+advice, tc.expect) {
+				t.Errorf("body %q is recognised but says nothing about the %s: %q / %q",
+					tc.body, tc.expect, hint, advice)
+			}
+		})
+	}
+
+	// The other direction: the generic detail MUST stay on the default. If a
+	// matcher above is widened until it swallows this one, every 401 starts
+	// reporting a cause it does not have, which is worse than the default —
+	// the default at least admits it does not know.
+	if hint, advice := identityFailureCause(`{"detail":"` + generic + `"}`); hint != defaultHint || advice != defaultAdvice {
+		t.Errorf("the keeper's catch-all detail %q is being read as a specific cause (%q / %q). "+
+			"It is what a malformed token, a missing claim and a foreign signing key all produce; "+
+			"naming any one of them here is a guess presented as a diagnosis.", generic, hint, advice)
+	}
+}
+
+// keeperPublicDetail reads one publicDetail* literal out of the keeper's
+// verifier. tests/e2e cannot import it — `keeper/internal/...` is internal to
+// another module — so the coupling is textual and has to be checked as such.
+func keeperPublicDetail(t *testing.T, name string) string {
+	t.Helper()
+	const verifier = "../../../keeper/internal/jwt/verifier.go"
+	src, err := os.ReadFile(verifier)
+	if err != nil {
+		t.Fatalf("read %s: %v", verifier, err)
+	}
+	m := regexp.MustCompile(name + `\s*=\s*"([^"]+)"`).FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("%s no longer defines %s. assertOwnKeeper matches that string to tell a "+
+			"clock problem from a wrong address; renamed or removed, the match silently stops "+
+			"firing and every 401 goes back to reporting a port collision.", verifier, name)
+	}
+	return string(m[1])
+}
 
 // TestEveryStackConstructorProvesItsKeeperIsItsOwn — a stack handed to a test
 // must have proved that the process answering on KeeperHTTPURL is the keeper it

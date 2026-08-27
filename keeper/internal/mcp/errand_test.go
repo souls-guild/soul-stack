@@ -145,3 +145,30 @@ func TestErrandRunArgs_DryRunTag(t *testing.T) {
 			"this text is what an agent reads before choosing to send the flag")
 	}
 }
+
+// TestMapErrandDispatchError_DryRunVerbShell — the MCP mirror of the REST 400. An MCP
+// client is usually another agent, and the two surfaces answering differently for the
+// same request is exactly how an agent "works around" a refusal by switching transport.
+// malformed-request, not one of the capability codes: no cluster or agent state can make
+// this pair work.
+func TestMapErrandDispatchError_DryRunVerbShell(t *testing.T) {
+	h, _, _ := newTestHandler(t, &fakePool{}, errandAdminCfg())
+
+	// Wrapped, as a dispatcher on the way out would carry it.
+	err := fmt.Errorf("dispatch host.test: %w", &errand.DryRunVerbShellError{Module: "core.exec.run"})
+
+	resp := h.mapErrandDispatchError(nil, "keeper.soul.errand.run", err)
+	if resp.Error == nil {
+		t.Fatal("expected an error response")
+	}
+	data := mustToolErrorData(t, resp.Error.Data)
+	if data.Code != mcpCodeMalformedRequest {
+		t.Errorf("code = %q, want %q (a capability code would send the agent to upgrade a Soul that refuses this too; "+
+			"the internal code would report our bug for the caller's mistake)", data.Code, mcpCodeMalformedRequest)
+	}
+	for _, want := range []string{"core.exec.run", "dry_run", "errand_dry_run_unsupported"} {
+		if !strings.Contains(resp.Error.Message, want) {
+			t.Errorf("message = %q, does not carry %q", resp.Error.Message, want)
+		}
+	}
+}

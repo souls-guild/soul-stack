@@ -235,10 +235,11 @@ type soulForgetOutput struct {
 
 // soulForgetOperation — metadata of DELETE /v1/souls/{sid}. DefaultStatus=200.
 // Permission soul.forget + audit soul.forgotten. Errors: 403 RBAC, INCLUDING a
-// host outside the operator's scope (this is a scope-aware RequirePermission
-// with SoulSIDSelector, so the selector is resolved from the path before the
-// handler runs — out-of-scope is answered 403 and never reaches the 404 branch,
-// unlike the read routes where narrowing happens in the handler); 404 no soul;
+// host outside the operator's scope (this is a scope-aware
+// RequirePermissionMulti with SoulSIDScopeSelector, so the host and its covens
+// are resolved before the handler runs — out-of-scope is answered 403 and never
+// reaches the 404 branch, unlike the read routes where narrowing happens in the
+// handler); 404 no soul;
 // 422 invalid sid; 503 the cluster could not be told (NOTHING was deleted —
 // retryable, problem type `teardown-unavailable`); 500.
 //
@@ -509,7 +510,7 @@ type ErrandRunRequest struct {
 	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state>; without dry_run - core.cmd.shell / core.exec.run / an ErrandReadSafe module, with dry_run - a PlanReadSafe module"`
 	Input          *map[string]any `json:"input,omitempty" doc:"input for the module (validated against input_schema)"`
 	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"total Errand timeout [1..300]; 0/omitted -> default 30s; > server-cap (30s) -> 202 + Location"`
-	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; target soul must announce the dry_run capability -> 409 otherwise"`
+	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400; target soul must announce the dry_run capability -> 409 otherwise"`
 }
 
 // errandExecOutput — huma output POST /v1/souls/{sid}/exec with TWO success codes under
@@ -528,16 +529,17 @@ type errandExecOutput struct {
 // errandExecOperation — metadata of POST /v1/souls/{sid}/exec. DefaultStatus=200 (sync
 // terminal). 202 (async escalation) — an additional success code (the handler sets
 // Status=202 + Location itself). Permission errand.run + audit errand.invoked. Errors: 202
-// async, 400 unknown/malformed, 403 RBAC, 404 soul-not-connected, 409 the target did not
-// announce dry_run (soul-capability-unsupported, NIM-456), 422 invalid sid/module/timeout,
-// 500.
+// async, 400 unknown/malformed + dry_run on a verb-shell module (malformed-request,
+// NIM-489 — impossible on every host, so not the 409 axis), 403 RBAC, 404
+// soul-not-connected, 409 the target did not announce dry_run
+// (soul-capability-unsupported, NIM-456), 422 invalid sid/module/timeout, 500.
 func errandExecOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "ErrandExec",
 		Method:        http.MethodPost,
 		Path:          "/{sid}/exec",
 		Summary:       "Run Errand on a Soul",
-		Description:   "Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).",
+		Description:   "Pull ad-hoc module exec on a single host (ADR-033). 200 sync (terminal up to server-cap 30s) or 202 + Location async-escalation. Permission errand.run. 404 - Soul not connected. 400 - dry_run requested for a verb-shell module (no pure-read Plan exists on any host, so no upgrade fixes it). 409 - dry_run requested and the target Soul did not announce the dry_run capability (it would apply for real).",
 		Tags:          []string{"Errand"},
 		DefaultStatus: http.StatusOK,
 		Errors: []int{http.StatusAccepted, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound,

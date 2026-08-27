@@ -302,6 +302,11 @@ deb.debian.org; NIM-542). So a red gate is not evidence that the box was
 busy, and rerunning it quietly until it passes buries exactly the failures
 worth reading. What actually failed is a question with an answer - see below.
 
+The github.com half of that is now gone: the gate serves those release tarballs
+from a local mirror and no longer downloads them per run (NIM-542, below). The
+apt half is not — `deb.debian.org` and `packages.redis.io` are still dialed on
+every live `create`.
+
 ### Reading a red gate (NIM-406)
 
 A failure while the **stand** comes up and a failure of an **assertion** arrive in
@@ -405,6 +410,42 @@ the layer is genuinely unknown there, and the tool currently reports it as if it
 were not. A distinct TIMEOUT verdict is tracked in **NIM-511**; until then, read
 "TEST-FAILURE on the test the panic names" as "unknown", and check whether the
 gate's `-timeout` was the thing that expired before treating it as a finding.
+
+### What the gate downloads (NIM-542)
+
+The classifier above answers "bring-up or the code?", and for a while there was a
+third answer it could not give, because the gate had a third way to fail: the
+network. Six of the nine gate tests run a live `create` of `examples/service/redis`,
+and that create fetched `node_exporter`, `redis_exporter` and `vector` from **public
+github.com** from inside the container — about 18 downloads per gate run. A blocking
+pre-tag step whose acceptance is "three runs on an unchanged slice give the same
+result" was resting on something that is not in the slice, and both red runs measured
+above died exactly there.
+
+**The gate no longer downloads them.** `make e2e-live-artifacts` — which
+`e2e-live-gate` now runs as an early, named step — fills a digest-verified cache
+outside the repo, the harness serves it over HTTPS on an ephemeral local port, and the
+**fixture's** copy of the service gets a `vars/99-*` layer pointing `base_url` there.
+The layer goes into the fixture's copy and never into `examples/service/redis`: the
+example is the subject under test (NIM-211). HTTPS rather than plain http for the same
+reason — the destinies declare `base_url` as `^https://…` and `core.url` refuses http
+without an opt-out, so the mirror mints a per-run CA the container is taught to trust
+instead of the destiny being loosened to accept the fixture. Mechanics and the guards
+that keep the override falsifiable are in [tests/e2e-live/README.md](../../tests/e2e-live/README.md#upstream-release-artifacts-nim-542).
+
+So no fourth verdict was added, and deliberately: the category the gate would have
+needed it for **does not occur inside the gate any more**. The one place it can still
+occur is `TestL3bRedisLiveUpstream_ArtifactsFromGitHub`, which keeps the real github
+path covered and is **not** in `E2E_GATE_TESTS` — it is the one L3b test allowed to
+fail for a reason outside the repository, and a blocking gate must never be. It
+handles the distinction itself, in the test rather than in the classifier: it probes
+the three real URLs before the stand and **skips** if they are unreachable (nothing of
+this repository has run yet, so the failure cannot be about this repository), and
+re-probes after a failure to print either "read this as environment" or — the more
+useful half — "upstream is still reachable, so read this as a finding".
+
+**Still not hermetic:** `core.pkg.installed` reaches `deb.debian.org` and
+`packages.redis.io` on every live create. NIM-542 fixed the tarballs only.
 
 The wall itself is also not derived from anything, and the two runs disagree:
 `make e2e-live` gives the whole 19-test package 30 m while the 9-test gate gets

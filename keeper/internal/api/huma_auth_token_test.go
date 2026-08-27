@@ -211,26 +211,37 @@ func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
-	// An expired cookie is rejected at STEP 3 (Verify → ErrExpiredToken), NOT
-	// at the ttl≤0 guard of step 5 (that one is defensive/unreachable without
-	// leeway in Verify).
+	// An expired cookie is rejected at STEP 3 (Verify → ErrExpiredToken), NOT at
+	// the ttl≤0 guard of step 5. Barely expired on purpose: NIM-621's clock-skew
+	// leeway would have let a cookie this fresh through Verify and down to step
+	// 5, which answers the generic "authentication required" — so this margin is
+	// exactly the one that distinguishes the two paths, and the detail below is
+	// what says which one ran. Widen the margin and the case stops testing that.
 	expired, _ := issuer.Issue("archon-alice", nil, time.Millisecond, false)
 	time.Sleep(5 * time.Millisecond)
 
 	cases := []struct {
-		name    string
-		session string
+		name       string
+		session    string
+		wantDetail string
 	}{
-		{"no cookie", ""},
-		{"malformed cookie", "not-a-jwt"},
-		{"foreign signature", strings.Repeat("a", 20) + ".b.c"},
-		{"expired cookie (Verify-expired, step 3)", expired},
+		{"no cookie", "", "authentication required"},
+		{"malformed cookie", "not-a-jwt", "invalid token"},
+		{"foreign signature", strings.Repeat("a", 20) + ".b.c", "invalid token"},
+		{"expired cookie (Verify-expired, step 3)", expired, "token expired"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := postExchange(h, tc.session, nil)
 			if rec.Code != http.StatusUnauthorized {
 				t.Fatalf("%s: status = %d, want 401; body=%s", tc.name, rec.Code, rec.Body.String())
+			}
+			// The detail, not just the status. All four are 401, and the browser
+			// acts on the difference: "token expired" means sign in again, the
+			// generic one means something it cannot fix by retrying. A 401 assert
+			// alone stays green while the causes get swapped underneath it.
+			if !strings.Contains(rec.Body.String(), tc.wantDetail) {
+				t.Errorf("%s: detail is not %q; body=%s", tc.name, tc.wantDetail, rec.Body.String())
 			}
 			// The raw jwt-library text must not leak (anti-oracle).
 			if strings.Contains(rec.Body.String(), "golang-jwt") || strings.Contains(rec.Body.String(), "token contains") {

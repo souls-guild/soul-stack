@@ -28,6 +28,7 @@ needed - use `core.exec`.
 | `creates` | string | optional | Guard: if the file at this path **exists** - skip (`changed=false`, `reason: creates`). |
 | `unless` | string | optional | Guard: execute `sh -c "<unless>"`; if its exit **= 0** - skip (`reason: unless`). |
 | `onlyif` | string | optional | Guard: execute `sh -c "<onlyif>"`; if its exit **≠ 0** - skip (`reason: onlyif`). |
+| `exit_codes` | list | optional, default `[0]` | Exit codes accepted as success. Elements are exact integers and/or inclusive `"lo-hi"` string ranges, mixed freely: `[0, 1, 2]`, `["2-5"]`, `[0, "2-5"]`. Any code outside the set fails the task. An empty list is rejected — it would accept nothing at all, not even 0. The code judged is the one `sh -c` returns, i.e. the **last** command of a pipeline. A process killed by a signal reports `-1`, which no `"lo-hi"` range can cover (the string form is non-negative by construction) — write negatives as bare integers: `[0, -1]`. Does not apply to the guards: `unless`/`onlyif` read their own exit code by their own rule, and a skipped task reports `exit_code: 0` and never fails. |
 
 ## Capabilities / side-effects
 
@@ -44,8 +45,38 @@ auxiliary shell calls.
 
 `shell` returns `{ stdout, stderr, exit_code }` (exit_code is a number). When
 when the guard is triggered - `{ skipped: true, reason, exit_code: 0 }` with `changed=false`.
-Like `core.exec`, the main command's non-zero exit does not take a step by itself
-failed - solves `failed_when:` in scenario.
+
+**A code outside `exit_codes` fails the task, and the output still arrives.** Exactly as in
+[`core.exec`](../exec/README.md): the final event carries `failed=true` **and**
+`{ stdout, stderr, exit_code }`, so the stderr explaining the failure is in
+`register.<name>.*` and a predicate over `register.self.exit_code` is evaluable. A stream
+that is not valid UTF-8 cannot be carried; each field is decided on its own, so an
+unencodable stream is dropped and named in the message while the rest are kept — a command
+that wrote binary to both loses both, and `exit_code` — a number — always survives.
+
+It is the only failure class that carries output. Everything that fails **before** the
+shell runs carries none, and there is no `register.self.exit_code` to test — read
+`TaskEvent.error` instead: an unknown state, a bad param (`cmd`/`cwd`/`env`, and a
+malformed `exit_codes`, which is rejected before the guards are even checked), a
+`creates`/`unless`/`onlyif` guard that could not be evaluated (`os.Stat` denied, the guard
+shell unavailable), and a shell that would not start at all (`res.Err != nil`).
+
+Widen the set when the line legitimately returns another code, or waive the verdict
+entirely from the scenario with `failed_when: false`
+([destiny/tasks.md](../../../destiny/tasks.md), `failed_when:`), which is applied after
+Apply and has the last word — at the price of the task ending **OK, not CHANGED**, so its
+`onchanges:` dependents do not fire.
+
+```yaml
+params:
+  cmd: "grep -q listen /etc/redis/redis.conf"
+  exit_codes: [0, 1]                  # 1 = no match, an answer
+```
+
+**A pipeline still hides its head.** `sh -c` returns the code of the **last** command, so
+`redis-cli ping | grep -q PONG` reports `grep`'s verdict and `a | b` says nothing about a
+failure of `a`. `exit_codes` judges what `sh` reported and cannot see past it — when the
+head matters, assert on `register.self.stdout` or split the step.
 
 ## Examples
 

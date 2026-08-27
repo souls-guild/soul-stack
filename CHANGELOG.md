@@ -177,6 +177,30 @@ order to act in.
   the capability check sees for a host that was never connected, so the refusal is
   cross-checked against the lease rather than blaming that host's binary.
 
+- **A `kind=command` Voyage with `dry_run: true` starts previewing instead of
+  applying.** Until this release the flag never reached the hosts, so such a run
+  applied for real; it now does what it says. Two consequences to expect on the
+  first run after the upgrade, both per-host and both counted by
+  `max_failures` / `on_failure` like any other failure: a target whose Soul does
+  not announce the `dry_run` capability fails on its row instead of applying, and a
+  module the runner does not admit on the `Plan` path fails with
+  `errand_dry_run_unsupported`. A recurring `kind=command` Voyage that has been
+  *relied on* to change hosts while carrying `dry_run: true` will stop changing
+  them — drop the flag there. Recorded runs from before the upgrade did modify
+  their hosts, whatever the row and the UI say.
+
+  On the same axis: `dry_run` together with `core.cmd.shell` or `core.exec.run` is
+  now refused with `400` on `POST /v1/souls/{sid}/exec`, its MCP twin, and Voyage
+  create and preview. The two paths used to differ, and neither was right. On the
+  single-SID path the pair was accepted and answered `200` carrying `failed` +
+  `errand_dry_run_unsupported`, so a caller that read only the status code saw a
+  preview that never ran. On the Voyage path the flag was dropped along with
+  everything else described above, so the pair was answered `202` and then **ran
+  the command line for real on every resolved host** — no `dry_run` refusal
+  appeared anywhere, because nothing downstream was ever told it was a preview.
+  Nothing that legitimately worked stops working; the pair has never been
+  previewable.
+
 - **Seven new permissions land inside `<resource>.*` grants you already issued.**
   The catalog is closed and a wildcard in the action position expands to every
   known action of that resource, so a role written before this release grants
@@ -284,6 +308,23 @@ order to act in.
   a context-less cluster operation, and a route that gated a scoped-capable
   action with a context-less check was mis-gated before and now says so. Read
   routes are unaffected — they gate on existence and narrow in the handler.
+
+- **A `coven=`-scoped `soul.forget` / `soul.issue-token` / `soul.ssh-target-update`
+  now reaches hosts, where it used to reach none.** These three mutations put only
+  the path SID into the RBAC context, and a dimension the context does not carry
+  fails closed — so a grant narrowed by `coven=<label>` refused **every** call,
+  including one aimed at a host that really was in that coven, and the 403 named a
+  permission the operator demonstrably held. The gate now reads the host's own
+  `souls.coven` list first and asks the enforcer once per label, admitting on any
+  of them, so the grant means what it reads as. **This widens what an existing
+  role can do** without a role edit: review any role that carries one of the three
+  narrowed by a coven — it was inert and is now live over that coven's hosts, and
+  in the case of `soul.forget` that is a destructive right. Both forms of coven are
+  covered, the `on coven=…` suffix and a bare permission under a role whose
+  `default_scope` is a coven. Grants written `on host=` are unchanged, and a host
+  whose row cannot be read (unknown SID, database unreachable) still asserts only
+  the host, so nothing widens when Postgres is down. `errand.run` and the live
+  `soul.console` keep the old shape — a `coven=` on either still denies.
 
 - **`GET /v1/roles` and `keeper.role.list` no longer return the whole catalog.**
   A caller sees a role exactly when the caller could grant what that role grants.
@@ -439,6 +480,39 @@ order to act in.
   admitted to stamp `{"tier": 1000000}`, a pair their scope does not cover. Both
   surfaces now render through one function over the payload's canonical jsonb, so
   a pair an operator may attach is exactly a pair their scope reaches.
+
+- **Labelling an incarnation is now gated by the label, not only by the
+  incarnation** (NIM-587). `trait.<key>` is a live scope dimension for
+  incarnations exactly as it is for hosts, so a pair stamped on an incarnation
+  grants the same visibility a pair stamped on a host grants — and yet `PUT
+  /v1/incarnations/{name}/traits` and `keeper.incarnation.traits-set` asked only
+  whether the caller held the incarnation. An operator scoped
+  `incarnation.traits-set on coven=dba` could stamp `tier=gold` on an incarnation
+  in that coven and hand every `trait.tier="gold"` role sight of it — and,
+  through a `trait` Rite, of its members — while holding no such pair itself.
+  Both surfaces now screen through the same function as the two soul surfaces,
+  over the payload's canonical jsonb.
+
+  **What to re-read before upgrading.** A role whose `incarnation.traits-set` is
+  scoped on any dimension OTHER than `trait.` — `coven=`, `service=`,
+  `incarnation=` — has an EMPTY trait-scope and is now refused every pair with
+  `422 trait <k>=<v> is outside operator trait-scope`; an empty payload, which
+  only clears labels, still passes. That is the rule the soul surfaces already
+  applied, reaching the surface that was missing it, not a new one. A **bare**
+  `incarnation.traits-set` with no `default_scope` stays unrestricted and is
+  unaffected. To keep a scoped role able to label, give it a separate permission
+  constraining trait ALONE (`incarnation.traits-set on trait.tier="gold"`) — a
+  disjunct mixing trait with another dimension contributes nothing, by the same
+  fail-closed rule that governs `coven`. ⚠ Note that such a grant also **widens
+  gate (a)**: scope is per `(resource, action)`, so "may stamp this label" and
+  "may write to objects carrying it" cannot presently be separated.
+
+  **Create is deliberately out of scope.** `POST /v1/incarnations` and
+  `keeper.incarnation.create` still accept any well-formed trait, so an operator
+  refused a label on `traits-set` can still carry it at birth. Whether a create
+  is refused or the creator is taken to hold what it stamped is an open
+  permissions decision (NIM-622); both create surfaces move together when it
+  lands.
 
 - **`POST /v1/incarnations/{name}/scenarios/{scenario}` can now answer `422
   assert_failed` synchronously**, where it previously always answered `202` and
@@ -807,6 +881,38 @@ order to act in.
   that path. The case this closes is the partial answer.
 
 ### Added
+
+- **`soul-lint` catches a `compute.*` that will not resolve, before the run.**
+  Two rules over one walk of the scenario — its `compute:` block, its tasks
+  (including `block:` children) and its `state_changes:`. `compute_out_of_scope`
+  reports a `loop.items:`/`loop.when:`, an `on: [covens]` element, an `add:`
+  operation's `match:`, or one of the four flow-control keys (`when:` /
+  `changed_when:` / `failed_when:` / `retry.until:`) that references the namespace
+  — the contexts that lack it and that the offline pass can see. The flow-control
+  four are the ones an author is most likely to get wrong, because they sit on a
+  task whose `params:` **do** read `compute.*`; the diagnostic names the Soul-side
+  sandbox they actually run in and points at the one-line detour through the
+  task's own `vars:`. `compute_unknown_name` covers the far
+  more ordinary mistake, wherever the namespace *is* in scope:
+  `compute.node_cont` for a declared `node_count`, and a reference to an entry
+  declared **further down** the block (entries resolve top to bottom, so a forward
+  reference has no value yet). The diagnostic lists the names that do exist. Until
+  now nothing caught any of this statically: the linter had no notion of `compute`
+  references at all, so the first sign was a failed run.
+
+  Both rules ask the CEL parser rather than a regex, so prose in a param, a coven
+  label like `compute-cluster` and an `input.compute_timeout` are not flagged; a
+  reference whose name is not in the source (`compute[input.key]`,
+  `size(compute)`) is left to the run rather than guessed at; and a child of an
+  `on: keeper` `block:` is not treated as keeper-side (`on:` is not inherited by
+  block children). Three things stay off the offline pass and are caught by the
+  run instead: a task spliced in by `include:` (the rule sees the scenario's own
+  task list, and the include is resolved on the keeper — a pre-existing limit of
+  every per-task rule, not of this one, NIM-655); the isolated destiny pass (the
+  destiny linter is handed `destiny.yml`, whose tasks live in a file it never
+  receives); and the name rule when an `extends:` covenant failed to resolve,
+  since the merged `compute:` block is then unknown and every name would look
+  undeclared. A clean `soul-lint` is a narrower statement than a clean run.
 
 - **The composed incarnation name, previewed before it is permanent**
   ([ADR-0079 (g)](docs/adr/0079-incarnation-name-template.md)). When a create
@@ -1227,7 +1333,180 @@ order to act in.
   response field is narrowed; the `?type=` filter stays a free string, because a
   filter has to keep matching historical rows whose type has since been retired.
 
+- **`make check-webui-freshness` — the gate now notices that the embedded UI is
+  not the companion's current one.** Merging the UI repository without re-running
+  `make sync-webui` leaves keeper serving a bundle nobody built from current
+  sources, and nothing failed: `check-webui` prints `skipping` and exits zero
+  where the companion is not checked out, and `check-webui-embed` compares the
+  bundle against a fingerprint recorded by the same sync that produced it, which
+  a stale bundle matches perfectly. That happened on two consecutive web merges — three times in all,
+  counting NIM-273 — and a human found it every time. The new check asks the one
+  question those two structurally cannot —
+  is `WEBUI_SOURCE`'s `commit=` still the tip of the companion branch this tree
+  is assembling — with a single anonymous `git ls-remote`: no companion checkout,
+  no npm, no token. It is **binding on `release/*` and `hotfix/*`** and advisory
+  everywhere else, so a release cannot be assembled around a stale `/ui` while an
+  unrelated feature branch stays quiet; hotfix branches are binding because they
+  reach `main` without passing a release branch. `WEBUI_FRESHNESS_SKIP=1` is the
+  declared escape for offline work, and every failing path names it — most of the
+  conditions that fail here (offline, no remote, no provenance file) are not cured
+  by the re-sync the message would otherwise be recommending. A checkout that is
+  on no branch at all cannot answer "is this a release?", and an unanswerable
+  question counts as binding rather than as "not a release": otherwise one
+  detached HEAD would turn the check off silently, which is the failure it exists
+  to prevent. Three detachments that are not that case are recognised rather than
+  counted as unanswerable — a conflicted rebase resolves to the branch being
+  rebased and is then judged as that branch, while a bisect stays advisory (it
+  lands on old commits on purpose) and so does a checkout sitting exactly on a
+  tag, a released version whose bundle is supposed to be frozen. Exactly
+  one tree is skipped outright — one with no `assets/` at all, which cannot carry
+  a stale bundle; a tree that is not a git checkout (an unpacked source tarball)
+  is advisory, which still reports. That single skip is unconditional, and it is
+  safe because of something outside this check: `//go:embed all:assets` refuses to
+  compile an empty or missing directory, so "delete `assets/` and the gate goes
+  quiet" reds the `build` tier first. A bundle *with* no `WEBUI_SOURCE` beside it
+  still fails — that is an inconsistency, not an absence, and it is the live state
+  of `main` and `hotfix/R5-I-provision-hardening`, so the hotfix branch reds until
+  it carries a re-vendored bundle. A pull request is judged by its **base** branch,
+  not by `GITHUB_REF_NAME` (which is `<n>/merge` there and could never match
+  `release/*`): the review before the merge is where an unpaired bundle is still
+  cheap to catch. A merge-queue run is read the same way — its ref spells the base
+  out as `gh-readonly-queue/<base>/pr-<n>-<sha>`, and that run is the last gate
+  before the commit lands on that base, so taking the ref at face value would go
+  quiet exactly there.
+  When the companion has no such branch yet — a release train that starts in core —
+  the check says so and compares against the branch the bytes were actually
+  vendored from, rather than reding until someone opens the branch on the other
+  side; a red nobody can clear teaches everyone to stop reading reds. When that
+  fallback is unavailable because the bundle records no `branch=` at all — which
+  is what `sync-webui` writes for a detached companion, and what it now warns
+  about while the companion is still in reach — the red says so instead of
+  blaming a branch nobody has to open. And the branch a bundle is *labelled* with
+  is judged only after its commit: a release train opens the companion's next
+  branch AT the commit already vendored, so for that moment the label reads
+  `release/<prev>` while the bytes are the tip of `release/<next>`, and calling
+  that stale would red a tree that is exactly up to date at the busiest hour of
+  the train.
+  It compares pointers, not content, so an inert companion commit still asks
+  for a re-sync — deliberate, because `vite.config.ts` carries both the build and
+  the test config and no path list can separate the two honestly. When the UI
+  really did not change, the whole diff is two provenance lines.
+  A red has two shapes and the message names both, because only one of them is
+  cleared by re-vendoring. Besides the unpaired merge there is a bundle vendored
+  from a companion commit **that was never pushed**, and there `make sync-webui`
+  is the wrong move in both directions: from the branch tip it rewinds the UI past
+  the work that was vendored, and from the local checkout it re-records the same
+  unpublished SHA. That state means the release bundle cannot be rebuilt by
+  anyone else, so it earns a red of its own; the fix is to push the companion.
+  `git branch -r --contains <sha>` in the companion separates the two shapes,
+  while `ls-remote | grep` cannot — an ancestor is published and is the tip of
+  nothing.
+  Three things the check deliberately does not overstate. It reports "does not
+  match the companion tip", never "is behind": `ls-remote` returns one SHA and
+  answers equality, not ancestry, and on a force-pushed branch "behind" would
+  simply be false. The companion repository is *derived* — every remote of this
+  checkout with `-web` appended, origin first, first answer wins — so a fork-based
+  checkout can be answered by a `-web` that trails or leads upstream; every
+  mismatch therefore names the URL that answered, and `WEBUI_REMOTE_URL=<url>`
+  pins a different one, which is what keeps a red that re-vendoring cannot clear
+  diagnosable. And `unknown` binds but cannot ask everything: without a branch,
+  "was this vendored from the branch being assembled" is unanswerable, so only
+  staleness against the recorded branch is checked and the banner says which
+  question was skipped. A rebase started from an already-detached HEAD stays
+  `unknown` too — git writes the literal string `detached HEAD` as the branch being
+  rebased, and reading that as a branch name would have downgraded a release
+  worktree to advisory with one `git rebase`.
+  Three things a green does not mean, written down because an unwritten limit
+  gets read as coverage: nobody hand-edited `WEBUI_SOURCE` (nothing binds
+  `commit=` to the bytes beside it, and writing the companion's tip into that
+  line greens all three web checks at once); the companion has opened the branch
+  being assembled (until it does, the fallback measures against the recorded
+  branch, so UI work landing elsewhere stays invisible); and the check actually
+  ran (`WEBUI_FRESHNESS_SKIP=1` exits zero and `gate.sh` prints PASS — a known
+  boundary of every tier, visible in the log rather than in the summary table).
+
 ### Changed
+
+- **`check-webui` fails instead of skipping where the companion is mandatory.**
+  Absent companion still skips off a release branch (third-party clones, ticket
+  worktrees that never touch the UI), but on `release/*` it is now an error with
+  `WEBUI_SKIP=1` as the declared opt-out — a release worktree is exactly where
+  the companion is supposed to sit next to core, so "no companion" there is an
+  unconfigured tree rather than a legitimate skip. CI keeps skipping the byte
+  comparison, knowingly: running it there would mean checking out the companion
+  *and* building it on every core push, and `check-webui-freshness` answers the
+  question that mattered without either. Both targets read the same answer from
+  `check-webui-freshness.sh --context`, so the two cannot drift apart, and when
+  that answer cannot be obtained at all the caller assumes the strict one — a
+  gate that fails open at the exact moment it cannot tell where it is running is
+  not a gate.
+
+- **`make sync-webui` always rebuilds the companion.** It used to build only when
+  `dist/index.html` was missing and otherwise mirror whatever was already there,
+  while reading `commit=` fresh from the companion's HEAD. A checkout whose `dist/`
+  predated its last few commits was therefore mirrored as-is under a provenance
+  line pointing at the tip: the bundle stayed stale, its fingerprint matched
+  (`check-webui-embed` derives it from those same bytes), and freshness was
+  satisfied. All three checks went green over exactly the defect they exist to
+  catch — in the one script every one of them recommends as the remedy. A failed
+  build now leaves the vendored bundle untouched and says so, pointing at
+  `npm ci` for a fresh checkout, and a detached companion records an empty
+  `branch=` rather than a branch literally named `HEAD`. Running it with no
+  companion beside the repository now prints the "not found, or name it
+  explicitly" message it always carried: the default path was resolved with a
+  `cd` under `set -e`, so the script died on a raw `cd: no such file or
+  directory` before reaching its own guard — and the person most likely to follow
+  a "run make sync-webui" red is precisely the one without the companion checked
+  out.
+
+- **`compute.<name>` is readable from an `on: keeper` task, and elsewhere a
+  context without the namespace now says so instead of blaming the key.** A
+  keeper-side task used to be handed no `compute` at all, so `${ compute.x }` in
+  its `params:` failed with `no such key: x` — for a name that was declared and
+  spelled right. The omission had no reason behind it: `compute:` resolves once
+  per run, in the very run-level context an `on: keeper` task renders in, so there
+  was never a per-host value to import. It is now in scope there, in `params:` and
+  in the task's own `vars:`, exactly as on the Soul side.
+
+  The namespace is genuinely absent from four contexts, each because it runs
+  before or beside the point where a computed value means anything: the
+  `loop.items:`/`loop.when:` axis, `on: [covens]`, the isolated destiny pass
+  ([ADR-009](docs/adr/0009-scenario-dsl.md) V2), and `state_changes` `add:`
+  `match:`. Those used to be handed an empty map and produced the same misleading
+  `no such key`; they now refuse at **compile**, naming the namespace, the context
+  the author is standing in, and what to write instead — with one exception left
+  standing: an `add:` `match:` **inside a `foreach`** is routed to the
+  context-aware merge-time evaluator so the predicate can read the `as` name, and
+  that path still reports an eval-time `no such key`. `soul-lint` refuses the
+  shape offline either way, so a scenario that lints clean does not reach it.
+  Two consequences worth
+  expecting: the check runs before evaluation, so it also fires on a branch a run
+  would never have reached; and the previously **silent** forms are silent no
+  longer — `has(compute.x)` stopped evaluating to `false` and `size(compute)`
+  stopped returning `0` in a context that never had the namespace. A scenario
+  relying on either as a feature test will now fail at render; test the underlying
+  `input.*`/`vars.*` instead. The full table is in
+  [docs/scenario/orchestration.md §2.4](docs/scenario/orchestration.md).
+
+  A fifth context is out of scope and always was, with nothing to fix at the
+  engine: `when:` / `changed_when:` / `failed_when:` / `retry.until:` are not
+  rendered by the Keeper at all — they travel into the `RenderedTask` verbatim and
+  Soul evaluates them in the flow-control sandbox
+  ([ADR-012](docs/adr/0012-keeper-soul-grpc.md)(d)), over
+  `input`/`vars`/`incarnation`/`soulprint.self`/`register`. That sandbox never
+  declared `compute`, so it already refused honestly in cel-go's own words
+  (`undeclared reference to 'compute'`) rather than blaming a key. It is called
+  out here because the surprise is real — the same task's `params:` **do** read
+  `compute.*` — and because the detour is one line: put the value in the task's
+  own `vars:`, which is rendered with the namespace in scope, and write the
+  predicate against that.
+
+- **`compute` is now a reserved binding name.** `loop.as:`/`loop.index_as:` and
+  `state_changes` `foreach.as:` reject it (`loop_var_reserved` /
+  `reserved_binding_name`), matching the other context roots. In the loop axis the
+  shadow was merely confusing; in `state_changes` it was silent and worse — that
+  context *does* have the namespace, so `as: compute` validated, rendered, and
+  quietly made every `compute.<name>` mean a field of the element being iterated.
 
 - **A Tiding's `incarnation` selector now binds through `incarnation.run_completed`.**
   It used to bind through `incarnation.drift_checked`, the only run-scope event
@@ -1781,6 +2060,236 @@ order to act in.
 
 ### Fixed
 
+- **A `coven=` scope on the three per-host Soul mutations denied every call
+  instead of narrowing them.** `NIM-588`. `soul.forget`, `soul.issue-token` and
+  `soul.ssh-target-update` were gated by a selector that put only `host=<sid>`
+  from the path into the RBAC context. A condition over a dimension the context
+  does not carry fails closed, so `soul.forget on coven=web` was not "forget hosts
+  in `web`" — it refused the whole permission, and the 403 named a right the
+  operator held. Both ways a coven attaches were affected, the `on coven=…` suffix
+  and a bare permission inheriting a role's `default_scope`; they meet at the same
+  scope expression before the check, so neither was a special case of the other's
+  bug. The gate now resolves the host's `souls.coven` list first and offers the
+  enforcer one context per label — a host holds several ([ADR-008](docs/adr/0008-coven-stable-tags.md)),
+  so a single context could only ever have asked about one — admitting if any
+  passes. MCP resolves the identical contexts before the tool body runs, since
+  both surfaces are primary ([ADR-004](docs/adr/0004-binaries.md)) and a fix on
+  one of them leaves the operator with the same 403 one surface over. A host whose
+  row cannot be read still asserts the host alone: coven-scoped grants fail closed,
+  `on host=` grants keep working, and a database outage widens nothing. Note the
+  scope of the fix — `errand.run` and the live `soul.console` still build a
+  host-only context, so a `coven=` on either continues to deny.
+
+- **A second of clock drift between Keeper instances answered `401 invalid
+  token` on a token seconds old.** `NIM-621`. Keeper runs as several stateless
+  instances over one signing key from Vault
+  ([ADR-002](docs/adr/0002-transport-grpc-ha.md),
+  [ADR-014](docs/adr/0014-operator-identity.md)), so a token minted by one is
+  routinely verified by another — and the verifier validated `iat` with no
+  tolerance at all. A node one second behind the issuer therefore rejected a
+  one-second-old token as issued in the future, the operator's retry landed on a
+  different instance and succeeded, and what they saw was authentication that
+  flaps. The answer made it worse: every cause other than expiry collapsed to
+  `invalid token`, the same string a forged signature produces, so drifting
+  clocks were indistinguishable from an attack and the diagnosis went to the
+  signing key. The project already treats skew as normal elsewhere
+  ([ADR-018](docs/adr/0018-soulprint-typed.md) warns above 10 minutes rather
+  than refusing).
+
+  `iat` and `nbf` now carry a 60s tolerance — RFC 7519 §4.1.4 allows "some small
+  leeway", and the budget stays small on purpose because rejecting a made-up
+  `iat` is what validating it is for. Past the budget the refusal is its own
+  cause: `detail: "token issued in the future"`, not `invalid token`. A client
+  matching on the exact string `invalid token` will see the new one for this
+  case; that is the only behaviour change on the wire.
+
+  **`exp` is deliberately excluded.** golang-jwt applies one tolerance to every
+  time claim and offers no way to split them, so the leeway alone would have
+  accepted a token up to 60s past its expiry. On `auth.jwt.exchange_ttl`, whose
+  floor is one minute ([ADR-058](docs/adr/0058-operator-auth-ldap-oidc.md)),
+  that doubles how long a stolen Bearer keeps working — and it buys nothing,
+  because drift on `exp` only ever costs the last second of a token's life,
+  when the holder should be getting a new one anyway. `Verify` therefore
+  re-checks expiry strictly afterwards, and expiry still arrives as its own
+  error: the cookie exchange keeps answering `token expired` rather than the
+  generic `authentication required`, which is the difference between telling a
+  browser to sign in again and telling it nothing.
+
+  The e2e harness had built a conclusion on the old ambiguity. Its keeper
+  identity check read any 401 against a freshly minted token as proof that some
+  other process had taken the port, and reported an address to go and
+  investigate — a reading that was never sound and is now demonstrably wrong,
+  because a wall clock stepping backwards produces that 401 on a stack talking
+  to its own keeper. It now branches on the cause the keeper names and says
+  "check the clock" for skew. The strings it matches on live in another module's
+  `internal/` and cannot be imported, so a guard reads them out of the
+  verifier's source instead: rename one there and the guard says which binding
+  went stale, rather than the harness quietly falling back to blaming the port
+  again.
+
+  The `-1s` durations in gate summaries are clamped in the same pass
+  (`NIM-611`): `SECONDS` follows the wall clock, an NTP correction or a WSL2
+  resume steps it backwards, and the release table people read the run from was
+  printing negative tier times.
+
+- **`make dev-stop` stopped nothing, and took `make dev-down` with it.** `NIM-615`.
+  The recipe quoted an inner `grep` pattern with `'...'` inside its own `'...'`
+  string, which does not nest — it closes. With `SHELL := /bin/sh` the target was
+  therefore never one command: it was the pipeline `bash -c '<truncated script>' |
+  node | npm '<the rest>'`. `bash` got a script cut off mid-statement and refused
+  it as a syntax error, so not one process was signalled, and make then exited 127
+  on the missing `node`. `dev-down` declares `dev-stop` as its prerequisite and
+  died there, before ever reaching `docker compose down`.
+
+  The failure mode is the one the target exists to prevent: an orphan `keeper run`
+  holding 8080/8081/9090/9442/9443, with the next bring-up failing on `bind:
+  address already in use` and the operator told only `Error 127`. Broken since
+  2026-07-22 and invisible for two and a half weeks, because a Makefile recipe is
+  the one kind of code in this repo that nothing compiles, lints or executes.
+
+  Fixed by quoting the pattern with `"..."`, and gated by the new
+  `check-makefile-recipes` tier, which is two layers because one does not cover
+  it. It **scans** every `bash -c` in the Makefile for an argument that is one
+  fully quoted string — breadth, and safe on recipes that redirect to absolute
+  paths — and then **runs** `dev-stop` for real against a throwaway stand, which
+  is the only way a defect in what the script does, rather than in how it is
+  quoted, can be caught. The run needs no docker and takes no stand slot
+  (`DEV_STAND_SLOT` short-circuits allocation ahead of the registry).
+
+- **Every E2E tier could report on code that was not in the tree.** L3a and L3b
+  spawn `keeper/bin/keeper` — whatever the last build left there — and L3c
+  deploys the `keeper:e2e-k8s` image the local daemon happens to hold. None of
+  the three compiled anything, and `make e2e` did not depend on `build`, so the
+  verdict was about an artifact rather than about the source. The failure is
+  symmetric and both halves are expensive: deleted wiring stayed green until
+  someone ran `make build`, and a test "reproduced" a defect the tree had
+  already fixed. Absence was loud (the harness skipped when the binary was
+  missing) and staleness was silent.
+
+  Two changes, because either alone leaves a way in. The Makefile targets now
+  build what they test (`e2e: build`; `e2e-live` gained `build` alongside
+  `build-linux` — those produce *different* keepers, and the tier ran the one
+  that was not being rebuilt). And each harness now refuses outright: before any
+  stand comes up it asks the artifact for its version and compares it with the
+  tree's, so a hand-run `go test -tags=e2e` cannot go green on yesterday's
+  binary either. Refuses, not skips — a skipped pre-flight is the defect again,
+  one level up.
+
+  Two axes, because one cannot cover both cases. The version catches another
+  commit; file timestamps catch an uncommitted edit made after the build, which
+  no version can see. `-dirty` is stripped before comparing (it is repo-wide, and
+  reddening a byte-correct binary over a README edit is how a gate gets turned
+  off), and the timestamp axis looks only at uncommitted files under
+  `keeper`/`shared`/`sdk`/`proto`. Each message names the command that fixes it,
+  and the L3c one says which command does *not*: `make build` produces the host
+  binary, while the cluster runs an image.
+
+  In L3a and L3b the refusal happens inside the declared bring-up region, so it
+  reaches a reader as STAND-SETUP — correct, in that nothing was asserted, but
+  STAND-SETUP's standing advice is "rerun this one alone", and rerunning a stale
+  binary reproduces it forever. Both classifiers —
+  `scripts/classify-l3a-failure.py` and `scripts/classify-e2e-live-failure.py` —
+  now recognise the refusal and say `make build` first. They key on a string in
+  the harness's message, so a self-test asserts both of the harness's stale paths
+  still carry it; an unchecked copy is the same silent drift one level up. That
+  count reads Go string literals only: over raw source, a comment quoting a
+  message the harness no longer prints keeps the check green — which is exactly
+  what rewording the message leaves behind.
+
+  In both scripts the advice is a pure function, and in both the *join* is
+  pinned separately, because a branch and its caller fail differently: a correct
+  function reached with the wrong argument still returns confidently. Each
+  script's self-test now runs a real stale-binary log through its own entry
+  point, as a subprocess, and requires the rebuild advice in the rendered
+  report. A fixture that calls the renderer directly cannot do this — it picks
+  its own argument, so it cannot tell the real one from an empty string. L3a
+  keeps an AST check beside the rendered one: that pins the *shape* (`main`
+  hands `next_step` the family it classified) where the log pins the *value*.
+  The advice line the rendered check looks for is asked of `next_step` rather
+  than spelled out, so rewording a headline does not redden it while the
+  headline never reaching the page does — `make build` appears in the paragraph
+  above the advice too, and on its own it does not tell the two apart.
+
+  Two things a stamp comparison quietly misses, both closed here. An
+  **uncommitted deletion** is invisible to both axes — `-dirty` is stripped, and
+  a file that is gone has no mtime — and `tests/e2e` has no `replace` for keeper,
+  so deleting keeper source does not even break the tier's build. The mtime axis
+  now falls back to the nearest surviving parent directory, which `unlink`
+  refreshes. And on L3c, `.Created` is **frozen by BuildKit** across rebuilds: the
+  image ID changes, the timestamp does not, so a rebuilt image read as
+  hours-old. The provenance check now prefers `.Metadata.LastTagTime` and falls
+  back to `.Created` (the tag stamp is zero for a pulled image), with both
+  Docker's timestamp renderings parsed.
+
+  The guards derive their subject rather than listing it: "every function that
+  resolves the keeper binary" comes out of the AST, minus a named exemption list
+  that carries the reason for each entry. A hardcoded list of who-must-check goes
+  stale in the silent direction — add a spawner, forget the list, and the guard
+  reports green about something it never looked at, which is this ticket's own
+  shape. An exemption list goes stale loudly. The L3c deployment manifest is tied
+  to the image constant the same way, since committed YAML cannot reference a Go
+  const. The rule caught one of this change's own lists: the four directories the
+  timestamp axis watches were hardcoded, and copied into three tiers that are
+  separate Go modules and cannot share them. They are correct today and would
+  have gone quiet the day keeper links a fifth module, so they are now derived by
+  walking keeper's first-party import closure and compared against all three
+  copies — in both directions, since a missing root is a false green and a
+  surplus one is a false red. The copies themselves are found by glob over
+  `tests/*/harness/provenance.go` with a floor of three, so a fourth tier joins
+  the comparison the day it appears, not the day someone remembers to list it.
+
+  Found on the way: `.dockerignore` excluded `*/bin/`, which is exactly where
+  the L3c image Dockerfiles (`tests/e2e-k8s/dockerfiles/`) COPY from — the
+  `deploy/docker/` images of the same names build inside a builder stage and
+  are unaffected — so `make docker-build-keeper` had been failing since the
+  beta, which is the commit that introduced both halves.
+
+- **A restarted dev Vault made `dev-provision` hand you someone else's stand,
+  silently.** The dev Vault stores its secrets in RAM (`dev/docker-compose.yml`);
+  Postgres stores its data on a named volume. A container restart therefore does
+  not reset the stand, it desynchronises it — and `dev/provision.sh`, being
+  idempotent, saw a missing key as "not created yet" and minted a fresh one over
+  live registries. Nothing errored. `operators` still held its Archons while
+  every JWT ever issued to them stopped verifying (401 — the rights are intact,
+  only the signature no longer matches); `soul_seeds` still held seeds chaining
+  to a PKI root that had just been replaced, so mTLS failed and the souls had to
+  be re-onboarded; `plugin_sigils` still held grants signed by an anchor that no
+  longer existed ([ADR-026](docs/adr/0026-sigil.md)). The stand looked healthy
+  and reported ready throughout.
+
+  Provision now checks the three anchors against the registries that depend on
+  them **before it generates any anchor** (step 1b) and refuses, naming the rows
+  at stake and ranking the ways out by blast radius. `DEV_VAULT_REISSUE_ANCHORS=1`
+  takes the loss on purpose, listing what it destroys as it goes.
+
+  Three things the guard does that the symptom does not suggest. First, the KV
+  prefix is per-stand but the `pki/` engine is **one per Vault**, and every
+  lightweight stand shares one — so the seed count is taken across every
+  `keeper*` database, not just this stand's, and when a neighbour is among the
+  losers the refusal stops offering "drop your own database": that advice would
+  be false, since the root is regenerated under their souls whatever you do to
+  yours. Second, a database list that cannot be read is reported as UNKNOWN
+  rather than counted as empty — the whole PKI half of the check hangs off that
+  one query, so treating a failed `psql` as "nobody depends on the root" would
+  reproduce the silence being fixed. Third, an unreachable Postgres warns instead
+  of blocking — with no registry to ask, a first-ever stand is indistinguishable
+  from a wiped Vault, and refusing there would break every initial provision. A
+  first-ever stand with empty registries generates them without objecting on a
+  machine with no neighbours, but not on a shared one: restart the Vault container where somebody
+  else already has souls and the next brand-new stand is refused too, because the
+  seed count spans every `keeper*` database and the root it would mint is the one
+  their seeds chain to. That refusal is the guard working, and it points at the
+  neighbour rather than at a database to drop.
+
+  One dev script changes behaviour with the guard. `dev/upgrade-demo/ui-stand.sh`
+  runs `make dev-provision` on exactly this symptom — `dev/mint-jwt.sh` failing —
+  so on a desynchronised host the demo now stops on the refusal instead of
+  quietly reissuing the anchors and coming up over registries it has just
+  orphaned. It runs under `set -e` and calls `make` directly, so the last lines
+  are the guard's `[provision] [fail]` block and make's own exit, with no
+  `[ui-stand][FAIL]` summary after them: take one of the ways out it lists, then
+  re-run the script.
+
 - **No fresh dev stand came up, on the release or on any branch off it.**
   `NIM-377` deleted the plugin's hand-written `manifest.yaml` and moved a
   module's contract into a generated canonical-JSON document stamped into the
@@ -1811,6 +2320,122 @@ order to act in.
   holds the script to each of those acts — anchored on the commands that perform
   them, because the step's own log line names all of them and would stay green
   while the writes it describes were gone.
+
+- **A red module ended the sweep, and the five modules behind it left no trace.**
+  Every per-module loop in the `Makefile` — `test`, `test-race`, `vet`, `tidy`,
+  `build`, `check-vuln`, `vet-tags`, `test-plugins` — was written
+  `for m in $(MODULES); do (cd $$m && …) || exit 1; done`. `MODULES` is eight
+  entries in a fixed order, so a failure in `shared`, the third, meant `sdk`,
+  `keeper`, `soul`, `soul-lint` and `soulctl` were never tested and nothing in
+  the output said so. The tier above printed one honest `FAIL test`, and
+  `gate.sh` reported exactly what it was told: one failed tier, zero not run.
+  True about tiers, false about modules.
+
+  That is the `NIM-373` defect one level down, and its cost lands where
+  `NIM-380`'s did — at release acceptance, on a red run read in a hurry. "That's
+  `shared`, we know about that" is a reasonable thing to think, and it is
+  compatible with the run having said nothing whatsoever about `keeper`. An
+  unperformed check is indistinguishable from a passed one unless something
+  names it.
+
+  `scripts/modules-run.sh` now runs the command across every module and reports
+  four states rather than two. `PASS` and `FAIL` are the module's own verdict.
+  `SKIPPED` means the probe found nothing to run there, and the reason is
+  printed beside it. `NOT RUN` means nobody asked — fail-fast was requested
+  (`MODULES_FAIL_FAST`, opt-in and off by default) or the run was interrupted —
+  and it is never folded into a pass: the summary names those modules and says
+  in words that the sweep is silent about them. An interrupted sweep still
+  prints the table, which is exactly when "how far did it get?" is worth most.
+
+  Several conflations went with it, all of the same shape — a refusal is only
+  worth anything if it gives the right reason:
+
+  - **A broken probe read as an empty module.** The old test,
+    `[ -z "$(cd $$m && go list ./... 2>/dev/null)" ]`, is empty both when a
+    module has no Go packages and when `go list` could not run at all — a broken
+    `go.mod`, an unresolvable import, a missing directory — so a module nobody
+    could even enumerate was reported as "no Go packages", skipped, and left the
+    sweep green. A probe that breaks is now a failure by default with its own
+    stderr quoted; a caller that genuinely wants to skip on it says so
+    (`MODULES_PROBE_FAIL=skip`) and gets a **different** sentence in the report,
+    because "there is nothing here" and "we could not find out what is here" are
+    different answers.
+  - **A sweep over zero modules printed a success line.** `test-plugins` did
+    exactly that over an empty plugin glob. It is now a refusal that names the
+    empty corpus rather than the calling convention, which was fine — sent to
+    check the invocation, nobody goes looking for the missing plugins. A blank
+    command is refused for the same reason: it satisfies an emptiness test, runs
+    as a no-op in every module, and reports a green sweep over work nobody did.
+  - **A module that is not on disk read as an empty one.** It has its own verdict
+    now — `no such module directory`, decided before any probe runs, so nothing
+    about it is ever explained in a probe's words. A directory that exists but
+    cannot be entered is a failure too, and that one matters most under
+    `MODULES_PROBE_FAIL=skip`, where it used to read as "does not resolve
+    offline", report `SKIPPED`, exit 0, and never print the `permission denied` —
+    a skip quotes nothing.
+  - **One scratch file carries the probe's stderr for the whole sweep**, so a
+    probe that fails without writing a word — `exit 1` on a precondition is the
+    ordinary shape — could be quoted the previous module's complaint under its
+    own name. What prevents it is that the redirect truncates on open, which is
+    one character away from not doing so; the guard has the case and the `2>>`
+    known-bad is measured beside it.
+  - **A module list carrying a newline swept its first line only.** `read -r -a`
+    takes one line, so the table would have covered part of the corpus while
+    reading as all of it. Nothing calls it that way today; the script refuses a
+    sweep over nothing, and quietly sweeping over half is the same claim.
+
+  The scope here is the eight targets listed above. `test-integration` still
+  tests its modules with the old `go list` idiom and is left alone in this
+  change.
+
+  `vet-tags` and `build` needed one more thing, and it is this ticket's own
+  defect surviving inside its fix: `make` runs each recipe line in its own shell
+  and abandons the target on the first nonzero exit, so a module sweep that
+  reported every module and then returned 1 still meant the four tagged
+  directories — and every binary — were never reached and never named. Both are
+  now a single recipe line with an accumulated `rc`. For `build` the comforting
+  story was that the chain is safe because the binaries link the library modules
+  above them, and the `go.mod` files say otherwise: `soulctl` requires none of
+  the four, `soul-lint` only `shared`, and `soul` is isolated from `keeper` by
+  ADR-011.
+
+  A sweep in which every module skipped now says the command ran nowhere. It
+  stays exit 0 — `test-plugins` offline skips every cloud and ssh plugin, and
+  that is a real answer — but `0 passed, 0 failed, 3 skipped` with nothing else
+  on the line reads as a pass over work that happened in no module at all, one
+  state along from the `NOT RUN` that already had a sentence.
+
+  `check-modules-run` guards the reporter, for the reason `check-gate` and
+  `check-ci-status` guard theirs: a restored early exit does not crash or print
+  an error, it just ends the sweep sooner and still prints a summary, which is
+  the most complete-looking thing in the log.
+
+- **A console test failed about once in fifty, and the defect was in the test.**
+  `TestConsoleWS_WriteFailureIsReportedAtWarn` waited for `hub.Count() == 0` and
+  then read the log in one shot. But `Count()` drops at `unregister`, the
+  **first** step of `Hub.Close`: the close dispatch to the soul, the recording
+  close and the audit write all happen after it, and the `sessions reaped` line
+  the test asserts on is written after all of those. So the test was reading the
+  log during a window it had explicitly waited to be past, and whether it won
+  depended on the scheduler. The reap itself was never late — nothing was wrong
+  with the subject — but a run that goes red for a reason unrelated to the
+  change under test costs the same as a real finding at release acceptance, and
+  gets believed less the next time.
+
+  Both assertions now poll to a deadline, and the fake soul stalls its close
+  dispatch by a fixed 250 ms so the teardown tail is observably long on every
+  run. That is the part worth keeping: the delay stays in the test permanently,
+  so restoring the one-shot read is red every time rather than one run in fifty.
+
+  The sibling case that asserts a clean disconnect logs **no** failure had the
+  same vantage-point problem and a worse version of it, because absence is the
+  whole claim: it asserts that *nothing* was logged at WARN, over teardown steps
+  that all come after the count it waited on and any of which can warn. It now
+  waits for `keeper_console_sockets_active` to reach zero — the final statement
+  of the socket handler, after the pumps are joined, the sessions reaped and the
+  reap line written — which is the only observation that means "finished" rather
+  than "got somewhere". Made an ordinary close report as a failure, the test is
+  red from there and green five times out of five from the old vantage point.
 
 - **Every service declaring `modules:` was unappliable on every host.** The two
   ends of the auto-synthesis path (`ADR-065`) disagreed about what address level 1
@@ -1878,6 +2503,59 @@ order to act in.
   wizard does) therefore offers only modules that cannot be planned, so the new
   capability is reachable through the API and MCP but not through the module
   picker; the catalog needs a way to say this at all (NIM-556).
+
+- **A `kind=command` Voyage with `dry_run: true` applied to every host for real.**
+  The flag was accepted by `POST /v1/voyages`, stored in the `voyages` row, echoed
+  back by `GET /v1/voyages/{id}` and shown in the UI — and then left behind. The
+  per-host leg builds an [Errand](docs/adr/0033-errand.md) dispatch request, and
+  that request was assembled without the field, so Go's zero value made every
+  target run `Apply`. An operator previewing a change across a fleet changed the
+  fleet, and nothing said so: the API answer, the row and the UI all agreed with
+  what had been asked for, and only the hosts disagreed. **If you have
+  `kind=command` runs recorded with `dry_run: true` from before this release, those
+  hosts were modified.** The bug is as old as `kind=command`; the Errand work of the
+  previous entries exposed it rather than causing it.
+
+  The flag now rides the per-host request, threaded through the single call the two
+  batch frames (`barrier` and `window`) share, so neither can drift from the other.
+  Two guard tests, not one: `dry_run: true` must arrive at the spawner, and `false`
+  must not arrive as `true` — a preview that quietly applies and an apply that
+  quietly previews are both wrong, and one assertion catches only the first. The
+  capability gate of the entries above now covers Voyage targets as a consequence:
+  a host that never announced `dry_run` fails on its own row instead of applying,
+  and that gate was not loosened to let a fleet run through.
+
+- **`dry_run` on a verb-shell module now answers `400`, not `200` with a failure.**
+  [ADR-033](docs/adr/0033-errand.md) has promised a keeper-side refusal since it was
+  written; only the Soul-side half existed. Asking to preview `core.cmd.shell` got
+  `200` carrying `FAILED errand_dry_run_unsupported` — a request that cannot succeed
+  on any host, in any fleet, at any agent version, reported as an attempt that
+  happened to fail. On the Voyage path it was wrong in the other direction — the
+  flag never reached the host, so the command line ran for real on every one of
+  them (the entry above). With the flag threaded, that same request would instead
+  fan out one identical, unavoidable failure per host, all of it after the operator
+  had been told `202`; this is the case the refusal catches at creation.
+
+  Keeper now refuses the pair up front, naming the module, on `POST
+  /v1/souls/{sid}/exec`, the MCP twin, and `kind=command` Voyage create and preview
+  — one validator called from both entry points, so the surfaces cannot answer
+  differently, and ahead of the `errands` row, the `errand.invoked` audit event and
+  Voyage scope resolution. `malformed-request`, not one of the `409` capability
+  types: nothing about the cluster or the target binary can make it work, so
+  pointing at a capability would send you to upgrade an agent that would refuse it
+  too. Unlike the capability refusals, "without `dry_run`" is the right advice here,
+  and the message says it.
+
+  **The refusal is deliberately narrow.** Verb-shell is two names Keeper already
+  holds as a constant (`core.cmd.shell`, `core.exec.run`); whether some other module
+  is installed on a given host and whether its `Plan` is pure-read lives on the far
+  side of the isolation boundary and differs per host. Those requests are still
+  dispatched and still come back per-target `failed` +
+  `errand_dry_run_unsupported` — `core.http.probe` included, which is a verb module
+  by the ADR's prose but not in Keeper's constant. Keying the check on the module
+  catalog's `errand_safe` flag was rejected for the reason the entry above records:
+  that flag is an Apply-path fact and marks nearly the complement of what `dry_run`
+  admits, so it would have rejected the 13 modules the flag exists for.
 
 - **`keeper init` refused the reference `keeper.yml` we ship.**
   `auth.jwt.ttl_bootstrap: 30d` in `examples/keeper/keeper.yml` is a well-formed
@@ -2359,6 +3037,102 @@ order to act in.
   and the expected subset, and has since the beta. Follow-ups: NIM-532 (ryuk's
   unreachable timeout), NIM-533 (the daemon stalls and the residual red).
 
+- **L3a's red was unreadable and its green was unearned** (NIM-533 / NIM-547 /
+  NIM-548 / NIM-549 / NIM-550 / NIM-532). The tier above labels its failures
+  since NIM-469; this closes the two ways it could still hand a reader a result
+  that means nothing.
+
+  **A wedged docker daemon produced no verdict at all.** With the socket
+  accepting connections and no reply ever coming, the run sat in its first
+  docker call for the whole test timeout and died as `panic: test timed out`,
+  naming no layer — NIM-533's headline symptom, reproduced by the harness meant
+  to report it. The cause is upstream and worth stating: testcontainers resolves
+  the docker host inside a `sync.Once` that `NewDockerProvider` enters with
+  `context.Background()`, so the first docker call in a process is unbounded and
+  every later one waits on that `Once`. No caller's deadline could have bounded
+  it. The probe now races that call against a timer on its own goroutine — the
+  only thing in the process able to end it — and `bringUpStand` asks **before**
+  it raises anything, because a post-mortem probe cannot explain a call that
+  never returned. It refuses on silence only; a slow daemon still gets its
+  stand, which is what the retry is for. The latch that spares the remaining
+  tests the same wait is set only by the unbounded lookup, since the `Ping`
+  after it does honour a deadline — and it retracts when a late lookup finishes,
+  because what it asserted has stopped being true.
+
+  **The probe was built on a call the library memoises**, and that is the defect
+  none of the process caught. `DockerProvider.Health` is `client.Info`, cached
+  in package variables after its first success, so on a healthy box the first
+  stand warmed the cache and every later probe reported a microsecond ping and
+  no error regardless of what the daemon was doing: the contention check could
+  never fire and a saturated daemon was reported as the *container* — naming the
+  wrong layer confidently, which is worse than the raw library error it
+  replaced. It is invisible against a daemon wedged from the start, because the
+  cache never gets its one success, and that is the only state this tier has
+  been runnable in here — which is why three identical runs and a full mutation
+  battery agreed it was fine. The probe uses `Ping`, a pass-through that hits
+  `/_ping` every call, and the ban on the cached one is a guard rather than a
+  comment.
+
+  **A failure below the daemon now names the layer that owns it.**
+  testcontainers raises its ryuk reaper before our container and waits on a
+  strategy it builds itself, with a hard-coded 60 s and no way in from a
+  `GenericContainer` option; the failure still surfaced through our
+  constructor, so it was described as ours, and by the time the probe ran a
+  minute later the daemon was idle again and the verdict read "the image or its
+  configuration did not become ready" — a layer that was never involved. The
+  60 s stays upstream's: moving it means leaking containers on every killed run
+  or bumping the dependency, and neither is this batch's call. What changed is
+  that the red says which thing failed. A daemon that *answered* with an error
+  no longer borrows the prose written for one that said nothing, which had
+  promised a 15 s wait that never happened and offered a WSL remedy for what is
+  usually a `DOCKER_HOST` typo.
+
+  **Stands stopped leaking.** testcontainers returns a live container alongside
+  its error by design; the harness dropped that handle, so every failed bring-up
+  left a container behind for the rest of the run. It is adopted before the
+  error is read. `t.Cleanup(s.Cleanup)` is now registered inside both
+  constructors, because a caller's `defer` cannot cover a constructor that
+  fatals before it returns.
+
+  **A tier that ran nothing must not report a pass.** The keeper-binary
+  pre-flight *skipped*, and `go test` without `-v` prints `ok <pkg> 0.1s` for a
+  package whose tests all skipped — byte-for-byte what it prints when they all
+  passed. A run that located no binary exited 0, satisfied `make e2e` and every
+  gate above it, and never reached `scripts/classify-l3a-failure.py`, which the
+  Makefile invokes only on a non-zero status: that tool's `NOT-RUN` verdict was
+  unreachable from its only caller. Both entry points now fail — the answer
+  missing docker already got — with the bring-up declaration registered *above*
+  the pre-flight, so the refusal carries the STAND-SETUP marker instead of
+  arriving as a bare `--- FAIL: TestX` on all forty tests at once.
+
+  **The guards derive their subject instead of listing it.** The hand-written
+  map of product entry points had the exact failure it was written against: one
+  name in it was called only from `_test.go` files, which the source walk
+  excludes, so that entry gated zero while reading as coverage. The set now
+  comes from three doors — the built binary, the operator API, the schema
+  `keeper init` migrated — so a helper written later is covered on the day it is
+  written, with the old list demoted to a floor that catches a door narrowing.
+  The declared bring-up region likewise no longer ends at the *earliest*
+  `infraUp = true`: a second assignment in a branch would silently lift the
+  boundary above `runKeeperInit` while the guard reported success, and which
+  assignment closes the region depends on the branch taken, so more than one is
+  now the finding. Three defects in the classifier's own self-test were found
+  the same way, by mutation: an unpinned check order, a fixture named for an
+  invariant it did not exercise, and a marker literal nothing compared against
+  the Go source.
+
+  **What this does not claim.** The acceptance bar for this batch was three L3a
+  runs on an unchanged slice agreeing with each other, and **that has not been
+  met — there is no green live run behind these changes.** The docker daemon on
+  the development machine has been wedged for the duration (the failure mode the
+  first item describes), which the work makes legible but cannot repair: it is
+  the host's, not the harness's. Every claim here was instead demonstrated by
+  known-bad mutation — 54 defects introduced in the shape of real code, each
+  caught by the guard whose statement it breaks, plus one control that stays
+  green — and the residual red NIM-533 reported has not been observed since,
+  because the tier has not been observed at all. CI runs `make build` before
+  `make e2e`, so the new pre-flight is satisfied there by construction.
+
 - **A CI run could be attributed to the wrong commit.** `cancel-in-progress: true`
   is written for a feature branch, where only the newest commit matters. A release
   branch is the opposite case: it *is* the integration target, every squash-merge
@@ -2698,6 +3472,102 @@ order to act in.
   behind their own tags. Vet compiles without running anything, so the gate stays
   docker-free and the container suites stay opt-in. The failback behavior itself
   was intact — only the call had drifted — and those tests pass again.
+
+- **The blocking live gate downloaded from public github.com on every run**
+  (NIM-542). Six
+  of the nine `make e2e-live-gate` tests run a live `create` of
+  `examples/service/redis`, and that create fetched three release tarballs —
+  `node_exporter`, `redis_exporter`, `vector` — from GitHub Releases inside the
+  soul container: ~18 downloads per gate run. This is the pre-tag blocking step
+  (`RELEASING.md` step e), and its acceptance is "three runs on an unchanged slice
+  give the same result"; github.com is not in the slice. It had already produced
+  red gates that were nothing but the network.
+
+  The harness now caches those tarballs outside the repo (digest-verified on the
+  way in; a wrong-digest file is deleted rather than reused), serves them over
+  HTTPS on an ephemeral local port laid out exactly like upstream, and points the
+  service at it with a `vars/99-*` layer. The harness verifies all three digests
+  itself because the subject does not verify all three: `vector` and
+  `redis-exporter` hand `checksum: "${ input.sha256 }"` to `core.url` and would
+  reject bad bytes inside the container, but `node-exporter/tasks/install.yml`
+  deliberately declares no checksum, so a truncated node_exporter tarball would
+  pass the fetch and surface later — a failed unpack, or a service that will not
+  start — wearing the costume of a product defect. `make e2e-live-artifacts`
+  primes the cache deliberately; the gate runs it as an early, named step so the
+  one network-dependent moment happens up front in half a minute rather than
+  twenty minutes in as a failed fetch.
+
+  **HTTPS, not plain HTTP — because the subject says so.** All three destinies
+  declare `base_url` with `pattern: "^https://[A-Za-z0-9._/:-]+$"`, and `core.url`
+  refuses a plain-http target unless the step opts in. Both are properties of the
+  service under test, so the first cut of the mirror — an http file server — did
+  not fail as a network problem but as
+  `input $.base_url … does not match pattern`, twenty minutes in, wearing the
+  costume of a product defect. Loosening the destiny would have been bending the
+  subject to fit the fixture. Instead the mirror mints a per-run CA and a leaf for
+  the address it advertises, and `SpawnSoulContainer` drops that root into the
+  container's trust store and runs `update-ca-certificates` before the soul
+  starts. The product walks its real fetch path — scheme check, TLS handshake,
+  chain validation, and the checksum wherever the destiny declares one — exactly
+  as it does against github.
+
+  **The layer goes into the fixture's materialized copy, never into
+  `examples/service/redis`.** The example is the subject under test (NIM-211);
+  bending it to suit the fixture would leave the gate green about a service nobody
+  runs. What the fixture writes is exactly the mirror override `vars/00-base.yaml`
+  already documents for an operator without github access.
+
+  An override three YAML layers away from where it is read is a claim that holds
+  until it doesn't — rename the file, add a `vars/_stack.yaml`, rename a var, and
+  it contributes nothing while the create still passes, from github, green. So the
+  mirror **counts what it served** and a successful run that never used it fails;
+  docker-free guards catch a fourth external fetch, a version or digest the catalog
+  does not carry, a vars layer that out-sorts `99-*`, or a `_stack.yaml`, twenty
+  minutes earlier. One of those guards exists because the http/https mistake above
+  walked straight into the gap: it starts a real mirror, reads each destiny's own
+  declared `pattern` at run time, and requires the URL the overlay generates to
+  satisfy it — neither side allowed to hardcode the scheme, or the test would only
+  be agreeing with itself. Two more guard the CA half, where the silence is
+  quieter still: `update-ca-certificates` reads only `*.crt` under
+  `/usr/local/share/ca-certificates` and ignores anything else without a word —
+  exit code 0, nothing added — so the file name is checked here rather than
+  described in a comment, and so is the property the container actually depends
+  on, that `caPEM` carries the CA-flagged root that signed the leaf and not the
+  leaf itself. Both mistakes are one-line edits that compile, pass every other
+  guard, and surface as `x509: certificate signed by unknown authority` inside a
+  container twenty minutes later, worn as a product defect.
+
+  **The container had to be booted first, and nothing had been checking that.**
+  Running a command in a soul container the moment it is declared ready exposed a
+  readiness check that had been wrong for as long as L3b has existed. It waits on
+  `systemctl is-system-running --wait` and accepted exit code 1 as "degraded,
+  which is normal for this image" — but systemctl returns 1 just as readily when
+  it could not reach the bus at all, which is systemd not being up yet, and
+  `--wait` does not help, because waiting is what it does *after* connecting. So a
+  container could be handed over mid-boot. `update-ca-certificates`, now the first
+  thing to run in one, creates two temp files in `/tmp` and reads them eighty
+  lines later; in between, `systemd-tmpfiles-setup.service` reaches the
+  `D /tmp 1777 root root -` line of `/usr/lib/tmpfiles.d/tmp.conf`, and `D` with
+  `--remove` empties the directory. The files vanished under the running script,
+  and the gate went red on a module-delivery test that fetches no artifacts and
+  has nothing to do with certificates. Readiness is now judged by the state
+  systemctl printed, matched per line; the exit code is kept wide only so a
+  genuinely degraded container is not thrown away. Measured on one container under
+  load: the old rule would have fired at 244 ms on `Failed to connect to bus`, the
+  new one waited for `running` at 761 ms.
+
+  **The real github path stays covered outside the gate.**
+  `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` runs the same create against real
+  GitHub Releases and is deliberately absent from `E2E_GATE_TESTS` — the one L3b
+  test allowed to fail for a reason outside the repository, which a blocking gate
+  must never be. It skips (naming the host) if upstream is unreachable *before* the
+  stand, and after a failure re-probes to print either "read this as environment"
+  or "upstream is still reachable, so read this as a finding". No new classifier
+  verdict was introduced: inside the gate the category no longer occurs, and
+  outside it the test answers the question itself.
+
+  **Not fixed:** `core.pkg.installed` still reaches `deb.debian.org` and
+  `packages.redis.io` on every live create. The tarballs were the scope.
 
 ---
 

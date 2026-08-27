@@ -75,6 +75,20 @@ func (p *soulFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		}
 		// RETURNING token_id, created_at.
 		return staticRow{values: []any{"token-uuid", time.Time{}}}
+	case strings.Contains(sql, "SELECT coven") && strings.Contains(sql, "FROM souls"):
+		// soul.CovenBySID — the one-column read the per-host RBAC gate does
+		// before the tool runs (NIM-588). Served from the SAME fixture as the
+		// full row, so a test that gives the host a coven has the gate and the
+		// handler agree on which coven that is. This case must stay above the
+		// full-row one: `SELECT coven … WHERE sid` matches both, and the
+		// 11-column row would panic scanning one column.
+		if p.selectErr != nil {
+			return errRow{err: p.selectErr}
+		}
+		if p.selectSoul == nil {
+			return errRow{err: pgx.ErrNoRows}
+		}
+		return staticRow{values: []any{p.selectSoul.Coven}}
 	case strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid"):
 		if p.selectErr != nil {
 			return errRow{err: p.selectErr}
@@ -645,6 +659,54 @@ func TestSoulIssueToken_RBACDeniesWithHostSelector(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("allowed host: unexpected error: %+v", resp.Error)
 	}
+}
+
+// TestSoulIssueToken_RBACNarrowsByCoven — the same claim one dimension over
+// (NIM-588). `soul.issue-token on coven=web` used to deny every call, including
+// one aimed at a host that really was in coven web, because the gate asserted
+// only `host` and a missing dimension fails closed.
+//
+// The host case above does not cover it: `host=<sid>` comes from the request,
+// `coven=` from a row that has to be read. A gate that stopped reading the row
+// keeps every host test green and puts this one back to forbidden.
+func TestSoulIssueToken_RBACNarrowsByCoven(t *testing.T) {
+	cfg := &rbactest.Config{
+		Roles: []rbactest.Role{
+			{
+				Name:        "soul-coven-op",
+				Operators:   []string{"archon-alice"},
+				Permissions: []string{"soul.issue-token on coven=web"},
+			},
+		},
+	}
+	hostIn := func(covens ...string) *soulFakePool {
+		return &soulFakePool{selectSoul: &soul.Soul{
+			SID: "web-01.example.com", Transport: soul.TransportAgent,
+			Status: soul.StatusPending, Coven: covens,
+		}}
+	}
+
+	t.Run("host in the granted coven", func(t *testing.T) {
+		h, _ := newSoulHandler(t, cfg, hostIn("web"))
+		resp := callTool(t, h, "archon-alice", "keeper.soul.issue-token", `{"sid":"web-01.example.com"}`)
+		if resp.Error != nil {
+			t.Fatalf("`soul.issue-token on coven=web` refused a host IN coven web: %+v", resp.Error)
+		}
+	})
+
+	t.Run("host in another coven", func(t *testing.T) {
+		h, rec := newSoulHandler(t, cfg, hostIn("prod"))
+		resp := callTool(t, h, "archon-alice", "keeper.soul.issue-token", `{"sid":"web-01.example.com"}`)
+		if resp.Error == nil {
+			t.Fatal("`soul.issue-token on coven=web` issued a token for a host in coven prod")
+		}
+		if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeForbidden {
+			t.Errorf("code = %q, want forbidden", data.Code)
+		}
+		if len(rec.events) != 0 {
+			t.Error("a denied issue-token wrote audit")
+		}
+	})
 }
 
 // --- decode / security helpers ---

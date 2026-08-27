@@ -42,7 +42,9 @@
 package harness
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -157,4 +159,82 @@ func vaultWaitStrategy() wait.Strategy {
 			WithStatusCodeMatcher(func(status int) bool { return status == http.StatusOK }).
 			WithStartupTimeout(standReadyTimeout),
 	).WithDeadline(standReadyTimeout)
+}
+
+// soulReadyTimeout — how long one soul container gets to finish booting systemd.
+//
+// Its own number rather than standReadyTimeout: this is a plain Debian image
+// reaching a target, not a database restoring itself, and it is not one of the
+// three stands standBringUpTimeout is derived from. Sixty seconds is ~120× the
+// 300-500 ms a healthy boot has been measured at here, so a container that blows
+// it is a finding about the machine rather than a budget to raise.
+const soulReadyTimeout = 60 * time.Second
+
+// systemdFinishedBooting reports whether `systemctl is-system-running --wait`
+// said the boot is over.
+//
+// The exit code cannot answer that, and the mistake is not a near miss: it
+// returns 1 for `degraded` — normal in a slim image with half the units removed,
+// and genuinely ready — and 1 AGAIN when it could not reach the bus at all,
+// which is systemd not yet being up. Accepting 1 therefore accepts a container
+// that has not started booting, and `--wait` does not save it: waiting is
+// something it does after connecting, so a failure to connect returns instantly.
+// The two are told apart by what the command printed and by nothing else, which
+// is the same shape as reading `N added` out of update-ca-certificates instead of
+// trusting its exit code (container.go, step 4b).
+//
+// What it cost, in this repo, on the run this was found on: the readiness probe
+// answered `Failed to connect to bus: No such file or directory` in 164 ms, the
+// container was declared ready, and update-ca-certificates then ran against a
+// half-booted system. It creates two temp files in /tmp and reads them ~80 lines
+// later; in between, systemd-tmpfiles-setup.service reached the `D /tmp 1777 root
+// root -` line of /usr/lib/tmpfiles.d/tmp.conf, and `D` with --remove empties the
+// directory. The files vanished under the running script, dash failed the
+// redirect on line 168 and exited 2, and the gate went red on
+// TestL3bModuleDeliveryLive_SynthesisFetchHotRegister — a test whose subject has
+// nothing to do with certificates. Reproduced outside the suite at 2 runs in 12,
+// and the correlation with the probe was total: every failure had answered
+// `Failed to connect to bus` in 100-164 ms, every pass had answered `running` in
+// 300-485 ms.
+//
+// Matched per line, not against the whole body: the reader carries stdout and
+// stderr multiplexed together with no ordering guarantee between them, so a
+// single stray warning on either would make an exact whole-body comparison
+// reject a system that is genuinely up — and that failure mode is a silent
+// 60-second stall per container. A line equal to one of these two tokens is
+// something only systemctl writes; the seven other states it can print, and the
+// bus error, contain no such line.
+func systemdFinishedBooting(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		switch strings.TrimSpace(line) {
+		case "running", "degraded":
+			return true
+		}
+	}
+	return false
+}
+
+// soulWaitStrategy waits for systemd inside a soul container to finish booting.
+//
+// Here rather than inline in container.go so that the guard can reach it: this
+// file is untagged and container.go is not, so a strategy declared there is
+// unreachable from the docker-free tests — which is where a readiness check has
+// to be checkable, per this file's opening note.
+//
+// The exit-code matcher stays deliberately wide. Tightening it to 0 would reject
+// `degraded`, and degraded is the expected steady state of this image: the
+// Dockerfile deletes most of the unit symlinks, so units that remain enabled and
+// have nothing to do are a normal outcome. The narrow check is the response
+// matcher; the exit code is only there to not throw away a ready container.
+func soulWaitStrategy() wait.Strategy {
+	return wait.ForExec([]string{"systemctl", "is-system-running", "--wait"}).
+		WithExitCodeMatcher(func(code int) bool { return code == 0 || code == 1 }).
+		WithResponseMatcher(func(body io.Reader) bool {
+			out, err := io.ReadAll(body)
+			if err != nil {
+				return false
+			}
+			return systemdFinishedBooting(string(out))
+		}).
+		WithStartupTimeout(soulReadyTimeout)
 }

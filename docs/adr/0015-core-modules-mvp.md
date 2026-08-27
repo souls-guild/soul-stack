@@ -13,8 +13,8 @@
   | `core.service` | `running` / `stopped` / `restarted` / `enabled` / `disabled` / `masked` | Service, abstraction over systemd/openrc/sysv. `disabled` = boot-autostart off (mirror of `enabled`); `masked` = unit unstartable (`systemctl mask`, systemd-only, disable-before-mask; see Amendment 2026-07-17 below). |
   | `core.user` | `present` / `absent` | Local OS users. |
   | `core.group` | `present` / `absent` | Local groups. |
-  | `core.exec` | `run` (verb) | An arbitrary command, exec(). The probe idiom [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only) is tied to it. |
-  | `core.cmd` | `shell` (verb) | A shell command (pipes, redirects). The difference from `exec.run` is shell interpretation. |
+  | `core.exec` | `run` (verb) | An arbitrary command, exec(). The probe idiom [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only) is tied to it. Success is the `exit_codes` set, default `[0]` — a non-zero code fails the task (Amendment 2026-08-14 below). |
+  | `core.cmd` | `shell` (verb) | A shell command (pipes, redirects). The difference from `exec.run` is shell interpretation. Same `exit_codes` default `[0]` (Amendment 2026-08-14 below). |
   | `core.cron` | `present` / `absent` | Cron jobs in crontab format. |
   | `core.mount` | `present` / `absent` / `mounted` / `unmounted` | Mount points, /etc/fstab. |
   | `core.git` | `cloned` / `pulled` | Cloning/updating a git repository on the host. |
@@ -187,3 +187,65 @@
   - Docs: new `docs/module/core/directory/README.md`; `core.file` doc trimmed;
     `core.service` doc gains `disabled`/`masked`; `naming-rules.md` gains
     `core.directory` and the two service states.
+- **Amendment (2026-08-14, `exit_codes` on the verb-shell modules; a non-zero exit
+  now FAILS by default).** `core.exec.run` and `core.cmd.shell` gain the optional
+  param `exit_codes` — the set of exit codes counted as success — **defaulting to
+  `[0]`**. This is a **contract change, not an addition**: until now both modules
+  reported `changed=true, failed=false` for ANY code the process returned, and the
+  exit code was merely data in `register`.
+  - **Reason.** A live `create` run (`apply_id 01KZZVSC94TX5K30QBBA5G1TWY`, step 33)
+    got `{exit_code: 1, stderr: "Could not connect to Redis … Connection refused"}`
+    and was recorded CHANGED. The run did die — a minute later, on a neighbouring
+    `until:` task — so the report named the wrong step and the operator was handed a
+    timeout instead of a connection refusal. A default that calls every failure a
+    success does not merely lose the error, it relocates it.
+  - **Form.** A list whose elements are exact integers and/or inclusive `"lo-hi"`
+    string ranges, mixed freely: `[0]`, `[0, 1, 2]`, `["2-5"]`, `[0, "2-5"]`. An
+    empty list is rejected (it would accept nothing, not even 0). Modelled on
+    `status_codes` of `core.http.probe`/`core.http.request`; it differs by admitting
+    the range form, and is therefore the first list param in
+    `shared/coremanifest` declared **without** `Items` (the schema validator skips
+    per-element checks when `Items == nil`, and the module parses the elements
+    itself). What that omission costs was checked rather than assumed, and is
+    recorded here so it is not rediscovered. It does **not** cost offline element
+    validation, because there is none for list params to begin with:
+    `shared/config.astMatchesType` checks only that the YAML node is a sequence and
+    never descends into it, `Items` or not — `exit_codes: ["3-"]` and `[]` reach the
+    host through `soul-lint` exactly as a malformed `status_codes` element does. What
+    it does cost is the machine-readable element type: `sdk/schema.validateParam`
+    skips its `items.type` check, so a consumer building a form or a type reference
+    from the manifest sees a bare `list`, and the grammar lives only in the
+    description string.
+    Declared on both modules and pinned there behaviourally:
+    the guards enumerate `shared/coremanifest.VerbShellModules()`, so dropping the
+    param from one manifest reddens them, and a third verb module reddens them too
+    rather than slipping past. The knob on only one of the pair would split a
+    contract the two share. A code the string form cannot express — `-1`, what Go
+    reports for a process killed by a signal — is written as a bare integer.
+  - **The failure carries its output.** A rejected code goes out through the new
+    `util.SendFailedWithOutput`, so the final event is `failed=true` **and**
+    `{stdout, stderr, exit_code}`. Plain `util.SendFailed` (no output) stays for the
+    class where there is nothing to report: the process never ran (`res.Err != nil`),
+    a bad param, an unknown state. Without this the change would delete exactly the
+    stderr it was introduced to surface, and would make `failed_when:` predicates
+    over `register.self.exit_code` unevaluable.
+  - **Unchanged.** The guards `creates`/`unless`/`onlyif` are outside `exit_codes`:
+    they read their own exit code by their own rule, and a skipped task reports
+    `exit_code: 0` and never fails. `res.Err != nil` fails as it always did.
+    `failed_when:` (ADR-012(d)) still has the last word, applied after Apply.
+  - **Way back to the old behaviour** — `failed_when: false` on the task, which is
+    the documented `ignore_errors`; no separate flag was added. Caveat worth
+    knowing: a waived task ends **OK, not CHANGED** (the base-outcome switch in
+    `applyrunner` tests `failed` before `changed`), so `onchanges:` dependents do not
+    fire — when a handler must still run, widen `exit_codes` instead of waiving.
+  - **Reach.** Same modules, so the same default applies to the Errand surface:
+    `keeper.soul.run-command` (MCP) and `POST /v1/souls/{sid}/exec` pin
+    `core.cmd.shell`, and a non-zero command now comes back as a failed errand. The
+    MCP tool exposes no `exit_codes` knob; the free-form `input` of the exec route
+    does.
+  - **Sweep.** Every `core.exec.run` / `core.cmd.shell` site in the repo
+    (`examples/`, `dev/`, `tests/`) was classified: none relies on a non-zero code,
+    so no site needed an annotation. Docs updated: `docs/destiny/tasks.md`,
+    `docs/scenario/orchestration.md`, `docs/templating.md`,
+    `docs/module/README.md`, `docs/module/core/{exec,cmd}/README.md`,
+    `docs/keeper/operator-api/errands.md`, `docs/keeper/mcp-tools/souls.md`.

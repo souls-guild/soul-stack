@@ -198,7 +198,21 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Compute:        in.Compute,
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
+		ComputeScope:   hostComputeScope(in),
 	}
+}
+
+// hostComputeScope: the scenario pass HAS the compute namespace (that is its
+// scope, together with state_changes); the isolated destiny pass does not — a
+// destiny receives run-level values only through `apply: input:` (ADR-009 V2).
+// Symmetric with AllowHosts above, and the same isolation flag decides both. Named
+// rather than inlined so the render-context guard test can enumerate it
+// (compute_scope_guard_test.go).
+func hostComputeScope(in RenderInput) cel.ComputeScope {
+	if in.destinyIsolated {
+		return cel.ComputeOutOfScopeDestiny
+	}
+	return cel.ComputeAvailable
 }
 
 // hostRegister selects the register context for CEL-rendering a specific

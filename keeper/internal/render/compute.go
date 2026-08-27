@@ -45,6 +45,11 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 		Incarnation: incarnationVars(in, len(in.Hosts)),
 		Vars:        in.ServiceVars,
 		Ctx:         in.Ctx,
+		// The block resolves INSIDE its own namespace: entry i reads entries j<i as
+		// `compute.<name>` (base.Compute = acc below), so the namespace is in scope
+		// here even on the first entry — where a reference is a genuine no-such-key
+		// (a forward reference), not an absent namespace.
+		ComputeScope: cel.ComputeAvailable,
 	}
 	for _, cv := range block {
 		s, ok := cv.Value.(string)

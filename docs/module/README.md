@@ -54,8 +54,8 @@ Statically built into the `soul` binary. Apply the same in pull (daemon) and pus
 | [`core.service`](core/service/README.md) | `running` / `stopped` / `restarted` / `enabled` / `disabled` / `masked` | Service via systemd/openrc/sysv (`masked` is systemd-only). |
 | [`core.user`](core/user/README.md) | `present` / `absent` | Local OS users. |
 | [`core.group`](core/group/README.md) | `present` / `absent` | OS local groups. |
-| [`core.exec`](core/exec/README.md) | `run` (verb) | Arbitrary command via exec() (without shell). |
-| [`core.cmd`](core/cmd/README.md) | `shell` (verb) | shell command (pipes, redirects). |
+| [`core.exec`](core/exec/README.md) | `run` (verb) | Arbitrary command via exec() (without shell). Success = the `exit_codes` set, default `[0]`. |
+| [`core.cmd`](core/cmd/README.md) | `shell` (verb) | shell command (pipes, redirects). The same `exit_codes`, default `[0]`. |
 | [`core.cron`](core/cron/README.md) | `present` / `absent` | Cron tasks. |
 | [`core.mount`](core/mount/README.md) | `present` / `absent` / `mounted` / `unmounted` | Mount points and /etc/fstab. |
 | [`core.git`](core/git/README.md) | `cloned` / `pulled` | Cloning/updating a git repository on the host. |

@@ -170,12 +170,20 @@ func registerHumaAuthTokenExchange(humaAPI huma.API, d *AuthTokenDeps) {
 		if rem := time.Until(claims.ExpiresAt); rem < ttl {
 			ttl = rem
 		}
-		// defensive guard for a future leeway: currently UNREACHABLE — Verify
-		// without leeway already rejected an expired cookie (ErrExpiredToken) at
-		// step 3, so claims.ExpiresAt is strictly in the future and rem>0. This
-		// branch would only activate if clock-leeway is added to Verify (then a
-		// cookie with exp in the past by ≤leeway would pass, and rem could become
-		// ≤0). Explicit 401 instead of Issue(ttl≤0)→error/500.
+		// Defensive: UNREACHABLE, and it takes a deliberate decision elsewhere to
+		// keep it that way. Verify rejects an expired cookie at step 3 with
+		// ErrExpiredToken, so claims.ExpiresAt is in the future and rem>0.
+		//
+		// NIM-621 added a clock-skew leeway to Verify and very nearly opened this
+		// branch: golang-jwt applies one leeway to every time claim, so `exp`
+		// would have been soft by a minute, a cookie expired by ≤60s would have
+		// reached here, and the browser would have been told "authentication
+		// required" instead of "token expired" — the same conflation between "sign
+		// in again" and "something is wrong with your token" that step 4 above
+		// exists to avoid. Verify re-checks `exp` strictly to prevent exactly
+		// that; if that re-check is ever removed, this branch goes live and must
+		// answer expiry by name rather than falling through to the generic 401.
+		// Explicit 401 instead of Issue(ttl≤0)→error/500.
 		if ttl <= 0 {
 			return nil, authTokenUnauthenticated("")
 		}

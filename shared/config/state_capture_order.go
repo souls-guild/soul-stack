@@ -237,6 +237,11 @@ func stateCaptureVerb(t *Task) (string, bool) {
 	return verb, true
 }
 
+// StateCaptureVerb is [stateCaptureVerb] for callers outside this package
+// (soul-lint's compute-scope walk). Exported rather than re-derived there so the
+// module base address stays spelled in exactly one place.
+func StateCaptureVerb(t *Task) (string, bool) { return stateCaptureVerb(t) }
+
 // captureField returns the state field a capture writes, and known=false when
 // `field:` is absent or is an expression (its value is decided at render).
 func captureField(t *Task) (string, bool) {

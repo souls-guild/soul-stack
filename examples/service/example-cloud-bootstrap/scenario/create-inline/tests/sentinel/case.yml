@@ -1,0 +1,84 @@
+# L0 topology 2/3 of the inline cloud source (NIM-668): sentinel.
+# Same step, different topology - only `profile` and `count` change, which is
+# the point: the topology x size matrix is service data in vars/, not a row
+# somebody had to create in the profiles registry first.
+name: sentinel topology renders its own VM spec from the same vars block
+
+fixtures:
+  hosts:
+    - sid: sentinel-0.ns.vm.example
+      covens: []
+      soulprint:
+        network: { primary_ip: 10.0.1.1 }
+        os: { arch: amd64 }
+    - sid: sentinel-1.ns.vm.example
+      covens: []
+      soulprint:
+        network: { primary_ip: 10.0.1.2 }
+        os: { arch: amd64 }
+    - sid: sentinel-2.ns.vm.example
+      covens: []
+      soulprint:
+        network: { primary_ip: 10.0.1.3 }
+        os: { arch: amd64 }
+  # Mock Vault KV for the `credentials:` ref (see the standalone case).
+  vault:
+    secret/cloud/wb-dev:
+      access_key_id:     EXAMPLE-KEY-ID
+      secret_access_key: EXAMPLE-NOT-A-REAL-SECRET
+  # MIRROR of vars/00-base.yaml -> cloud (see the standalone case; equality is
+  # pinned by TestInlineCloudCasesMirrorServiceVars).
+  vars:
+    cloud:
+      driver:      wb
+      region:      ru-central1
+      fqdn_suffix: ns.vm.example
+      profiles:
+        standalone:
+          image:         ubuntu-24-04
+          instance_type: c2-m4
+          disk:          { size_gb: 40, type: ssd }
+        sentinel:
+          image:         ubuntu-24-04
+          instance_type: c2-m2
+          disk:          { size_gb: 20, type: ssd }
+        cluster:
+          image:         ubuntu-24-04
+          instance_type: c4-m8
+          disk:          { size_gb: 100, type: ssd }
+  input:
+    topology: sentinel
+    count: 3
+    name: sentinel
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-s0, i-s1, i-s2]
+      hosts:
+        - { sid: sentinel-0.ns.vm.example, vm_id: i-s0, primary_ip: 10.0.1.1 }
+        - { sid: sentinel-1.ns.vm.example, vm_id: i-s1, primary_ip: 10.0.1.2 }
+        - { sid: sentinel-2.ns.vm.example, vm_id: i-s2, primary_ip: 10.0.1.3 }
+
+assert:
+  task_present:
+    - module: core.cloud.created
+      params_subset:
+        driver: wb
+        region: ru-central1
+        fqdn_suffix: ns.vm.example
+        count: 3
+        name: sentinel
+        self_onboard: true
+        profile:
+          image: ubuntu-24-04
+          instance_type: c2-m2
+          disk: { size_gb: 20, type: ssd }
+
+    - module: core.soul.registered
+      params_subset:
+        sid:
+          - sentinel-0.ns.vm.example
+          - sentinel-1.ns.vm.example
+          - sentinel-2.ns.vm.example
+        await_online: true

@@ -432,3 +432,35 @@ func TestErrandHandler_DispatchError_DryRunCapability(t *testing.T) {
 		})
 	}
 }
+
+// TestErrandHandler_DispatchError_DryRunVerbShell — ★ THE GUARD for the transport half
+// of NIM-489. The refusal is 400 malformed-request, NOT one of the 409 capability types
+// and NOT the 500 default: nothing about the cluster, the target or its version can make
+// dry_run of a command line work, so the request itself is what is wrong. Landing in the
+// default branch would report keeper's own bug ("errand dispatch failed") for an operator
+// mistake and log it as an internal error on every occurrence.
+func TestErrandHandler_DispatchError_DryRunVerbShell(t *testing.T) {
+	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil)
+
+	// Wrapped, the way a dispatcher on the way out would carry it — the mapper must
+	// still recognise it, or the 400 silently degrades to 500 the first time some layer
+	// adds context.
+	err := fmt.Errorf("dispatch host.test: %w", &errand.DryRunVerbShellError{Module: "core.cmd.shell"})
+
+	details, ok := asProblemError(h.dispatchError(err))
+	if !ok {
+		t.Fatalf("dispatchError did not yield a problem error for %v", err)
+	}
+	if details.Status != http.StatusBadRequest {
+		t.Errorf("problem.Status = %d, want %d - the request cannot succeed anywhere, so it is not a 409 the operator "+
+			"can fix by upgrading an agent, nor a 500 of ours", details.Status, http.StatusBadRequest)
+	}
+	if !strings.Contains(details.Type, "malformed-request") {
+		t.Errorf("problem.Type = %q, want malformed-request", details.Type)
+	}
+	for _, want := range []string{"core.cmd.shell", "dry_run", "errand_dry_run_unsupported"} {
+		if !strings.Contains(details.Detail, want) {
+			t.Errorf("problem.Detail = %q, does not carry %q", details.Detail, want)
+		}
+	}
+}

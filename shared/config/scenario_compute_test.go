@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -87,5 +88,84 @@ tasks: []
 	if !hasCode(diags, "type_mismatch") {
 		dump(t, diags)
 		t.Fatalf("expected type_mismatch for non-mapping compute block")
+	}
+}
+
+// --- NIM-619: `compute` as a binding name. A loop binding that shadows the
+// namespace is rejected at parse time, so it never reaches a run: the loop axis
+// itself has no `compute` (ComputeOutOfScopeLoopAxis), but the binding travels into
+// the task body, which does — and there `compute.<name>` would silently stop meaning
+// the computed var and start meaning a field of the element being iterated. ---
+
+func TestLoadScenarioManifest_LoopComputeIsReserved(t *testing.T) {
+	cases := map[string]string{
+		"as":       "as: compute",
+		"index_as": "as: u\n      index_as: compute",
+	}
+	for key, spec := range cases {
+		key, spec := key, spec
+		t.Run(key, func(t *testing.T) {
+			src := `name: x
+tasks:
+  - module: core.exec.run
+    loop:
+      items: "${ input.users }"
+      ` + spec + `
+    params: { cmd: "true" }
+`
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+			if !hasCode(diags, "loop_var_reserved") {
+				dump(t, diags)
+				t.Fatalf("expected loop_var_reserved for loop.%s: compute", key)
+			}
+		})
+	}
+}
+
+// TestReservedNameHintsListCompute — the diagnostic tells the author which names are
+// taken, and that list is hand-written next to each rule. A name added to the map
+// without the hint leaves the author reading a list that does not contain the name
+// they were just rejected for.
+func TestReservedNameHintsListCompute(t *testing.T) {
+	cases := []struct {
+		what string
+		src  string
+		code string
+	}{
+		{
+			what: "loop.as",
+			code: "loop_var_reserved",
+			src: `name: x
+tasks:
+  - module: core.exec.run
+    loop: { items: "${ input.users }", as: compute }
+    params: { cmd: "true" }
+`,
+		},
+		{
+			what: "compute name",
+			code: "reserved_binding_name",
+			src:  "name: x\ncompute:\n  compute: \"${ 1 }\"\ntasks: []\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.what, func(t *testing.T) {
+			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(tc.src), ValidateOptions{})
+			var hint string
+			for _, d := range diags {
+				if d.Code == tc.code {
+					hint = d.Hint
+					break
+				}
+			}
+			if hint == "" {
+				dump(t, diags)
+				t.Fatalf("no %s diagnostic with a hint", tc.code)
+			}
+			if !strings.Contains(hint, "compute") {
+				t.Fatalf("hint does not list the name it just rejected: %q", hint)
+			}
+		})
 	}
 }

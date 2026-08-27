@@ -75,6 +75,15 @@ func (p *hSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return hSoulStaticRow{vals: []any{hSoulAt, hSoulAt}}
 	case strings.Contains(sql, "INSERT INTO bootstrap_tokens"):
 		return hSoulStaticRow{vals: []any{"token-uuid", hSoulAt}}
+	case strings.Contains(sql, "SELECT coven") && strings.Contains(sql, "FROM souls"):
+		// soul.CovenBySID — the one-column read the per-host RBAC gate does
+		// before the handler runs (NIM-588). Must stay above the full-row case:
+		// `SELECT coven … WHERE sid = $1` matches both, and the ten-value row
+		// would land a SID string in the coven slice.
+		if p.existing == nil {
+			return hSoulErrRow{err: pgx.ErrNoRows}
+		}
+		return hSoulStaticRow{vals: []any{p.existing.Coven}}
 	case strings.Contains(sql, "FROM souls") && strings.Contains(sql, "WHERE sid = $1"):
 		if p.existing == nil {
 			return hSoulErrRow{err: pgx.ErrNoRows}
@@ -286,10 +295,10 @@ func humaSoulRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, s
 				registerHumaSoulSoulprint(api, soulH)
 				registerHumaSoulHistory(api, soulH)
 			})
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "soul", "issue-token", handlers.SoulSIDSelector)).Group(func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "soul", "issue-token", handlers.SoulSIDScopeSelector(soulH.ContextReader()))).Group(func(r chi.Router) {
 				registerHumaSoulIssueToken(newHumaSoulAPI(r, auditW, audit.EventSoulTokenIssued, nil), soulH)
 			})
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "soul", "ssh-target-update", handlers.SoulSIDSelector)).Group(func(r chi.Router) {
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "soul", "ssh-target-update", handlers.SoulSIDScopeSelector(soulH.ContextReader()))).Group(func(r chi.Router) {
 				registerHumaSoulSshTarget(newHumaSoulAPI(r, auditW, audit.EventSoulSshTargetUpdated, nil), soulH)
 			})
 		})
@@ -1123,13 +1132,18 @@ func buildHExecDryRunDispatcher(t *testing.T, ob errand.OutboundSender, cap erra
 // Soul never plans — while every gate unit test stays green, because they all
 // start from a DispatchRequest that already has the flag set. Nothing else in the
 // suite posts dry_run over HTTP.
+//
+// The module must NOT be verb-shell: since NIM-489 that pair is refused by the
+// dispatcher before the gate, so the request would never reach the wire and this test
+// would be asserting the refusal instead of the flag's path. `core.file.present` is
+// what dry_run actually reaches (PlanReadSafe, NIM-488).
 func TestHumaSoul_Exec_DryRunFlag_ReachesTheWire(t *testing.T) {
 	ob := &hExecRecordingOutbound{}
 	d := buildHExecDryRunDispatcher(t, ob, hExecSoulCap{})
 	r := humaExecRouter(t, hSoulEnforcer{allow: true}, nil, d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
-		strings.NewReader(`{"module":"core.cmd.shell","timeout_seconds":5,"dry_run":true}`))
+		strings.NewReader(`{"module":"core.file.present","input":{"path":"/etc/motd"},"timeout_seconds":5,"dry_run":true}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (an announcing host must not be gated); body=%s", rec.Code, rec.Body.String())
@@ -1150,6 +1164,9 @@ func TestHumaSoul_Exec_DryRunFlag_ReachesTheWire(t *testing.T) {
 // writeInvoked and this huma middleware), the gate precedes the first by
 // construction, and only a wire test covers the second. An event claiming an
 // invocation that was refused before dispatch is a lie in the audit log.
+//
+// Module as above — a verb-shell one would be refused by the module admission ahead of
+// the gate (NIM-489) and this test would pass on a 400 it never asked about.
 func TestHumaSoul_Exec_DryRunNotAnnounced_409_NoAudit(t *testing.T) {
 	ob := &hExecRecordingOutbound{}
 	// No LeaseLookup wired, so the gate cannot cross-check connectivity and the
@@ -1159,13 +1176,49 @@ func TestHumaSoul_Exec_DryRunNotAnnounced_409_NoAudit(t *testing.T) {
 	r := humaExecRouter(t, hSoulEnforcer{allow: true}, auditCap, d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
-		strings.NewReader(`{"module":"core.cmd.shell","dry_run":true}`))
+		strings.NewReader(`{"module":"core.file.present","input":{"path":"/etc/motd"},"dry_run":true}`))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (target did not announce dry_run); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeSoulCapabilityUnsupported)
+	if n := len(auditCap.Events()); n != 0 {
+		t.Errorf("* audit recorded %d event(s) on a refused dry_run: errand.invoked would claim an invocation "+
+			"that never reached a host", n)
+	}
+	if len(ob.sent) != 0 {
+		t.Errorf("* %d ErrandRequest(s) reached the wire on a refused dry_run", len(ob.sent))
+	}
+}
+
+// TestHumaSoul_Exec_DryRunVerbShell_400_NoAudit — the refusal as a client sees it,
+// over the real route: 400 malformed-request, nothing on the wire, and no
+// `errand.invoked`. The mapper is unit-tested in internal/api/handlers; what only a
+// wire test can show is the status code an operator actually receives and that the
+// huma audit middleware — the second producer of `errand.invoked` — stays silent for a
+// request that never reached a host (the same argument the 409 test above makes).
+//
+// The host announces everything, so a 409 here would mean the capability gate answered
+// first and the module admission is not the thing being tested (NIM-489).
+func TestHumaSoul_Exec_DryRunVerbShell_400_NoAudit(t *testing.T) {
+	ob := &hExecRecordingOutbound{}
+	d := buildHExecDryRunDispatcher(t, ob, hExecSoulCap{})
+	auditCap := &auditCaptureWriter{}
+	r := humaExecRouter(t, hSoulEnforcer{allow: true}, auditCap, d)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/souls/host-1.example.com/exec",
+		strings.NewReader(`{"module":"core.cmd.shell","input":{"cmd":"uptime"},"dry_run":true}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (dry_run on a verb-shell module cannot succeed on any host, so it is the "+
+			"request that is wrong); body=%s", rec.Code, rec.Body.String())
+	}
+	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
+	if body := rec.Body.String(); !strings.Contains(body, "core.cmd.shell") {
+		t.Errorf("* detail does not name the offending module, leaving the operator to guess which one it was: %s", body)
+	}
 	if n := len(auditCap.Events()); n != 0 {
 		t.Errorf("* audit recorded %d event(s) on a refused dry_run: errand.invoked would claim an invocation "+
 			"that never reached a host", n)

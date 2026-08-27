@@ -1,0 +1,87 @@
+# L0 topology 1/3 of the inline cloud source (NIM-668): standalone.
+#
+# What this case pins: the rendered core.cloud.created step carries the WHOLE
+# driver tuple - alias, region, fqdn_suffix - and the VM SPEC ITSELF, taken from
+# vars.cloud.profiles.standalone. Nothing here names a row of the providers or
+# profiles registry, so the render needs zero rows in Postgres.
+#
+# The three cases differ only in input.topology; the assertion on `profile`
+# is what separates them - a topology that resolved to the wrong spec (or to an
+# empty one) fails here rather than at the provider.
+name: standalone topology renders its VM spec inline, with no registry rows
+
+fixtures:
+  hosts:
+    - sid: redis-0.ns.vm.example
+      covens: []
+      soulprint:
+        network: { primary_ip: 10.0.0.1 }
+        os: { arch: amd64 }
+  # Mock Vault KV for the `credentials:` ref. Keeper reads it in the
+  # vault-resolve phase, so by the time the module runs the cell holds the
+  # secret MAP - which is why the assertion below can name its keys, and why
+  # the driver never talks to Vault itself (A-flow).
+  vault:
+    secret/cloud/wb-dev:
+      access_key_id:     EXAMPLE-KEY-ID
+      secret_access_key: EXAMPLE-NOT-A-REAL-SECRET
+  # MIRROR of examples/service/example-cloud-bootstrap/vars/00-base.yaml -> cloud.
+  # L0 has no service tree: the harness takes ServiceVars from here and nowhere
+  # else (keeper/internal/trial/harness.go). TestInlineCloudCasesMirrorServiceVars
+  # keeps this copy equal to the file, so "renders from vars/" is a fact and not
+  # a claim about a hand-written fixture.
+  vars:
+    cloud:
+      driver:      wb
+      region:      ru-central1
+      fqdn_suffix: ns.vm.example
+      profiles:
+        standalone:
+          image:         ubuntu-24-04
+          instance_type: c2-m4
+          disk:          { size_gb: 40, type: ssd }
+        sentinel:
+          image:         ubuntu-24-04
+          instance_type: c2-m2
+          disk:          { size_gb: 20, type: ssd }
+        cluster:
+          image:         ubuntu-24-04
+          instance_type: c4-m8
+          disk:          { size_gb: 100, type: ssd }
+  input:
+    topology: standalone
+    count: 1
+    name: redis
+
+mocks:
+  register:
+    provision:
+      vm_ids: [i-aaa]
+      hosts:
+        - { sid: redis-0.ns.vm.example, vm_id: i-aaa, primary_ip: 10.0.0.1 }
+
+assert:
+  task_present:
+    - module: core.cloud.created
+      params_subset:
+        driver: wb
+        # The ref became the secret itself before the module ran (phase 1,
+        # ADR-010). The sibling cases do not repeat this - it is a property of
+        # the step, not of the topology.
+        credentials:
+          access_key_id:     EXAMPLE-KEY-ID
+          secret_access_key: EXAMPLE-NOT-A-REAL-SECRET
+        region: ru-central1
+        fqdn_suffix: ns.vm.example
+        count: 1
+        name: redis
+        self_onboard: true
+        profile:
+          image: ubuntu-24-04
+          instance_type: c2-m4
+          disk: { size_gb: 40, type: ssd }
+
+    - module: core.soul.registered
+      params_subset:
+        sid: [redis-0.ns.vm.example]
+        await_online: true

@@ -32,7 +32,10 @@ import (
 // --- fake pool serving the forget transaction, recording every statement ---
 
 type mcpForgetPool struct {
-	status     string // "" → ErrNoRows (not found)
+	status string // "" → ErrNoRows (not found)
+	// coven — souls.coven as the per-host RBAC gate reads it before the tool
+	// runs (NIM-588). No row (status "") → the coven read says ErrNoRows too.
+	coven      []string
 	seeds      int64
 	tokens     int64
 	members    int64
@@ -46,7 +49,16 @@ func (p *mcpForgetPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) 
 func (p *mcpForgetPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, errors.New("mcpForgetPool.Exec: unexpected")
 }
-func (p *mcpForgetPool) QueryRow(context.Context, string, ...any) pgx.Row {
+func (p *mcpForgetPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	// soul.CovenBySID — the coven read the RBAC gate does before the forget
+	// transaction opens. On the pool, not the tx, so it stays out of
+	// `statements`: that list is the forget's own writes and deleted() reads it.
+	if strings.Contains(sql, "SELECT coven") && strings.Contains(sql, "FROM souls") {
+		if p.status == "" {
+			return mcpForgetErrRow{err: pgx.ErrNoRows}
+		}
+		return mcpForgetCovenRow{coven: p.coven}
+	}
 	return mcpForgetErrRow{err: errors.New("mcpForgetPool.QueryRow: unexpected")}
 }
 func (p *mcpForgetPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
@@ -122,6 +134,20 @@ func (r mcpForgetStrRow) Scan(dest ...any) error {
 			*p = r.s
 		}
 	}
+	return nil
+}
+
+type mcpForgetCovenRow struct{ coven []string }
+
+func (r mcpForgetCovenRow) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return errors.New("mcpForgetCovenRow.Scan: want exactly one dest (coven)")
+	}
+	p, ok := dest[0].(*[]string)
+	if !ok {
+		return errors.New("mcpForgetCovenRow.Scan: dest is not *[]string")
+	}
+	*p = r.coven
 	return nil
 }
 
@@ -429,6 +455,69 @@ func TestSoulForget_RBACForbidden(t *testing.T) {
 	if recEvent(rec, audit.EventSoulForgotten) != nil {
 		t.Error("audit written on a forbidden call")
 	}
+}
+
+// TestSoulForget_CovenGrantNarrowsHere_Too — the ADR-004 parity claim for
+// NIM-588: `soul.forget on coven=<label>` narrows over MCP exactly as it does
+// over DELETE /v1/souls/{sid}.
+//
+// This is not covered by the REST guards in the api package. The two surfaces
+// share soulforget.Erase but NOT the RBAC check — REST resolves the host's
+// covens in a router selector, MCP in checkSoulHostScope — so a fix applied to
+// one leaves the other exactly as broken as before, and every test on the fixed
+// side stays green about it. ADR-004 makes both primary operator interfaces:
+// "narrows over OpenAPI, denies over MCP" is not a partial fix, it is a bug for
+// whoever uses MCP.
+//
+// Both directions in one test on purpose. Narrowing that admitted every host
+// would satisfy the admit half alone, and the old host-only behaviour would
+// satisfy the refuse half alone; only the pair distinguishes a grant that is
+// compared from one that is merely fetched or ignored.
+func TestSoulForget_CovenGrantNarrowsHere_Too(t *testing.T) {
+	webOnly := &rbactest.Config{
+		Roles: []rbactest.Role{
+			{Name: "web-forgetter", Operators: []string{"archon-alice"},
+				Permissions: []string{"soul.forget on coven=web"}},
+		},
+	}
+
+	t.Run("host in the granted coven is forgotten", func(t *testing.T) {
+		pool := &mcpForgetPool{status: "connected", coven: []string{"web"}, seeds: 1}
+		h, rec := newForgetHandler(t, webOnly, pool, &mcpForgetTeardown{})
+
+		resp := callTool(t, h, "archon-alice", "keeper.soul.forget", `{"sid":"host-1.example.com"}`)
+		if resp.Error != nil {
+			t.Fatalf("`soul.forget on coven=web` was refused for a host IN coven web — the MCP surface "+
+				"still reads a coven grant as a denial: %+v", resp.Error)
+		}
+		if !pool.deleted() {
+			t.Error("success without a DELETE FROM souls")
+		}
+		if recEvent(rec, audit.EventSoulForgotten) == nil {
+			t.Error("a host was forgotten without `soul.forgotten` — the only record it ever existed")
+		}
+	})
+
+	t.Run("host in another coven is refused", func(t *testing.T) {
+		pool := &mcpForgetPool{status: "connected", coven: []string{"prod"}, seeds: 1}
+		td := &mcpForgetTeardown{}
+		h, rec := newForgetHandler(t, webOnly, pool, td)
+
+		resp := callTool(t, h, "archon-alice", "keeper.soul.forget", `{"sid":"host-1.example.com"}`)
+		if resp.Error == nil {
+			t.Fatal("`soul.forget on coven=web` erased a host in coven prod")
+		}
+		if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeForbidden {
+			t.Errorf("code = %q, want forbidden", data.Code)
+		}
+		if pool.deleted() || td.broadcasts != 0 {
+			t.Errorf("a refused call still reached the DB/teardown: statements=%v broadcasts=%d",
+				pool.statements, td.broadcasts)
+		}
+		if recEvent(rec, audit.EventSoulForgotten) != nil {
+			t.Error("audit written on a forbidden call")
+		}
+	})
 }
 
 // TestSoulForget_NotFound — 404-equivalent, and no audit for a host that was

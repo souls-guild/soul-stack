@@ -68,6 +68,28 @@ var productEntryPoints = map[string]string{
 	"IssueBootstrapToken":       "raw INSERTs into souls/bootstrap_tokens — where a dropped column dies",
 	"SpawnSoulContainer":        "`soul init` (CSR Bootstrap RPC), `soul run`, waiting for souls.status='connected'",
 	"buildCommunityRedisBinary": "`go build` of this repo's community-redis plugin",
+	// assertKeeperBinaryMatchesTree (NIM-490) is deliberately absent, and since
+	// this half is a LIST, the absence has to be argued rather than left to be
+	// read as the gap the comment above describes. It answers to BOTH halves,
+	// because it has both shapes.
+	//
+	// It execs the keeper, so the shape says product call. What it runs is
+	// `keeper version` — the artifact's nameplate. It drives no behaviour this
+	// tier tests and no regression in this repo can redden it.
+	//
+	// It also reads this repository's tree, which is repoReadingFuncs' property,
+	// and escapes that closure only because it asks git for the root instead of
+	// calling repoRoot. That is a technicality and would be a poor reason on its
+	// own, so here is the real one: NIM-515's read produced a finding ABOUT REPO
+	// CONTENT — a document that should have existed and did not — and content
+	// findings must never wear the STAND-SETUP label. This read produces no
+	// claim about content. It stats uncommitted files for their mtimes and
+	// concludes only that the artifact predates them, which is a fact about the
+	// build, and a fact about the build is what bring-up means.
+	//
+	// Listing it in either half would force it outside the region, where its
+	// refusal reaches the reader as unlabelled FAIL lines on every gate test at
+	// once. Same argument, same placement, as L3a's NewStack.
 }
 
 // TestDeclaredRegionsEndBeforeTheProductRuns — the bring-up declaration covers
@@ -124,20 +146,31 @@ func TestDeclaredRegionsEndBeforeTheProductRuns(t *testing.T) {
 // punishing the fix: BuildCommunityRedisPlugin calls the plugin build first and
 // declares afterwards, precisely so the build stays out.
 func deferPos(fn *ast.FuncDecl) token.Pos {
-	pos := token.NoPos
+	if d := standSetupDefer(fn); d != nil {
+		return d.Pos()
+	}
+	return token.NoPos
+}
+
+// standSetupDefer — the same defer as the statement rather than the position.
+// provenance_test.go needs the statement because it reads the region's CLOSING
+// end off the third argument (regionFlagName); walking for it twice would give
+// two answers to one question.
+func standSetupDefer(fn *ast.FuncDecl) *ast.DeferStmt {
+	var out *ast.DeferStmt
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		d, ok := n.(*ast.DeferStmt)
 		if !ok {
 			return true
 		}
 		if id, ok := d.Call.Fun.(*ast.Ident); ok && id.Name == "declareStandSetupFailure" {
-			if pos == token.NoPos || d.Pos() < pos {
-				pos = d.Pos()
+			if out == nil || d.Pos() < out.Pos() {
+				out = d
 			}
 		}
 		return true
 	})
-	return pos
+	return out
 }
 
 // repoReadingFuncs — the package's functions that reach [repoRoot], directly or

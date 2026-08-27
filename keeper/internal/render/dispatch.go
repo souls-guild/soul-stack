@@ -132,6 +132,13 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // params is a normal CEL no-such-key error, as intended: a keeper step
 // operates on input/incarnation/vars, not host facts).
 //
+// compute: IS available (NIM-619). It used to be omitted, which made
+// `compute.<name>` here fail as `no such key: <name>` — a sentence about a key
+// that was spelled correctly and had just been computed, because the activation
+// substitutes an empty map for a namespace the context left out. Both halves of
+// that are gone: the namespace is passed through, and the omission itself is no
+// longer expressible in silence (compute_scope_guard_test.go).
+//
 // incarnation.state — read-only pre-run snapshot (RenderInput.State, the same
 // stateBefore under FOR UPDATE, see [incarnationVars]): a keeper task
 // (core.cloud.destroyed etc.) reads `incarnation.state.<path>` in params just
@@ -194,6 +201,11 @@ func keeperVars(in RenderInput) cel.Vars {
 		Vars:               in.ServiceVars,
 		Compute:            in.Compute,
 		Ctx:                in.Ctx,
+		// compute: is in scope here (NIM-619 variant B). It fits this context by
+		// construction: [Pipeline.resolveCompute] runs ONCE per run before the task
+		// loop, in a soulprint-free run-level context — the same one a keeper task
+		// renders in. Nothing about it is per-host, so there is no drift to import.
+		ComputeScope: cel.ComputeAvailable,
 	}
 }
 
@@ -205,7 +217,8 @@ func keeperVars(in RenderInput) cel.Vars {
 // form is an omitted `on:`). Fail-closed: a stale `on: ["${ incarnation.name }"]`
 // errors out instead of silently resolving to an empty set.
 func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string, error) {
-	// on: resolves not per-host — soulprint is unavailable in this context.
+	// on: resolves not per-host — soulprint is unavailable in this context, and so
+	// is compute (declared, so a reference says which, NIM-619).
 	vars := cel.Vars{
 		Input:    in.Input,
 		Register: in.Register,
@@ -214,7 +227,8 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 			"service":         in.Incarnation.Service,
 			"service_version": in.Incarnation.ServiceVersion,
 		},
-		Ctx: in.Ctx,
+		Ctx:          in.Ctx,
+		ComputeScope: cel.ComputeOutOfScopeCovenList,
 	}
 
 	out := make([]string, 0, len(items))

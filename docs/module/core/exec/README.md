@@ -7,9 +7,9 @@ redirects, glob, variable substitutions). **Soul-side**, statically built into
 
 This is a verb module: the only state is `run` (without declarative semantics
 "lead to state"). For shell semantics (pipes/redirects) - [`core.cmd`](../cmd/README.md).
-Non-zero exit of the main command is **not** considered an error automatically - which
-is considered a failure, the author decides via `failed_when:` in the scenario (for example, `grep`
-with exit 1 is normal).
+Which exit codes count as success is the `exit_codes` param, and it defaults to
+`[0]`: a command that ran and exited non-zero fails the task. Codes that are an
+answer rather than an error — `grep` exiting 1 — are declared per task.
 
 ## States
 
@@ -28,6 +28,7 @@ with exit 1 is normal).
 | `creates` | string | optional | Guard: if the file at this path **exists** - skip (`changed=false`, `reason: creates`). |
 | `unless` | string | optional | Guard: execute `sh -c "<unless>"`; if its exit **= 0** - skip (`reason: unless`). |
 | `onlyif` | string | optional | Guard: execute `sh -c "<onlyif>"`; if its exit **≠ 0** - skip (`reason: onlyif`). |
+| `exit_codes` | list | optional, default `[0]` | Exit codes accepted as success. Elements are exact integers and/or inclusive `"lo-hi"` string ranges, mixed freely: `[0, 1, 2]`, `["2-5"]`, `[0, "2-5"]`. Any code outside the set fails the task. An empty list is rejected — it would accept nothing at all, not even 0. A process killed by a signal reports `-1`, which no `"lo-hi"` range can cover (the string form is non-negative by construction) — write negatives as bare integers: `[0, -1]`. Does not apply to the guards: `unless`/`onlyif` read their own exit code by their own rule, and a skipped task reports `exit_code: 0` and never fails. |
 
 ## Capabilities / side-effects
 
@@ -47,6 +48,39 @@ auxiliary shell calls.
 guard - `{ skipped: true, reason, exit_code: 0 }` with `changed=false`. Typical
 using `register:` - read-only probe (`changed_when: false`) with reading
 `register.<name>.stdout` in subsequent `where:` / `failed_when:` / `output:`.
+
+**A code outside `exit_codes` fails the task, and the output still arrives.** The final
+event carries `failed=true` **and** `{ stdout, stderr, exit_code }`, so `register.<name>.*`
+is fully populated on the failure too — the stderr that explains it is right there, and a
+predicate over `register.self.exit_code` is evaluable.
+
+A stream can still go missing: a command's output is arbitrary bytes, and one that is not
+valid UTF-8 (`printf '\xff'`) cannot be carried. Each field is decided on its own — an
+unencodable one is left out and named in the failure message, an encodable one is kept
+whatever its neighbours did, and a command that wrote binary to both streams loses both
+and has both named. `exit_code` is a number, so it is never among them and the
+`failed_when:` escape hatch always has something to read.
+
+It is the only failure class that carries output. Everything that fails **before** the
+command runs carries none, and there is no `register.self.exit_code` to test — read
+`TaskEvent.error` instead: an unknown state, a bad param (`cmd`/`args`/`cwd`/`env`, and a
+malformed `exit_codes`, which is rejected before the guards are even checked), a
+`creates`/`unless`/`onlyif` guard that could not be evaluated (`os.Stat` denied, the guard
+shell unavailable), and a process that would not start at all (`res.Err != nil`).
+
+To accept a code the command legitimately returns, widen the set on the task:
+
+```yaml
+params:
+  cmd: grep
+  args: ["-q", "listen", "/etc/redis/redis.conf"]
+  exit_codes: [0, 1]                  # 1 = no match, an answer
+```
+
+To tolerate **any** code, waive the verdict from the scenario with `failed_when: false`
+([destiny/tasks.md](../../../destiny/tasks.md), `failed_when:`) — it is applied after Apply
+and has the last word. Note that a waived task ends **OK, not CHANGED**, so `onchanges:`
+dependents of it do not fire; when a handler must still run, widen `exit_codes` instead.
 
 ## Example
 

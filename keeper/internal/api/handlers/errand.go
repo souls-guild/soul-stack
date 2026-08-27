@@ -442,6 +442,10 @@ func ptrBoolIfTrue(b bool) *bool {
 // (delivered by the huma wrapper via AsProblemDetails). Path in problem.Details is
 // empty — filled on output.
 func (h *ErrandHandler) dispatchError(err error) error {
+	// Carries the offending module, so the refusal can name it without the mapper
+	// re-reading the request (the same wording serves MCP and Voyage).
+	var verbShell *errand.DryRunVerbShellError
+
 	switch {
 	case errors.Is(err, errand.ErrSIDEmpty):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", "sid is empty")}
@@ -452,6 +456,11 @@ func (h *ErrandHandler) dispatchError(err error) error {
 			"field 'timeout_seconds' must be in ["+strconv.Itoa(errand.MinTimeoutSeconds)+", "+strconv.Itoa(errand.MaxTimeoutSeconds)+"]")}
 	case errors.Is(err, errand.ErrSoulNotConnected):
 		return &problemError{problem.New(problem.TypeNotFound, "", "target soul is not connected to the cluster")}
+	case errors.As(err, &verbShell):
+		// 400, not one of the 409 capability types: nothing about the cluster or the
+		// target can make this pair work, so it is the request that is wrong
+		// (ADR-033 contract row, NIM-489).
+		return &problemError{problem.New(problem.TypeMalformedRequest, "", verbShell.Detail())}
 	case errors.Is(err, errand.ErrDryRunNotAnnounced):
 		return &problemError{problem.New(problem.TypeSoulCapabilityUnsupported, "",
 			"the target soul's announced capability set does not include 'dry_run', so keeper cannot rule out a binary "+
@@ -505,8 +514,13 @@ func (h *ErrandHandler) authorizeShell(aid, sid, module string) error {
 // path parameter `/v1/souls/{sid}/exec` for the permission check
 // (rbac.md §Errand → selectors `host=<sid>`).
 //
-// Symmetric to SoulSIDSelector — a separate helper so router.go does not
-// depend on the errand package internals.
+// A separate helper so router.go does not depend on the errand package
+// internals. This one is still host-ONLY: unlike the three per-host Soul
+// mutations, which NIM-588 moved to [SoulSIDScopeSelector], `errand.run on
+// coven=<label>` therefore denies every call rather than narrowing to that
+// coven, and `soul.console` has the same shape one layer deeper in
+// authorizeShell. Fixing those needs both layers moved together and a reader
+// threaded through NewErrandHandler — tracked separately.
 func ErrandSIDSelector(r *http.Request) map[string]string {
 	sid := chi.URLParam(r, "sid")
 	if sid == "" {

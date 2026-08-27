@@ -62,6 +62,12 @@ type fakePool struct {
 	// amend R1, parity with REST insertArgs).
 	insertIncArgs []any
 
+	// canonicalizeCalls — how many times gate (b) of a trait write reached
+	// `SELECT $1::jsonb` (soul.CanonicalTraitPayload). Zero for an Unrestricted
+	// operator by design: the gate returns before touching the database, so this
+	// separates "admitted after checking" from "never asked".
+	canonicalizeCalls int
+
 	// memberSIDs — backing for the `incarnation_membership` roster read that a
 	// force destroy takes before the FK cascade wipes the relation (NIM-395).
 	// nil → an incarnation with no member hosts.
@@ -141,6 +147,20 @@ func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 }
 
 func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	// Gate (b) canonicalization probe — soul.CanonicalTraitPayload's `SELECT
+	// $1::jsonb`, reached by handlers.ScreenTraitPairsInScope for every operator
+	// that is not Unrestricted. The fake ECHOES the bytes it was handed and
+	// canonicalizes NOTHING, for the same reason as the UPDATE … SET traits branch
+	// below: no fake re-implements jsonb. A test in this package may therefore pin
+	// the gate's VERDICT — which pair was refused, and that nothing was written —
+	// and never the SPELLING of a value (`1e+06` vs `1000000`, NIM-529). Spelling
+	// belongs to TestIntegration_TraitWriteGate_AllSurfacesAgree, against a real
+	// database.
+	if contains(sql, "SELECT $1::jsonb") {
+		f.canonicalizeCalls++
+		raw, _ := args[0].([]byte)
+		return staticRow{values: []any{raw}}
+	}
 	// INSERT INTO incarnation … RETURNING created_at, updated_at (Create).
 	if contains(sql, "INSERT INTO incarnation") {
 		f.insertIncArgs = args
@@ -620,6 +640,14 @@ func (r staticRow) Scan(dest ...any) error {
 			}
 		case *[]byte:
 			*d = r.values[i].([]byte)
+		case *[]string:
+			*d = r.values[i].([]string)
+		default:
+			// A dest type this fake does not know used to be scanned into
+			// nothing at all, which reads exactly like a column that came back
+			// empty. Every caller then agrees with the fake and the test is
+			// green about a value it never received.
+			return fmt.Errorf("staticRow.Scan: unhandled dest type %T at index %d", d, i)
 		}
 	}
 	return nil
@@ -721,11 +749,17 @@ func newTestHandler(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config) (*Ha
 	}
 	rec := &recordingAudit{}
 	h, err := NewHandler(HandlerDeps{
-		OperatorSvc:   svc,
-		RBAC:          enf,
-		AuditWriter:   rec,
-		Logger:        slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		IncarnationDB: pool,
+		OperatorSvc: svc,
+		RBAC:        enf,
+		AuditWriter: rec,
+		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		// PurviewResolver — the same enforcer, wired for the same reason as in
+		// newTestHandlerFull: gate (b) of a trait write is fail-closed without one,
+		// so a handler built without it answers 500 to every trait write — a shape
+		// production never has (daemon.go: `PurviewResolver: d.rbacHolder`). The two
+		// helpers must not disagree about which dependencies exist.
+		PurviewResolver: enf,
+		IncarnationDB:   pool,
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -878,10 +912,16 @@ func newTestHandlerFull(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config, 
 	}
 	rec := &recordingAudit{}
 	h, err := NewHandler(HandlerDeps{
-		OperatorSvc:     svc,
-		RBAC:            enf,
-		AuditWriter:     rec,
-		Logger:          slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		OperatorSvc: svc,
+		RBAC:        enf,
+		AuditWriter: rec,
+		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		// PurviewResolver — the same enforcer the daemon passes (daemon.go:
+		// `PurviewResolver: d.rbacHolder`). Gate (b) of a trait write resolves the
+		// operator's trait-scope through it and is fail-closed without it, so a
+		// handler built without one would answer 500 to every incarnation
+		// traits-set — a shape production never has.
+		PurviewResolver: enf,
 		IncarnationDB:   pool,
 		ScenarioRunner:  runner,
 		ServiceRegistry: registry,

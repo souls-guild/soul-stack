@@ -63,11 +63,28 @@ type Vars struct {
 
 	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
 	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
-	// soulprint), available in CEL as `compute.<name>`. Scope — apply.input AND
-	// keeper-side task params (host-invariant by construction). nil/empty ⇒ `compute.<name>`
-	// gives the normal no-such-key. NOT passed into the destiny pass (isolation:
-	// destiny sees the result only via apply.input).
+	// soulprint), available in CEL as `compute.<name>` in every context that IS that
+	// run-level context — a task's params/where/vars and apply.input, on the Soul
+	// side and under `on: keeper` alike (host-invariant by construction). nil/empty ⇒
+	// `compute.<name>` gives the normal no-such-key. NOT passed into the destiny pass
+	// (isolation: destiny sees the result only via apply.input). Which contexts are
+	// out of scope, and why: [ComputeScope].
+	//
+	// A nil Compute means "this run has no compute: block", NOT "this context has
+	// no compute namespace" — the second is [ComputeScope]'s job. Conflating them
+	// is exactly what NIM-619 was.
 	Compute map[string]any
+
+	// ComputeScope — does the `compute` namespace exist in this context at all
+	// (scope.go)? The zero value says yes, and a missing name is then an ordinary
+	// no-such-key. A context that does not have the namespace must say so: it turns
+	// `compute.<name>` into a compile-time [ErrOutOfScope] that names the namespace
+	// and the context, instead of an eval error naming a key that was never the
+	// problem — and instead of `has(compute.x)` quietly evaluating false.
+	//
+	// Independent of Compute on purpose: a run whose `compute:` block is empty still
+	// has the namespace wherever it is in scope.
+	ComputeScope ComputeScope
 
 	// State — the root of incarnation.state in migration mode ([NewMigration],
 	// [ADR-019]): in CEL available as `state.<path>` (mutated over the course of
@@ -134,6 +151,13 @@ const registerHostsKey = "hosts"
 //
 // soulprint.hosts — list(map(string,dyn)); nil SoulprintHosts ⇒ empty list (access
 // in the destiny pass is cut off at compile, [Vars.AllowHosts]).
+//
+// compute is always placed here when the mode is not migration — a context that
+// does NOT have the namespace is cut off earlier, at compile ([Vars.ComputeScope],
+// scope.go), so nothing reaches eval with a `compute` reference it may not read.
+// Substituting an empty map for an absent namespace is what made the absence look
+// like a missing key (NIM-619); the empty map that remains here means only "the
+// run has no compute: entries".
 //
 // Loop variables are placed at the top level of the activation under their own names
 // (the bare form `<as>.*`). Iteration names do not conflict with the fixed context:

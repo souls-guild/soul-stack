@@ -194,7 +194,16 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 // that says exactly the same thing.
 func communityRedisProvisionStep(t *testing.T) string {
 	t.Helper()
-	const opener = communityRedisProvisionFunc + "() {"
+	return provisionShellFunction(t, communityRedisProvisionFunc)
+}
+
+// provisionShellFunction returns the text of one function of dev/provision.sh, comments
+// dropped. Shared with the anchor guard in devvaultanchors_test.go, which runs what it
+// extracts rather than reading it — the extractor has to be one, or the two sets of
+// guards disagree about where a function ends.
+func provisionShellFunction(t *testing.T, name string) string {
+	t.Helper()
+	opener := name + "() {"
 	lines := strings.Split(provisionScriptSource(t), "\n")
 	start := -1
 	for i, line := range lines {

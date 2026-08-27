@@ -37,9 +37,14 @@ import (
 // --- fake pool: serves the forget transaction and RECORDS what it was asked ---
 
 type fgPool struct {
-	status     string // souls.status under FOR UPDATE; "" → pgx.ErrNoRows (404)
-	seeds      int64  // rows the soul_seeds UPDATE reports
-	tokens     int64  // rows the bootstrap_tokens UPDATE reports
+	status string // souls.status under FOR UPDATE; "" → pgx.ErrNoRows (404)
+	// coven — souls.coven for this host, as the per-host RBAC gate reads it
+	// (NIM-588). Empty status means the row does not exist, so the coven read
+	// answers ErrNoRows too: one row, one truth.
+	coven      []string
+	covenErr   error // coven read fails (Postgres down) → the gate must fail closed
+	seeds      int64 // rows the soul_seeds UPDATE reports
+	tokens     int64 // rows the bootstrap_tokens UPDATE reports
 	members    int64
 	voices     int64
 	statements []string // every SQL that reached the tx, in order
@@ -50,7 +55,20 @@ func (p *fgPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) { retur
 func (p *fgPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, errors.New("fgPool.Exec: unexpected")
 }
-func (p *fgPool) QueryRow(context.Context, string, ...any) pgx.Row {
+func (p *fgPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	// soul.CovenBySID — read by the RBAC gate BEFORE the forget transaction
+	// opens (NIM-588). It runs on the pool rather than the tx and is left out
+	// of `statements` on purpose: that list is the forget's own writes, and
+	// deleted() reads it to decide whether anything was destroyed.
+	if strings.Contains(sql, "SELECT coven") && strings.Contains(sql, "FROM souls") {
+		switch {
+		case p.covenErr != nil:
+			return hSoulErrRow{err: p.covenErr}
+		case p.status == "":
+			return hSoulErrRow{err: pgx.ErrNoRows}
+		}
+		return hSoulStaticRow{vals: []any{p.coven}}
+	}
 	return hSoulErrRow{err: errors.New("fgPool.QueryRow: unexpected")}
 }
 func (p *fgPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
@@ -177,7 +195,7 @@ func forgetRouter(t *testing.T, enforcer hSoulEnforcer, auditW audit.Writer, sou
 	}
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/souls", func(r chi.Router) {
-			r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "soul", "forget", handlers.SoulSIDSelector)).
+			r.With(injectClaims, apimiddleware.RequirePermissionMulti(enforcer, "soul", "forget", handlers.SoulSIDScopeSelector(soulH.ContextReader()))).
 				Group(func(r chi.Router) {
 					registerHumaSoulForget(newHumaSoulAPI(r, auditW, audit.EventSoulForgotten, nil), soulH)
 				})

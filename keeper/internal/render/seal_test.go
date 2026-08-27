@@ -1,8 +1,11 @@
 package render
 
 import (
+	"context"
+	"reflect"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -191,5 +194,118 @@ func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
 	}
 	if paths["path"] || paths["mode"] || paths["owner"] {
 		t.Errorf("non-secret fields sealed - over-seal: %v", paths)
+	}
+}
+
+// literalRefParams — the cell shapes a bare `vault:` ref can take, next to the
+// near-misses that must NOT be sealed. Used by both tests below so the seal
+// side and the resolve side are asked about the same strings.
+func literalRefParams() map[string]any {
+	return map[string]any{
+		// The NIM-668 shape: `credentials: vault:secret/cloud/wb-dev` on a
+		// core.cloud.provisioned step — a whole-cell ref with no `${ … }` for
+		// DetectSealed to read.
+		"credentials": "vault:secret/redis/admin",
+		"field_ref":   "vault:secret/redis/admin#password",
+		// Near-misses: `vault:` not at position 0. walkVaultValue resolves by
+		// prefix, so these stay literal text and there is nothing to seal.
+		"mid_string": "see vault:secret/redis/admin for the credentials",
+		"plain":      "no-secret",
+	}
+}
+
+// TestCollectSealed_LiteralVaultRefCell ★ — a bare `vault:<mount>/<path>` cell
+// is sealed on the RAW params, before the vault-resolve phase replaces it with
+// the secret. Without this the resolved secret would reach the masker's
+// declarative layers unannounced, and only the key-name regex could still catch
+// it — masking a `credentials` key but not a `cloud_auth` one, and raising a
+// declarative-gap alarm on every run where it worked.
+func TestCollectSealed_LiteralVaultRefCell(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+
+	collectSealed(e, set, literalRefParams(), cel.SealSources{}, "")
+
+	paths := set.Paths()
+	for _, k := range []string{"credentials", "field_ref"} {
+		if !paths[k] {
+			t.Errorf("%s (literal vault: ref) not sealed — the resolved secret would arrive unannounced: %v", k, paths)
+		}
+	}
+	for _, k := range []string{"mid_string", "plain"} {
+		if paths[k] {
+			t.Errorf("%s sealed — over-seal on a cell the vault phase leaves alone: %v", k, paths)
+		}
+	}
+}
+
+// TestCollectSealed_MatchesVaultResolve ★ — the seal predicate and the resolve
+// predicate are the same predicate. Rather than restate `HasPrefix` in the
+// assertion (which would pass even if walkVaultValue moved to, say, a full-ref
+// regex), this runs the actual vault-resolve over the same params and requires
+// exactly the cells it REPLACED to be exactly the cells that were sealed.
+func TestCollectSealed_MatchesVaultResolve(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+	params := literalRefParams()
+
+	collectSealed(e, set, params, cel.SealSources{}, "")
+
+	kv := stubKVRender{secrets: map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t"},
+	}}
+	resolved, err := resolveVaultRefs(context.Background(), kv, params)
+	if err != nil {
+		t.Fatalf("resolveVaultRefs: %v", err)
+	}
+
+	replaced := map[string]bool{}
+	for k, before := range params {
+		if !reflect.DeepEqual(before, resolved[k]) {
+			replaced[k] = true
+		}
+	}
+	if sealed := set.Paths(); !reflect.DeepEqual(replaced, sealed) {
+		t.Errorf("cells the vault phase replaced = %v, cells sealed = %v — the two predicates have drifted apart", replaced, sealed)
+	}
+}
+
+// TestMaskSecretsSealed_ResolvedVaultRefSubtree ★ — the point of sealing the
+// raw cell: after resolve, `credentials` holds the secret MAP, and the seal
+// makes the DECLARATIVE layer mask the whole subtree. The alarm hook must stay
+// silent — it signals a declarative gap, and firing it on a step that named its
+// secret properly would train an operator to ignore it.
+func TestMaskSecretsSealed_ResolvedVaultRefSubtree(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+	params := map[string]any{
+		"driver":      "wb",
+		"credentials": "vault:secret/redis/admin",
+	}
+	collectSealed(e, set, params, cel.SealSources{}, "")
+
+	// What the cell looks like once the vault phase has replaced it.
+	rendered := map[string]any{
+		"driver":      "wb",
+		"credentials": map[string]any{"password": "s3cr3t", "access_key_id": "AKIA"},
+	}
+
+	var alarms []string
+	masked := audit.MaskSecretsSealed(rendered, audit.SealOpts{
+		Sealed:        set.Paths(),
+		RegexFallback: func(path string) { alarms = append(alarms, path) },
+	})
+
+	if masked["credentials"] == nil {
+		t.Fatal("credentials cell disappeared instead of being masked")
+	}
+	if sub, isMap := masked["credentials"].(map[string]any); isMap {
+		t.Fatalf("credentials masked per-key instead of as a whole subtree: %v", sub)
+	}
+	if masked["driver"] != "wb" {
+		t.Errorf("driver = %v, want it untouched", masked["driver"])
+	}
+	if len(alarms) != 0 {
+		t.Errorf("regex-fallback alarm fired for %v — the seal should have caught the cell declaratively", alarms)
 	}
 }

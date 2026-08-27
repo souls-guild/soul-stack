@@ -12,6 +12,27 @@
 #     In prod — Vault Enterprise / OSS with a persistent storage backend
 #     (raft/consul) + auto-unseal via KMS / Shamir keys, AppRole, or
 #     mTLS instead of a root token.
+#
+#     Read that loss together with the line above it: Postgres keeps its data on
+#     a named volume, Vault keeps none. So a restart of this stack does not reset
+#     it — it desynchronises it. The registries survive holding rows that name
+#     trust anchors which no longer exist:
+#       * `secret/keeper[/<stand>]/jwt-signing-key` gone, `operators` intact —
+#         every JWT ever issued to an Archon fails signature verification (401).
+#         The rights in the registry are untouched; only the signature no longer
+#         matches, so it reads as "my token stopped working", not as a wipe.
+#       * the `pki/` root gone, `soul_seeds` intact — the seeds chain to a CA
+#         that is not there, mTLS fails, and every soul has to be re-onboarded.
+#         Note `pki/` is a single engine per Vault, and every lightweight stand
+#         shares this one (unlike the KV prefix, which is per-stand, NIM-25):
+#         losing it costs the neighbours their souls too.
+#       * `secret/keeper[/<stand>]/sigil-signing-key` gone, `plugin_sigils`
+#         intact — the grants were signed by an anchor that no longer exists, so
+#         no plugin they cover can be admitted (ADR-026).
+#     `dev/provision.sh` is idempotent and would happily mint fresh anchors over
+#     a live registry, which is what makes the stand look healthy while being
+#     someone else's. Step 1b refuses instead and prints what would die; take
+#     `DEV_VAULT_REISSUE_ANCHORS=1` only when the loss is the point (NIM-365).
 #   - OTel-collector / Jaeger: receives OTLP **without TLS** (dev). keeper/soul
 #     send traces via insecure gRPC to 127.0.0.1:4317. In prod — a collector
 #     with TLS and a persistent trace backend (not all-in-one in-memory Jaeger).
