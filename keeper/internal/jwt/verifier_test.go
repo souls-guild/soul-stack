@@ -257,9 +257,11 @@ func TestVerify_ClockSkew(t *testing.T) {
 // `exp` — on a Bearer whose configured floor is one minute
 // (`auth.jwt.exchange_ttl`, ADR-058), doubling how long a stolen one keeps
 // working. Verify re-checks expiry strictly for that reason, and this is the
-// test that holds it there: delete the re-check and the first three cases go
-// green (return nil instead of ErrExpiredToken), because the parser's leeway
-// accepts tokens that are past `exp` by less than one budget.
+// test that holds it there: delete the re-check and the first three cases FAIL
+// — Verify accepts the token and answers a nil error where they require
+// ErrExpiredToken, because the parser's leeway passes anything less than one
+// budget past `exp`. That failure is the signal; the token going through is the
+// defect it reports.
 //
 // Those three are the ones that gate the re-check — they sit inside the leeway,
 // where nothing else refuses them. The last case is nine budgets past `exp` and
