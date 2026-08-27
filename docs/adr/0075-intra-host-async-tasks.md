@@ -39,7 +39,9 @@
     | Where the reference sits | Resolution | Barrier |
     |---|---|---|
     | `when` · `changed_when` · `failed_when` · `until` · `onchanges` · `onfail` · `require` | Soul-side, inside one `ApplyRequest` | **local** — waits for that task only |
-    | `where` · `vars` · `params` · `apply.input` · `output` · `loop.items` · `loop.when` | Keeper-side, before dispatch ([ADR-056](0056-staged-render-passage.md)) | **full** — the next Passage waits for the whole previous one, on every host |
+    | `where` · `vars` · `params` · `apply.input` · `loop.items` · `loop.when` | Keeper-side, before dispatch ([ADR-056](0056-staged-render-passage.md)) | **full** — the next Passage waits for the whole previous one, on every host |
+
+    ★ `output:` left the second row in NIM-334: a task-level `output:` is refused on every task kind (`output_unsupported`), so no author can reach a Keeper-side reference through it. It returns to that row with the output-contract slice ([`docs/destiny/output.md`](../destiny/output.md)).
 
     And: **an async task never outlives its Passage.** The final barrier is the end of the `ApplyRequest`, which on a stratified plan is the end of the current Passage, not the end of the destiny. On an unstratified plan (`Count == 1`, the common case) the two coincide, which is why the distinction is invisible until a probe splits the run. Authors are told this rather than left to infer it from a latency anomaly.
 

@@ -342,14 +342,25 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 // carries any field besides `include:`/`name:`/`when:`. These fields are allowed
 // on an include-task (`when:` — conditional include, ADR-009 amendment); any other
 // non-empty scope/control modifier would be lost silently by the splice — so
-// expansion rejects it. A whitelist (not a blacklist) is robust to future Task
-// fields: a new field is forbidden on include by default. An empty string means
-// the task is clean.
+// expansion rejects it. An empty string means the task is clean.
+//
+// ⚠ The switch enumerates the FORBIDDEN fields, so a new [Task] field is
+// PERMITTED on an include task until someone adds it here — the opposite of the
+// "forbidden by default" this comment used to claim. Adding a scope/control field
+// to Task means adding a case here in the same commit.
 //
 // `when:` is NOT in this list (conditional include) — its staticness is checked
 // separately by expandOne (IsStaticIncludeWhen → include_when_dynamic_unsupported
 // for dynamic). `loop:` stays forbidden: loop on include is not implemented
 // (docs↔code drift, docs/destiny/tasks.md §7) → include_modifier_unsupported.
+//
+// ★ `output:` left the switch in NIM-334. The key is refused on EVERY task kind
+// at validation (`output_unsupported`), which runs before expansion, so this case
+// could only ever fire second — and its advice ("move the modifier onto a module
+// task of the included file") became false the moment a module task stopped
+// accepting the key too. One key, one diagnostic, and the surviving one is the
+// true one. It comes back here when the output-contract slice makes `output:`
+// legal on a module task, because forwarding it through include stays unbuilt.
 func includeModifierReason(task Task) string {
 	switch {
 	case task.Loop != nil:
@@ -360,8 +371,6 @@ func includeModifierReason(task Task) string {
 		return "async:"
 	case task.Register != "":
 		return "register:"
-	case len(task.Output) > 0:
-		return "output:"
 	case len(task.OnChanges) > 0:
 		return "onchanges:"
 	case len(task.OnFail) > 0:

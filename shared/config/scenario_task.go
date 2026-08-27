@@ -33,7 +33,7 @@ type Task struct {
 	Loop        *LoopSpec      `yaml:"loop,omitempty"`
 	Register    string         `yaml:"register,omitempty"`
 	ID          string         `yaml:"id,omitempty"`
-	Output      map[string]any `yaml:"output,omitempty"`
+	Output      map[string]any `yaml:"output,omitempty"` // refused everywhere by validateOutputUnsupported (NIM-334); the provenance walkers still scan it for the slice that will implement the contract
 	OnChanges   []string       `yaml:"onchanges,omitempty"`
 	OnFail      []string       `yaml:"onfail,omitempty"`
 	Require     any            `yaml:"require,omitempty"` // []string OR "all"
@@ -607,6 +607,11 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 		}))
 	}
 
+	// 1c) Task keys that parse but are implemented nowhere. Discriminator-
+	// independent: they are unbuilt on EVERY kind, so the diagnostic must not read
+	// as "meaningless on this kind".
+	out = append(out, validateOutputUnsupported(present, pathPrefix)...)
+
 	// 2) Discriminator: exactly one of {module, apply, include, block, assert}.
 	// `assert:` is a render-time precondition (ADR-009 amendment): a check, NOT an
 	// executable task, so it shares the discriminator slot with the other kinds
@@ -1054,9 +1059,13 @@ func validateBlockChildOnKeeper(item ast.Node, childPath string) []diag.Diagnost
 // blockForbiddenKeys — module-specific keys not allowed at the BLOCK level (fail-
 // closed; destiny/tasks.md §6.5 does not mention them on a block). A block invokes no
 // module, so a module-result override (`changed_when`/`failed_when`), one call's
-// retry/timeout/output, and `params:` (module arguments) are meaningless on
+// retry/timeout, and `params:` (module arguments) are meaningless on
 // it. Each key is rejected with code `<key>_on_block_invalid` (symmetric to
 // register_on_block_invalid). `register:` is already rejected separately above.
+//
+// `output:` LEFT this list in NIM-334: it is refused on every kind at once by
+// validateOutputUnsupported, because it is unimplemented everywhere and not
+// merely meaningless on a block.
 //
 // `async:` is also rejected on a block — deferred, not forbidden by design
 // (ADR-0075: the design intent is that the whole group runs in one flow, gated
@@ -1070,7 +1079,6 @@ var blockForbiddenKeys = []string{
 	"failed_when",
 	"retry",
 	"timeout",
-	"output",
 	"params",
 	"async",
 }
@@ -1095,6 +1103,39 @@ func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 		}))
 	}
 	return out
+}
+
+// validateOutputUnsupported raises `output_unsupported` for a task-level `output:`
+// on ANY task kind (fail-closed, NIM-334).
+//
+// The key decodes into [Task.Output] and the provenance walkers scan it for
+// `register.*` / `vault(...)` / `soulprint.*` refs, but NOTHING ever resolves it:
+// no consumer materialises a value, and no name is ever checked against the
+// destiny's top-level `output:` schema. Task-level fill and the projection into
+// `register.<applier>.<field>` are two halves of ONE unbuilt slice
+// (docs/destiny/output.md, docs/scenario/orchestration.md §2.1.1). An author who
+// writes `output:` gets silence and reads the docs as a promise it was published.
+// Accepting a key that does nothing is worse than refusing it — the rule behind
+// `async_on_apply_invalid` and `<key>_on_block_invalid`.
+//
+// ★ Refused on every kind rather than per-discriminator, and with its own code:
+// `output_on_block_invalid` / `output_on_apply_invalid` would say "meaningless
+// HERE" about a key that is merely unimplemented EVERYWHERE, and that reading is
+// wrong — the slice, when it lands, makes the key legal on a module task.
+// `output` is therefore NOT in [blockForbiddenKeys]; this check subsumes it.
+func validateOutputUnsupported(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	kv, ok := present["output"]
+	if !ok {
+		return nil
+	}
+	tok := kv.Key.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "output_unsupported",
+		Message:  "output: is not implemented on any task kind — the destiny output contract (task-level fill + projection into register.<applier>.<field>) is an unbuilt slice, so the key would be accepted and then silently dropped (docs/destiny/tasks.md §9, docs/destiny/output.md)",
+		Hint:     "delete output:; to pass a value to a later task use register: and read register.<name>.<field>",
+		YAMLPath: pathPrefix + ".output",
+	})}
 }
 
 // validateAsyncOnApply raises `async_on_apply_invalid` for `async:` on an
@@ -1160,14 +1201,15 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 // could. Inconsistent silence is worse than plain silence.
 //
 // NOT in the list:
-//   - `output:` — unread on EVERY task type today, not just on an applier
-//     (nothing in render reads Task.Output; only passage_vault scans it for
-//     `vault(...)` provenance). It belongs to the unimplemented output-contract
-//     slice — the projection of a destiny's top-level `output:` into
-//     `register.<applier>.<field>` that orchestration.md §2.1.1 and
-//     destiny/output.md both mark PLANNED. Refusing it only here would pre-empt
-//     a design that slice owns, and would say the key is meaningless on an
-//     applier when it is merely unimplemented everywhere.
+//   - `output:` — unread on EVERY task type, not just on an applier (nothing in
+//     render reads Task.Output; only the provenance walkers scan it for
+//     `register.*`/`vault(...)`/`soulprint.*` refs). It belongs to the
+//     unimplemented output-contract slice — task-level fill plus the projection
+//     of a destiny's top-level `output:` into `register.<applier>.<field>`,
+//     which orchestration.md §2.1.1 and destiny/output.md mark PLANNED.
+//     Refusing it HERE would say the key is meaningless on an applier when it is
+//     merely unimplemented everywhere, so NIM-334 refuses it on every kind at
+//     once instead, code `output_unsupported` (validateOutputUnsupported).
 //   - `async:` and `id:` and `loop:` — already refused, by
 //     validateAsyncOnApply, `id_unsupported_target` and
 //     `loop_unsupported_target` respectively (the last two gate every

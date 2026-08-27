@@ -47,7 +47,7 @@ auxiliary shell calls.
 `run` returns `{ stdout, stderr, exit_code }` (exit_code is a number). When triggered
 guard - `{ skipped: true, reason, exit_code: 0 }` with `changed=false`. Typical
 using `register:` - read-only probe (`changed_when: false`) with reading
-`register.<name>.stdout` in subsequent `where:` / `failed_when:` / `output:`.
+`register.<name>.stdout` in subsequent `where:` / `failed_when:` (`output:` is **not** a read site - the key is refused, `output_unsupported`).
 
 **A code outside `exit_codes` fails the task, and the output still arrives.** The final
 event carries `failed=true` **and** `{ stdout, stderr, exit_code }`, so `register.<name>.*`

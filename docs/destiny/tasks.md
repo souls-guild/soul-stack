@@ -40,7 +40,7 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 | `loop:` | map | module-task | optional (on include - **deferred**, see §7) |
 | `register:` | string (identifier) | module-task | optional |
 | `id:` | string (identifier) | module-task (pilot) | optional |
-| `output:` | map | module-task | optional |
+| `output:` | map | — | **refused** (`output_unsupported`) - the output contract is unimplemented, see §9 |
 | `onchanges:` | array of register-id | everyone | optional |
 | `onfail:` | array of register-id | everyone | optional |
 | `require:` | array of register-id OR `"all"` | everyone | optional |
@@ -235,7 +235,7 @@ An async task is **always waited for** - the question is only where. There are t
 | Reference sits in | Resolved | Barrier |
 |---|---|---|
 | `when:` · `changed_when:` · `failed_when:` · `retry.until:` · `onchanges:` · `onfail:` · `require:` | Soul-side, inside one `ApplyRequest` | **local** - waits for that one task; the other async tasks keep running |
-| `where:` · `vars:` · `params:` · `apply.input:` · `output:` · `loop.items:` · `loop.when:` | Keeper-side, **before** dispatch | **full** - these keys define a Passage boundary ([ADR-056](../adr/0056-staged-render-passage.md)), so the reading task waits for the *entire* previous Passage on *every* host of the run |
+| `where:` · `vars:` · `params:` · `apply.input:` · `loop.items:` · `loop.when:` | Keeper-side, **before** dispatch | **full** - these keys define a Passage boundary ([ADR-056](../adr/0056-staged-render-passage.md)), so the reading task waits for the *entire* previous Passage on *every* host of the run |
 
 Practical consequence: `onchanges: [vhost]` waits for `vhost` alone, while `params: { path: "${ register.vhost.dest }" }` waits for everything. If a local wait is what you want, address the async task through a requisite or a flow-control predicate.
 
@@ -681,11 +681,13 @@ What replaces it, per channel:
   stderr is covered by neither — which is the reason the declaration belongs on
   the output field, not on the task.
 
-### `output:`
+### `output:` - **NOT IMPLEMENTED, refused**
 
 - **Type:** map (name → template-expr).
-- **Applies to:** module task.
-- **Semantics:** values that destiny publishes externally as its result. Task-level `output:` **writes to declared top-level `output:` fields** destiny (see [destiny/output.md](output.md)); names not declared in top-level `output:` destiny - validation error. Used by `expect:` in tests and `register:` caller chains (`register.<applier>.<output field>` - [scenario/orchestration.md §2](../scenario/orchestration.md)).
+- **Applies to:** nothing. The key is **refused on every task kind** with the error `output_unsupported` (module / apply / include / block, a task inside a `block:`, a keeper-side task, and a destiny's own `tasks/main.yml` alike).
+- **Why refused and not accepted:** the mechanism this section used to describe - task-level `output:` fills the fields declared in the destiny's top-level `output:`, and a name that is not declared is a validation error - **was never built**. Neither half existed: nothing resolved the key into a value, and no name was ever compared against the contract. An author who wrote `output:` got silence and read this page as a promise the value had been published. Accepting a key that does nothing is worse than refusing it, the same rule that governs `async_on_apply_invalid` and `<key>_on_block_invalid`.
+- **What is planned:** task-level fill and the projection of the destiny's top-level `output:` into `register.<applier>.<field>` are **two halves of one unimplemented slice** - see [destiny/output.md](output.md) and [scenario/orchestration.md §2.1.1](../scenario/orchestration.md). When that slice lands, the key becomes legal on a module task and this section describes it again. The top-level `output:` block in `destiny.yml` stays valid meanwhile: it is a schema declaration, and declaring it is not the same as claiming it is filled.
+- **What to write instead:** `register:` on the producing task, then `register.<name>.<field>` in the reader. Inside one destiny or one scenario that covers everything task-level `output:` was ever documented to do; across the destiny boundary there is no substitute yet, which is exactly what the planned slice is for.
 
 ### `changed_when:`
 
@@ -799,7 +801,7 @@ There is no special field for dry-run at the task level. If a task needs the beh
 Template engine - CEL for YAML expressions ([ADR-010](../adr/0010-templating.md), [`docs/templating.md`](../templating.md)). Two positions:
 
 - **Top-level expression-keys** (`when:`, `changed_when:`, `failed_when:`, `until:`; in scenario also `where:`) - entire line = CEL **without wrapper**.
-- **String interpolation** in `params:`, `output:`, `loop.*:`, `vars.yml` values, task-level `vars:`, `apply: input:` - via the `${ … }` marker.
+- **String interpolation** in `params:`, `loop.*:`, `vars.yml` values, task-level `vars:`, `apply: input:` - via the `${ … }` marker.
 
 Available in both positions:
 
@@ -808,7 +810,7 @@ Available in both positions:
 | `input.<name>` | Destiny parameters from the caller, declared in `destiny.yml → input:` and validated ([input.md](input.md)). |
 | `vars.<name>` | Destiny locals. Resolves according to the rule **task-level `vars:` beats file-level `vars.yml`** - the more local scope wins. More details: [vars.md](vars.md), task-level - §9. |
 | `soulprint.self.<…>` | Facts about the current host: `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, … ([ADR-018](../adr/0018-soulprint-typed.md), [`docs/soul/soulprint.md`](../soul/soulprint.md)). Bare `soulprint.<path>` without `.self` - validation error `soul-lint`. Cross-host requests (`soulprint.where(...)`, `soulprint.hosts`) - scenario level, **not destiny**. |
-| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + fields from `output:` task. On an async task, referencing `register.<name>` creates an **implicit barrier** whose kind depends on the key it sits in (see the table in §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md). |
+| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + the fields the **module** declares in its own manifest `output:` (`.stdout`, `.exit_code`, …) - not the task key of that name, which is refused (§9). On an async task, referencing `register.<name>` creates an **implicit barrier** whose kind depends on the key it sits in (see the table in §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md). |
 | `register.self.*` | Own result of the task. Available **in all expression-key task contexts** - `changed_when:` / `failed_when:` / `until:` (destiny + scenario), as well as `where:` (scenario-only, see [orchestration.md §4](../scenario/orchestration.md)). |
 | `soulprint.hosts` | **Scenario-only.** List of run hosts; element - stable facts `sid` / `role` (declared) / `network` / `os` / `covens`. `.where("<pred>")` filters by any attribute (predicate-string). In destiny **not available** (like any cross-host `soulprint` request); destiny receives topology only through `apply: input:`. Specification - [scenario/orchestration.md §4.1](../scenario/orchestration.md). |
 | `incarnation.host_count` | **Scenario-only.** Number of hosts in the run target. Used in the probe idiom of completeness (`failed_when: size(register.<p>) < incarnation.host_count`, [scenario/orchestration.md §5](../scenario/orchestration.md)). Not available in destiny (part of `incarnation.*`, scenario-scope). The formal definition is [`docs/scenario/orchestration.md §4.2`](../scenario/orchestration.md). |
@@ -937,15 +939,15 @@ include groups by `loop:` (symmetry with `loop:` on the module task).
 - **Dry-run for requisites.** In dry-run, `register.<name>.changed` is a **planned** change, not an actual one. Does this trigger onchanges-handler? Most likely yes - the operator should see "restart redis scheduled".
 
 ### Changed_when / failed_when
-- **`register.self.*` scope.** Currently fixed: only available in `changed_when:` / `failed_when:`. Distribution to other task fields (for example, `output:` via `register.self.*` to publish post-overridden `.changed`) - open Q.
+- **`register.self.*` scope.** Currently fixed: only available in `changed_when:` / `failed_when:`. Distribution to other task fields is open Q; the former example (`output:` reading `register.self.*` to publish a post-overridden `.changed`) is moot while the key is refused (§9).
 - **Impact of `failed_when:` on `retry:`.** If a task finishes with `failed_when: true`, is it considered "failed and needs retry"? Now we assume yes.
 
 ### Task-level vars
 - **Composition with `loop:` - CLOSED.** Task-level `vars:` are recalculated at **each** loop iteration and can refer to the loop variable `<as>`/`<index_as>` (vars are resolved within the iteration, after loop expansion). Captured in §9 "Links within `vars:`".
 
 ### Output
-- **Output at the destiny level is CLOSED.** Top-level `output:` in `destiny.yml` (scheme declaration, symmetrical to `input:`) + task-level `output:` (filling declared fields) are accepted as a general mechanism. Specification - [destiny/output.md](output.md); reading from scenario via `register:` on the applier task - [scenario/orchestration.md §2](../scenario/orchestration.md).
-- **Output via `include:`.** Is `output:` visible to tasks from the included file in the caller?
+- **The DESIGN is closed, the IMPLEMENTATION is not.** Top-level `output:` in `destiny.yml` (a schema declaration, symmetric to `input:`) + task-level `output:` (filling the declared fields) are accepted as the general mechanism. Nothing of the filling half is built: task-level `output:` is **refused** (`output_unsupported`, §9) and the projection into `register.<applier>.<field>` is **planned**. Specification - [destiny/output.md](output.md); reading from a scenario via `register:` on the applier task - [scenario/orchestration.md §2.1.1](../scenario/orchestration.md).
+- **Output via `include:`.** When the slice lands: is `output:` visible to tasks from the included file in the caller?
 
 ### `name:` as lint rule
 - Make it mandatory (error) or leave it as a recommendation (warn). Now a recommendation.

@@ -302,13 +302,17 @@ tasks:
 // TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-specific keys
 // on a block task are cut fail-closed with code <key>_on_block_invalid
 // (destiny/tasks.md §6.5 does not mention them on block). async: is also rejected.
+//
+// ★ `output:` is still cut on a block, but by `output_unsupported` (NIM-334) — it
+// is unimplemented on EVERY kind, so it left the _on_block_invalid family rather
+// than claiming to be meaningless only here.
 func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 	cases := map[string]string{
 		"changed_when_on_block_invalid": "changed_when: \"true\"",
 		"failed_when_on_block_invalid":  "failed_when: \"false\"",
 		"retry_on_block_invalid":        "retry: { count: 3 }",
 		"timeout_on_block_invalid":      "timeout: 30s",
-		"output_on_block_invalid":       "output: { x: \"y\" }",
+		"output_unsupported":            "output: { x: \"y\" }",
 		"params_on_block_invalid":       "params: { a: 1 }",
 		"async_on_block_invalid":        "async: true",
 	}
@@ -660,10 +664,11 @@ tasks:
 // stay valid: the requisites and register: that render merges into the group,
 // the targeting delta it resolves before the destiny pass, and a static when:.
 //
-// ★ `output:` is here deliberately. It is unread on every task type today, not
-// just on an applier, and belongs to the output-contract projection that
-// orchestration.md §2.1.1 marks PLANNED — refusing it here would pre-empt that
-// slice and misreport an unimplemented key as a meaningless one.
+// ★ `output:` LEFT this fixture in NIM-334. It stayed here while the argument was
+// "unread everywhere, so refusing it only on an applier would misreport an
+// unimplemented key as a meaningless one" — that argument survived; the answer
+// changed. It is now refused on every kind at once (`output_unsupported`), so an
+// applier does not answer it either.
 //
 // ★ `vars:` is here since NIM-336: it is resolved into the env that renders
 // `apply.input`, so it is an answered key, not a lost one.
@@ -684,7 +689,6 @@ tasks:
     serial: 1
     onchanges: [probe]
     require: [probe]
-    output: { dsn: "${ register.probe.stdout }" }
     register: rolled
   - apply:
       destiny: redis

@@ -120,6 +120,33 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `include:` is covered like an inline one — linted inside its service tree, where
   the include resolves the way the keeper resolves it (NIM-652).
 
+- **A task-level `output:` is refused** with a new `output_unsupported` error, on
+  every task kind (`module:` / `apply:` / `include:` / `block:`, a task inside a
+  block, a keeper-side task) and in both entities that carry tasks - a scenario
+  and a destiny's own `tasks/main.yml` (NIM-334). The key parsed and nothing
+  ever resolved it: no consumer materialised a value and no name was compared
+  against the destiny's declared top-level `output:`, while
+  [`docs/destiny/tasks.md §9`](docs/destiny/tasks.md) documented both halves as
+  working. It gets its own code rather than joining `<key>_on_apply_invalid` /
+  `<key>_on_block_invalid`: those two say "this key works elsewhere and is lost
+  HERE", and this one is unbuilt everywhere. `output_on_block_invalid` is
+  withdrawn, and so is `include_modifier_unsupported` for `output:` - its hint
+  ("move the modifier onto a module task of the included file") named a task kind
+  that now refuses the key as well, so one key yields one diagnostic and the
+  surviving one is the true one. The top-level `output:` block in
+  `destiny.yml` stays valid; it is a declaration, and the machinery that would
+  fill it (task-level fill plus the projection into `register.<applier>.<field>`)
+  remains one unbuilt slice, now marked as such everywhere it was documented.
+  That sweep includes a worked example in
+  [`docs/module/core/noop/README.md`](docs/module/core/noop/README.md) that wrote
+  a task-level `output:` on `core.noop.run`; it collects its three probe results
+  through `vars:` now - equally passage-defining, so the barrier is unchanged, and
+  not schema-checked, which `params:` is: `core.noop.run` declares no inputs, so
+  three keys there would be three `unknown_param` errors. Two pre-existing claims
+  in the same file (and the matching row in `naming-rules.md`) said any `params:`
+  key was "accepted and ignored" - true of the module at runtime, false at load,
+  and the same drift this entry is about.
+
 ### Fixed
 
 - **A renamed file in the artifact reddened nobody, so the rename was found one

@@ -1,5 +1,15 @@
 # `output:` in destiny
 
+> **Implementation status.** The **declaration** works: a top-level `output:` block in
+> `destiny.yml` parses and is validated as a schema. **Everything that moves a value
+> through it does not exist yet.** Task-level `output:` is **refused** with
+> `output_unsupported` ([destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)),
+> nothing collects the declared fields, neither Soul nor Keeper validates collected
+> values, and `register.<applier>.<field>` does not resolve. This page describes the
+> agreed **design** of one unbuilt slice; the sections below say per-section what is
+> real today. Declaring `output:` in a destiny is legal and inert - it publishes
+> nothing.
+
 This document describes the **destiny-specific** block `output:` - a declaration of what result destiny publishes to the outside. The block is **symmetrical in shape to `input:`** ([docs/destiny/input.md](input.md)): the same core of the schema - one common standard. Here is where `output:` lives, how it is filled with tasks `tasks/main.yml` and how the scenario is read by the caller.
 
 ## Source of truth on the format
@@ -19,20 +29,30 @@ At the root `destiny.yml` (see [manifest.md](manifest.md) → field `output:`). 
 - destiny **publishes** its run result through the declared `output:` fields.
 - destiny **never reads** the caller's context (scenario / other destiny / state). Destiny isolation is not broken ([ADR-009](../adr/0009-scenario-dsl.md)).
 
-The symmetry is obvious: `input:` is from outside to inside destiny, `output:` is from inside to outside. Both contracts are declared by destiny, both are validated by the engine, and neither allows destiny to spy on someone else's context.
+The symmetry is obvious: `input:` is from outside to inside destiny, `output:` is from inside to outside. Both contracts are declared by destiny, and neither allows destiny to spy on someone else's context. ★ Only `input:` is validated by the engine today; validation of collected `output:` values is part of the unbuilt slice (see below).
 
-## How it is filled in - task-level `output:` writes to the top-level fields
+## How it is filled in - task-level `output:` writes to the top-level fields — **PLANNED**
+
+> **Not implemented.** Task-level `output:` is refused today (`output_unsupported`,
+> [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)): the key was
+> accepted and then silently dropped, which read as "the contract is filled" to every
+> author who wrote it. The rules below are the design this slice will implement, not
+> current behaviour.
 
 Top-level `output:` block in `destiny.yml` declares the **schema** of the result (field names + types + validation). The actual values are collected through the task-level `output:` ([destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)): the values declared in the `output:` task fill in the **declared** top-level `output:` destiny fields.
 
-Rules:
+Rules (planned):
 
 - Field name in top-level `output:` - connection point. When a task in `tasks/main.yml` writes to its task-level `output:` (`<name>: "${ ... }"`), this value is assigned to the top-level field destiny.
 - If a task publishes a name **not declared** in the top-level `output:` destiny there is a validation error (destiny does not return something that is not in its output schema).
 - If the top-level `output:` field is declared as `required: true`, but by the end of the run no task has filled it in - an error (the field is not provided contrary to the contract).
 - Last entry wins: if two tasks write to the same field, the value of the last entry (in order of execution) applies.
 
-## Where is validated
+## Where is validated — **PLANNED**
+
+> **Not implemented.** No values are collected, so neither round runs. The two rounds
+> below are the design; today a destiny's declared `output:` fields are never
+> populated and never checked.
 
 Defense in depth, similar to `input:`:
 
@@ -71,7 +91,7 @@ The appearance/expansion of the `output:` contract destiny is an evolution of th
 
 ## Communication with `output:` scenario
 
-Scenario `output:` block **no**: a scenario writes its result to `incarnation.state` with a `core.state.<verb>` capture step ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-the-capture-verbs)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. The scenario only has task-level `output:` (part of the task DSL core, [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)) for internal `register:` chains.
+Scenario `output:` block **no**: a scenario writes its result to `incarnation.state` with a `core.state.<verb>` capture step ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-the-capture-verbs)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. A scenario task cannot carry task-level `output:` either - the key is refused on every kind in both entities ([destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)); an internal chain between tasks is written with `register:` and `register.<name>.<field>`.
 
 > **`register:` as the source of a capture's `value:`.** A `core.state.<verb>` step
 > reads `register.<task>.<field>` like any other keeper task
@@ -93,6 +113,6 @@ Scenario `output:` block **no**: a scenario writes its result to `incarnation.st
 - [`docs/input.md`](../input.md) - general format standard (validation keys are the same).
 - [`docs/destiny/input.md`](input.md) - destiny specificity of the input contract (symmetric document).
 - [manifest.md](manifest.md) - where `output:` lives in `destiny.yml`.
-- [tasks.md §9](tasks.md#9-strength-and-control-of-execution) — task-level `output:` (fills the declared top-level fields).
+- [tasks.md §9](tasks.md#9-strength-and-control-of-execution) — task-level `output:`: refused (`output_unsupported`) until this slice lands.
 - [scenario/orchestration.md §2.1.1](../scenario/orchestration.md) - `register:` on the applier task: implemented aggregate `.changed`/`.failed`/`.timed_out` vs planned output projection.
 - [ADR-009](../adr/0009-scenario-dsl.md) - destiny isolation: `output:` (giving your own) does not break it.

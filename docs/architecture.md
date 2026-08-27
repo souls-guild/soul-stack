@@ -393,7 +393,7 @@ Moved to [`docs/adr/0045-param-dsl.md`](adr/0045-param-dsl.md). Brings modular i
 
 The contents of destiny live in **`destiny-<name>/tasks/main.yml`** as a top-level YAML task list (without the `tasks:` / `steps:` wrapper), and not in `destiny.yml` itself. Root `destiny.yml` - manifest only (`name`, `description`, `input`, opt. `required_modules`); `tasks/main.yml` - entry point, with the ability to connect `include: <file>.yml` neighbors inside the same folder `tasks/`, or one subdirectory down (`include: <dir>/<file>.yml`).
 
-One list element is a call to one module with parameters and optional binding. Task fields (`name`, `module`, `params`, `when`, `register`, `output`, `include`), task naming convention (capital letter, imperative, English) and rules `include:` - fixed in **[`docs/destiny/tasks.md`](destiny/tasks.md)**. The architectural section here does not duplicate the field table, so that there is no drift between two sources.
+One list element is a call to one module with parameters and optional binding. Task fields (`name`, `module`, `params`, `when`, `register`, `include`; a task-level `output:` is refused - `output_unsupported`, see §9 there), task naming convention (capital letter, imperative, English) and rules `include:` - fixed in **[`docs/destiny/tasks.md`](destiny/tasks.md)**. The architectural section here does not duplicate the field table, so that there is no drift between two sources.
 
 Destiny folder layout and format `destiny.yml` - in [`docs/destiny/manifest.md`](destiny/manifest.md). For a complete overview of the concept of destiny, see [`docs/destiny/`](destiny/README.md).
 

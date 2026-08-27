@@ -80,7 +80,7 @@ This ADR introduces **staged-render** to implement what the canon already promis
 | `vars:` | `${ register.<name>.* }` in values | render inputs of a Passage task |
 | `params:` | `${ register.<name>.* }` in values (module task) | render inputs of the module |
 | `apply.input:` | `${ register.<name>.* }` in values (applier task) | render inputs of the delegated destiny |
-| `output:` | `${ register.<name>.* }` in values | the task's declared output, also rendered by the Keeper from register |
+| ~~`output:`~~ | `${ register.<name>.* }` in values | ★ the key is **refused** on every task kind (`output_unsupported`, NIM-334) - the row describes the unbuilt output-contract slice, nothing renders it today ([`docs/destiny/output.md`](../destiny/output.md)) |
 | `loop.items:` | `${ register.<name>.* }` in a scalar/list/map | render-time fan-out: the list of iterations is built from register |
 | `block:` | recursion into nested tasks | block is an atomic Passage unit (orchestration.md §2.2.1); register of its descendants is addressed flat |
 

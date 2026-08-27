@@ -417,36 +417,6 @@ tasks:
 	}
 }
 
-// TestStratify_RegisterInOutput — a cross-task register threaded through ${ … } in
-// `output:` (a destiny/scenario task's declared output, read by the consumer via
-// register:) also moves the passage. output is a passage-defining source (ADR-056
-// registry); a regression where collectTaskReads skips it would leave the
-// output-register consumer in the same Passage as the probe → silent-wrong-target.
-func TestStratify_RegisterInOutput(t *testing.T) {
-	const src = `
-name: chain_output
-tasks:
-  - name: Probe value
-    module: core.cmd.shell
-    register: probe
-    changed_when: false
-    params: { cmd: "true" }
-  - name: Expose probe result via output
-    module: core.exec.run
-    changed_when: false
-    output:
-      role: "${ register.probe.stdout }"
-    params: { cmd: "true" }
-`
-	p := stratify(t, src)
-	if p.Count != 2 {
-		t.Fatalf("Count = %d, want 2 (register in output moves passage)", p.Count)
-	}
-	if p.TaskPassage[0] != 0 || p.TaskPassage[1] != 1 {
-		t.Fatalf("passages = %v, want [0 1] (output consumer STRICTLY after probe)", p.TaskPassage)
-	}
-}
-
 // registerSourceFields — the canonical registry of passage-defining register
 // sources of a Task (ADR-056), EACH as a minimal scenario fixture where a
 // ghost-register appears ONLY in that field and NOBODY emits it. Key — the
@@ -462,6 +432,13 @@ tasks:
 // validator does not raise unknown_register_reference (a linter hole → unknown
 // survives to runtime). requisites (onchanges/onfail/require) and flow-control
 // (when/...) are NOT included here — they are NOT passage-defining (see ADR-056 §registry).
+//
+// ★ `output:` left the registry in NIM-334: the key is now refused on every task
+// kind (`output_unsupported`), so no author-writable fixture can reach either
+// walker through it. Both walkers still scan Task.Output; the slice that makes
+// the key legal again must re-add the `output` entry here, or the reads==refs
+// guard silently loses that field. That obligation is a GATE, not a comment —
+// see TestStratify_OutputStaysOutOfTheRegistryOnlyWhileTheKeyIsRefused below.
 var registerSourceFields = map[string]string{
 	"where": `
 name: f_where
@@ -501,16 +478,6 @@ tasks:
       input:
         seed: "${ register.ghost.stdout }"
 `,
-	"output": `
-name: f_output
-tasks:
-  - name: consumer
-    module: core.exec.run
-    changed_when: false
-    output:
-      role: "${ register.ghost.stdout }"
-    params: { cmd: "true" }
-`,
 	"loop.items": `
 name: f_loop_items
 tasks:
@@ -535,11 +502,45 @@ tasks:
 `,
 }
 
+// TestStratify_OutputStaysOutOfTheRegistryOnlyWhileTheKeyIsRefused — ★ the gate
+// behind the ★ note above. `output:` was dropped from registerSourceFields for
+// exactly one reason: no author-writable fixture can reach either walker through a
+// key that validation refuses. That reason is a fact about another file, and a
+// comment cannot notice when it stops being true.
+//
+// Both walkers still scan Task.Output (passage.go, task_refs.go). If the
+// output-contract slice makes the key legal again and nobody re-adds the entry,
+// TestStratify_ReadsEqRefsConsistency keeps passing while covering one field fewer
+// — the silent shrink the registry exists to prevent. This goes red instead.
+func TestStratify_OutputStaysOutOfTheRegistryOnlyWhileTheKeyIsRefused(t *testing.T) {
+	if _, ok := registerSourceFields["output"]; ok {
+		return // the entry is back; the consistency test covers the field again
+	}
+	const src = `
+name: f_output
+tasks:
+  - name: consumer
+    module: core.exec.run
+    changed_when: false
+    params: { cmd: "true" }
+    output:
+      v: "${ register.ghost.stdout }"
+`
+	_, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+	if err != nil {
+		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+	}
+	if !hasCode(diags, "output_unsupported") {
+		dump(t, diags)
+		t.Fatal(`task-level output: is no longer refused, but "output" is still missing from registerSourceFields — re-add the entry (fixture: a ghost register read ONLY through output:), or the reads==refs guard covers one passage-defining field fewer than the walkers do: passage.go addMapRefs(t.Output) and task_refs.go case "vars", "output", "params"`)
+	}
+}
+
 // TestStratify_ReadsEqRefsConsistency — ★ guard against silently blurring the
 // register graph: the set of PASSAGE-DEFINING source-fields covered by the
 // stratifier (collectTaskReads) MUST match those covered by the config validator
 // (collectRefs) in this class. For each source-field (where / vars / params /
-// apply.input / output / loop.items / block) the ghost-register must be caught by
+// apply.input / loop.items / block) the ghost-register must be caught by
 // BOTH: Stratify → StratifyUnknownRegister AND config validator →
 // unknown_register_reference.
 //
@@ -789,36 +790,6 @@ tasks:
 	passage := stratify(t, src)
 	if _, bad := CrossPassageWhenGating(tasks, passage); bad {
 		t.Fatalf("CrossPassageWhenGating falsely reported register.self (same-task) as cross-passage - would break the remove_replica guard (TaskPassage=%v)", passage.TaskPassage)
-	}
-}
-
-// TestValidate_UnknownRegisterInOutput — a closed ADR-056 S2 gap: before S2 the
-// cross-ref validator did not walk interpolation source-fields, and an
-// unknown-register in `output:` (like in vars/params/apply.input/loop.items) survived
-// to the runtime stratifier. Now the config validator catches it OFFLINE.
-func TestValidate_UnknownRegisterInOutput(t *testing.T) {
-	const src = `
-name: out_unknown
-tasks:
-  - name: Expose a register nobody emits
-    module: core.exec.run
-    changed_when: false
-    output:
-      role: "${ register.ghost.stdout }"
-    params: { cmd: "true" }
-`
-	_, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-	if err != nil {
-		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
-	}
-	found := false
-	for _, d := range diags {
-		if d.Code == "unknown_register_reference" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("config-validator did NOT raise unknown_register_reference for ghost in output: — the validator gap (ADR-056 S2) is not closed")
 	}
 }
 

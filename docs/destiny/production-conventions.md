@@ -210,7 +210,7 @@ destiny sees **only its `input:`**. No reading someone else's context:
 
 - No access to `incarnation.state`, to facts of other hosts, to the SERVICE's `vars` (only its own `vars.yml`), to scenario-scope.
 - Cross-host and cloud/vault data come exclusively through `apply: input:` from the caller (scenario resolves `soulprint.where(...)`, `vault(...)`, the service's `vars.*` on its side and transfers the values).
-- The result comes out only through the declared top-level `output:` ([output.md](output.md)), not through prying.
+- The result comes out only through the declared top-level `output:` ([output.md](output.md)), not through prying. ★ **Planned:** nothing fills that block today - a task-level `output:` is refused (`output_unsupported`), so a destiny that has to answer its caller cannot be written yet.
 
 This is an invariant, not a recommendation: it keeps destiny reusable and independently testable.
 

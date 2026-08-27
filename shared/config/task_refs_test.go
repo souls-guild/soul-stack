@@ -672,16 +672,12 @@ tasks:
 // (vars/output/params/loop.items), so an unknown register in them survived to the
 // runtime stratifier. Now each field is caught offline. The field set here must
 // match the passage-defining sources of the stratifier (reads==refs, render/passage_test.go).
+//
+// `output:` left the table in NIM-334 together with its entry in
+// registerSourceFields: the key is refused on every kind (`output_unsupported`),
+// so the fixture would fail validation before the cross-ref walk.
 func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
 	cases := map[string]string{
-		"output": `
-- name: act
-  module: core.exec.run
-  changed_when: false
-  output:
-    role: "${ register.ghost.stdout }"
-  params: { cmd: "true" }
-`,
 		"vars": `
 - name: act
   module: core.exec.run
@@ -740,7 +736,7 @@ tasks:
 }
 
 // TestTaskRefs_KnownInterpField_NotFlagged — a register emitted by a probe task,
-// read via ${ … } in output/params/apply.input, is valid and does NOT produce a
+// read via ${ … } in params/apply.input, is valid and does NOT produce a
 // false unknown_register_reference (forward-ref across the flat plan namespace).
 func TestTaskRefs_KnownInterpField_NotFlagged(t *testing.T) {
 	src := `
@@ -751,11 +747,9 @@ tasks:
     register: probe
     changed_when: false
     params: { cmd: "true" }
-  - name: use in output and params
+  - name: use in params
     module: core.exec.run
     changed_when: false
-    output:
-      role: "${ register.probe.stdout }"
     params:
       cmd: echo
       args: ["${ register.probe.stdout }"]
@@ -768,7 +762,7 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("scenario/chain/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		dump(t, diags)
-		t.Fatalf("a known register in output/params/apply.input must not be flagged; got=%d", got)
+		t.Fatalf("a known register in params/apply.input must not be flagged; got=%d", got)
 	}
 }
 

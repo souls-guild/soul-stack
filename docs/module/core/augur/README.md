@@ -16,7 +16,7 @@ external credential does not apply to Soul.
 This is a verb module: the only state is `fetch` (without declarative semantics
 "lead to state"). Typical use of `register:` - read-only probe
 (`changed_when: false` is not needed - the module is already `changed=false`) with reading
-`register.<name>.*` in subsequent `where:` / `failed_when:` / `output:`.
+`register.<name>.*` in subsequent `where:` / `failed_when:` (`output:` is **not** a read site - the key is refused, `output_unsupported`).
 
 ## States
 

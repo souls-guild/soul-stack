@@ -218,7 +218,7 @@ Rough list - what is *probably* worth measuring, composition revised during desi
 - **Branch coverage by `when`** - for each expression, both truthy- and falsy-results are collected (or all branches, if this is a switch by enum).
 - **Enum-value coverage** — each value of the `enum:` input parameter is used in at least one case. Complements static check No. 1 in [soul-lint.md](../soul-lint.md): statics says "the literal in the expression is legal", runtime says "the value was actually tested on the bench".
 - **Module coverage** — each custom module from `required_modules:` was called at least once in at least one of its state forms. If not, either the entry is redundant or there is an uncovered scenario. (Core modules are not declared in `required_modules:` - see ["Addressing modules"](../architecture.md).)
-- **Output coverage** - each field declared in `output:` of some task is actually assigned in at least one run.
+- **Output coverage** (★ **planned**, with the output contract itself - a task-level `output:` is refused today, `output_unsupported`) - each field declared in `output:` of some task is actually assigned in at least one run.
 
 ## Open questions
 
