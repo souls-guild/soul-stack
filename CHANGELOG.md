@@ -243,8 +243,11 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   all-or-nothing: one uncovered host refuses the batch, as before. A host whose
   row cannot be read (unknown SID, database unreachable) still asserts the host
   alone, so `coven=` grants fail closed and `on host=` grants are untouched. The
-  read happens inside the shell gate's probe, so an ordinary (non-verb-shell)
-  Errand still costs no database round-trip.
+  cost is one indexed single-row read per call on the per-host routes, paid in
+  the gate before the module is known — an ordinary (non-verb-shell) Errand pays
+  it too. A verb-shell Errand over REST pays a second one inside the shell
+  gate's probe, because the two rights are checked at different layers; MCP
+  resolves the set once and both rights read it.
 
 ### Upgrade notes
 

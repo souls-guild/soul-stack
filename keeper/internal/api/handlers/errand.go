@@ -498,13 +498,16 @@ func validErrandStatus(s string) bool {
 
 // authorizeShell applies the console gate to one exec call (ADR-0074 amendment,
 // NIM-197). A non-verb-shell module returns nil without touching the enforcer;
-// a verb-shell one additionally requires `soul.console` under the SAME context
-// set the route's `errand.run` middleware used — `host=<sid>` plus one context
-// per Coven label of the host, granted if ANY ONE of them matches (NIM-650).
+// a verb-shell one additionally requires `soul.console` over the same shape of
+// context set the route's `errand.run` middleware used — `host=<sid>` plus one
+// context per Coven label of the host, granted if ANY ONE of them matches
+// (NIM-650). The set is resolved again here rather than carried over: the
+// middleware runs before the module is known, so it cannot decide whether this
+// second right will be asked for at all.
 //
 // The covens are read INSIDE the probe, not before it: an ordinary Errand is not
-// narrowed by this gate at all, and it must not pay a round-trip for a check
-// that never runs.
+// narrowed by this gate at all, so it must not pay a SECOND round-trip on top of
+// the one the route's gate already paid, for a check that never runs.
 //
 // nil enforcer → no probe is supplied, and the gate records `unconfigured`
 // rather than assuming an answer.

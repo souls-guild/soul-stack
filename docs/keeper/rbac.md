@@ -793,11 +793,11 @@ An **interactive console is not an Errand** and is not covered by any of these t
 
 **`errand.run` is not enough for a verb-shell module** ([ADR-0074 amendment 2026-07-28](../adr/0074-interactive-console-pty.md), NIM-197). `core.cmd.shell` and `core.exec.run` are on the Errand runner's allow-list, and their declared input IS an arbitrary command line — so the allow-list bounds the *module*, not what it carries. Reaching either through an Errand therefore requires **`soul.console` in addition to `errand.run`**, with the same selector the entry point already resolved. `errand.run` stays necessary; it stopped being sufficient. An `ErrandReadSafe` module is unaffected — an ordinary Errand never demands a console right.
 
-Both rights read the same context set on every row below: `host=<sid>` **plus one context per Coven label the host carries**, granted if any one matches (NIM-650). On the two in-handler rows the set is resolved ONCE per call and reused by both rights — two reads could only differ by making the two halves of one decision answer about different hosts.
+Both rights read the same context set on every row below: `host=<sid>` **plus one context per Coven label the host carries**, granted if any one matches (NIM-650). MCP resolves the set once per call and both rights read it. REST cannot: `errand.run` is gated by middleware before the module is known, so a verb-shell Errand resolves the set a second time inside the shell gate's probe. The two reads are separated in time, so a Coven reassignment landing between them can admit a call in which the operator held `errand.run` over the host's old label and `soul.console` over its new one. Both rights are genuinely held and the window needs a concurrent reassignment; it is not worth carrying the middleware's result into the handler to close.
 
 | Entry point | `errand.run` selector | added `soul.console` check |
 |---|---|---|
-| `POST /v1/souls/{sid}/exec` | `host=<sid>` + the host's covens | same set, resolved in-handler |
+| `POST /v1/souls/{sid}/exec` | `host=<sid>` + the host's covens, resolved by the route gate | same set, resolved again in-handler (the gate ran before the module was known) |
 | MCP `keeper.soul.errand.run` | `host=<sid>` + the host's covens | same set, resolved once for both rights |
 | `POST /v1/voyages`, `kind=command` | Purview over the resolved target | `host=<sid>` + that host's covens, on **every** resolved host (all-or-nothing — the batch is not trimmed) |
 | `POST /v1/voyages/preview`, `kind=command` | same | same — preview shares the create path's resolver and refuses in the same places, so a preview never promises a run the create would refuse |
