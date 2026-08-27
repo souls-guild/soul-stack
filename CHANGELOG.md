@@ -2171,19 +2171,70 @@ order to act in.
   `iat` is what validating it is for. Past the budget the refusal is its own
   cause: `detail: "token issued in the future"`, not `invalid token`. A client
   matching on the exact string `invalid token` will see the new one for this
-  case; that is the only behaviour change on the wire.
+  case. The `401` entry in
+  [getting-started.md](docs/getting-started.md#troubleshooting-first-launch) now breaks the
+  five `unauthenticated` details a JWT-protected route can carry out separately,
+  because its previous advice — "issue a fresh one" — is the one thing that does
+  not work for this cause: the replacement token carries the same clock offset.
+  Three of the five are not repaired by a fresh token at all, and one of those
+  three is `missing or malformed Authorization header`, which `RequireJWT`
+  returns one branch above the verifier — so it is the likeliest `401` on a
+  request whose token is perfectly valid, and the one the entry it replaces
+  folded away along with every other cause into "the token expired or was not
+  accepted; issue a fresh one".
 
   **`exp` is deliberately excluded.** golang-jwt applies one tolerance to every
   time claim and offers no way to split them, so the leeway alone would have
-  accepted a token up to 60s past its expiry. On `auth.jwt.exchange_ttl`, whose
-  floor is one minute ([ADR-058](docs/adr/0058-operator-auth-ldap-oidc.md)),
-  that doubles how long a stolen Bearer keeps working — and it buys nothing,
-  because drift on `exp` only ever costs the last second of a token's life,
-  when the holder should be getting a new one anyway. `Verify` therefore
-  re-checks expiry strictly afterwards, and expiry still arrives as its own
-  error: the cookie exchange keeps answering `token expired` rather than the
-  generic `authentication required`, which is the difference between telling a
-  browser to sign in again and telling it nothing.
+  accepted a token up to 60s past its expiry. What that adds is a flat minute,
+  at every instance, drifted or not — a tenth of the 10m
+  `auth.jwt.exchange_ttl` default, but double the window at its one-minute
+  floor ([ADR-058](docs/adr/0058-operator-auth-ldap-oidc.md)) and more than
+  double on a token the cap below has cut shorter still. It costs least where
+  a token is long-lived and most where it was deliberately made short.
+
+  Excluding it is a trade, not a free win. An instance whose clock runs ahead
+  now refuses a token early by exactly its drift, and reissuing helps only
+  while the replacement outlives that drift. How long it lives is not a number
+  to look up: the cookie exchange caps it at
+  `min(exchange_ttl, remaining_until_cookie.exp)`, so a session near its own
+  end hands out a Bearer shorter than the one-minute floor no matter what
+  `exchange_ttl` is set to — and at the 60s this same change calls ordinary,
+  those replacements arrive expired as well. Skew on `iat` has no escape at
+  all: a fresh token's `iat` is just as far in the refusing node's future.
+
+  The trade is taken because the two claims are not worth the same: `iat` is a
+  sanity check that a timestamp was not fabricated, so slack there gives away
+  nearly nothing, while `exp` is the authorization boundary itself. The fix for
+  a node that refuses live tokens is its clock, not a wider boundary for
+  everyone. Note also that the strict re-check reads the
+  verifier's own clock, so it narrows the overrun rather than closing it: an
+  instance running behind still honours a token past its real `exp` by its own
+  lag — the difference is that the overrun now follows an actual fault instead
+  of being granted to every node.
+
+  `Verify` therefore re-checks expiry strictly after parsing, and expiry still
+  arrives as its own error: the cookie exchange keeps answering `token expired`
+  rather than the generic `authentication required`, which is the difference
+  between telling a browser to sign in again and telling it nothing. One
+  consequence is visible on the wire: the re-check sits below the issuer check,
+  where the parser's expiry check sat above it, so a token that is *both*
+  expired by less than 60s *and* carrying a foreign `iss` now answers
+  `token issuer not trusted` where it used to answer `token expired`. Past 60s
+  the parser still reports expiry first. Both halves are now a test rather than
+  a sentence: moving the re-check back above the issuer pin — the one edit that
+  would silently undo this, since both answers are a 401 carrying a fact the
+  holder can already read out of its own token — turns the first case red.
+
+  The `401` list itself is held to the code. A guard parses the two functions
+  that write the detail — `RequireJWT` and the classifier it delegates to — and
+  collects every string literal either can put on the wire, following the
+  classifier's returns rather than its constant declarations, so a new cause
+  slips past neither by being written as a bare literal nor by being written
+  into the middleware beside the header branch. Both their presence in the list
+  and the count the list states about itself are checked. The bound is what is
+  left: a detail assembled at run time, or written from a third file, is
+  outside it, and each scrape fails loudly rather than quietly finding nothing
+  when it stops recognising what it is reading.
 
   The e2e harness had built a conclusion on the old ambiguity. Its keeper
   identity check read any 401 against a freshly minted token as proof that some

@@ -256,12 +256,15 @@ func TestVerify_ClockSkew(t *testing.T) {
 // them, so the leeway alone would have accepted a token up to a minute past
 // `exp` — on a Bearer whose configured floor is one minute
 // (`auth.jwt.exchange_ttl`, ADR-058), doubling how long a stolen one keeps
-// working. Verify re-checks expiry strictly for that reason, and this is what
-// says so: delete the re-check and the first case below goes green while the
-// window silently reopens.
+// working. Verify re-checks expiry strictly for that reason, and this is the
+// test that holds it there: delete the re-check and the first three cases go
+// green (return nil instead of ErrExpiredToken), because the parser's leeway
+// accepts tokens that are past `exp` by less than one budget.
 //
-// The boundary case is the one that matters. Expiring by a whole budget-length
-// would be caught either way and would prove nothing.
+// Those three are the ones that gate the re-check — they sit inside the leeway,
+// where nothing else refuses them. The last case is nine budgets past `exp` and
+// the parser catches it either way; it gates that parser branch instead, and is
+// not coverage of this one.
 func TestVerify_LeewayDoesNotReachExpiry(t *testing.T) {
 	v, err := NewVerifier(testSigningKey, testIssuer)
 	if err != nil {
@@ -297,5 +300,56 @@ func TestVerify_LeewayDoesNotReachExpiry(t *testing.T) {
 	live := issueAtSkew(t, testSigningKey, testIssuer, "archon-alice", 0, time.Hour)
 	if _, err := v.Verify(live); err != nil {
 		t.Fatalf("Verify refused a token with an hour left: %v", err)
+	}
+}
+
+// TestVerify_ExpiryLosesToIssuerInsideTheLeeway pins the refusal order that the
+// strict re-check created, and that the comment on it in verifier.go describes.
+//
+// Before [clockSkewLeeway] existed the parser rejected expiry above everything,
+// including the issuer pin. The re-check sits below it instead, so inside the
+// leeway — where the parser now lets an expired token through — the issuer is
+// what answers. Past the leeway the parser gets there first and expiry answers
+// again, which is what confines the change to that window.
+//
+// The comment states both halves; without this test neither is held by
+// anything, and the sentence would go stale the first time someone moves the
+// re-check up to "check expiry as early as possible". That move is silent: both
+// answers are a 401 carrying a fact the holder can already read out of its own
+// token, so nothing downstream distinguishes them.
+func TestVerify_ExpiryLosesToIssuerInsideTheLeeway(t *testing.T) {
+	v, err := NewVerifier(testSigningKey, testIssuer)
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	// A sibling instance, not another cluster: `auth.jwt.issuer` defaults to the
+	// instance's own `kid`, so two keepers sharing one signing key routinely pin
+	// different `iss`. Only the mismatch matters here.
+	const foreignIssuer = "keeper.other-instance"
+
+	tests := []struct {
+		name    string
+		expired time.Duration // how long ago `exp` passed
+		want    error
+	}{
+		{"half a budget past exp — the parser passes it, the issuer pin refuses it",
+			clockSkewLeeway / 2, ErrInvalidIssuer},
+		{"nine budgets past exp — the parser refuses it before the issuer pin is reached",
+			clockSkewLeeway * 9, ErrExpiredToken},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// `iat` sits one budget before `exp`, so it is never the reason.
+			tok := issueAtSkew(t, testSigningKey, foreignIssuer, "archon-alice",
+				-(tc.expired + clockSkewLeeway), clockSkewLeeway)
+			_, err := v.Verify(tok)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Verify on a token from %q that expired %s ago = %v, want %v. "+
+					"The order of the two refusals is documented on the re-check in verifier.go; "+
+					"moving that check changes which one an operator is told and updates no test",
+					foreignIssuer, tc.expired, err, tc.want)
+			}
+		})
 	}
 }

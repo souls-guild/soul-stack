@@ -39,15 +39,15 @@ type Claims struct {
 
 // clockSkewLeeway is the tolerance for `iat` and `nbf` (golang-jwt applies it
 // to `exp` as well; Verify takes that back — see below). It is not zero
-// because keeper runs as several stateless
-// instances behind one address ([ADR-002]) over one signing key from Vault
-// ([ADR-014]): a token minted by instance A is routinely verified by instance B,
-// and the nodes' clocks drift apart as a matter of course rather than as an
-// incident. At zero tolerance a verifier one second behind the issuer rejects a
-// one-second-old token because its `iat` is "in the future", and the operator's
-// retry lands on another instance and succeeds — authentication that flaps
-// instead of a clock that reports. The project already treats skew as a fact of
-// life elsewhere ([ADR-018] warns above 10 minutes rather than refusing).
+// because keeper runs as several stateless instances behind one address
+// ([ADR-002]) over one signing key from Vault ([ADR-014]): a token minted by
+// instance A is routinely verified by instance B, and the nodes' clocks drift
+// apart as a matter of course rather than as an incident. At zero tolerance a
+// verifier one second behind the issuer rejects a one-second-old token because
+// its `iat` is "in the future", and the operator's retry lands on another
+// instance and succeeds — authentication that flaps instead of a clock that
+// reports. The project already treats skew as a fact of life elsewhere
+// ([ADR-018] warns above 10 minutes rather than refusing).
 //
 // 60s is the entire budget and is deliberately small: RFC 7519 §4.1.4 allows
 // "some small leeway, usually no more than a few minutes", and the point of
@@ -56,14 +56,34 @@ type Claims struct {
 //
 // It does NOT reach `exp`, even though golang-jwt applies one leeway to every
 // time claim and offers no way to split them — [Verifier.Verify] re-checks
-// expiry strictly afterwards for that reason. The asymmetry is the point.
-// Drift on `iat` refuses a token that is genuinely fresh, and the holder can
-// neither see why nor do anything about it. Drift on `exp` costs at most the
-// last second of a token's life, when the holder should be getting a new one
-// anyway — while widening it would extend how long a stolen Bearer keeps
-// working, on top of a floor (`auth.jwt.exchange_ttl`, minimum 1m, [ADR-058])
-// that is short on purpose. A minute of tolerance on a one-minute floor would
-// double it.
+// expiry strictly afterwards for that reason.
+//
+// Neither claim is cheap to get wrong. A verifier running more than that budget
+// behind the issuer refuses a fresh token on `iat`, and minting another never
+// helps: the replacement's `iat` is just as far in that verifier's future. A
+// verifier running ahead refuses one on `exp` early by exactly the magnitude of
+// the drift: if this instance's clock is N seconds ahead of the issuer's, a
+// token is rejected N seconds before its real `exp`. Minting another helps only
+// until the drift consumes the replacement's entire remaining life. That life
+// is not a constant to look up: on the cookie exchange [ADR-058] caps it at
+// `min(auth.jwt.exchange_ttl, remaining_until_cookie.exp)`, and `exchange_ttl`
+// itself defaults to 10m with a 1m floor — so a nearly-spent session hands out
+// tokens shorter than even the floor, and at the 60s of drift this very
+// constant calls ordinary, those arrive expired. Both are repaired by fixing
+// the clock, and until then both flap, because the operator's retry lands on an
+// instance that may not be skewed.
+//
+// The asymmetry that decides it is in what tolerance is bought with. `iat` is
+// a sanity check that the timestamp was not fabricated, so slack there gives
+// away nearly nothing. `exp` is the authorization boundary itself, and slack
+// there would extend how long every token stays usable — a stolen one included
+// — at every instance, drifted or not. The strict re-check trades a guaranteed
+// 60s extension at every instance for an asymmetry that only penalises the
+// drifted ones: an instance whose clock is ahead pays the full drift in lost
+// token lifetime, while an instance whose clock is behind retains a residual
+// acceptance window equal to its own lag (it honours a token past its real
+// `exp` by exactly how late its local clock is). The overrun at least tracks
+// an actual fault instead of being granted to everyone.
 //
 // [ADR-002]: docs/adr/0002-transport-grpc-ha.md
 // [ADR-014]: docs/adr/0014-operator-identity.md
@@ -225,11 +245,22 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 	// Expiry, strictly — undoing the part of [clockSkewLeeway] that golang-jwt
 	// applied to `exp` because it cannot apply a leeway to one claim only. The
 	// reasoning is on the constant; the effect is that a token past its `exp` is
-	// refused on the same second here as it was before the leeway existed, and
-	// with the same [ErrExpiredToken]. Callers depend on that specific answer:
-	// the cookie exchange (keeper/internal/api/huma_auth_token.go) tells the
-	// browser "your session ended, sign in again" only because expiry arrives as
-	// its own error rather than as a generic 401.
+	// refused here at the same local-clock boundary this instance would have
+	// enforced before the leeway existed, and with the same [ErrExpiredToken].
+	// Callers depend on that specific answer: the cookie exchange
+	// (keeper/internal/api/huma_auth_token.go) tells the browser "your session
+	// ended, sign in again" only because expiry arrives as its own error rather
+	// than as a generic 401.
+	//
+	// Order change from NIM-621: this re-check sits below the issuer check,
+	// whereas the parser used to reject expiry above everything. A token that is
+	// expired by less than [clockSkewLeeway] and carries `iss != verifier.issuer`
+	// (e.g. minted by a sibling instance whose kid differs) now answers
+	// [ErrInvalidIssuer]; before NIM-621 the parser answered [ErrExpiredToken]
+	// first. Past the leeway the parser still gets there first, so the change is
+	// confined to that window. Both answers are 401 and the holder can read
+	// either fact out of its own token, so nothing downstream tells them apart —
+	// recorded here because there is otherwise no way to notice.
 	if time.Now().After(claims.ExpiresAt.Time) {
 		return nil, ErrExpiredToken
 	}

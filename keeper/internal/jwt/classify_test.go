@@ -20,7 +20,13 @@ import (
 // sentinel means a new row below, in the same change that adds it.
 //
 // Sentinel errors are checked both directly and wrapped
-// (fmt.Errorf("%w: …")), because Verify returns them wrapped.
+// (fmt.Errorf("%w: …")) so the classifier never depends on which form Verify
+// happens to return. Today ErrExpiredToken arrives bare from both of its paths
+// (the parser branch and the strict re-check), ErrInvalidToken arrives bare on
+// three of seven paths (bad signature, alg:none, missing claims) and wrapped on
+// the others, while ErrClockSkew and ErrInvalidIssuer always arrive wrapped.
+// Both forms are pinned for each sentinel regardless, because a refactor that
+// changes one path's wrapping must not silently break classification.
 func TestClassifyVerifyErr(t *testing.T) {
 	cases := []struct {
 		name string
