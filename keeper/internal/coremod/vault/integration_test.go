@@ -22,6 +22,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	coremodvault "github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -45,10 +46,12 @@ func TestMain(m *testing.M) {
 }
 
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcvault.Run(ctx, integrationImage, tcvault.WithToken(integrationToken))
+	ctr, err := integrationenv.Start(ctx, "vault", func(ctx context.Context) (*tcvault.VaultContainer, error) {
+		return tcvault.Run(ctx, integrationImage, tcvault.WithToken(integrationToken))
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("coremod/vault integration: setup failed (REQUIRE_DOCKER): %v", err)

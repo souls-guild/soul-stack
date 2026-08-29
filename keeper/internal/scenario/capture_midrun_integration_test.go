@@ -111,7 +111,7 @@ func TestIntegration_Capture_SurvivesTheSuccessTerminal(t *testing.T) {
 	gitURL := captureThenSetRepo(t)
 
 	probe := &capturingStateModule{field: "captured", value: "mid-run"}
-	keepers := fakeKeeperRegistry{"core.probe": probe}
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": probe})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
@@ -185,7 +185,7 @@ func TestIntegration_Capture_SurvivesTheFailureTerminal(t *testing.T) {
 	gitURL := captureThenFailRepo(t)
 
 	probe := &capturingStateModule{field: "captured", value: "mid-run"}
-	keepers := fakeKeeperRegistry{"core.probe": probe}
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": probe})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusFailed}
 	r := newRunnerKeeperStaged(t, disp, keepers)
@@ -226,7 +226,7 @@ func TestIntegration_Capture_HistoryKeepsTheTerminalLast(t *testing.T) {
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := captureThenSetRepo(t)
 
-	keepers := fakeKeeperRegistry{"core.probe": &capturingStateModule{field: "captured", value: "mid-run"}}
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": &capturingStateModule{field: "captured", value: "mid-run"}})
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
 

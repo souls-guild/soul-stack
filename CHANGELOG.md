@@ -196,6 +196,59 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `core.` prefix (NIM-543): `keeper.*` and `soul.*` sit beside `core` on that list
   and were being given install steps no registration could satisfy.
 
+### Fixed
+
+- **L1 no longer loses packages per sweep to container bring-up** (NIM-569,
+  diagnosis corrected by NIM-723). `make test-integration` failed packages during
+  bring-up on every run, different ones each time. The error names a published
+  port, which reads like a dead route to it, but the call that times out is
+  `GET /containers/<id>/json` on the docker socket — the daemon's own API:
+
+  ```
+  check target: retries: 503 address: localhost:32890: get state:
+  Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.54/containers/<id>/json":
+  context deadline exceeded
+  ```
+
+  The container is up and the port is mapped; what cannot answer inside the 60 s
+  budget is the daemon, and ~500 retries mean the poll asked it for a minute and
+  got nothing. Concurrency is what moves it: four sweeps on one host lost one and
+  then three packages at `INTEGRATION_PARALLEL=4`, and none at `2`. So the
+  primary control is that knob, now `2`, and it is the reason this entry no
+  longer claims the daemon was never the problem — it was. Every bring-up in the
+  tree additionally goes through `integrationenv.Start` as a second line for the
+  residual case, replacing the container outright rather than waiting longer,
+  because past the wait strategy's own deadline the container's health is
+  unknown. The retry
+  is deliberately blind to the failure reason (guessing "infra" from error text
+  is how a real failure gets silenced), it runs entirely inside setup so no
+  verdict is ever overwritten, and it joins every attempt's error so
+  `classify-l1-failure.py` still sees the markers it keys on.
+  `SOUL_STACK_INTEGRATION_START_ATTEMPTS=1` restores the old behaviour for
+  debugging, and `integrationenv.WithAttempts(1)` switches the retry off at the
+  two fixtures it cannot help: the Redis cluster pins host ports 7000-7005, so a
+  replacement asks for the same pinned ports, and the L2 stand publishes no port at
+  all. A docker-free guard, `TestContainersAreBroughtUpThroughStart`, fails on
+  any tagged file that brings a container up outside `Start`, so no package can
+  quietly opt out and look fixed; the guard is itself tested, because its first
+  version resolved an unaliased `testcontainers-go` import to an identifier no
+  file writes and therefore covered none of the generic bring-ups. `make
+  test-integration` also states its `-timeout` (`INTEGRATION_TIMEOUT`, 15m)
+  instead of inheriting Go's silent 10m default, which the retry budget plus
+  `internal/api` at 347-439 s could otherwise reach — a package killed there
+  dumps goroutines and reads as a hang.
+
+- **`classify-l1-failure.py` can reach the verdict that says "fix the code"**
+  (NIM-569). `--- FAIL:` was matched without `re.MULTILINE`, so it was only ever
+  found when the line happened to be the first thing after the previous
+  package's `ok` — under `-p 4` it usually was not, and a package with nineteen
+  failing tests was reported `UNCLEAR`, "no test reported a failure". A killed
+  binary now gets its own `TIMEOUT` verdict naming what was still running,
+  instead of landing in `UNCLEAR` under a goroutine dump. And the retry's own
+  log lines, which carry the container-layer markers verbatim, are dropped
+  before matching, so a package that recovered from a blip and then failed an
+  assertion is no longer blamed on the container layer.
+
 ### Removed
 
 - **`config.VaultInputFloor`** — a list of literal Vault path prefixes guarding

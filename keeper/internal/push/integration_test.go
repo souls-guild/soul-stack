@@ -42,6 +42,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -220,9 +221,11 @@ exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config
 		Entrypoint: []string{"/bin/sh", "/entrypoint.sh"},
 		WaitingFor: wait.ForLog("Server listening on").WithStartupTimeout(60 * time.Second),
 	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
+	c, err := integrationenv.Start(ctx, "sshd", func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
 	})
 	if err != nil {
 		t.Fatalf("start sshd container: %v", err)
@@ -328,7 +331,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test requires docker")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
 	ca := genIntegrationCA(t)

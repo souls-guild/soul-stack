@@ -48,6 +48,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -75,16 +76,18 @@ var (
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	pgCtr, err := tcpostgres.Run(ctx,
-		integrationPGImage,
-		tcpostgres.WithDatabase("keeper_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	pgCtr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			integrationPGImage,
+			tcpostgres.WithDatabase("keeper_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("grpc integration: PG setup failed (REQUIRE_DOCKER): %v", err)
@@ -114,7 +117,9 @@ func run(m *testing.M) int {
 	defer pool.Close()
 	integrationPool = pool
 
-	vCtr, err := tcvault.Run(ctx, integrationVaultImage, tcvault.WithToken(integrationVaultToken))
+	vCtr, err := integrationenv.Start(ctx, "vault", func(ctx context.Context) (*tcvault.VaultContainer, error) {
+		return tcvault.Run(ctx, integrationVaultImage, tcvault.WithToken(integrationVaultToken))
+	})
 	if err != nil {
 		log.Printf("Vault Run: %v", err)
 		return 1

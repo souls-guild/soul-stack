@@ -22,6 +22,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -34,7 +35,7 @@ func keeperRegisterCaptureRepo(t *testing.T) string {
 description: keeper-register in a capture (live provisioned_vm_ids class)
 tasks:
   - name: provision vm
-    module: core.bootstrap.created
+    module: core.probe.created
     on: keeper
     register: provision
     params:
@@ -66,7 +67,7 @@ func TestIntegration_KeeperRegisterInCapture_CommitsToState(t *testing.T) {
 	gitURL := keeperRegisterCaptureRepo(t)
 
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
-	keepers := fakeKeeperRegistry{"core.bootstrap": bootstrap}
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": bootstrap})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)

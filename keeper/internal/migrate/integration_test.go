@@ -30,6 +30,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keepermigrate "github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
@@ -53,16 +54,18 @@ func TestMain(m *testing.M) {
 // (CI mode): any setup failure -> log.Fatalf. Without the flag (local mode),
 // tests are skipped when docker is unavailable.
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("keeper_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	ctr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			"postgres:16-alpine",
+			tcpostgres.WithDatabase("keeper_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("migrate integration: setup failed (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER set): %v", err)

@@ -44,7 +44,7 @@ var integrationAddr string
 func TestMain(m *testing.M) { os.Exit(integrationRun(m)) }
 
 func integrationRun(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
 	req := testcontainers.ContainerRequest{
@@ -52,9 +52,11 @@ func integrationRun(m *testing.M) int {
 		ExposedPorts: []string{"6379/tcp"},
 		WaitingFor:   wait.ForLog("Ready to accept connections").WithStartupTimeout(60 * time.Second),
 	}
-	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
+	ctr, err := integrationenv.Start(ctx, "redis", func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
 	})
 	if err != nil {
 		if requireDocker() {

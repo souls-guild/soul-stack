@@ -28,6 +28,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
@@ -45,7 +46,7 @@ const (
 // sense with >1 test using it; for now there's just one.
 func startRedisContainer(t *testing.T) (addr string, shutdown func()) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
 	req := testcontainers.ContainerRequest{
@@ -53,9 +54,11 @@ func startRedisContainer(t *testing.T) (addr string, shutdown func()) {
 		ExposedPorts: []string{"6379/tcp"},
 		WaitingFor:   wait.ForLog("Ready to accept connections").WithStartupTimeout(30 * time.Second),
 	}
-	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
+	ctr, err := integrationenv.Start(ctx, "redis", func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
 	})
 	if err != nil {
 		if requireDocker() {

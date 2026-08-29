@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	render "github.com/souls-guild/soul-stack/keeper/internal/render"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
@@ -81,10 +82,17 @@ func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 		// take the build down with it (l2_registry_auth.go, NIM-307).
 		ensureRegistryAuthUsable()
 	}
-	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	// One attempt only: the stand publishes no port (both wait strategies are
+	// ForExec), so the NIM-569 wedge -- a host forward to a published port that
+	// never becomes reachable -- cannot happen here. Retrying would only divide
+	// ctx, which the caller sized for a soul build, an image build and several
+	// applies, by three.
+	ctr, err := integrationenv.Start(ctx, "stand", func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
+	}, integrationenv.WithAttempts(1))
 	if err != nil {
 		return nil, fmt.Errorf("trial L2: start stand (init=%s): %w", stand.init(), annotateRegistryAuthError(err))
 	}

@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
@@ -29,16 +30,18 @@ var integrationPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("keeper_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	ctr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			"postgres:16-alpine",
+			tcpostgres.WithDatabase("keeper_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("sigil integration: setup failed (REQUIRE_DOCKER): %v", err)

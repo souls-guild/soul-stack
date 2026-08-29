@@ -44,16 +44,18 @@ func requireDockerPush() bool {
 // newRouterPGPool spins a migrated Postgres for one test and returns a pool.
 func newRouterPGPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("keeper_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	ctr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			"postgres:16-alpine",
+			tcpostgres.WithDatabase("keeper_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDockerPush() {
 			t.Fatalf("push router integration: setup failed (REQUIRE_DOCKER): %v", err)

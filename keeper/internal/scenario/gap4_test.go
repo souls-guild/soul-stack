@@ -95,7 +95,9 @@ state_schema_version: 1
 description: noop service
 state_schema:
   type: object
-  properties: {}
+  properties:
+    b:
+      type: string
 `)
 	write("scenario/"+scenarioName+"/main.yml", scenarioMain)
 	wt, err := repo.Worktree()
@@ -169,8 +171,13 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HistorySelectByName: %v", err)
 	}
-	if total != 1 || len(hist) != 1 {
-		t.Fatalf("history entries = %d, want 1", total)
+	// Two rows, not one: `state_history` is a snapshot per CAPTURE since
+	// [ADR-0084], so the `core.state.set` step writes its own alongside the run's
+	// terminal. The single-row expectation belongs to the retired end-of-run
+	// commit. hist[0] is still the capture's, which is what the assertions below
+	// read.
+	if total != 2 || len(hist) != 2 {
+		t.Fatalf("history entries = %d, want 2 (the capture's own snapshot + the terminal)", total)
 	}
 	if hist[0].StateBefore["b"] != float64(2) {
 		t.Errorf("history state_before.b = %v, want 2", hist[0].StateBefore["b"])

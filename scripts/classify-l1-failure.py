@@ -22,6 +22,11 @@ into THREE classes rather than two:
               `CLUSTERDOWN`). Deliberately not folded into INFRA: a false INFRA
               label is the failure mode that matters here, because it is the one
               that makes a regression disappear.
+  TIMEOUT     the package binary hit `-timeout` and dumped every goroutine. It
+              names no failing test and prints no error string, so without its
+              own verdict it lands in UNCLEAR and reads as "nothing identifies
+              the layer" under several hundred lines of stack — which is how a
+              hang comes to look like noise.
 
 Nothing is ever downgraded to a pass: the caller's exit code is untouched, and
 UNCLEAR is to be treated as a finding until a solitary rerun says otherwise.
@@ -90,7 +95,35 @@ UNCLEAR = [
 ]
 
 FAIL_LINE = re.compile(r"^FAIL\s+(\S+)")
-TEST_FAIL = re.compile(r"^\s*--- FAIL: (\S+)")
+# MULTILINE is load-bearing, not decoration. Without it `^` anchors to the start
+# of the whole blob, so a `--- FAIL:` line was only ever found when it happened to
+# be the first thing after the previous package's `ok` line -- and under `-p 4` the
+# packages interleave, so usually it was not. The visible symptom was a package
+# with nineteen failing tests reported as UNCLEAR "no test reported a failure":
+# the verdict that says "fix the code" was unreachable for most real logs, and the
+# verdict that replaced it says the opposite.
+TEST_FAIL = re.compile(r"^\s*--- FAIL: (\S+)", re.MULTILINE)
+
+# `go test` kills the binary and the binary panics itself, so this text is the
+# testing package's, not the tool's.
+TIMEOUT_PANIC = "panic: test timed out"
+RUNNING_TEST = re.compile(r"^\s*(\S+) \(\d+[hms]")
+
+# The NIM-569 retry logs a recovered attempt, and that log line carries the
+# testcontainers error verbatim — `check target: retries:` (INFRA) and `context
+# deadline exceeded` (UNCLEAR) — into the blob of a package that then went on to
+# run its tests. Left in, a package that recovered from a blip and THEN failed an
+# assertion is reported UNCLEAR instead of REGRESSION: the retry would erode the
+# one verdict that says "fix the code", precisely in the runs where it did its
+# job. The line is the tool talking about itself, so it is not evidence about
+# either layer; a bring-up that genuinely failed is unaffected, because the suite
+# declares that in its own words (SETUP_DECLARED) and the joined error survives.
+RETRY_LOG = re.compile(r"^.*\bintegrationenv: .*$", re.MULTILINE)
+
+
+def denoise(blob: str) -> str:
+    """The package's output with this tool's own retry chatter removed."""
+    return RETRY_LOG.sub("", blob)
 
 
 def import_path_to_pkg(path: str) -> str | None:
@@ -116,6 +149,46 @@ def import_path_to_pkg(path: str) -> str | None:
 # someone hunting a defect that does not exist — so the mapping is pinned here and
 # checked by `make check`.
 SELF_TEST = [
+    (
+        "a failing test BELOW other output -> still REGRESSION (needs MULTILINE)",
+        "REGRESSION",
+        "2026/08/26 22:45:15 INFO artifact: snapshot materialized service name=noop\n"
+        "--- FAIL: TestIntegration_Capture_SurvivesTheSuccessTerminal (0.23s)\n"
+        "    capture_midrun_integration_test.go:130: incarnation status = \"error_locked\", "
+        "want \"ready\"\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/scenario\t91.100s\n",
+    ),
+    (
+        "retry noise on a package that then failed an assertion -> REGRESSION",
+        "REGRESSION",
+        "2026/08/26 22:45:14 integrationenv: postgres did not come up on attempt 1/3, "
+        "starting a NEW container: create container: wait until ready: external check: "
+        "check target: retries: 447 address: localhost:32814: context deadline exceeded\n"
+        "2026/08/26 22:45:20 integrationenv: postgres came up on attempt 2/3\n"
+        "--- FAIL: TestIntegration_ApplyRun_Idempotent (1.20s)\n"
+        "    apply_integration_test.go:88: changed = true, want false\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/scenario\t91.004s\n",
+    ),
+    (
+        "every attempt failed -> still INFRA, the joined error survives denoising",
+        "INFRA",
+        "2026/08/26 22:45:14 integrationenv: postgres did not come up on attempt 1/3, "
+        "starting a NEW container: boom\n"
+        "2026/08/26 22:46:20 scenario integration: container setup failed (REQUIRE_DOCKER): "
+        "postgres: no container became reachable in 3 attempt(s): attempt 1/3: create "
+        "container: wait until ready: external check: check target: retries: 447\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/scenario\t272.400s\n",
+    ),
+    (
+        "a killed binary -> TIMEOUT, not UNCLEAR under a goroutine dump",
+        "TIMEOUT",
+        "panic: test timed out after 15m0s\n"
+        "\trunning tests:\n"
+        "\tTestIntegration_ApplyRun_Serial (14m59s)\n\n"
+        "goroutine 1 [running]:\n"
+        "testing.(*M).startAlarm.func1()\n"
+        "FAIL\tgithub.com/souls-guild/soul-stack/keeper/internal/api\t900.021s\n",
+    ),
     (
         "declared setup failure -> INFRA",
         "INFRA",
@@ -164,6 +237,9 @@ SELF_TEST = [
 def classify_blob(blob: str) -> str:
     """The verdict for one package's output. Shared by main() and --self-test so
     the guard cannot drift away from what the tool actually does."""
+    if TIMEOUT_PANIC in blob:
+        return "TIMEOUT"
+    blob = denoise(blob)
     declared = SETUP_DECLARED.search(blob)
     infra_hits = [s for s in INFRA if s in blob]
     unclear_hits = [s for s in UNCLEAR if s in blob]
@@ -192,7 +268,7 @@ def self_test() -> int:
         print(f"classify-l1-failure: {bad} case(s) misclassified. A wrong label is worse than")
         print("classify-l1-failure: none — fix the logic, do not relax the expectation.")
         return 1
-    print("classify-l1-failure: self-test passed — the three verdicts still mean what they say")
+    print("classify-l1-failure: self-test passed — the four verdicts still mean what they say")
     return 0
 
 
@@ -239,11 +315,28 @@ def main() -> int:
         return 0
 
     for path, out in failing:
-        blob = "\n".join(out)
+        raw = "\n".join(out)
+        blob = denoise(raw)
         declared = SETUP_DECLARED.search(blob)
         infra_hits = [s for s in INFRA if s in blob]
         unclear_hits = [s for s in UNCLEAR if s in blob]
         tests = TEST_FAIL.findall(blob)
+        # What the binary was still running when the alarm went off is the whole
+        # of the diagnosis a timeout offers, and it is printed once, above the
+        # dump.
+        hung = []
+        if TIMEOUT_PANIC in raw:
+            after = raw.split("running tests:", 1)
+            if len(after) == 2:
+                for line in after[1].splitlines():
+                    if not line.strip():
+                        if hung:
+                            break
+                        continue
+                    m = RUNNING_TEST.match(line)
+                    if not m:
+                        break
+                    hung.append(m.group(1))
 
         # The rule itself lives in classify_blob so --self-test exercises exactly
         # what a real run does. Its ordering is the design: a named
@@ -253,10 +346,13 @@ def main() -> int:
         # report "fix the code" about code that was never exercised. That mistake is
         # not symmetrical with the other one: it sends someone hunting a defect that
         # does not exist, and after twice it teaches them to disbelieve the label.
-        verdict = classify_blob(blob)
+        verdict = classify_blob(raw)
 
         print()
         print(f"  {verdict:<11}{path}")
+        if verdict == "TIMEOUT" and hung:
+            shown = ", ".join(hung[:4]) + (" …" if len(hung) > 4 else "")
+            print(f"{'':13}still running when the alarm fired: {shown}")
         if tests:
             shown = ", ".join(tests[:4]) + (" …" if len(tests) > 4 else "")
             print(f"{'':13}failed test(s): {shown}")
@@ -272,7 +368,15 @@ def main() -> int:
             print(f"{'':13}no test reported a failure, so nothing here identifies the layer")
 
         pkg = import_path_to_pkg(path)
-        if verdict == "REGRESSION":
+        if verdict == "TIMEOUT":
+            print(f"{'':13}The binary was killed at INTEGRATION_TIMEOUT and dumped every")
+            print(f"{'':13}goroutine, so it named no failing test. Read the dump for the")
+            print(f"{'':13}test above, not for an error string — there is none. A hang is")
+            print(f"{'':13}not the container layer and not an assertion; it is its own")
+            print(f"{'':13}finding.")
+            if pkg:
+                print(f"{'':17}make test-integration PKG={pkg}")
+        elif verdict == "REGRESSION":
             print(f"{'':13}An assertion failed, so the code WAS exercised. A finding —")
             print(f"{'':13}unless a solitary rerun clears it, and if it does, that is a")
             print(f"{'':13}finding too: a test that only fails under load is the very")

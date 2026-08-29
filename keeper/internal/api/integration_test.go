@@ -41,6 +41,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
@@ -71,17 +72,19 @@ var (
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
 	// --- Postgres ---
-	pgCtr, err := tcpostgres.Run(ctx,
-		integrationPGImage,
-		tcpostgres.WithDatabase("keeper_api_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	pgCtr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			integrationPGImage,
+			tcpostgres.WithDatabase("keeper_api_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("api integration: PG setup failed (REQUIRE_DOCKER): %v", err)
@@ -112,7 +115,9 @@ func run(m *testing.M) int {
 	integrationPool = pool
 
 	// --- Vault ---
-	vCtr, err := tcvault.Run(ctx, integrationVaultImage, tcvault.WithToken(integrationVaultToken))
+	vCtr, err := integrationenv.Start(ctx, "vault", func(ctx context.Context) (*tcvault.VaultContainer, error) {
+		return tcvault.Run(ctx, integrationVaultImage, tcvault.WithToken(integrationVaultToken))
+	})
 	if err != nil {
 		log.Printf("vault Run: %v", err)
 		return 1

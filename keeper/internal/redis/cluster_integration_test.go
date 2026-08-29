@@ -49,6 +49,7 @@ import (
 	tcvault "github.com/testcontainers/testcontainers-go/modules/vault"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -97,10 +98,18 @@ func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate
 				WithPollInterval(500*time.Millisecond),
 		).WithStartupTimeoutDefault(90 * time.Second),
 	}
-	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
+	// One attempt only: this is the one fixture in the tree that PINS its host
+	// ports (nat7000to7005), because grokzen announces 127.0.0.1:<contport> and
+	// the ClusterClient dials what it is told. The NIM-569 retry works by getting
+	// a DIFFERENT published port, so here it would re-request the identical
+	// forward and could turn one clear failure into three, the second and third
+	// reading "port is already allocated" while the daemon still holds 7000-7005.
+	ctr, err := integrationenv.Start(ctx, "redis-cluster", func(ctx context.Context) (testcontainers.Container, error) {
+		return testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          true,
+		})
+	}, integrationenv.WithAttempts(1))
 	if err != nil {
 		if requireDocker() {
 			t.Fatalf("cluster integration: container setup failed (REQUIRE_DOCKER): %v", err)
@@ -183,7 +192,7 @@ func clusterStateOK(ctx context.Context, c *Client) error {
 // TestIntegration_Cluster_SingleKeyLease — single-key Lua-lease is
 // cluster-safe (one KEYS → one slot, CROSSSLOT impossible).
 func TestIntegration_Cluster_SingleKeyLease(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContextFor(90 * time.Second)
 	defer cancel()
 	seed, term := startCluster(ctx, t)
 	defer term()
@@ -208,7 +217,7 @@ func TestIntegration_Cluster_SingleKeyLease(t *testing.T) {
 // pending→processing does not trigger CROSSSLOT, because all queue keys sit
 // under a shared hash-tag `{q}` (= one slot). Also cross-checks CLUSTER KEYSLOT.
 func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContextFor(90 * time.Second)
 	defer cancel()
 	seed, term := startCluster(ctx, t)
 	defer term()
@@ -265,7 +274,7 @@ func TestIntegration_Cluster_HeraldNoCrossSlot(t *testing.T) {
 // SCAN (ForEachMaster). Without the fix, a plain SCAN would cover only one
 // node and undercount.
 func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContextFor(90 * time.Second)
 	defer cancel()
 	seed, term := startCluster(ctx, t)
 	defer term()
@@ -320,7 +329,7 @@ func TestIntegration_Cluster_CountLiveCrossNode(t *testing.T) {
 // delivered on a cluster (ADR-006: sharded SPUBLISH is a separate GA slice;
 // here we verify that plain PUBLISH/SUBSCRIBE works on a ClusterClient).
 func TestIntegration_Cluster_PubSubCrossNode(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	ctx, cancel := integrationenv.SetupContextFor(90 * time.Second)
 	defer cancel()
 	seed, term := startCluster(ctx, t)
 	defer term()
@@ -356,7 +365,7 @@ func TestIntegration_Cluster_PubSubCrossNode(t *testing.T) {
 // it. (The "resolved password → AUTH" link is covered by the unit test
 // TestNewClient_VaultRef_Resolved against miniredis.)
 func TestIntegration_Cluster_PasswordFromVault(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContextFor(90 * time.Second)
 	defer cancel()
 
 	vc, term := startVaultWithRedisSecret(ctx, t, "cluster-pw")
@@ -385,7 +394,9 @@ func TestIntegration_Cluster_PasswordFromVault(t *testing.T) {
 // keeper-vault client (it satisfies passwordResolver).
 func startVaultWithRedisSecret(ctx context.Context, t *testing.T, pw string) (*keepervault.Client, func()) {
 	t.Helper()
-	ctr, err := tcvault.Run(ctx, vaultClusterImg, tcvault.WithToken(vaultClusterTok))
+	ctr, err := integrationenv.Start(ctx, "vault", func(ctx context.Context) (*tcvault.VaultContainer, error) {
+		return tcvault.Run(ctx, vaultClusterImg, tcvault.WithToken(vaultClusterTok))
+	})
 	if err != nil {
 		if requireDocker() {
 			t.Fatalf("vault setup failed (REQUIRE_DOCKER): %v", err)

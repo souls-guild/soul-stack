@@ -24,6 +24,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	tcvault "github.com/testcontainers/testcontainers-go/modules/vault"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -43,10 +44,12 @@ var (
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcvault.Run(ctx, integrationImage, tcvault.WithToken(integrationToken))
+	ctr, err := integrationenv.Start(ctx, "vault", func(ctx context.Context) (*tcvault.VaultContainer, error) {
+		return tcvault.Run(ctx, integrationImage, tcvault.WithToken(integrationToken))
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("render integration: setup failed (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER set): %v", err)

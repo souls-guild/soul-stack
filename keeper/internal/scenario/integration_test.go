@@ -29,7 +29,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
+	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -71,16 +74,18 @@ func run(m *testing.M) int {
 	// dev/test flag for the whole package run — same trick as artifact_test.go.
 	os.Setenv("SOUL_STACK_ALLOW_FILE_REPOS", "1")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := integrationenv.SetupContext()
 	defer cancel()
 
-	ctr, err := tcpostgres.Run(ctx,
-		"postgres:16-alpine",
-		tcpostgres.WithDatabase("keeper_test"),
-		tcpostgres.WithUsername("keeper"),
-		tcpostgres.WithPassword("keeper"),
-		tcpostgres.BasicWaitStrategies(),
-	)
+	ctr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+		return tcpostgres.Run(ctx,
+			"postgres:16-alpine",
+			tcpostgres.WithDatabase("keeper_test"),
+			tcpostgres.WithUsername("keeper"),
+			tcpostgres.WithPassword("keeper"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+	})
 	if err != nil {
 		if requireDocker() {
 			log.Fatalf("scenario integration: setup failed (REQUIRE_DOCKER): %v", err)
@@ -337,6 +342,49 @@ func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner
 	})
 }
 
+// stateKeeperRegistry is the keeper-side registry an integration Runner needs in
+// order to run an ordinary scenario at all.
+//
+// Since [ADR-0084] a scenario captures state through a `core.state.<verb>` step
+// on the keeper side rather than through a `state_changes:` block, so a fixture
+// that records anything now carries an `on: keeper` task. A Runner built without
+// a registry rejects that task with [ErrKeeperModulesNotConfigured] before the
+// host fan-out, which turns "this scenario captures state" into a run-level
+// failure and has nothing to do with what the test was written to check.
+//
+// It is the REAL module over the REAL PG store, not a fake: the tests that need
+// it assert what landed in `incarnation.state`, so a stub that accepted the step
+// and wrote nothing would leave them green against a capture path that never
+// ran. Vault is nil because a plain field never reaches it -- only a
+// `type: secret` field does ([ADR-0083] §4), and no fixture here declares one.
+func stateKeeperRegistry() *coremod.Registry {
+	return coremod.NewRegistry(map[string]module.SoulModule{
+		coremodstate.Name: stateModule(),
+	})
+}
+
+// stateModule is the real `core.state` over the integration PG store. See
+// [stateKeeperRegistry] for why it is the real one and why Vault is nil.
+func stateModule() module.SoulModule {
+	return coremodstate.New(nil, nil, "secret").
+		WithStore(coremodstate.NewPGStore(integrationPool))
+}
+
+// keeperRegistryWith is a [fakeKeeperRegistry] carrying the caller's stub
+// modules AND the real `core.state`.
+//
+// A test that stubs one keeper module still runs a scenario, and a scenario that
+// records anything carries a `core.state.<verb>` step of its own ([ADR-0084]).
+// Listing only the stub leaves that step unresolvable, and the run fails on the
+// capture rather than on whatever the stub was there to exercise.
+func keeperRegistryWith(mods map[string]module.SoulModule) fakeKeeperRegistry {
+	r := fakeKeeperRegistry{coremodstate.Name: stateModule()}
+	for name, m := range mods {
+		r[name] = m
+	}
+	return r
+}
+
 // newRunnerWithDestiny builds a Runner with an optional DestinySource (for
 // apply:destiny). Empty destinyTemplate → Destiny=nil (apply:destiny unsupported).
 func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *DestinySource) *Runner {
@@ -353,6 +401,11 @@ func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *Destin
 		Outbound:    disp,
 		Destiny:     destinySrc,
 		DB:          integrationPool,
+		// A scenario that records anything carries a `core.state.<verb>` task on
+		// the keeper side ([ADR-0084]), so the default Runner needs a registry
+		// that answers it — see [stateKeeperRegistry]. A test that wants the
+		// unconfigured path asks for it explicitly: newRunnerWithKeeper(t, disp, nil).
+		KeeperModules: stateKeeperRegistry(),
 		// Staged gate (ADR-056 §S5): test hosts "support passage" (lacking is
 		// empty) — otherwise the fail-closed reject would reject all staged
 		// tests. The forward-compat reject is verified by a separate stub in
@@ -779,7 +832,9 @@ state_schema_version: 1
 description: register-in-sets service
 state_schema:
   type: object
-  properties: {}
+  properties:
+    leader:
+      type: string
 `)
 	write("scenario/probe/main.yml", `name: probe
 description: a capture reaching for a host task's register
@@ -1390,7 +1445,9 @@ state_schema_version: 1
 description: serial rolling service
 state_schema:
   type: object
-  properties: {}
+  properties:
+    rolled:
+      type: string
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: rolling restart with serial
@@ -1490,8 +1547,12 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
 	}
-	if len(st) != 3 {
-		t.Errorf("apply_runs rows = %d, want 3", len(st))
+	// Three host rows plus the keeper row: the `core.state.set` capture is a task
+	// of this run and gets its own apply_runs row under the `__run__` sid
+	// ([ADR-0084]). Before the capture became a keeper-side step there were only
+	// the three hosts.
+	if len(st) != 4 {
+		t.Errorf("apply_runs rows = %d, want 4 (three hosts + the keeper capture)", len(st))
 	}
 }
 
@@ -1530,9 +1591,14 @@ func TestIntegration_Serial_FailStop(t *testing.T) {
 		t.Errorf("dispatched = %v, want [host-a.example.com] (fail-stop: waves 2,3 must not start)", got)
 	}
 
-	// state NOT committed (rolled didn't appear) — §7: partial commit is forbidden.
-	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes - state must NOT be committed on fail (§7)")
+	// State IS committed, and that is the point of [ADR-0084]: a run that dies
+	// half-way leaves exactly what was captured BEFORE it died. The capture is a
+	// keeper task of this Passage, and keeper tasks run before the host fan-out
+	// (run.go step 5.5), so it committed and then wave 1 failed. The pre-ADR-0084
+	// all-or-nothing commit is what this assertion used to pin; it was green only
+	// because no registry answered `core.state.set` and the run failed earlier.
+	if inc.State["rolled"] != "yes" {
+		t.Errorf("state.rolled = %v, want yes - a capture that ran before the failure must survive it (ADR-0084)", inc.State["rolled"])
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("reason = %v, want dispatch_failed", inc.StatusDetails)
@@ -1598,7 +1664,9 @@ state_schema_version: 1
 description: serial multi-task service
 state_schema:
   type: object
-  properties: {}
+  properties:
+    rolled:
+      type: string
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: two tasks with different serial widths
@@ -1688,14 +1756,17 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 	if inc.State["rolled"] != "yes" {
 		t.Errorf("state.rolled = %v, want \"yes\"", inc.State["rolled"])
 	}
-	// Single commit after all waves (§7): exactly one state_history snapshot.
+	// A snapshot per CAPTURE, not per run and not per wave ([ADR-0084]): the one
+	// `core.state.set` writes its own, and the run's terminal writes the other.
+	// Three waves do not make three — that is what this pins. The pre-ADR-0084
+	// "single commit after all waves" is the count this used to expect.
 	_, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
 		t.Fatalf("HistorySelectByName: %v", err)
 	}
-	if total != 1 {
-		t.Errorf("state_history snapshots = %d, want 1 (single commit after waves [2,2,1])", total)
+	if total != 2 {
+		t.Errorf("state_history snapshots = %d, want 2 (one capture + the terminal, NOT per-wave over [2,2,1])", total)
 	}
 }
 
@@ -1742,9 +1813,10 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 		}
 	}
 
-	// state NOT committed (§7: partial commit is forbidden).
-	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes - state must NOT be committed on fail in wave 2 (§7)")
+	// Committed before the failure and kept ([ADR-0084]) — the keeper capture ran
+	// at the top of the Passage, wave 2 failed after it.
+	if inc.State["rolled"] != "yes" {
+		t.Errorf("state.rolled = %v, want yes - the capture preceded the wave-2 failure and must survive it (ADR-0084)", inc.State["rolled"])
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("reason = %v, want dispatch_failed", inc.StatusDetails)
@@ -1843,9 +1915,11 @@ func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 		t.Errorf("dispatched = %v, want [host-a.example.com] (cancel stops waves 2,3)", got)
 	}
 
-	// state NOT committed — cancel = abort, same as fail-stop (§7).
-	if inc.State["rolled"] == "yes" {
-		t.Errorf("state.rolled = yes - a cancelled run must NOT commit state")
+	// Cancel is abort, and abort keeps what was already captured ([ADR-0084]) —
+	// the cancellation reaches the barrier between waves, after the keeper
+	// capture at the top of the Passage has committed.
+	if inc.State["rolled"] != "yes" {
+		t.Errorf("state.rolled = %v, want yes - a cancel after the capture does not roll it back (ADR-0084)", inc.State["rolled"])
 	}
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("reason = %v, want dispatch_failed (cancel via barrier -> abort)", inc.StatusDetails)
@@ -2026,12 +2100,23 @@ func writeServiceRepo(t *testing.T, scenarioMain string) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
+	// The schema is not empty because `core.state.<verb>` checks its `field:`
+	// against it at Apply ([ADR-0083] §4): a service declaring `properties: {}`
+	// can run scenarios but cannot capture anything, and a fixture that captures
+	// would fail on the declaration rather than on what it was written to test.
+	// These are the fields this package's scenarios record.
 	write("service.yml", `name: noop
 state_schema_version: 1
 description: noop service
 state_schema:
   type: object
-  properties: {}
+  properties:
+    captured:
+      type: string
+    recorded:
+      type: string
+    provisioned_ip:
+      type: string
 `)
 	write("scenario/create/main.yml", scenarioMain)
 	wt, err := repo.Worktree()

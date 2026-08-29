@@ -314,8 +314,50 @@ test-race:
 # INTEGRATION_PARALLEL caps how many packages - i.e. how many container sets - start
 # at once. Unbounded, the default GOMAXPROCS-wide start swamps the docker daemon and
 # packages fail on the testcontainers reaper rather than on their own assertions.
-INTEGRATION_PARALLEL ?= 4
+# It is 2 because four sweeps say so (NIM-569, NIM-723). Two sweeps at 4 lost
+# one and then three packages during container bring-up; two sweeps at 2 lost
+# none. Concurrency is the variable that moves it.
+#
+# Read the failure text before raising this. The wait strategy names the
+# published port, which invites reading it as a dead route to that port, but the
+# call that actually times out is to the daemon's own API over the unix socket:
+#
+#   check target: retries: 503 address: localhost:32890: get state:
+#   Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.54/containers/<id>/json":
+#   context deadline exceeded
+#
+# The container is up and the port is mapped; what cannot answer within the 60s
+# budget is `GET /containers/<id>/json`. Five hundred retries mean the readiness
+# poll kept asking the daemon and the daemon kept not answering, which is what a
+# saturated daemon looks like and is not what a wedged forward looks like. The
+# investigation on `wip/NIM-569-investigation` read the same string the other way
+# and concluded the daemon was never the bottleneck; that reading is not
+# supported by these four sweeps.
+#
+# The cost is throughput on the tier that runs longest, paid deliberately: a tier
+# that reddens on infrastructure every sweep is one people learn to skim, and a
+# real regression rides in behind that habit.
+INTEGRATION_PARALLEL ?= 2
 SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
+
+# INTEGRATION_TIMEOUT is `go test -timeout` — the point at which a package binary
+# is killed and dumps every goroutine. It used to be left at Go's 10m default,
+# which was already thin: `internal/api` runs 347-439 s on this hardware, and
+# container bring-up is charged to the same clock. NIM-569 made bring-up retry up
+# to 3 times, so the worst legitimate package now costs ~620 s and would trip a
+# 10m ceiling — surfacing as a goroutine dump, which reads as a hang rather than
+# as what it is. Stated explicitly at 15m instead of raised silently: high enough
+# that only a genuine hang reaches it, low enough that a hang still surfaces
+# inside one sitting.
+#
+# It is a per-BINARY clock, not a budget for the sweep: `go test` passes it to
+# every package, so up to INTEGRATION_PARALLEL of them run their own 15m at once.
+# The two knobs are therefore coupled, and only one of them is calibrated: those
+# 347-439 s were measured at INTEGRATION_PARALLEL=4, contending for one docker
+# daemon. Raise the parallelism on a bigger box and the packages slow down while
+# this ceiling does not move — which is how a correct-but-slow package comes to
+# be killed and reported as a hang. Move them together.
+INTEGRATION_TIMEOUT ?= 15m
 
 # PKG narrows the run to one package while keeping every other flag identical:
 #
@@ -375,9 +417,9 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 			echo "skip $$m (no package under $(PKG) carries integration-tagged tests)"; \
 			continue; \
 		fi; \
-		echo "go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
+		echo "go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
 		if ! (cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
-			go test -tags=integration -race -count=1 -p $(INTEGRATION_PARALLEL) $$pkgs 2>&1 | tee -a "$$log"); then \
+			go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) $$pkgs 2>&1 | tee -a "$$log"); then \
 			rc=1; \
 		fi; \
 	done; \

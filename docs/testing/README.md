@@ -128,7 +128,9 @@ smoke on a real `soul` binary; usually nightly, but run it before release.
 
 One-time flake at container start (testcontainers infra — for example a timeout
 bringing Vault up) is not a code regression: rerun the affected package in
-isolation rather than rolling the change back.
+isolation rather than rolling the change back. Since NIM-569 the bring-up itself
+retries first, so a sweep that still reports an INFRA failure has already burned
+three containers on it — see [below](#one-red-package-per-sweep-a-different-one-every-time).
 
 **You no longer have to work out which one you got.** When L1 fails, the target
 runs [`scripts/classify-l1-failure.py`](../../scripts/classify-l1-failure.py) over
@@ -168,6 +170,136 @@ every data race in the code those suites exercise. A whole-tree sweep that lost
 the flag fails on `TestIntegrationSuiteRunsUnderRace` rather than passing
 quietly; declaring the weaker run is possible and explicit
 (`SOUL_STACK_INTEGRATION_SKIP_RACE=1`).
+
+### One red package per sweep, a different one every time
+
+For months `make test-integration` failed **exactly one** of its ~47 packages per
+sweep and a different one each time (NIM-569). That shape is worth recognising
+because it rules out the obvious readings by itself: a package that fails on its
+own contents fails on every sweep, and 46 of 47 passing rules out "the daemon
+cannot keep up".
+
+What it actually was, measured rather than assumed — and note that the first
+version of this section got it wrong, which is worth keeping because of *how*:
+
+- the failing sweeps carry this line, quoted here **to the end**:
+
+  ```
+  check target: retries: 503 address: localhost:32890: get state:
+  Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.54/containers/<id>/json":
+  context deadline exceeded
+  ```
+
+- four sweeps on one host: at `INTEGRATION_PARALLEL=4` they lost **one** and then
+  **three** packages during bring-up; at `2` they lost **none**.
+
+The port is in the message, and that is the trap. `address: localhost:32890` is
+the wait strategy naming what it is polling *for*; it is not the address that
+failed. The call that times out is `GET /containers/<id>/json` on the docker
+socket — the **daemon's own API**. The container is up and the port is mapped;
+what cannot answer inside the 60 s budget is the daemon, and ~500 retries mean
+the poll asked it for a minute and got nothing back.
+
+The earlier reading quoted that line with the middle elided — `... ` in place of
+`get state: Get ".../containers/<id>/json"`, which is exactly the segment that
+names the daemon — and concluded the opposite: a wedged host route to an
+already-published port, with concurrency ruled out. The four sweeps above refute
+that. **The elision removed the evidence**, and everything downstream of it,
+including a staged change lowering nothing, followed from the shortened quote.
+
+So the primary control is **`INTEGRATION_PARALLEL`**, now `2`, which keeps the
+daemon under its knee. A longer readiness timeout is still the wrong lever: it
+waits out a daemon that is saturated rather than slow, and makes real failures
+slower to arrive. `keeper/internal/integrationenv/start.go` is the second line
+for the residual case, wrapping every bring-up in the tree:
+
+```go
+ctr, err := integrationenv.Start(ctx, "postgres", func(ctx context.Context) (*tcpostgres.PostgresContainer, error) {
+	return tcpostgres.Run(ctx, "postgres:16-alpine", ...)
+})
+```
+
+`integrationenv.SetupContext()` replaces the hand-copied
+`context.WithTimeout(context.Background(), 90*time.Second)` each `TestMain` used
+to carry, and sizes the budget for all attempts; `SetupContextFor(d)` is for a
+suite whose wait strategy legitimately needs longer per attempt (the Redis
+cluster forming quorum, a stand built on the spot).
+
+Three properties are load-bearing, and each of them is a way this could have been
+built wrong:
+
+- **The retry is blind to why an attempt failed.** Deciding "infra, so retry"
+  from the error text is the same string-matching
+  [classify-l1-failure.py](../../scripts/classify-l1-failure.py) already has to
+  maintain, and being wrong *here* silences a real failure instead of merely
+  mislabelling one. A deterministic failure — a missing image, a bad request —
+  still fails, three times over, a minute later.
+- **It does not make red mean less.** A retry happens during setup, before the
+  suite's first assertion, so no verdict is ever overwritten and no test is rerun
+  on a whim (the thing NIM-393 exists to prevent). Every retry is logged, and the
+  final error joins every attempt's error so the classifier still sees the
+  container-layer markers it keys on.
+- **Nothing chose to retry locally.** A per-package retry is a per-package
+  decision, and a package that quietly opted out would reproduce NIM-569 while
+  looking fixed. `TestContainersAreBroughtUpThroughStart`
+  ([start_scope_test.go](../../keeper/internal/integrationenv/start_scope_test.go))
+  parses every `integration`-tagged file in the tree and fails on any
+  `testcontainers` bring-up that is not lexically inside a closure passed to
+  `Start`. It is untagged on purpose, so `make check` runs it without docker, and
+  it fails when it scans zero files — an empty scan is not a pass (NIM-238).
+  The guard is itself tested (`start_scope_selftest_test.go`), which is not
+  ceremony: its first version derived an unaliased import's identifier from the
+  last segment of the path, so `github.com/testcontainers/testcontainers-go`
+  resolved to `testcontainers-go` while every call site writes `testcontainers.`
+  — it covered **zero** of the seven generic bring-ups and looked green doing it.
+
+Two fixtures switch the retry off with `integrationenv.WithAttempts(1)`, and both
+say why where they are used. The Redis cluster pins host ports 7000-7005 because
+grokzen announces `127.0.0.1:<contport>` and the client dials what it is told, so
+a replacement container asks for the *same* forward and terminate-then-rebind can
+add `port is already allocated` to a failure that was already there. The L2 stand
+publishes no port at all — both its wait strategies are `ForExec` — so the wedge
+cannot happen to it, and retrying would only divide a context its caller sized
+for a soul build, an image build and several applies. Neither is an exemption
+from the convention: the call still goes through `Start`, so the scope guard
+still sees it.
+
+`make test-integration` now also passes `-timeout $(INTEGRATION_TIMEOUT)`, 15m.
+The retry spends wall clock on the same budget the tests do, and Go's silent 10m
+default was already thin for `internal/api` at 347-439 s — a package that tripped
+it would print a goroutine dump, which reads as a hang rather than as a slow
+suite. Stated rather than raised silently, so the ceiling is a number someone
+chose. It is a per-**binary** clock, so `INTEGRATION_PARALLEL` of them run at
+once and the two knobs are coupled: those 347-439 s were measured at `-p 4`, and
+raising the parallelism slows the packages down without moving the ceiling.
+
+The classifier learned three things in the same move, each of which had been
+quietly costing a verdict:
+
+- **`TIMEOUT` is its own verdict.** A killed binary names no failing test and
+  prints no error string — a goroutine dump is function names and file paths —
+  so it used to land in `UNCLEAR` reading "no test reported a failure", under
+  several hundred lines of stack. It now says what happened and lists what was
+  still running when the alarm fired.
+- **The retry's own log lines are not evidence.** `Start` logs a recovered
+  attempt, and that line carries the testcontainers error verbatim into the
+  package's output — `check target: retries:` and `context deadline exceeded`,
+  both of which the classifier keys on. A package that recovered from a blip and
+  *then* failed an assertion was therefore reported as the container layer. The
+  lines are dropped before matching; a bring-up that genuinely failed is
+  unaffected, because the suite declares that in its own words.
+- **`--- FAIL:` is matched per line.** The pattern was compiled without
+  `re.MULTILINE`, so it only ever matched when the line happened to be the first
+  thing after the previous package's `ok` — and under `-p 4` it usually was not.
+  The visible symptom was a package with nineteen failing tests reported as
+  `UNCLEAR`, "no test reported a failure": `REGRESSION`, the one verdict that
+  says *fix the code*, was unreachable for most real logs.
+
+`SOUL_STACK_INTEGRATION_START_ATTEMPTS=1` turns the retry off when you are
+debugging a bring-up and want the first failure verbatim. Three is the default
+because the wedge is rare (~1 start in 50 under a full sweep's load): it takes
+the odds of losing a sweep to it from roughly one in two to one in a few
+thousand, and a fourth attempt buys noise.
 
 ### Where `-race` runs and where it does not
 
