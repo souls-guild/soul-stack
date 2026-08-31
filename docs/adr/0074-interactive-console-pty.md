@@ -18,7 +18,7 @@
 
     **Session ids are per-plane and never cross.** The browser mints its own id so it can correlate `open` with `opened` without a round trip (unique within one socket); Keeper mints a ULID for the Soul side, where uniqueness must hold per EventStream, or two operators would collide on "pane-1" against the same host. Translating between them is the session manager's job.
 
-  - **(c) The right is `soul.console`, and it is strictly stronger than `errand.run`.** Registered in the closed catalog (`keeper/internal/rbac/catalog.go`, [rbac.md §Console](../keeper/rbac.md)). The two rights are **independent in both directions**: `errand.run` never implies `soul.console` (a module allow-list says nothing about an arbitrary shell) and `soul.console` never implies `errand.run`. Selectors are the existing `host=<sid>` / `coven=<label>`; bare is unrestricted.
+  - **(c) The right is `soul.console`, and it is strictly stronger than `errand.run`.** Registered in the closed catalog (`keeper/internal/rbac/catalog.go`, [rbac.md §Console](../keeper/rbac.md)). The two rights are **independent in both directions**: `errand.run` never implies `soul.console` (a module allow-list says nothing about an arbitrary shell) and `soul.console` never implies `errand.run`. Selectors are the existing `host=<sid>` / `coven=<coven-tag>`; bare is unrestricted.
 
     **No new selector keys.** Per-host consoles reuse `host=`, per-environment consoles reuse `coven=`; RBAC selector keys stay `{service, coven, incarnation, host}` and any narrowing beyond them goes through the existing Purview dimensions ([ADR-047 §S4](0047-purview.md)) — the same discipline the Voyage command path was held to.
 

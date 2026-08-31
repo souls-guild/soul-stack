@@ -59,7 +59,7 @@ For Soul with `transport: ssh` tool returns `validation-failed` error (ssh host 
 
 Bulk assignment of Coven labels: add ONE label (`mode: append`) / remove (`mode: remove`) or REPLACE (`mode: replace`) the entire set of Coven labels on hosts under `selector` ∩ coven-scope operator. Coven - cold PG tag (clean UPDATE `souls`). Permission: `soul.coven-assign`. Endpoint: [`POST /v1/souls/coven`](../operator-api/souls.md). Async: no.
 
-**Scope-intersection (security).** A double check identical to REST is applied: (a) target hosts ⊆ coven-scope statement (predicate `coven && ARRAY[scope]`); (b) assigned label ∈ scope (permission gate `RBAC.Check` with selector `coven=<label>` + service check). For `replace`, gate (b) goes over EVERY set label: a statement with scope `dev` cannot override `prod` through `labels: [dev, prod]` (`forbidden` fails). An operator with `soul.coven-assign on coven=dev` cannot tag/unlabel `prod` (failure `forbidden`) and will not affect hosts outside of `dev`. Bare/`*`-permission removes both restrictions. Without this check, MCP would become a bypass of REST protection (privilege-escalation), so the MCP path performs it on the same service functions as REST.
+**Scope-intersection (security).** A double check identical to REST is applied: (a) target hosts ⊆ coven-scope statement (predicate `coven && ARRAY[scope]`); (b) assigned label ∈ scope (permission gate `RBAC.Check` with selector `coven=<coven-tag>` + service check). For `replace`, gate (b) goes over EVERY set label: a statement with scope `dev` cannot override `prod` through `labels: [dev, prod]` (`forbidden` fails). An operator with `soul.coven-assign on coven=dev` cannot tag/unlabel `prod` (failure `forbidden`) and will not affect hosts outside of `dev`. Bare/`*`-permission removes both restrictions. Without this check, MCP would become a bypass of REST protection (privilege-escalation), so the MCP path performs it on the same service functions as REST.
 
 **Input (XOR `label` ↔ `labels` by mode):**
 
@@ -148,7 +148,7 @@ This is the only destructive action on the resource, and the only one an agent c
 
 #### `keeper.soul.ssh-target.update`
 
-Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../../adr/0032-push-orchestrator.md) amendment 2026-05-26, S7-1). Source-of-truth for `PGFallbackTargetResolver`; `keeper.yml::push.targets[]` - legacy fallback under the `push.allow_legacy_push_targets` flag. Permission: `soul.ssh-target-update`; selectors `host=<sid>` and `coven=<label>` (the host's own labels, resolved before the tool body runs - [rbac.md](../rbac.md)). Endpoint: [`PUT /v1/souls/{sid}/ssh-target`](../operator-api/souls.md). Async: no.
+Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../../adr/0032-push-orchestrator.md) amendment 2026-05-26, S7-1). Source-of-truth for `PGFallbackTargetResolver`; `keeper.yml::push.targets[]` - legacy fallback under the `push.allow_legacy_push_targets` flag. Permission: `soul.ssh-target-update`; selectors `host=<sid>` and `coven=<coven-tag>` (the host's own labels, resolved before the tool body runs - [rbac.md](../rbac.md)). Endpoint: [`PUT /v1/souls/{sid}/ssh-target`](../operator-api/souls.md). Async: no.
 
 3-segment MCP-tool `keeper.soul.ssh-target.update` ↔ 2-segment permission `soul.ssh-target-update` (permission grammar is exactly `<resource>.<action>`; parallel `keeper.sigil.key.introduce` ↔ `sigil.key-introduce`).
 
