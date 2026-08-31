@@ -82,6 +82,57 @@ OpenAPI, MCP, фоновый Reaper), `soul` (агент-демон на упр�
 слой (presence, lease, выбор лидера) — в Redis. Обязательный инфраструктурный контур —
 **Postgres + Redis + Vault** ([ADR-053](../adr/0053-dependency-tiers.md)).
 
+## Установка
+
+Каждый тег публикует подписанные артефакты на
+[страницу релизов](https://github.com/souls-guild/soul-stack/releases); образы
+контейнеров уходят в
+[Packages](https://github.com/orgs/souls-guild/packages?repo_name=soul-stack). Всё
+собирается и подписывается в CI — руками здесь ничего не собрано. В примерах ниже
+зафиксирована `0.1.0-beta.1`; актуальный тег смотрите в релизах.
+
+**Образы контейнеров** — `keeper` и `soul`, multi-arch (`linux/amd64` + `linux/arm64`),
+distroless. Образы тегируются только версией, тега `latest` нет:
+
+```sh
+docker pull ghcr.io/souls-guild/soul-stack/keeper:0.1.0-beta.1
+docker pull ghcr.io/souls-guild/soul-stack/soul:0.1.0-beta.1
+```
+
+**Нативные пакеты** — `.deb`, `.rpm` и `.apk`, по одному на бинарь, `amd64` и `arm64`.
+`keeper` и `soul` несут systemd-юнит, env-файл и пример конфига, поэтому пакет кладёт
+готовый к запуску демон:
+
+```sh
+curl -fsSLO https://github.com/souls-guild/soul-stack/releases/download/v0.1.0-beta.1/soul-stack-keeper_0.1.0-beta.1_linux_amd64.deb
+sudo dpkg -i soul-stack-keeper_0.1.0-beta.1_linux_amd64.deb
+```
+
+Вместо `keeper` подставьте `soul`, `soul-lint`, `soulctl`, `soul-trial` или
+`soul-legion`.
+
+**Архивы** — `soul-stack_<версия>_<ос>_<арх>.tar.gz` для Linux и macOS, `.zip` для
+Windows. Linux-бандл несёт все шесть бинарей; macOS и Windows — только четыре CLI,
+поскольку `keeper` и `soul` — это Linux-демоны.
+
+**Проверьте перед запуском.** Артефакты подписаны keyless-[cosign](https://docs.sigstore.dev/)
+(GitHub OIDC, без долгоживущего ключа), а к каждому архиву приложен CycloneDX SBOM
+(`*.cdx.json`):
+
+```sh
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/souls-guild/soul-stack/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --ignore-missing -c checksums.txt
+
+cosign verify ghcr.io/souls-guild/soul-stack/keeper:0.1.0-beta.1 \
+  --certificate-identity-regexp '^https://github\.com/souls-guild/soul-stack/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Сборка из исходников — [docs/getting-started.md](../getting-started.md).
+
 ## С чего начать
 
 - **[docs/install.md](../install.md)** — установка released-бинарей: apt, Homebrew,

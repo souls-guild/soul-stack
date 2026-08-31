@@ -17,10 +17,10 @@ All commands are from the root of the repository.
 
 ## Step 0. Get sources
 
-There are no binary releases in beta distribution - Soul Stack is compiled from source code. Access to the code at this stage is **by invite to a private GitHub repository** (how to get an invite - [SUPPORT.md](../SUPPORT.md)). After accepting the invite:
+The repository is public, and every tag publishes signed binaries, native packages and container images - see [README → Install](../README.md#install) if all you want is to run Soul Stack. This quickstart still starts from a source checkout, because it drives the `dev/` targets (`make dev-up`, `make dev-provision`, `make dev-smoke`) that only exist in the repo:
 
 ```sh
-git clone git@github.com:<org>/soul-stack.git
+git clone https://github.com/souls-guild/soul-stack.git
 cd soul-stack
 ```
 
