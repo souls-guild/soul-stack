@@ -231,3 +231,12 @@ The sections "Keeper Requirements" and "Souls Requirements" in [docs/requirement
 
 - Repository content is **English** (see the "Repository language" section above) — code, comments, docs, tests, ADRs; no Cyrillic in sources.
 - Conversational replies to the user follow the user's preferred language.
+
+## Code intelligence
+
+Integration code here is behind `//go:build integration`, so it is outside the
+default build and invisible to a semantic answer. An answer carrying `unchecked`
+and `suggested_build_tags` is hiding it: re-ask with `build_tags: ["integration"]`.
+On `keeper/internal/api.NewServer` that is 1 caller against 3 — the two missing
+ones are in `integration_test.go`, and a signature change made against the short
+list compiles here and fails CI's integration lane.
