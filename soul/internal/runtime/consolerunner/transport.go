@@ -77,6 +77,12 @@ type sessionTransport struct {
 	ready chan struct{}
 	alive bool
 	once  sync.Once
+
+	// loopDone is closed by [Runner.consoleStreamLoop] when the RPC has ended.
+	// It is what [sessionTransport.close] waits on, and it must be closed by the
+	// reader rather than polled here: Recv is not safe for concurrent use, so
+	// only the goroutine already in it can observe the end.
+	loopDone chan struct{}
 }
 
 // dialConsoleStream opens a stream for one session and announces which session
@@ -103,6 +109,7 @@ func (r *Runner) dialConsoleStream(id string) *sessionTransport {
 		fallback: r.sink,
 		logger:   r.logger,
 		ready:    make(chan struct{}),
+		loopDone: make(chan struct{}),
 	}
 
 	if err := stream.Send(&keeperv1.ConsoleFromSoul{
@@ -168,9 +175,51 @@ func (t *sessionTransport) cut() {
 	t.cancel()
 }
 
+// closeDrainBudget bounds the wait for the peer to end the RPC after the
+// half-close. It is a backstop, not a latency: a peer that is already gone has
+// broken the reader's Recv long before this, so the wait is normally over in the
+// time of one round trip. Kept under the runner's teardown budget
+// (4×KillGrace + 1s in [Runner.CloseAll]) so draining can never outlive it.
+const closeDrainBudget = 2 * time.Second
+
 // close ends the stream politely once the session's terminal frame is out.
+//
+// CloseSend then cancel — the obvious pair — LOSES that terminal frame, and this
+// is the whole of NIM-387. Send only hands a frame to the transport; it does not
+// mean the peer's application has read it. Cancelling immediately afterwards
+// writes RST_STREAM behind it, and gRPC then resolves the peer's Recv as a race
+// between the buffered frame and the cancellation. Measured against a peer whose
+// reader was descheduled by 5ms, the cancellation won 21 times out of 40 — and
+// the loss is INVISIBLE from this side, because Send returned nil every time.
+// That is why the ConsoleExit-could-not-be-delivered Warn never fired for it
+// (NIM-397 raised that log for a genuinely broken stream, which this is not).
+//
+// So the half-close is followed by waiting for the peer to finish the RPC. Only
+// then is cancelling free of consequence — it is releasing a context whose
+// stream has already ended, rather than pre-empting one still in flight.
 func (t *sessionTransport) close() {
 	_ = t.stream.CloseSend()
+
+	// Only a stream that actually carried this session's frames has anything to
+	// drain. One that never settled, or settled onto the fallback, sent its
+	// terminal event down the EventStream instead.
+	select {
+	case <-t.ready:
+		if !t.alive {
+			t.cancel()
+			return
+		}
+	default:
+		t.cancel()
+		return
+	}
+
+	select {
+	case <-t.loopDone:
+	case <-time.After(closeDrainBudget):
+		t.logger.Warn("console: peer did not end the console stream within the drain budget",
+			slog.String("session_id", t.id))
+	}
 	t.cancel()
 }
 
@@ -182,6 +231,9 @@ func (t *sessionTransport) close() {
 // Started only after the session is registered, so a stream that breaks
 // immediately still finds a session to kill.
 func (r *Runner) consoleStreamLoop(t *sessionTransport) {
+	// The end of this loop IS the end of the RPC, and [sessionTransport.close]
+	// waits for it before cancelling.
+	defer close(t.loopDone)
 	for {
 		msg, err := t.stream.Recv()
 		if err != nil {

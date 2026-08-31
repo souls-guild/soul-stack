@@ -2,6 +2,7 @@ package consolerunner
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -32,6 +33,12 @@ type stubKeeper struct {
 
 	// down is handed to the handler so the test can push keystrokes.
 	down chan *keeperv1.ConsoleToSoul
+
+	// readDelay stalls the handler before each Recv, standing in for a peer whose
+	// reader goroutine is descheduled — a loaded CI runner, in other words. It is
+	// what makes the NIM-387 race observable: with the reader always already
+	// parked in Recv, a frame cancelled out from under it still gets through.
+	readDelay time.Duration
 
 	mu       sync.Mutex
 	attached string
@@ -75,6 +82,9 @@ func (s *stubKeeper) ConsoleStream(stream grpclib.BidiStreamingServer[keeperv1.C
 	}()
 
 	for {
+		if s.readDelay > 0 {
+			time.Sleep(s.readDelay)
+		}
 		msg, err := stream.Recv()
 		if err != nil {
 			<-writerDone
@@ -153,12 +163,17 @@ func (d liveDialer) ConsoleStream(ctx context.Context) (ConsoleStreamClient, err
 
 func startStubKeeper(t *testing.T) (*stubKeeper, Dialer) {
 	t.Helper()
+	return startStubKeeperWithReadDelay(t, 0)
+}
+
+func startStubKeeperWithReadDelay(t *testing.T, readDelay time.Duration) (*stubKeeper, Dialer) {
+	t.Helper()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	stub := &stubKeeper{down: make(chan *keeperv1.ConsoleToSoul, 16)}
+	stub := &stubKeeper{down: make(chan *keeperv1.ConsoleToSoul, 16), readDelay: readDelay}
 	srv := grpclib.NewServer()
 	keeperv1.RegisterKeeperServer(srv, stub)
 	go func() { _ = srv.Serve(ln) }()
@@ -224,6 +239,47 @@ func TestLiveGRPC_ConsoleRoundTripOverItsOwnStream(t *testing.T) {
 
 	if n := len(sink.snapshot()); n != 0 {
 		t.Fatalf("EventStream sink saw %d messages over a live session", n)
+	}
+}
+
+// The terminal event must survive the session's OWN teardown, even when the peer
+// is slow to pick frames up (NIM-387).
+//
+// Cancelling the RPC is the last act of a console session. Doing it straight
+// after the half-close raced the ConsoleExit already handed to the transport,
+// and about half the time the cancellation won — invisibly, because Send had
+// returned nil, so no "could not be delivered" Warn was ever emitted. That is the
+// flake this package chased: NIM-349 made the failure readable, NIM-397 explained
+// a genuinely broken stream, and neither covered a stream that was fine until the
+// Soul pre-empted it.
+//
+// The delay on the peer's reader is the whole fixture: with the reader always
+// already parked in Recv, a frame cancelled out from under it still gets through,
+// which is why this never reproduced on an idle machine in 105 runs. Ten sessions
+// are asserted rather than one because the loss is probabilistic — at the
+// measured rate one session would catch a regression about half the time, ten
+// catch it with probability ~0.999. `/bin/true` rather than a shell: the subject
+// here is the transport teardown, and a session that ends on its own reaches it
+// without a pty round trip.
+func TestLiveGRPC_TerminalSurvivesTeardownWhenThePeerIsSlow(t *testing.T) {
+	prog := requireProgram(t, "/bin/true")
+	stub, dialer := startStubKeeperWithReadDelay(t, 25*time.Millisecond)
+
+	sink := &strictSink{t: t}
+	r := New(sink, Limits{}, testLogger(t), nil, WithDialer(dialer))
+	defer r.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
+
+	const sessions = 10
+	for i := 0; i < sessions; i++ {
+		id := fmt.Sprintf("01TEARDOWN%016d", i)
+		r.Open(&keeperv1.ConsoleOpen{SessionId: id, Shell: prog})
+		waitFor(t, 10*time.Second, "ConsoleExit for session "+id, func() bool {
+			return stub.exit(id) != nil
+		})
+	}
+
+	if n := len(sink.snapshot()); n != 0 {
+		t.Fatalf("EventStream sink saw %d messages over live sessions", n)
 	}
 }
 
