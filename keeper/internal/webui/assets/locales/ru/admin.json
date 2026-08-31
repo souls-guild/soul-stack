@@ -318,7 +318,7 @@
   "rbacDerivationTitle": "Производится от",
   "rbacDerivedFrom": "производная от {{name}}",
   "rbacDescription": "Описание",
-  "rbacDescriptionPlaceholder": "Управление Soul-ами, чтение состояния флота",
+  "rbacDescriptionPlaceholder": "Управление Souls, чтение их состояния",
   "rbacEditBuiltinWarn": "Это builtin-роль — сервер вернёт 409 role-builtin. Редактирование заблокировано.",
   "rbacEditReplaceProse": "Replace-семантика: отмеченный набор полностью заменяет существующий. Отметьте нужные permissions в каталоге ниже.",
   "rbacEffectiveCountTitle": "записей хранится → сколько роль реально выдаёт после применения родителя",
