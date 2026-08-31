@@ -169,7 +169,7 @@ All steps are re-applicable:
 
 ```bash
 ./soul-lint/bin/soul-lint validate-service  examples/service/monitoring/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/monitoring/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/monitoring/scenario/create/main.yml --service-name monitoring
 ```
 
 Both give exit 0 and `OK: <path>`.

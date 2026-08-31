@@ -3,18 +3,21 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// writeFencedService lays out a minimal service tree — service.yml (the only
-// place the service NAME is written down), the scenario, and any extra files an
-// `include:` resolves against. Returns the path to main.yml.
+// writeFencedService lays out a minimal service tree — service.yml, the scenario,
+// and any extra files an `include:` resolves against. Returns the path to main.yml.
+// The manifest states no name (NIM-726): the fence's name comes from the caller,
+// via `--service-name`, so these trees are laid out exactly as a real one is.
 func writeFencedService(t *testing.T, mainYAML string, extra map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte("name: redis\nstate_schema_version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte("state_schema_version: 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	scnDir := filepath.Join(root, "scenario", "deploy")
@@ -77,7 +80,7 @@ tasks:
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
-			diags := runJSON(t, writeFencedService(t, body, nil))
+			diags := runJSONAs(t, writeFencedService(t, body, nil), "redis")
 			if !hasCode(diags, config.VaultOwnNamespaceCode) {
 				t.Fatalf("no %s in %+v", config.VaultOwnNamespaceCode, diags)
 			}
@@ -100,7 +103,7 @@ tasks:
     path: /etc/redis/users.acl
     content: "${ vault('secret/redis/prod/redis_users/app#password') }"
 `
-	diags := runJSON(t, writeFencedService(t, main, map[string]string{"deploy/users.yml": included}))
+	diags := runJSONAs(t, writeFencedService(t, main, map[string]string{"deploy/users.yml": included}), "redis")
 	if !hasCode(diags, config.VaultOwnNamespaceCode) {
 		t.Fatalf("no %s in %+v", config.VaultOwnNamespaceCode, diags)
 	}
@@ -108,24 +111,78 @@ tasks:
 
 // Outside the prefix nothing changes: `vault()` still reads a shared CA.
 func TestLint_CrossNamespaceVaultSurvives(t *testing.T) {
-	diags := runJSON(t, writeFencedService(t, `name: deploy
+	diags := runJSONAs(t, writeFencedService(t, `name: deploy
 tasks:
   - name: Ship the CA
     module: core.file.present
     params:
       path: /etc/redis/ca.pem
       content: "${ vault('secret/services/shared/tls#ca') }"
-`, nil))
+`, nil), "redis")
 	if hasCode(diags, config.VaultOwnNamespaceCode) {
 		t.Fatalf("the fence fired on a cross-namespace read: %+v", diags)
 	}
 }
 
-// Without a service.yml there is no name to key the fence on. Standalone linting
-// stays silent rather than inventing one — the same choice
-// scenarioCompatFloorDiags makes, and the reason the keeper keeps its own copy of
-// the fence where the manifest is never absent.
-func TestLint_OwnNamespaceVaultSilentWithoutServiceManifest(t *testing.T) {
+// ★ NIM-726, the guard this ticket exists for. Without a service name the fence
+// CANNOT run — and it must SAY SO. It used to return nil: `ScanOwnNamespaceVault`
+// opened with `if service == "" { return nil }`, so a scenario writing into its own
+// Vault namespace linted `OK`, exit 0, and was refused at render. Removing the
+// manifest's `name:` without this warning would have turned that silent fail-open
+// from an accident into the permanent shape of the tool.
+//
+// This test must FAIL on the old behaviour: delete the warning branch in
+// scenarioVaultNamespaceDiags and it goes red, because the body below is a real
+// fence violation that nothing else reports.
+func TestLint_OwnNamespaceFenceUncheckedWithoutServiceName(t *testing.T) {
+	body := `name: deploy
+tasks:
+  - name: Write the ACL
+    module: core.file.present
+    params:
+      path: /etc/redis/users.acl
+      content: "${ vault('secret/redis/prod/redis_users/app#password') }"
+`
+	main := writeFencedService(t, body, nil)
+
+	diags := runJSONAs(t, main, "")
+	if !hasCode(diags, FenceUncheckedCode) {
+		t.Fatalf("no %s when --service-name is absent: %+v", FenceUncheckedCode, diags)
+	}
+	// A warning, not an error: linting a scenario standalone stays possible, and the
+	// exit code stays 0. Refusing here would only teach operators to drop the linter.
+	for _, d := range diags {
+		if d.Code != FenceUncheckedCode {
+			continue
+		}
+		if d.Level != diag.LevelWarning {
+			t.Fatalf("%s level = %s, want warning", FenceUncheckedCode, d.Level)
+		}
+		if !strings.Contains(d.Hint, "--service-name") {
+			t.Fatalf("hint %q must name the flag that fixes it", d.Hint)
+		}
+	}
+	// And it is genuinely UNCHECKED — the real violation in the body is not reported,
+	// which is precisely why the warning has to exist.
+	if hasCode(diags, config.VaultOwnNamespaceCode) {
+		t.Fatalf("the fence reported a finding it could not have computed: %+v", diags)
+	}
+
+	// Same tree, same body, name supplied: the violation appears and the warning
+	// does not. The two halves together are what make the warning honest.
+	withName := runJSONAs(t, main, "redis")
+	if !hasCode(withName, config.VaultOwnNamespaceCode) {
+		t.Fatalf("--service-name given but the fence did not fire: %+v", withName)
+	}
+	if hasCode(withName, FenceUncheckedCode) {
+		t.Fatalf("%s survived a stated service name: %+v", FenceUncheckedCode, withName)
+	}
+}
+
+// A service tree with no service.yml at all is the standalone-linting case, and it
+// behaves identically: the name comes from the flag, never from the tree, so the
+// absence of a manifest changes nothing about the fence.
+func TestLint_OwnNamespaceFenceIgnoresTheManifest(t *testing.T) {
 	root := t.TempDir()
 	scnDir := filepath.Join(root, "scenario", "deploy")
 	if err := os.MkdirAll(scnDir, 0o755); err != nil {
@@ -142,7 +199,7 @@ tasks:
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if diags := runJSON(t, mainPath); hasCode(diags, config.VaultOwnNamespaceCode) {
-		t.Fatalf("the fence fired with no service.yml to name the service: %+v", diags)
+	if diags := runJSONAs(t, mainPath, "redis"); !hasCode(diags, config.VaultOwnNamespaceCode) {
+		t.Fatalf("the fence needs no service.yml to run: %+v", diags)
 	}
 }

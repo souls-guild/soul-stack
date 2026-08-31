@@ -1,4 +1,3 @@
-name: example-cloud-bootstrap
 state_schema_version: 1
 description: >-
   Minimal demo service for ADR-017(h) amendment 2026-05-27 (B-flat):

@@ -1,4 +1,3 @@
-name: staged-probe-live
 state_schema_version: 1
 description: >-
   L3b staged-render capstone (ADR-056 §S5): a real soul fleet runs a probe

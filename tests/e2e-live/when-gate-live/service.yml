@@ -1,4 +1,3 @@
-name: when-gate-live
 state_schema_version: 1
 description: >-
   FC-5 L3b when-gating capstone: a real soul fleet runs a probe

@@ -1081,15 +1081,16 @@ func notRegisteredMessage(op, service, examplePath string, registered map[string
 	if len(registered) == 0 {
 		name := service
 		if name == "" {
-			name = "<the name: from the example's service.yml>"
+			name = "<the name you register the example under>"
 		}
 		fmt.Fprintf(&b, "This Stack registered NOTHING — ADR-029 requires the service to exist before\n"+
 			"an incarnation can be created on it. Add, before the first CreateIncarnation:\n"+
 			"    stack.RegisterService(t, %q, %q)\n", name, examplePath)
 	} else {
 		fmt.Fprintf(&b, "This Stack registered %v, so the name does not match what the test asked for.\n"+
-			"The registered name must equal the `name:` in the example's service.yml, and the\n"+
-			"service ref passed to CreateIncarnation/RunScenario must use that same name.\n",
+			"A service is named at registration and nowhere else (NIM-726 took `name:` out of\n"+
+			"service.yml), so the name RegisterService was given is the only one there is, and\n"+
+			"the service ref passed to CreateIncarnation/RunScenario must use that same name.\n",
 			slices.Sorted(maps.Keys(registered)))
 	}
 

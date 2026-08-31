@@ -198,7 +198,6 @@ func TestResolveForSID_MergesManifestAndServiceVars(t *testing.T) {
 	}
 
 	manifest := &config.ServiceManifest{
-		Name: "web",
 		Telemetry: &config.TelemetryConfig{
 			Interval:   telStrPtr("45s"),
 			Collectors: []string{"cpu"},
@@ -262,7 +261,7 @@ func TestResolveForSID_NoMembershipNoConfig(t *testing.T) {
 func TestResolveForSID_CovenTagIsNotMembership(t *testing.T) {
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{
 		LocalDir: t.TempDir(),
-		Manifest: &config.ServiceManifest{Name: "web", Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s")}},
+		Manifest: &config.ServiceManifest{Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s")}},
 	}}
 	db := &telemetryFakeDB{
 		soulCoven:      []string{"web-app"},
@@ -310,7 +309,6 @@ func TestResolveForSID_InheritsIncarnationCovenIntoServiceVars(t *testing.T) {
 	}
 
 	manifest := &config.ServiceManifest{
-		Name:      "web",
 		Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s"), Collectors: []string{"cpu"}},
 	}
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
@@ -361,7 +359,6 @@ func TestResolveForSID_PassesIncarnationTraitsToTheStack(t *testing.T) {
 	}
 
 	manifest := &config.ServiceManifest{
-		Name:      "web",
 		Telemetry: &config.TelemetryConfig{Interval: telStrPtr("90s"), Collectors: []string{"cpu"}},
 	}
 	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}

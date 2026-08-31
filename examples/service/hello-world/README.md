@@ -49,7 +49,7 @@ No `migrations/` directory: `state_schema_version = 1`, no migrations needed
 
 ```bash
 ./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml --service-name hello-world
 ```
 
 Both should give exit 0 and `OK: <path>`.

@@ -18,8 +18,11 @@ import "github.com/souls-guild/soul-stack/shared/config"
 
 // ServiceRef — coordinates of a Service repository to load.
 //
-// Name — kebab-case service name (matches `service.yml → name`), used as the
-// first segment of the cache path. Git — repository URL (`file://`/`https://`/
+// Name — the name the service is REGISTERED under: the `service_registry` primary key
+// ([ADR-029](docs/adr/0029-service-registry.md)), used as the first segment of the cache
+// path. The manifest states no name to match it against and has not since NIM-726 — this
+// IS the authority, and the own-namespace Vault fence keys on it
+// ([ADR-0083] §7, LoadScenarioManifestResolved). Git — repository URL (`file://`/`https://`/
 // `ssh://`). Ref — git tag or branch (ADR-007); an empty Ref is treated as
 // the repository's default `HEAD`.
 type ServiceRef struct {

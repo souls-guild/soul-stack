@@ -1,4 +1,3 @@
-name: staged-failover
 state_schema_version: 1
 description: |
   Staged-render (ADR-056) 2-passage e2e fixture: probe role → action on master.

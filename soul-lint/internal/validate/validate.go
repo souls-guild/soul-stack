@@ -57,6 +57,14 @@ type Options struct {
 	// each such module is reported as `plugin_params_unchecked` rather than
 	// passing in silence.
 	Modules []string
+
+	// ServiceName is the `--service-name <name>` flag (NIM-726): the name the
+	// service being linted is registered under. It is on the flag because no file
+	// in a service repository states it any more — the name is assigned at
+	// registration and lives in the registry row. Only `validate-scenario` reads it,
+	// for the own-namespace fence; empty means the fence cannot run and is reported
+	// as `own_namespace_fence_unchecked` rather than skipped in silence.
+	ServiceName string
 }
 
 // moduleSchemas builds the resolver for this run, or nil when the caller supplied no
@@ -181,8 +189,10 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 		diags = append(diags, scenarioCompatFloorDiags(opts.Path, scn)...)
 		// A Vault path under the service's own derived prefix, in any spelling
 		// ([ADR-0083] §7) — read over the include-expanded list, so a path in a
-		// sibling file is caught offline and not only at render.
-		diags = append(diags, scenarioVaultNamespaceDiags(opts.Path, scn)...)
+		// sibling file is caught offline and not only at render. Needs the service
+		// name, which only `--service-name` can supply; without it the check is
+		// reported as not run.
+		diags = append(diags, scenarioVaultNamespaceDiags(opts.Path, opts.ServiceName, scn)...)
 		// Two elements of one literal collection addressing the same declared
 		// secret ([ADR-0083] §1) — read over the include-expanded list, against
 		// the state_schema of `../../service.yml`.

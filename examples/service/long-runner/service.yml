@@ -1,4 +1,3 @@
-name: long-runner
 state_schema_version: 1
 description: >-
   Service for validating cross-host barrier and serial waves (Phase-2 TEST B).

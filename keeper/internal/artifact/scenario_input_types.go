@@ -62,19 +62,25 @@ func LoadScenarioManifestResolved(art *ServiceArtifact, rel string, data []byte,
 	// call the same one.
 	diags = append(diags, config.ResolveScenarioCovenant(scn, doc, art.LocalDir)...)
 
-	// The own-namespace fence ([ADR-0083] §7). Here because this is the one place a
-	// scenario is parsed with its service manifest in scope — the fence needs the
-	// service NAME, which the scenario file never states. It runs before the
-	// early return below: a scenario with no `input:` is fenced too.
+	// The own-namespace fence ([ADR-0083] §7). The fence needs the service NAME,
+	// which the scenario file never states; it comes from art.Ref.Name — the name
+	// the service is REGISTERED under, which is what every Vault path is actually
+	// derived from. Until NIM-726 it came from the manifest's own `name:`, a second
+	// copy nothing compared against the first, so a manifest naming the wrong
+	// service fenced the wrong namespace and passed green. It runs before the early
+	// return below: a scenario with no `input:` is fenced too.
 	//
 	// This sees the main file only; an `include:` body is parsed later, inside
 	// config.ExpandIncludes. The scan over the expanded list runs at
 	// render.Pipeline.Render, which no dispatch path can bypass.
+	// No longer conditional on the manifest: the fence's input is the ref, and an
+	// artifact always has one.
+	diags = append(diags, config.ScanOwnNamespaceVault(rel, art.Ref.Name, scn, scn.Tasks)...)
 	if art.Manifest != nil {
-		diags = append(diags, config.ScanOwnNamespaceVault(rel, art.Manifest.Name, scn, scn.Tasks)...)
 		// Same window, same limitation: a duplicate key in a LITERAL collection of
 		// the main file ([ADR-0083] §1). What an `include:` body carries, and what
-		// only exists once CEL has run, is refused by the module at apply.
+		// only exists once CEL has run, is refused by the module at apply. Still
+		// manifest-gated — its input is the state_schema, which only the manifest has.
 		diags = append(diags, config.ScanDuplicateSecretKeys(rel, art.Manifest.StateSchema, scn.Tasks)...)
 	}
 

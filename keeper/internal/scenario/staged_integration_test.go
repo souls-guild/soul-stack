@@ -52,8 +52,7 @@ func stagedServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: staged-render proof service
 state_schema:
   type: object
@@ -309,8 +308,7 @@ func stagedExpandingServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: staged-render expanding-passage proof service
 state_schema:
   type: object
@@ -685,8 +683,7 @@ func staged3PassageServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: staged-render 3-passage proof service
 state_schema:
   type: object
@@ -1003,8 +1000,7 @@ func TestIntegration_RunOnceStaged(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: run_once+staged service
 state_schema:
   type: object
@@ -1209,8 +1205,7 @@ func multiTaskPassage0ServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: multi-task passage-0 proof service
 state_schema:
   type: object
@@ -1409,8 +1404,7 @@ func perHostWhereServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: per-host where in same passage proof service
 state_schema:
   type: object

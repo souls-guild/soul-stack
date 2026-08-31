@@ -1,4 +1,3 @@
-name: smoke-nginx-live
 state_schema_version: 1
 description: >-
   L3b real-soul-in-container flagship-smoke (ADR-039): the same scenario as

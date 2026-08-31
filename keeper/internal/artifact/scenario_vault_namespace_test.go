@@ -15,9 +15,12 @@ import (
 
 func loadFencedScenario(t *testing.T, service, body string) []diag.Diagnostic {
 	t.Helper()
+	// The fence is keyed on the REGISTERED name (art.Ref.Name), not on anything the
+	// manifest says — NIM-726 removed the manifest copy.
 	art := &ServiceArtifact{
+		Ref:      ServiceRef{Name: service},
 		LocalDir: t.TempDir(),
-		Manifest: &config.ServiceManifest{Name: service},
+		Manifest: &config.ServiceManifest{},
 	}
 	_, _, diags, err := LoadScenarioManifestResolved(art, "scenario/deploy/main.yml", []byte(body), nil)
 	if err != nil {

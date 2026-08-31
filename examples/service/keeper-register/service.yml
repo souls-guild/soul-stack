@@ -1,4 +1,3 @@
-name: keeper-register
 state_schema_version: 1
 description: >-
   E2E foundation for keeper-side module dispatch (ADR-017). The service runs

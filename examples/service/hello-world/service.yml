@@ -1,4 +1,3 @@
-name: hello-world
 state_schema_version: 1
 description: Minimal service with a real state change for E2E (writes a file + commits to incarnation.state)
 

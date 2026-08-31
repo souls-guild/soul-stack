@@ -38,7 +38,7 @@ No `migrations/` directory: `state_schema_version = 1`, no migrations needed
 
 ```bash
 ./soul-lint/bin/soul-lint validate-service  examples/service/noop/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/noop/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/noop/scenario/create/main.yml --service-name noop
 ```
 
 Both should return exit 0 and `OK: <path>`.

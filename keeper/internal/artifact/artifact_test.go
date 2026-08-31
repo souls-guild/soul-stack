@@ -22,8 +22,7 @@ func TestMain(m *testing.M) {
 }
 
 // validManifest is the minimal valid service.yml for test repositories.
-const validManifest = `name: web-app
-state_schema_version: 1
+const validManifest = `state_schema_version: 1
 state_schema:
   type: object
   properties:
@@ -135,7 +134,7 @@ func TestLoad_DefaultHEAD(t *testing.T) {
 	if art.SHA1 != want {
 		t.Fatalf("SHA1 = %s, want HEAD %s", art.SHA1, want)
 	}
-	if art.Manifest == nil || art.Manifest.Name != "web-app" {
+	if art.Manifest == nil || art.Manifest.StateSchemaVersion == 0 {
 		t.Fatalf("manifest was not parsed correctly: %+v", art.Manifest)
 	}
 	if _, err := os.Stat(filepath.Join(art.LocalDir, "service.yml")); err != nil {
@@ -252,7 +251,7 @@ func TestReadFile_PathTraversalBlocked(t *testing.T) {
 
 func TestLoad_InvalidManifestRejected(t *testing.T) {
 	tr := newTestRepo(t)
-	tr.writeFile("service.yml", "name: web-app\n") // no state_schema_version/state_schema
+	tr.writeFile("service.yml", "description: no schema\n") // no state_schema_version/state_schema
 	tr.commit("break manifest")
 
 	loader := newLoader(t)

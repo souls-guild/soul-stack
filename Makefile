@@ -1752,13 +1752,19 @@ lint: build
 			mongo) mods="--modules=community=$(LINT_MODULES_MONGO)";; \
 			*)     mods="--modules=community=$(LINT_MODULES_REDIS)";; \
 		esac; \
-		echo "validate-scenario $$f $$mods"; \
-		out=$$($(LINT_BIN) validate-scenario "$$f" "$$mods" 2>&1); rc=$$?; \
+		echo "validate-scenario $$f $$mods --service-name=$$svc"; \
+		out=$$($(LINT_BIN) validate-scenario "$$f" "$$mods" "--service-name=$$svc" 2>&1); rc=$$?; \
 		echo "$$out"; \
 		[ $$rc -eq 0 ] || exit 1; \
 		if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
 			echo "lint: FALSE-GREEN in $$f — a plugin module in the corpus has no --modules binding," >&2; \
 			echo "      so its params were NOT checked (NIM-294). Bind it above and re-run." >&2; \
+			exit 1; \
+		fi; \
+		if echo "$$out" | grep -qF own_namespace_fence_unchecked; then \
+			echo "lint: FALSE-GREEN in $$f — the own-namespace Vault fence did NOT run (NIM-726)," >&2; \
+			echo "      so a task writing under the service's own prefix would lint clean and be" >&2; \
+			echo "      refused at render. --service-name reached soul-lint empty; fix it above." >&2; \
 			exit 1; \
 		fi; \
 	done

@@ -257,9 +257,15 @@ func (r *Runner) resolvePreflightServiceVars(
 		// No row yet (create). Build the incarnation the request is ABOUT to
 		// insert, labels included — a step keyed on `incarnation.covens` must see
 		// what the create run will see, not an empty list.
+		// Service is the REGISTERED name — the same string the row will carry once
+		// the create inserts it, and the same one the render context two dozen lines
+		// up is built from (spec.ServiceRef.Name). It was read off the manifest until
+		// NIM-726, so a manifest whose `name:` disagreed with its registration gave
+		// `incarnation.service` one value at create and another on day-2, with no
+		// check anywhere between them.
 		inc = &incarnation.Incarnation{
 			Name:    spec.IncarnationName,
-			Service: art.Manifest.Name,
+			Service: spec.ServiceRef.Name,
 			Covens:  spec.Covens,
 			Traits:  spec.Traits,
 		}

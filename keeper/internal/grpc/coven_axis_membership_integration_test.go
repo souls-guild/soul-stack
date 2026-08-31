@@ -154,7 +154,6 @@ func newCovenAxisTelemetry(t *testing.T, covenOverlay string) TelemetrySource {
 		}
 	}
 	manifest := &config.ServiceManifest{
-		Name:      covenAxisSvc,
 		Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s"), Collectors: []string{"cpu"}},
 	}
 	return NewTelemetrySource(

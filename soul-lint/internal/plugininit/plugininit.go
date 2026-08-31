@@ -329,5 +329,5 @@ func printNextSteps(w io.Writer, outDir string, vars TemplateVars) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "the artifact declares no name of its own: address level 1 is the alias an")
 	fmt.Fprintln(w, "operator picks at registration, so lint a definition against it with")
-	fmt.Fprintf(w, "  soul-lint validate-scenario <path> --modules %s=./dist/schema.json\n", vars.Namespace)
+	fmt.Fprintf(w, "  soul-lint validate-scenario <path> --modules %s=./dist/schema.json --service-name <service>\n", vars.Namespace)
 }

@@ -1,4 +1,3 @@
-name: fc3-retry-until
 state_schema_version: 1
 description: >-
   FC-3 L3b: prove the retry:+until: health-gate on REAL timing (real-apply).

@@ -1040,7 +1040,7 @@ func writeApplyDestinyTree(t *testing.T, dst, mainYML, caseYML, destinyYML, dest
 		}
 	}
 	files := map[string]string{
-		filepath.Join(root, "service.yml"):                    "name: arch-svc\nstate_schema_version: 1\nstate_schema:\n  type: object\n  properties: {}\ndestiny:\n  - { name: " + dst + ", ref: v1.0.0 }\n",
+		filepath.Join(root, "service.yml"):                    "state_schema_version: 1\nstate_schema:\n  type: object\n  properties: {}\ndestiny:\n  - { name: " + dst + ", ref: v1.0.0 }\n",
 		filepath.Join(root, "scenario", "create", "main.yml"): mainYML,
 		filepath.Join(caseDir, caseFileName):                  caseYML,
 		filepath.Join(root, "destiny-"+dst, "destiny.yml"):    destinyYML,

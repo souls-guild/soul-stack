@@ -1,4 +1,3 @@
-name: redis
 state_schema_version: 15
 description: >-
   Redis following a unified-service concept: ONE service for deployment modes

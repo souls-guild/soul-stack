@@ -348,9 +348,16 @@ path was assembled stops mattering once CEL has produced it. The guard is scoped
 whole `<mount>/<service>/` prefix, not to the incarnation being rendered — reaching
 sideways into a sibling incarnation is the same second-copy failure, not a lesser one —
 and it is a no-op for a caller with no service identity (push, unit eval), the same
-condition §6's resolution applies. **Trial is deliberately not in that list**: an L0 case
-runs against a `service.yml`, so the harness takes the identity from its `name:` and the
-fence is live in L0. It has to be — a fence that only the live keeper enforces is one an
+condition §6's resolution applies. **Trial is deliberately not in that list**: the L0
+harness carries a service identity of its own, so the fence is live in L0. Until NIM-726
+that identity was the manifest's `name:`; the manifest states none now, so the harness
+derives it from the service DIRECTORY, overridable per case with `fixtures.service:`
+(`trial.trialServiceIdentity`). Neither source can be empty, which is the property that keeps
+the fence from switching itself off — but the derived form is a CONVENTION, not an
+authority: a checkout whose directory is not the registered name fences a name no path
+will match, and such a repository must state `fixtures.service:`. Offline nothing can
+detect that mismatch, so `soul-trial run` PRINTS the name it fenced on for every case,
+marked `(from directory)` when nobody stated it. It has to be live — a fence that only the live keeper enforces is one an
 author meets for the first time in production, and the two layers this paragraph
 describes are precisely the ones a static reading of the scenario cannot stand in for.
 The other direction, a `vault:` ref built by interpolation, needs no guard: vault-resolve
@@ -618,7 +625,7 @@ prefixes, spelling the default mount and naming neither `herald` nor `provider`,
 replaced by `config.PathUnderReservedNamespace` — mount-agnostic, segment-whole, and
 reading the same closed list as everything else.
 
-Four surfaces, one predicate: the manifest load (`service_name_reserved`), registration
+Three surfaces, one predicate: registration
 over REST and MCP (422, not 409 — nothing holds the name), the derivation, and reveal
 (denied before Vault is read, `reason=floor_denied`). Reveal keeps a second, path-shaped
 half of the check, because a **mount** that spells a reserved word

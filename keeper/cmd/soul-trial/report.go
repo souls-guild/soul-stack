@@ -46,6 +46,17 @@ func printResults(w io.Writer, results []trial.Result) bool {
 
 		coveredBranches, totalBranches := r.Coverage.CoveredBranches()
 		fmt.Fprintf(w, "%s  %s\n", status, r.Case)
+		// The identity the own-namespace Vault fence ran against ([ADR-0083] §7). Printed
+		// on every case, and marked `(from directory)` when nobody stated it: since NIM-726
+		// the manifest names no service, so the harness derives one, and a derived name that
+		// is not the REGISTERED name is non-empty and matches nothing — the fence runs and
+		// finds nothing, which looks exactly like a clean scenario. This line is the only
+		// place the operator can see the word it actually fenced on.
+		if r.ServiceStated {
+			fmt.Fprintf(w, "    fenced as service %q\n", r.Service)
+		} else {
+			fmt.Fprintf(w, "    fenced as service %q (from directory; set fixtures.service if that is not the registered name)\n", r.Service)
+		}
 		fmt.Fprintf(w, "    when-branches %d/%d, expressions %d\n",
 			coveredBranches, totalBranches, len(r.Coverage.Branches)+len(r.Coverage.NonBranch))
 

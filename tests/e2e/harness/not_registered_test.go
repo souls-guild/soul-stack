@@ -55,9 +55,11 @@ func TestNotRegisteredMessage_NamesTheOmission(t *testing.T) {
 			t.Errorf("a mismatched name must not be reported as an empty registry\n--- message ---\n%s", got)
 		}
 		// The registered name has to be quoted back: it IS the fix — the four
-		// tests of NIM-317 asked for `service-<X>` while the examples declare
-		// `<X>`, and only seeing both names side by side makes that visible.
-		for _, want := range []string{`hello-world`, `service.yml`} {
+		// tests of NIM-317 asked for `service-<X>` while the examples were
+		// registered as `<X>`, and only seeing both names side by side makes that
+		// visible. Since NIM-726 the message cites RegisterService rather than the
+		// example's `service.yml`, because the manifest no longer states a name.
+		for _, want := range []string{`hello-world`, `RegisterService`} {
 			if !strings.Contains(got, want) {
 				t.Errorf("message does not contain %q\n--- message ---\n%s", want, got)
 			}
@@ -75,8 +77,19 @@ func TestNotRegisteredMessage_NamesTheOmission(t *testing.T) {
 		if strings.Contains(got, `service "" `) {
 			t.Errorf("empty service name leaked into the message\n--- message ---\n%s", got)
 		}
-		if !strings.Contains(got, "service.yml") {
+		// With no service ref the message has to name a PLACEHOLDER where the name
+		// would go — that is the whole degradation being tested. Asserting on
+		// "RegisterService" would be vacuous: the empty-registry branch always
+		// prints the `stack.RegisterService(t, …)` snippet, so the pin would stay
+		// green with the placeholder deleted. Pin the placeholder itself. It cites
+		// registration and not the example's `service.yml` because since NIM-726
+		// the manifest states no name, and sending an author to that file would have
+		// them add a `name:` key that makes the service refuse to load.
+		if !strings.Contains(got, "<the name you register the example under>") {
 			t.Errorf("message must still point at where the name comes from\n--- message ---\n%s", got)
+		}
+		if strings.Contains(got, "service.yml") {
+			t.Errorf("the message must not send the author to service.yml for a name it no longer has\n--- message ---\n%s", got)
 		}
 	})
 }

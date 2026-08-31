@@ -178,6 +178,41 @@ schema. Either way an undeclared key fails the task on the host
 ([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
 where the definition is being written.
 
+## Service identity: `--service-name <name>` (`validate-scenario`)
+
+A service states no name of its own. `name:` left `service.yml` with
+[NIM-726](adr/0085-entity-id-and-label.md): the name is assigned once, at
+registration, and it is what the registry row is keyed on, what every derived Vault
+path is built from, and what `incarnation.service` resolves to. The manifest used to
+carry a second copy that nothing compared against the first.
+
+So the one check that needs the name takes it as an argument — the own-namespace Vault
+fence ([ADR-0083](adr/0083-declared-secret-state-fields.md) §7), which refuses a task
+writing under `<mount>/<service>/`:
+
+```
+soul-lint validate-scenario scenario/create/main.yml --service-name redis
+```
+
+Without it the fence **cannot run, and says so**: `own_namespace_fence_unchecked`, at
+warning level, exit code unchanged. That is the whole point of moving the name onto the
+flag. Before NIM-726 an absent or nameless `service.yml` made the rule return nil — the
+scenario linted `OK`, and the same paths were refused at render. A check that did not
+run now reports that it did not run.
+
+Linting a scenario standalone, before anyone has decided which service will own it, is
+ordinary and stays possible; the warning is not an error for exactly that reason.
+`make lint` is the exception: over the example corpus the name is always known, so an
+unchecked fence there means the wiring broke rather than that the author was undecided,
+and the target treats the warning as a FALSE-GREEN and fails.
+
+The offline L0 runner has the same need and no registry either: `soul-trial` defaults to
+the service directory's name, overridable per case with `fixtures.service:`. The directory
+is a convention, not an authority — a checkout laid out as the documented `service-<name>/`
+derives `service-redis` where the registry says `redis`, and that name is non-empty but
+matches nothing. So the fence is never silently disabled at L0, but a repository whose
+directory is not its registered name must state `fixtures.service:` for it to mean anything.
+
 ## Service vars checks (`validate-service`, `validate-scenario`)
 
 Implemented, [ADR-0082](adr/0082-service-vars.md). All four answer the same class:

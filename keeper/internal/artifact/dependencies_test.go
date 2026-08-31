@@ -2,8 +2,7 @@ package artifact
 
 import "testing"
 
-const manifestWithDeps = `name: redis-cluster
-state_schema_version: 2
+const manifestWithDeps = `state_schema_version: 2
 state_schema:
   type: object
   properties:
@@ -75,7 +74,7 @@ func TestListDependencies_MissingManifest(t *testing.T) {
 // (broken service.yml in the repo; caller returns 502).
 func TestListDependencies_BrokenManifest(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, "name: 123\nstate_schema_version: oops\n")
+	writeServiceManifest(t, root, "state_schema_version: oops\n")
 	if _, err := ListDependencies(root, discardLogger()); err == nil {
 		t.Fatalf("want error for invalid service.yml")
 	}

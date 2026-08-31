@@ -26,6 +26,12 @@
 // is the registration alias an operator picks, so `redis=./dist/schema.json`
 // states the same word the task writes and the operator will register.
 //
+// `validate-scenario` also takes `--service-name <name>` (NIM-726) — the name the
+// service is registered under, for the own-namespace Vault fence ([ADR-0083] §7).
+// It is on the flag for the same reason the module alias is: nothing in a service
+// repository states the name any more. Without it the fence cannot run, and says
+// so (`own_namespace_fence_unchecked`) rather than passing in silence.
+//
 // Exit codes: 0 = ok, 1 = has errors, 2 = I/O fatal / usage.
 package main
 
@@ -52,7 +58,7 @@ func main() {
 	case "validate-service":
 		os.Exit(runSubcommand(sub, "validate-service <path> [--json] [--modules ALIAS=PATH]...", validate.KindService, os.Args[2:]))
 	case "validate-scenario":
-		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--modules ALIAS=PATH]...", validate.KindScenario, os.Args[2:]))
+		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--service-name NAME] [--modules ALIAS=PATH]...", validate.KindScenario, os.Args[2:]))
 	case "validate-manifest":
 		os.Exit(runSubcommand(sub, "validate-manifest <path> [--json]", validate.KindManifest, os.Args[2:]))
 	case "plugin-init":
@@ -72,15 +78,22 @@ func main() {
 func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 	usageLine := "Usage: soul-lint " + usage
 	var (
-		jsonOut    bool
-		path       string
-		modules    []string
-		wantModule bool // the previous arg was `--modules`, so this one is its value
+		jsonOut     bool
+		path        string
+		modules     []string
+		serviceName string
+		wantModule  bool // the previous arg was `--modules`, so this one is its value
+		wantService bool // likewise for `--service-name`
 	)
 	for _, a := range args {
 		if wantModule {
 			modules = append(modules, a)
 			wantModule = false
+			continue
+		}
+		if wantService {
+			serviceName = a
+			wantService = false
 			continue
 		}
 		switch {
@@ -89,6 +102,13 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 		case a == "-h" || a == "--help":
 			fmt.Fprintln(os.Stdout, usageLine)
 			return 0
+		case a == "--service-name" || a == "-service-name":
+			wantService = true
+		case strings.HasPrefix(a, "--service-name=") || strings.HasPrefix(a, "-service-name="):
+			// Not repeatable: a service has one name. A second occurrence overwrites,
+			// rather than being refused, for the same reason every other flag here does.
+			_, value, _ := strings.Cut(a, "=")
+			serviceName = value
 		case a == "--modules" || a == "-modules":
 			wantModule = true
 		case strings.HasPrefix(a, "--modules=") || strings.HasPrefix(a, "-modules="):
@@ -114,15 +134,20 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 		fmt.Fprintf(os.Stderr, "soul-lint %s: --modules needs an <alias>=<path> binding\n", sub)
 		return 2
 	}
+	if wantService {
+		fmt.Fprintf(os.Stderr, "soul-lint %s: --service-name needs a <name>\n", sub)
+		return 2
+	}
 	if path == "" {
 		fmt.Fprintln(os.Stderr, usageLine)
 		return 2
 	}
 	return validate.Run(validate.Options{
-		Path:    path,
-		JSON:    jsonOut,
-		Kind:    kind,
-		Modules: modules,
+		Path:        path,
+		JSON:        jsonOut,
+		Kind:        kind,
+		Modules:     modules,
+		ServiceName: serviceName,
 	}, os.Stdout, os.Stderr)
 }
 
@@ -215,7 +240,7 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "  validate-config   <path> [--json]              validate keeper.yml or soul.yml")
 	fmt.Fprintln(w, "  validate-destiny  <path> [--json] [--modules A=P]...  validate destiny.yml manifest")
 	fmt.Fprintln(w, "  validate-service  <path> [--json] [--modules A=P]...  validate service.yml manifest")
-	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--modules A=P]...  validate scenario/<name>/main.yml")
+	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--service-name N] [--modules A=P]...  validate scenario/<name>/main.yml")
 	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate a plugin schema document")
 	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]      scaffold a new SoulModule plugin")
 	fmt.Fprintln(w, "")
@@ -225,4 +250,10 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "                 alias is stated here because the artifact carries no name of its own.")
 	fmt.Fprintln(w, "                 Without a binding, that module's params cannot be checked and it is")
 	fmt.Fprintln(w, "                 reported as plugin_params_unchecked rather than passing silently.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  --service-name <name>  the name the service is REGISTERED under. Read by")
+	fmt.Fprintln(w, "                 validate-scenario, for the own-namespace Vault fence (ADR-0083 §7). It is")
+	fmt.Fprintln(w, "                 a flag because no file in a service repository states the name: it is")
+	fmt.Fprintln(w, "                 assigned once, at registration. Without it the fence cannot run and is")
+	fmt.Fprintln(w, "                 reported as own_namespace_fence_unchecked rather than skipped silently.")
 }

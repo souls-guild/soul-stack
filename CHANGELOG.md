@@ -72,10 +72,13 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   the [ADR-064](docs/adr/0064-secret-write-path.md) write path. The two
   derivations met on one KV entry — and Vault KV v2 **replaces** an entry rather
   than merging into it, so on the `secretwrite` path the second write deleted
-  the first one's fields with no error at either end. Refused offline
-  (`service_name_reserved`), at REST and MCP registration (**422**, not 409 —
-  nothing holds the name), and by the derivation itself, which now returns an
-  error rather than emitting a colliding path. The comparison is on the whole
+  the first one's fields with no error at either end. Refused at REST and MCP
+  registration (**422**, not 409 — nothing holds the name), and by the derivation
+  itself, which now returns an error rather than emitting a colliding path. (It was
+  also refused offline, as `service_name_reserved` against `service.yml → name`;
+  that half went with the field in NIM-726, below — it could only judge a name the
+  manifest stated. Registration is where the name is minted and is now the only
+  place the rule can be checked.) The comparison is on the whole
   name: `keeper-notes` is still a perfectly good service. **Breaking** — a
   service already registered under one of the four names stops loading and must
   be renamed. `herald` and `provider` also join the reserved registration
@@ -146,6 +149,41 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   in the same file (and the matching row in `naming-rules.md`) said any `params:`
   key was "accepted and ignored" - true of the module at runtime, false at load,
   and the same drift this entry is about.
+
+### Removed
+
+- **`name:` is gone from `service.yml`** ([ADR-0085](docs/adr/0085-entity-id-and-label.md), NIM-726). A service is named once, when
+  it is registered, and that name is the registry row's primary key, the segment
+  every derived Vault path is built from, and the value of `incarnation.service`.
+  The manifest carried a second copy that nothing compared against the first, so a
+  manifest naming the wrong service made the own-namespace Vault fence
+  ([ADR-0083](docs/adr/0083-declared-secret-state-fields.md) §7) check the wrong
+  namespace — silently, and green. The key is now refused (`unknown_key`) rather
+  than ignored: a field the author reads as identity and the engine reads as
+  nothing is the worse of the two failures. **Migration: delete the line.** The
+  reserved-namespace rule it carried (NIM-706) is unchanged and still enforced at
+  registration; only its manifest-side copy, which had no name to judge, went with
+  the field.
+
+  Consequences for the three things that read it:
+
+  - `soul-lint validate-scenario` takes **`--service-name <name>`**. Without it the
+    fence cannot run and reports `own_namespace_fence_unchecked` (warning, exit 0)
+    instead of skipping in silence — which is what it did before, via a bare
+    `return nil` on an empty service name.
+  - `soul-trial` derives the name from the service directory (absolutised first, so
+    the verdict does not depend on how the case path was typed; a `_trial/` wrapper
+    takes the destiny above it), overridable per case with `fixtures.service:`.
+    Neither source can be empty, so the authored-path half of the fence can no longer
+    be switched OFF at L0 — which is the invariant. It is not a claim that the derived
+    name is correct: a checkout whose directory is not the registered name fences a word
+    no path matches, and must state `fixtures.service:`. The rendered-param half
+    (`ScanRenderedVaultParams`) is dispatch, not render, and L0 is render-only — it was
+    never reached there and still is not.
+  - Pre-flight on the **create** path now synthesizes the incarnation with
+    `spec.ServiceRef.Name`, the same string the row will carry — so
+    `incarnation.service` no longer means one thing at create and another on day-2.
+    The engine-compat error text likewise names the registered service.
 
 ### Fixed
 

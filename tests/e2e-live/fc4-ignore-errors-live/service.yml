@@ -1,4 +1,3 @@
-name: fc4-ignore-errors-live
 state_schema_version: 1
 description: >-
   FC-4 L3b: prove that failed_when:false = ignore_errors on a REAL module failure

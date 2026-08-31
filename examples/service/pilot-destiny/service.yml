@@ -1,4 +1,3 @@
-name: pilot-destiny
 state_schema_version: 1
 description: >
   Pilot apply:destiny (slice A): a service built from a single create scenario that

@@ -30,7 +30,7 @@ Layout of our `hello-world` (minimum - only `service.yml` and at least one scrip
 
 ```
 hello-world/
-├── service.yml                     # manifest: name, state-schema version, structure incarnation.state
+├── service.yml                     # manifest: state-schema version, structure incarnation.state (NO name — NIM-726)
 ├── vars/
 │   └── 00-base.yaml               # baseline parameters for all incarnations (background)
 └── scenario/
@@ -57,7 +57,6 @@ The manifesto is short in design: only service metadata and **contract for the r
 [`examples/service/hello-world/service.yml`](../../examples/service/hello-world/service.yml):
 
 ```yaml
-name: hello-world
 state_schema_version: 1
 description: Minimal service with real state-change for E2E (file write + commit to incarnation.state)
 
@@ -70,7 +69,7 @@ state_schema:
 
 Parsing fields:
 
-- **`name`** is the name of the service type in kebab-case (`^[a-z][a-z0-9-]*$`). Same as the folder name without the `service-` prefix. Keeper resolves the service using this name when creating an incarnation.
+- **There is no `name`.** The manifest states no identity: you name the service when you register it (`POST /v1/services`), and that is the name Keeper resolves an incarnation against. Writing `name:` here is an error — a second copy nobody compared against the first is how a service ends up fencing the wrong Vault namespace (NIM-726).
 - **`state_schema_version`** is the **structure** version of `incarnation.state`, not the service version (version = git-ref). It is incremented only when there is a breaking change in the state structure and then requires migration. We have `1` → the `migrations/` directory is not needed.
 - **`description`** - one or two phrases; visible in the Keeper UI, MCP directory and `soul-lint` output.
 - **`state_schema`** - JSON Schema (draft-07-compatible, always `type: object` at the root), describing the JSONB field `incarnation.state` in Postgres. Here we declare a single field `greeting_file` of type string. Keeper validates state against this schema when creating an incarnation and when upgrading a schema version.
@@ -166,10 +165,10 @@ Before registering a service, run the static linter - it catches structural erro
 
 ```sh
 ./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
-./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml --service-name hello-world
 ```
 
-Both should give exit 0 and `OK: <path>`. What exactly does the linter check (name regex, JSON Schema at the root, compliance with `state_schema_version` ↔ `migrations/`, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md).
+Both should give exit 0 and `OK: <path>`. `--service-name` is what the scenario check fences Vault paths on — drop it and you get an `own_namespace_fence_unchecked` warning saying the fence did not run ([docs/soul-lint.md](../soul-lint.md)); the manifest states no name to take it from. What exactly does the linter check (JSON Schema at the root, compliance with `state_schema_version` ↔ `migrations/`, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md).
 
 **If your service uses plugin modules, add `--modules`.** The `params:` of a `core.*`
 task are checked against the declaration compiled into the linter; a plugin's schema
@@ -181,7 +180,8 @@ which **alias**, since the artifact carries no name of its own
 ```sh
 ./soul-lint/bin/soul-lint validate-scenario \
     examples/service/redis/scenario/add_user/main.yml \
-    --modules redis=./soul-mod-redis/dist/schema.json
+    --modules redis=./soul-mod-redis/dist/schema.json \
+    --service-name redis
 ```
 
 The `redis` you write here is the `redis` the task writes in `redis.acl.present` — the

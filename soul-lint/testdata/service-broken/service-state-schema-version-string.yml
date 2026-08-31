@@ -1,4 +1,3 @@
-name: x
 state_schema_version: "abc"
 state_schema:
   type: object

@@ -155,8 +155,9 @@ func (f SecretField) VaultPath(mount, service, incarnation, key string) (string,
 	// Namespace floor (NIM-706): a service whose name is one the platform writes under
 	// as a fixed first segment derives on top of that family, and secretwrite REPLACES
 	// a KV entry rather than merging into it. Registration refuses the name
-	// ([IsReservedVaultNamespace] at serviceregistry.validateFields and at
-	// `service_name_reserved`), so reaching this is either a service admitted before the
+	// ([IsReservedVaultNamespace] at serviceregistry.validateFields — since NIM-726 the
+	// only enforcement point, the manifest having no name left to judge), so reaching this
+	// is either a service admitted before the
 	// rule existed or a route that skipped it — both are cases for failing closed rather
 	// than emitting the path. The mount is deliberately not part of the comparison, for
 	// the same reason [PathAddressesOwnNamespace] leaves it out: what makes the path

@@ -1,4 +1,3 @@
-name: smoke-nginx
 state_schema_version: 1
 description: >-
   Minimal service for the L3a E2E pilot (ADR-039): one scenario "create",

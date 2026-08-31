@@ -82,6 +82,13 @@ type Fixtures struct {
 	// IncarnationName overrides incarnation name for L0 (NIM-58 guard-tests);
 	// empty → scenario name (scn.Name), previous BIT-EXACT behavior.
 	IncarnationName string `yaml:"incarnation_name,omitempty"`
+
+	// Service is the name L0 fences on ([ADR-0083] §7) — the name the case pretends
+	// the service is registered under. Empty → the service directory's own name
+	// (NIM-726: the manifest no longer states one, and offline there is no registry
+	// to ask). Set it only when the directory is not the registered name; the fence
+	// is never disabled by leaving it out.
+	Service string `yaml:"service,omitempty"`
 }
 
 // HostFixture is one entry in the multi-host roster of L0 (`fixtures.hosts[]`).

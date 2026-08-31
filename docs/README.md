@@ -83,7 +83,7 @@ Reference: exact formats, behavior, parameters. The source of truth is here (and
 | [migrations.md](migrations.md) | **Regulatory spec state_schema migration DSL** ([ADR-019](adr/0019-state-migration-dsl.md)): flat `rename`/`set`/`delete`/`move` + CEL + `foreach`, forward-only, sandbox, atomicity with one PG transaction, test layout. |
 | [soul/soulprint.md](soul/soulprint.md) | Soulprint typed schema ([ADR-018](adr/0018-soulprint-typed.md)): fields `SoulprintFacts`, canonical CEL form `soulprint.self.<path>`, virtual projection `covens`. |
 | [input.md](input.md) | **Format standard `input:`** for destiny / scenario / module manifest: types, validation keys, formats (hostname / email / semver / ...), examples. The source of truth in discrepancies. |
-| [service/manifest.md](service/manifest.md) | Service repo layout and format `service.yml` (`name` / `state_schema_version` / `state_schema` / `destiny[]` / `modules[]`), prohibited keys, state_schema migrations, `soul-lint validate-service` validation. |
+| [service/manifest.md](service/manifest.md) | Service repo layout and format `service.yml` (`state_schema_version` / `state_schema` / `destiny[]` / `modules[]`), prohibited keys, state_schema migrations, `soul-lint validate-service` validation. |
 | [service/manifest.md#service-vars](service/manifest.md#service-vars) | **Service vars** — a service's own default parameters (`vars/*.yaml` in lexical order, or an explicit `vars/_stack.yaml` pipeline). Not overridable from outside: a fleet forks the service repo ([ADR-0082](adr/0082-service-vars.md)). |
 
 ### Module Reference

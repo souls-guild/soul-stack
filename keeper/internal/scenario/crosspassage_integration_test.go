@@ -63,8 +63,7 @@ func crossPassageServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: cross-passage onchanges service
 state_schema:
   type: object

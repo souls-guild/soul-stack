@@ -1,4 +1,3 @@
-name: monitoring
 state_schema_version: 1
 description: Installs Prometheus exporters (node_exporter + redis_exporter) on a VM with Linux/systemd
 

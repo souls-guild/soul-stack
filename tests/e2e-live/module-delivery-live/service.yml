@@ -1,4 +1,3 @@
-name: module-delivery-live
 state_schema_version: 1
 description: >-
   NIM-32 S2 live gate for SoulModule plugin delivery (ADR-065 S5, live guarantee

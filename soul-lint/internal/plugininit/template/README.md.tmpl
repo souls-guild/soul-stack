@@ -44,7 +44,7 @@ make check       # fmt + vet + test + stamp + verify
 ## Checking a destiny against this module, offline
 
 ```
-soul-lint validate-scenario <path> --modules {{.Namespace}}=./dist/schema.json
+soul-lint validate-scenario <path> --modules {{.Namespace}}=./dist/schema.json --service-name <service>
 ```
 
 The alias goes on the flag for the same reason it is absent from the artifact: it is the operator's choice, so the linter has to be told which one the definition assumes.

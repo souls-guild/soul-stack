@@ -16,8 +16,8 @@ func loadKeyedScenario(t *testing.T, body string) []diag.Diagnostic {
 	t.Helper()
 	art := &ServiceArtifact{
 		LocalDir: t.TempDir(),
+		Ref:      ServiceRef{Name: "redis"},
 		Manifest: &config.ServiceManifest{
-			Name: "redis",
 			StateSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

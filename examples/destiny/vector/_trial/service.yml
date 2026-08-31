@@ -4,7 +4,6 @@
 # a render-only L0-check via scenario apply:destiny. The apply:destiny resolution mirrors
 # PROD (slice A): name -> service.yml::destiny[] + URL from default_destiny_source
 # (case.yml). So even the wrapper needs a service.yml with a declared dependency.
-name: trial-vector
 state_schema_version: 1
 description: >-
   L0-harness for destiny vector (ADR-023). Not a service - a scenario wrapper for render-only

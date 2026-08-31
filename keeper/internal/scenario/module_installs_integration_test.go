@@ -47,8 +47,7 @@ func moduleServiceRepo(t *testing.T, mainTasks string, extraFiles map[string]str
 		}
 	}
 
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: service with modules[] for install-synthesis integration test
 state_schema:
   type: object

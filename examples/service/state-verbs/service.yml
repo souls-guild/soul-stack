@@ -1,4 +1,3 @@
-name: state-verbs
 state_schema_version: 1
 description: >-
   Corpus exercise for the whole `core.state.<verb>` family ([ADR-0084]). Every

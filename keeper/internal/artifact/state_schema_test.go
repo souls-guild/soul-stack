@@ -30,8 +30,7 @@ func writeMigration(t *testing.T, root, name, body string) {
 	}
 }
 
-const validManifestV2 = `name: redis-cluster
-state_schema_version: 2
+const validManifestV2 = `state_schema_version: 2
 state_schema:
   type: object
   required: [master_host, replicas]
@@ -175,8 +174,7 @@ func TestListStateSchema_BrokenManifest(t *testing.T) {
 // the normative schema.
 func TestListStateSchema_NoStateSchemaField(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, `name: redis-cluster
-state_schema_version: 1
+	writeServiceManifest(t, root, `state_schema_version: 1
 `)
 	_, err := ListStateSchema(root, discardLogger())
 	if err == nil {

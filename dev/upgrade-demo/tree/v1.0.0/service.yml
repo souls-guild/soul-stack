@@ -1,4 +1,3 @@
-name: upgrade-demo
 state_schema_version: 1
 description: >-
   Demo service for manual testing of NIM-34 (upgrade v2, ADR-0068). Tag v1.0.0 —

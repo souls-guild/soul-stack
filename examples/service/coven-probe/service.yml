@@ -1,4 +1,3 @@
-name: coven-probe
 state_schema_version: 1
 description: >-
   Probe service for validating coven-targeting of the on:/coven resolver (Phase-2 TEST A).

@@ -40,8 +40,17 @@ func writeMiniService(t *testing.T, typesYAML, scenarioName, mainYAML string) st
 // runJSON runs scenario lint in JSON mode and returns the diagnostics.
 func runJSON(t *testing.T, mainPath string) []diag.Diagnostic {
 	t.Helper()
+	return runJSONAs(t, mainPath, "")
+}
+
+// runJSONAs is runJSON with `--service-name` set (NIM-726). The fence needs the
+// name and nothing on disk states it any more, so a test that wants the fence to
+// run has to say which service the scenario belongs to — exactly as the operator
+// does. Passing "" is the "not stated" case, which is a diagnostic of its own.
+func runJSONAs(t *testing.T, mainPath, serviceName string) []diag.Diagnostic {
+	t.Helper()
 	var out, errOut bytes.Buffer
-	Run(Options{Path: mainPath, Kind: KindScenario, JSON: true}, &out, &errOut)
+	Run(Options{Path: mainPath, Kind: KindScenario, JSON: true, ServiceName: serviceName}, &out, &errOut)
 	var diags []diag.Diagnostic
 	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
 	for dec.More() {

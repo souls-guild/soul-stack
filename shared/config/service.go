@@ -14,12 +14,19 @@ import (
 // ServiceManifest is the typed representation of the root `service.yml`
 // (spec: [`docs/service/manifest.md`]).
 //
-// Holds only service metadata (name/description), the `state_schema` contract
+// Holds only service metadata (description), the `state_schema` contract
 // for `incarnation.state` in Postgres, and a flat list of git dependencies.
 // Scenarios are auto-discovered from `scenario/<name>/main.yml`, so there is no
 // `scenarios:` section here.
+//
+// The manifest carries NO name (NIM-726). Identity is assigned at registration
+// and lives in the registry row; every Vault path the platform derives comes
+// from the incarnation row's service string, never from this file. A manifest
+// name was therefore never checked against the registered one — a mistyped one
+// silently fenced the wrong namespace — so the field was removed rather than
+// made advisory. Tooling that needs the name takes it as an argument
+// (`soul-lint --service-name`).
 type ServiceManifest struct {
-	Name        string `yaml:"name"`
 	Description string `yaml:"description,omitempty"`
 
 	// StateSchemaVersion — version of the `incarnation.state` structure. Bumped
@@ -173,9 +180,14 @@ type DependencyRef struct {
 }
 
 var (
-	// reServiceName — canonical kebab-case: dash only between alphanumerics, no
-	// trailing/leading/double dash. Symmetric with `reDestinyName`.
-	reServiceName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	// The service-name regex left with the manifest's `name:` (NIM-726): it could only
+	// judge a name the manifest stated, and the manifest states none. What remains is
+	// serviceregistry.NamePattern at registration, and it is NOT the same rule —
+	// `^[a-z][a-z0-9-]*$` admits `redis-` and `a--b`, which the retired
+	// `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` refused. Deliberately left alone here: tightening
+	// it is a new refusal at the mint point, so it belongs to whoever narrows
+	// NamePattern, not to the removal of a second copy. Neither form can produce an
+	// unsafe Vault segment — both are strict subsets of ADR-064's `^[a-zA-Z0-9_-]+$`.
 
 	// reDependencyDestinyName — kebab-case single-level destiny name in
 	// `destiny[]`. Same as `reDestinyName` (destiny.go), reused directly — a
@@ -196,6 +208,10 @@ var (
 // docs/service/manifest.md → "What service.yml does NOT hold"). Symmetric with
 // `deprecatedDestinyKeys` in destiny.go.
 var deprecatedServiceKeys = map[string]string{
+	"name": "name: removed (NIM-726); a service is named once, at registration, and that name is what every derived " +
+		"Vault path and RBAC scope is built from. The manifest copy was never compared against it, so a typo here " +
+		"fenced the wrong namespace in silence. Offline tools take the name as an argument instead " +
+		"(`soul-lint validate-scenario --service-name <name>`)",
 	"version":   "version is a git ref under which service is committed, not a manifest field; see ADR-007",
 	"tasks":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
 	"steps":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
@@ -233,41 +249,12 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		}))
 	}
 
-	// 2) name — required + format. The `topKeys["name"]` branch distinguishes
-	// "key absent" from "key present with empty/null string" (symmetric with destiny.go).
-	if !topKeys["name"] {
-		out = append(out, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "name is required at top-level",
-			Hint:     "set name: <kebab-case>, matching service-<name>/ folder",
-			YAMLPath: "$.name",
-		})
-	} else if !reServiceName.MatchString(m.Name) {
-		msg := fmt.Sprintf("name %q does not match %s", m.Name, reServiceName)
-		if m.Name == "" {
-			msg = "name must be non-empty kebab-case string"
-		}
-		out = append(out, atPath(root, "$.name", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    "name_invalid_format",
-			Message: msg,
-			Hint:    "kebab-case: lowercase letters, digits, dashes; must start with letter",
-		}))
-	} else if IsReservedVaultNamespace(m.Name) {
-		// NIM-706. Offline half of the rule serviceregistry.validateFields enforces at
-		// registration: the service name becomes the first path segment of every secret
-		// the platform derives for it, and these words already name a path family the
-		// platform writes under itself. Reported here as well as there because the
-		// artifact is authored long before anyone registers it, and a name is the one
-		// mistake that is cheap now and a rename later.
-		out = append(out, atPath(root, "$.name", diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:    ServiceNameReservedCode,
-			Message: fmt.Sprintf("name %q is reserved: the platform derives its own secrets under `<mount>/%s/`", m.Name, m.Name),
-			Hint:    "pick another name — reserved names are " + strings.Join(ReservedVaultNamespaceNames(), ", "),
-		}))
-	}
+	// 2) name — gone (NIM-726). Nothing to check here: the key is refused above,
+	// through deprecatedServiceKeys, and the reserved-namespace rule it used to
+	// carry (NIM-706) now lives only where the name is actually assigned —
+	// serviceregistry.validateFields. The offline half was dropped with the field
+	// rather than moved: it can only judge a name, and the manifest no longer
+	// states one.
 
 	// 3) state_schema_version — required + integer ≥ 1.
 	// Also catch a float (`1.5`): goccy silently truncates when decoding into

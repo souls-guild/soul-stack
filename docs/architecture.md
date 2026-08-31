@@ -663,7 +663,7 @@ Service is a **service type** (Redis HA, PostgreSQL, Vector-collector). One serv
 
 ```
 redis/
-├── service.yml                         # manifest: name, state/host schemas, destiny, modules (version = git tag, see ADR-007)
+├── service.yml                         # manifest: state/host schemas, destiny, modules (no name: — ADR-0083/NIM-726) (version = git tag, see ADR-007)
 ├── vars/                               # the service's default parameters (see "Service vars: the assembly pipeline")
 │   ├── _stack.yaml                     # OPTIONAL: declarative build pipeline
 │   ├── _default.yaml                   # baseline for all incarnation
@@ -703,7 +703,7 @@ Each folder `scenario/<name>/` is a separate operation (CRUD-style) on the servi
 ### `service.yml` - manifest
 
 ```yaml
-name: redis
+# No `name:` — a service is named at registration, not here (NIM-726).
 state_schema_version: 2               # incarnation.state structure version, not service version (see ADR-007)
 
 # Structure of incarnation.state in the database

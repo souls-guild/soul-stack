@@ -58,8 +58,7 @@ func serialStagedServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: noop
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: serial+staged 2D proof service
 state_schema:
   type: object

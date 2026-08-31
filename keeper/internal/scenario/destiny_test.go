@@ -105,7 +105,6 @@ func TestDestinySource_ResolveURL_Lazy(t *testing.T) {
 func TestDestinyResolver_RefFromManifest(t *testing.T) {
 	src := NewDestinySource(nil, fixedTemplateSource("file:///tmp/destiny/{name}"))
 	manifest := &config.ServiceManifest{
-		Name: "pilot-destiny",
 		Destiny: []config.DependencyRef{
 			{Name: "pilot-flat", Ref: "v1.0.0"},
 		},
@@ -128,7 +127,6 @@ func TestDestinyResolver_RefFromManifest(t *testing.T) {
 func TestDestinyResolver_GitOverrideFromManifest(t *testing.T) {
 	src := NewDestinySource(nil, fixedTemplateSource("file:///tmp/destiny/{name}"))
 	manifest := &config.ServiceManifest{
-		Name: "pilot-destiny",
 		Destiny: []config.DependencyRef{
 			{Name: "pilot-flat", Ref: "v1.0.0", Git: "git@github.com:custom/destiny-special.git"},
 		},

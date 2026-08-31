@@ -249,7 +249,6 @@ func TestKeeperCompatErrorNamesTheVersion(t *testing.T) {
 // its absence stays valid (backcompat, no migration of existing services).
 func TestServiceManifestCompatParse(t *testing.T) {
 	const withWindow = `
-name: redis
 state_schema_version: 1
 state_schema:
   type: object
@@ -269,7 +268,6 @@ compat:
 	}
 
 	const withoutWindow = `
-name: redis
 state_schema_version: 1
 state_schema:
   type: object

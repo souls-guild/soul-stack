@@ -71,7 +71,6 @@ The root file contains only the service metadata and the contract for the runtim
 
 | Field | Obligation | Type | Meaning |
 |---|---|---|---|
-| `name` | yes | string (kebab-case) | Service type name (`redis`, `postgres-ha`). Coincides with the name of the service folder (in `examples/service/<name>/` - a bare name without the prefix `service-`). Regex `^[a-z][a-z0-9-]*$`. |
 | `description` | recommended | string | One or two phrases: what kind of service is this? Visible in UI Keeper, MCP directory, output `soul-lint`. |
 | `state_schema_version` | yes | integer (≥1) | Structure version `incarnation.state` in Postgres. **NOT** version of the service (this is the git tag by [ADR-007](../adr/0007-versioning-git-ref.md)). Increments explicitly when breaking schema changes; requires appropriate migration to `migrations/`. |
 | `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
@@ -79,6 +78,10 @@ The root file contains only the service metadata and the contract for the runtim
 | `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <alias>.<module>, ref: <git-tag-or-branch> }`, where the alias is the registration name the artifact was allowed under (see below). Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
 | `compat` | no | object | Declared **engine-compatibility window**: which keeper versions this definition was authored and tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today — `keeper: {min, max}`. No section → unbounded (existing services keep working). Semantics and example — ["`compat` Section"](#compat-section). |
 | `certificate_rotation` | no | object | Enables and configures **auto-rotation** of the incarnation's service TLS certs by the background Reaper ([ADR-017](../adr/0017-keeper-side-core.md)): fields `enable`/`scenario`/`threshold`/`pki_role`. No section (or `enable: false`) → rotation off. Semantics and example — ["`certificate_rotation` Section"](#certificate_rotation-section). |
+
+There is **no `name:` field** ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-726). A service is named once, when it is registered (`POST /v1/services`), and that name is the primary key of the registry row, the second segment of every Vault path the platform derives, and the value of `incarnation.service` in CEL. The manifest used to carry a second copy, and nothing anywhere compared the two: a manifest naming the wrong service made the own-namespace Vault fence check the wrong namespace, silently and green. Writing `name:` in `service.yml` is now an error (`unknown_key`).
+
+Offline tooling has no registry to ask, so it takes the name as an argument: `soul-lint validate-scenario --service-name <name>`. Without it the fence cannot run, and says so (`own_namespace_fence_unchecked`, warning) instead of passing in silence. `soul-trial` defaults to the service directory's own name, overridable per case with `fixtures.service:`.
 
 ### What is NOT in `service.yml`
 
@@ -233,7 +236,6 @@ certificate_rotation:
 ### Example
 
 ```yaml
-name: redis
 state_schema_version: 2
 description: Redis (standalone/sentinel/cluster/sentinel_only)
 

@@ -51,6 +51,19 @@ type Result struct {
 	Skipped  bool
 	Failures []string // human-readable assert mismatches; empty if Pass
 	Coverage CoverageReport
+
+	// Service is the identity the own-namespace Vault fence ran against ([ADR-0083] §7);
+	// ServiceStated says whether the case named it (`fixtures.service`) or the harness
+	// derived it from the directory.
+	//
+	// Reported, not merely carried. A derived name that is not the name the service is
+	// REGISTERED under is non-empty and simply matches nothing, so the fence runs and
+	// finds nothing — indistinguishable from a clean scenario in any output that does not
+	// print the name, and offline there is no second source to check it against. The
+	// operator is the only party who knows the registered name. Same rule soul-lint
+	// applies with `own_namespace_fence_unchecked`: a check whose input was guessed says so.
+	Service       string
+	ServiceStated bool
 }
 
 // renderedCase — result of hermetic render pass of case: flat plan
@@ -63,6 +76,11 @@ type renderedCase struct {
 	pipeline *render.Pipeline
 	in       render.RenderInput
 	sink     *coverageSink
+
+	// service / serviceStated — the fence identity and its source, carried to the
+	// report. See Result.Service.
+	service       string
+	serviceStated bool
 }
 
 // loadResolvedScenario loads scenario/<name>/main.yml from case.yml path and
@@ -102,6 +120,14 @@ func loadResolvedScenario(caseFile string) (*config.ScenarioManifest, *config.Do
 // resolves as `<dir(case.yml)>/../../main.yml` (tests/<case>/case.yml).
 func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, error) {
 	var rc renderedCase
+
+	// FIRST, before anything that can return early. Every `return rc, err` below hands
+	// the caller this struct and RunCase reports rc.service from it — a case that aborts
+	// (expect_render_error, a broken scenario) still fenced on a name, and printing an
+	// empty one would have the report claim the fence had no identity when it did. Pure:
+	// no I/O, nothing to fail.
+	svcName, svcStated := trialServiceIdentity(caseFile, c.Fixtures)
+	rc.service, rc.serviceStated = svcName, svcStated
 
 	scn, _, err := loadResolvedScenario(caseFile)
 	if err != nil {
@@ -185,7 +211,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		ServiceVars: orEmptyMap(c.Fixtures.Vars),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
-		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures), Service: trialServiceName(svcManifest)}, // NIM-58
+		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures), Service: svcName}, // NIM-58
 		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
@@ -235,6 +261,9 @@ func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
 	res := Result{Case: c.Name}
 
 	rc, err := renderCase(ctx, c, caseFile)
+	// Recorded even when render failed: a case that aborted still fenced on a name, and
+	// the report is what tells the operator which one.
+	res.Service, res.ServiceStated = rc.service, rc.serviceStated
 
 	// expect_render_error (ADR-023 amendment): case EXPECTS render abort
 	// (assert failure / required_when). Render success → FAIL; error without substring
@@ -338,11 +367,58 @@ func serviceRootFor(caseFile string) string {
 // ([ADR-0083] §7). Without it both halves of the fence are inert — the guard and
 // the runtime scan both no-op on an empty service — and L0 would report a scenario
 // green that a real run rejects.
-func trialServiceName(m *config.ServiceManifest) string {
-	if m == nil {
-		return ""
+//
+// It came off the manifest's `name:` until NIM-726 removed that field. Offline there
+// is no registry to ask, so the default is the service directory itself, which is what
+// every in-tree service named itself after; `fixtures.service` overrides it.
+//
+// Be precise about what this buys. The guarantee is that the name is never EMPTY, so
+// the fence cannot switch itself off in silence — that is the ticket's invariant, and
+// it holds. It is NOT a guarantee that the name is right: the directory is a
+// convention, not an authority, and a checkout laid out as the documented
+// `service-<name>/` (docs/service/manifest.md) derives `service-redis` where the
+// registry says `redis`. Such a name is non-empty and simply never matches, so the
+// fence runs and finds nothing. A repository whose directory is not its registered
+// name MUST state `fixtures.service:`; nothing offline can detect that it didn't,
+// because there is no second source to compare against — which is the same reason
+// the manifest copy this replaced was worth deleting.
+//
+// ABSOLUTE first, and this is not tidiness. serviceRootFor is four lexical Dir
+// calls, so `scenario/create/tests/<case>/case.yml` — what soul-trial is handed
+// when it is run from inside the service repo — decomposes to ".", and Base(".")
+// is ".". A "." service is not empty, so it clears every `service == ""` guard and
+// installs a fence that can never fire: PathAddressesOwnNamespace drops "." while
+// splitting, so no path ever matches it. That is the silent fail-open this ticket
+// removed, re-entering through the back door, and it would make the verdict a
+// function of how the operator typed the path. soul-lint's scenarioServiceRoot
+// carries the same fix for the same reason.
+//
+// A `_`-prefixed root is the standalone-destiny wrapper convention
+// (`<destiny>/_trial/`, see serviceRootFor): the wrapper is not the identity, the
+// destiny it wraps is, so the name comes from the level above. Otherwise the four
+// in-tree wrappers would all be called `_trial` — one word, no service, shared by
+// all of them.
+func trialServiceName(caseFile string, f Fixtures) string {
+	name, _ := trialServiceIdentity(caseFile, f)
+	return name
+}
+
+// trialServiceIdentity is trialServiceName plus WHERE the name came from. The caller
+// reports the derived case, because a derived name that is wrong is indistinguishable
+// from a right one at this layer and the operator is the only one who can tell — see
+// the godoc above. A stated name (`fixtures.service`) needs no report: someone decided.
+func trialServiceIdentity(caseFile string, f Fixtures) (name string, stated bool) {
+	if f.Service != "" {
+		return f.Service, true
 	}
-	return m.Name
+	root := serviceRootFor(caseFile)
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if base := filepath.Base(root); !strings.HasPrefix(base, "_") {
+		return base, false
+	}
+	return filepath.Base(filepath.Dir(root)), false
 }
 
 // loadTrialServiceManifest reads `<service-root>/service.yml` of case. Absence

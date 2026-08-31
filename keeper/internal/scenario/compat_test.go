@@ -76,7 +76,6 @@ func resolveDestinyAt(t *testing.T, gitURL, name, rawVersion string) error {
 	t.Helper()
 	src := NewDestinySource(artifact.NewDestinyLoader(t.TempDir(), nil), fixedTemplateSource(gitURL))
 	manifest := &config.ServiceManifest{
-		Name:    "compat-svc",
 		Destiny: []config.DependencyRef{{Name: name, Ref: "main", Git: gitURL}},
 	}
 	r := src.resolverFor(manifest, rawVersion, nil)
@@ -161,7 +160,6 @@ func TestServiceCompatEntity_FromManifest(t *testing.T) {
 	art := &artifact.ServiceArtifact{
 		Ref: artifact.ServiceRef{Name: "redis", Ref: "v1.2.0"},
 		Manifest: &config.ServiceManifest{
-			Name:   "redis",
 			Compat: &config.CompatConfig{Keeper: &config.VersionWindow{Min: "0.2.0", Max: "0.5.0"}},
 		},
 	}

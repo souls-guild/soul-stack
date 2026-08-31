@@ -64,8 +64,7 @@ func clusterAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: redis-cluster-guard
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: cluster topology pre-flight assert test service
 state_schema:
   type: object
@@ -216,8 +215,7 @@ func dispatcherAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: redis-dispatch-guard
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: dispatcher-with-include pre-flight assert test service
 state_schema:
   type: object
@@ -401,8 +399,7 @@ func createGuardServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: create-guard
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: ungated topology size-guard on the create path
 state_schema:
   type: object

@@ -1,4 +1,3 @@
-name: dragonfly
 state_schema_version: 7
 description: >-
   DragonFly follows a unified-service concept (PILOT, sentinel-only). The operator sets SIMPLE

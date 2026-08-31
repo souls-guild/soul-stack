@@ -135,8 +135,11 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// smuggled in through an include is caught before a single Vault read happens.
 	// A caller with no service identity (push, unit eval) scans nothing — the same
 	// condition resolveRegisterSecrets applies, for the same reason. Trial is NOT
-	// such a caller: the L0 harness takes the name from service.yml, so the fence
-	// is live there too.
+	// such a caller: since NIM-726 the L0 harness derives the name from the service
+	// directory (`fixtures.service` overrides), and neither source can be empty, so
+	// the fence is never switched off there. Whether it MATCHES is a separate question
+	// the harness cannot answer offline — see trial.trialServiceName. The property to
+	// re-check if this is ever revisited is non-emptiness, not a `name:` key.
 	if fdiags := config.ScanOwnNamespaceVault(in.Scenario.Name, in.Incarnation.Service, in.Scenario, in.Scenario.Tasks); len(fdiags) > 0 {
 		return nil, nil, fmt.Errorf("render: %s: %s at %s (%d in this scenario)",
 			fdiags[0].Code, fdiags[0].Message, fdiags[0].YAMLPath, len(fdiags))

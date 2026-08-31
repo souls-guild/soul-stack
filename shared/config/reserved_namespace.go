@@ -34,8 +34,10 @@ import (
 	"strings"
 )
 
-// ServiceNameReservedCode — a service.yml `name:` that is a reserved Vault namespace.
-const ServiceNameReservedCode = "service_name_reserved"
+// The `service_name_reserved` diagnostic code went with the manifest's `name:`
+// (NIM-726): it could only be raised against a name the manifest stated. The rule
+// itself is unchanged and now has one enforcement point, serviceregistry.validateFields,
+// which is where the name is actually minted.
 
 // reservedVaultNamespaces — service names that would derive on top of a path family
 // the platform writes under a fixed first segment.

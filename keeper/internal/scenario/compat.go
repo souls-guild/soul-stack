@@ -22,12 +22,13 @@ import (
 // serviceCompatEntity — the service manifest's contribution to the effective
 // window. Ref is the pinned git ref of the snapshot being rendered (ADR-007).
 func serviceCompatEntity(art *artifact.ServiceArtifact) config.CompatEntity {
+	// Name is the REGISTERED name, always. It used to be overridden by the
+	// manifest's own `name:` when that was set, which meant the message blamed an
+	// entity under a word no operator could look up — nothing ever compared the two
+	// (NIM-726, which removed the manifest field).
 	e := config.CompatEntity{Kind: config.CompatEntityService, Ref: art.Ref.Ref, Name: art.Ref.Name}
 	if art.Manifest != nil {
 		e.Window = art.Manifest.Compat.KeeperWindow()
-		if art.Manifest.Name != "" {
-			e.Name = art.Manifest.Name
-		}
 	}
 	return e
 }

@@ -12,7 +12,7 @@ import (
 // duration are checked structurally (independent of enable); scenario/pki_role
 // are required only when enable:true (inert opt-in).
 func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
-	const base = "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n"
+	const base = "state_schema_version: 1\nstate_schema:\n  type: object\n"
 
 	cases := []struct {
 		name     string
@@ -133,7 +133,7 @@ func TestLoadServiceManifest_CertificateRotation(t *testing.T) {
 // TestLoadServiceManifest_CertificateRotationDecode — the section's yaml tags decode
 // into a typed block (including pki_role → PKIRole).
 func TestLoadServiceManifest_CertificateRotationDecode(t *testing.T) {
-	src := "name: svc-golden\nstate_schema_version: 1\nstate_schema:\n  type: object\n" + `certificate_rotation:
+	src := "state_schema_version: 1\nstate_schema:\n  type: object\n" + `certificate_rotation:
   enable: true
   scenario: rotate_tls
   threshold: 30d

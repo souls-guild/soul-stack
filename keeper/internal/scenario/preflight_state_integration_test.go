@@ -59,8 +59,7 @@ func stateAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `name: state-assert-guard
-state_schema_version: 1
+	write("service.yml", `state_schema_version: 1
 description: pre-flight asserts that read incarnation.state
 state_schema:
   type: object

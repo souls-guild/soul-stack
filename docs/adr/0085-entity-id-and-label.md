@@ -264,9 +264,9 @@ than by a version moving past it. A service author does not opt into it and cann
 ### A fence surface is lost (not a security regression — an authoring-time regression)
 
 Deleting `service.yml → name` removes one of the four enforcement surfaces of the reserved-Vault-
-namespace fence. [ADR-0083](0083-declared-secret-state-fields.md) names them:
+namespace fence. [ADR-0083](0083-declared-secret-state-fields.md) named them, before NIM-726 landed:
 *"Four surfaces, one predicate: the manifest load (`service_name_reserved`), registration over REST
-and MCP, the derivation, and reveal"*
+and MCP, the derivation, and reveal"* — it now says three
 ([`0083:621-626`](0083-declared-secret-state-fields.md)). The manifest load is the one that goes.
 
 The **floor still holds** — `shared/config/secret_field.go:164-167` refuses to emit a colliding path
