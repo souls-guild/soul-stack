@@ -64,12 +64,12 @@ func (h *Handler) callServiceSetLabel(ctx context.Context, claims *jwt.Claims, r
 		notConfigured: serviceRegistryNotConfigured,
 		validName:     serviceregistry.ValidName,
 		namePattern:   serviceregistry.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (serviceView, error) {
-			entry, err := h.deps.ServiceSvc.SetServiceLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (serviceView, *string, error) {
+			entry, previous, err := h.deps.ServiceSvc.SetServiceLabel(ctx, name, label)
 			if err != nil {
-				return serviceView{}, err
+				return serviceView{}, nil, err
 			}
-			return toServiceView(entry), nil
+			return toServiceView(entry), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, serviceregistry.ErrNotFound) },
 		notFoundf:  func(name string) string { return "service " + name + " not found" },

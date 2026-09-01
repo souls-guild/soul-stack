@@ -23,12 +23,12 @@ func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Clai
 		notConfigured: oracleNotConfigured,
 		validName:     oracle.ValidName,
 		namePattern:   oracle.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (decreeView, error) {
-			d, err := h.deps.OracleSvc.SetDecreeLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (decreeView, *string, error) {
+			d, previous, err := h.deps.OracleSvc.SetDecreeLabel(ctx, name, label)
 			if err != nil {
-				return decreeView{}, err
+				return decreeView{}, nil, err
 			}
-			return toDecreeView(d), nil
+			return toDecreeView(d), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrDecreeNotFound) },
 		notFoundf:  func(name string) string { return "decree " + name + " not found" },

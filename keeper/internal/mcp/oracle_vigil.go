@@ -22,12 +22,12 @@ func (h *Handler) callOracleVigilSetLabel(ctx context.Context, claims *jwt.Claim
 		notConfigured: oracleNotConfigured,
 		validName:     oracle.ValidName,
 		namePattern:   oracle.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (vigilView, error) {
-			v, err := h.deps.OracleSvc.SetVigilLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (vigilView, *string, error) {
+			v, previous, err := h.deps.OracleSvc.SetVigilLabel(ctx, name, label)
 			if err != nil {
-				return vigilView{}, err
+				return vigilView{}, nil, err
 			}
-			return toVigilView(v), nil
+			return toVigilView(v), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrVigilNotFound) },
 		notFoundf:  func(name string) string { return "vigil " + name + " not found" },

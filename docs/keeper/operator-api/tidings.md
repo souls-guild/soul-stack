@@ -80,7 +80,7 @@ Permission: `tiding.label-set`. MCP-tool: `keeper.tiding.label-set`. OperationID
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 Tiding`** — the rule as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `tiding.label_changed`, payload `{name, label}`.
+**Response `200 Tiding`** — the rule as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `tiding.label_changed`, payload `{name, old_label, new_label}`.
 
 ### `DELETE /v1/tidings/{name}` - delete rule
 

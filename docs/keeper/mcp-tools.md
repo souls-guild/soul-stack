@@ -270,7 +270,7 @@ The caption is free text — capitals and spaces allowed, nothing validates its 
 
 **Output:** `ServiceView` — the entry as it now reads.
 
-Errors: `not-found` (no entry). Audit: `service.label_changed`, payload `{name, label}`.
+Errors: `not-found` (no entry). Audit: `service.label_changed`, payload `{name, old_label, new_label}`.
 
 #### `keeper.service.deregister`
 

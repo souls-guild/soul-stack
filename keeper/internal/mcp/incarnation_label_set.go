@@ -86,7 +86,8 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 			"operator lacks required permission incarnation.label-set")
 	}
 
-	if err := incarnation.UpdateLabel(ctx, h.deps.IncarnationDB, a.Name, a.Label); err != nil {
+	previous, err := incarnation.UpdateLabel(ctx, h.deps.IncarnationDB, a.Name, a.Label)
+	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
 				"incarnation "+a.Name+" not found")
@@ -105,8 +106,9 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 	// holds — a caller sending "  " stored NULL and the audit must say so.
 	stored := registrylabel.Normalize(a.Label)
 	h.writeAudit(audit.EventIncarnationLabelChanged, claims.Subject, map[string]any{
-		"name":  a.Name,
-		"label": stored,
+		"name":      a.Name,
+		"old_label": previous,
+		"new_label": stored,
 	})
 
 	return h.toolResult(req.ID, incarnationLabelSetOutput{

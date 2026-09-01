@@ -59,7 +59,13 @@ const omenColumns = `name, source_type, endpoint, auth_ref, created_by_aid, crea
 // omenUpdateLabelSQL replaces the display caption of one Omen ([ADR-0085]). It
 // sets `label` and nothing else — the PK is not in the SET list, because the
 // identifier is immutable and Rites grant against it by FK.
-const omenUpdateLabelSQL = `UPDATE omens SET label = $2 WHERE name = $1`
+const omenUpdateLabelSQL = `
+UPDATE omens AS x
+SET label = $2
+FROM omens AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 
 const omenSelectByNameSQL = `
 SELECT ` + omenColumns + `
@@ -157,33 +163,39 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 	return &o, nil
 }
 
-// UpdateOmenLabel replaces the display caption of one Omen ([ADR-0085]).
-// [ErrOmenNotFound] when the row is absent (RowsAffected==0).
+// UpdateLabel replaces the display caption of one Omen and returns the caption
+// the row held BEFORE the write ([ADR-0085]). [ErrOmenNotFound] when the row is absent.
 //
 // label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
-// the caption back to NULL, and the consumer falls back to showing the name.
-// Anything else is stored as given: capitals, spaces and punctuation are what
+// the caption back to NULL, and the consumer falls back to showing the name. The
+// value is stored as given otherwise: capitals, spaces and punctuation are what
 // the field is for, so there is no format check to fail.
+//
+// The previous value comes back from the SAME statement rather than from a read
+// before it: the audit event records `{old_label, new_label}` (parity with
+// `incarnation.traits_changed`, which carries old and new keys), and a separate
+// read would let a concurrent edit make that pair describe a transition that
+// never happened.
 //
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateOmenLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateOmenLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("augur: invalid omen name %q (must match %s)", name, NamePattern)
+		return nil, fmt.Errorf("augur: invalid name %q (must match %s)", name, NamePattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
-	tag, err := db.Exec(ctx, omenUpdateLabelSQL, name, v)
-	if err != nil {
-		return fmt.Errorf("augur: update omen label: %w", err)
+	var previous *string
+	if err := db.QueryRow(ctx, omenUpdateLabelSQL, name, v).Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrOmenNotFound
+		}
+		return nil, fmt.Errorf("augur: update label: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrOmenNotFound
-	}
-	return nil
+	return previous, nil
 }
 
 // SelectAllOmens returns a page of Omens and the total count.

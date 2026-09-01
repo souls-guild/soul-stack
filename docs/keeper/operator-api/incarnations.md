@@ -580,7 +580,7 @@ Consequently there is **no status gate**: the caption may be fixed while the inc
 
 **RBAC:** the same scope selector as every other incarnation mutation (`coven=`/`service=`/`incarnation=` by path-`name`). **Only that gate** — unlike `PUT .../traits` below there is no second, pair-level check, because a trait pair is a live scope dimension and grants visibility while a caption is in no dimension of anything and grants nothing.
 
-**Audit:** `incarnation.label_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, label}`) — written by the handler after the write. `label` is explicitly `null` when the caption was cleared; `name` is the identifier that was addressed and is not what changed.
+**Audit:** `incarnation.label_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_label, new_label}`) — written by the handler after the write. `label` is explicitly `null` when the caption was cleared; `name` is the identifier that was addressed and is not what changed.
 
 #### `PUT /v1/incarnations/{name}/traits` — replace incarnation trait marks
 

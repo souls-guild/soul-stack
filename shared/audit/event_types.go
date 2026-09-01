@@ -1264,13 +1264,18 @@ const (
 	// or the mirror MCP tool `keeper.<resource>.label-set`. `source: api`/`mcp`,
 	// `archon_aid` is the initiator, permission `<resource>.label-set`.
 	//
-	// Payload for every one of the ten: `{name, label}` — the identifier that was
-	// addressed and the caption as it NOW reads. `label` is explicitly `null` when
-	// the caption was cleared, so "cleared" and "written before the field existed"
-	// are different records. Only the new value is carried, matching
-	// `synod.updated`, the one other free-text mutation in the tree. The caption is
-	// operator-written display text and never a secret, so it is recorded as it
-	// reads.
+	// Payload for every one of the ten: `{name, old_label, new_label}` — the
+	// identifier that was addressed and the caption on BOTH sides of the change.
+	// This follows `incarnation.traits_changed` (`{name, old_keys, new_keys}`),
+	// the event this family is named after; a caption is display text and the
+	// trail can afford to carry it whole, so unlike traits — which record KEYS
+	// only, because a value may be sensitive — both values are recorded verbatim.
+	//
+	// Both keys are always present, and explicitly `null` where the caption was
+	// absent on that side, so "there was no caption" and "written before the
+	// field existed" are different records. The pair is read off a single
+	// `UPDATE … RETURNING`, so it always describes a transition that really
+	// happened rather than one a concurrent edit invented between two statements.
 	//
 	// `name` is the identifier and it is NOT what changed — there is no rename
 	// operation anywhere. What makes these events cheap to read is the invariant

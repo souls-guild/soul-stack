@@ -148,11 +148,13 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 // learn a word no code reads.
 //
 // [ErrHeraldNotFound] if missing.
-func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string) (*Herald, error) {
-	if err := UpdateHeraldLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string) (*Herald, *string, error) {
+	previous, err := UpdateHeraldLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectHeraldByName(ctx, s.pool, name)
+	h, err := SelectHeraldByName(ctx, s.pool, name)
+	return h, previous, err
 }
 
 // SetTidingLabel replaces the display caption of one Tiding and returns the row
@@ -161,11 +163,13 @@ func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string
 // [Service.SetHeraldLabel].
 //
 // [ErrTidingNotFound] if missing.
-func (s *Service) SetTidingLabel(ctx context.Context, name string, label *string) (*Tiding, error) {
-	if err := UpdateTidingLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetTidingLabel(ctx context.Context, name string, label *string) (*Tiding, *string, error) {
+	previous, err := UpdateTidingLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectTidingByName(ctx, s.pool, name)
+	t, err := SelectTidingByName(ctx, s.pool, name)
+	return t, previous, err
 }
 
 // DeleteHerald deletes channel (its Tidings cascade delete) + invalidates.

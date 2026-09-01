@@ -119,7 +119,7 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 
 	const renamed = "AWS — Production (Frankfurt)"
 	label := renamed
-	if err := UpdateLabel(ctx, integrationPool, "aws-eu", &label); err != nil {
+	if _, err := UpdateLabel(ctx, integrationPool, "aws-eu", &label); err != nil {
 		t.Fatalf("UpdateLabel: %v", err)
 	}
 
@@ -168,10 +168,10 @@ func TestIntegration_UpdateLabel_ClearsToNull(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Put a caption back first, so each case actually clears something.
 			restore := "AWS"
-			if err := UpdateLabel(ctx, integrationPool, "aws-eu", &restore); err != nil {
+			if _, err := UpdateLabel(ctx, integrationPool, "aws-eu", &restore); err != nil {
 				t.Fatalf("UpdateLabel(restore): %v", err)
 			}
-			if err := UpdateLabel(ctx, integrationPool, "aws-eu", tc.label); err != nil {
+			if _, err := UpdateLabel(ctx, integrationPool, "aws-eu", tc.label); err != nil {
 				t.Fatalf("UpdateLabel(clear): %v", err)
 			}
 			got, err := SelectByName(ctx, integrationPool, "aws-eu")
@@ -193,7 +193,7 @@ func TestIntegration_UpdateLabel_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	label := "whatever"
-	err := UpdateLabel(ctx, integrationPool, "no-such-provider", &label)
+	_, err := UpdateLabel(ctx, integrationPool, "no-such-provider", &label)
 	if err == nil {
 		t.Fatal("UpdateLabel on a missing row returned nil")
 	}

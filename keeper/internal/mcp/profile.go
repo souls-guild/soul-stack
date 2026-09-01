@@ -128,12 +128,12 @@ func (h *Handler) callProfileSetLabel(ctx context.Context, claims *jwt.Claims, r
 		notConfigured: "profile registry is not configured",
 		validName:     profile.ValidName,
 		namePattern:   profile.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (profileViewOut, error) {
-			p, err := h.deps.ProfileSvc.SetLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (profileViewOut, *string, error) {
+			p, previous, err := h.deps.ProfileSvc.SetLabel(ctx, name, label)
 			if err != nil {
-				return profileViewOut{}, err
+				return profileViewOut{}, nil, err
 			}
-			return toProfileViewOut(p), nil
+			return toProfileViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, profile.ErrProfileNotFound) },
 		notFoundf:  func(name string) string { return "profile " + name + " not found" },

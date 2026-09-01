@@ -206,11 +206,13 @@ func (s *Service) Get(ctx context.Context, name string) (*Provider, error) {
 // apply — nothing reads it.
 //
 // [ErrProviderNotFound] when the row is absent.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Provider, error) {
-	if err := UpdateLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Provider, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectByName(ctx, s.pool, name)
+	p, err := SelectByName(ctx, s.pool, name)
+	return p, previous, err
 }
 
 // Delete removes a Provider by PK. [ErrProviderNotFound] when absent,

@@ -63,7 +63,7 @@ This is the registry's only operator mutation: `interval`, `check` and the subje
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 VigilView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `vigil.label_changed`, payload `{name, label}`.
+**Response `200 VigilView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `vigil.label_changed`, payload `{name, old_label, new_label}`.
 
 ### `DELETE /v1/vigils/{name}` - remove Vigil
 
@@ -107,7 +107,7 @@ The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breake
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 DecreeView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `decree.label_changed`, payload `{name, label}`.
+**Response `200 DecreeView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `decree.label_changed`, payload `{name, old_label, new_label}`.
 
 ### `DELETE /v1/decrees/{name}` - remove Decree
 

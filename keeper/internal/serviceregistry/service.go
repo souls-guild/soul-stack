@@ -199,11 +199,13 @@ func (s *Service) UpdateService(ctx context.Context, in UpdateServiceInput) (*Se
 // derived from an artifact, and a caption is none of them.
 //
 // [ErrNotFound] if no record with that name.
-func (s *Service) SetServiceLabel(ctx context.Context, name string, label *string) (*ServiceEntry, error) {
-	if err := UpdateServiceLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetServiceLabel(ctx context.Context, name string, label *string) (*ServiceEntry, *string, error) {
+	previous, err := UpdateServiceLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return GetService(ctx, s.pool, name)
+	e, err := GetService(ctx, s.pool, name)
+	return e, previous, err
 }
 
 // DeleteService deletes a Service record by name. [ErrNotFound] if none.

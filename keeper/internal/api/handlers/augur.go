@@ -221,10 +221,10 @@ func (h *AugurHandler) SetOmenLabelTyped(ctx context.Context, name string, req L
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path param 'name' must match "+reOmenName.String())}
 	}
-	o, err := h.svc.SetOmenLabel(ctx, name, req.Label)
+	o, previous, err := h.svc.SetOmenLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[OmenView]{Body: toOmenView(o), Name: name, Label: o.Label}, nil
+		return LabelWriteReply[OmenView]{Body: toOmenView(o), Name: name, Label: o.Label, Previous: previous}, nil
 	case errors.Is(err, augur.ErrOmenNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+name+" not found")}
 	default:

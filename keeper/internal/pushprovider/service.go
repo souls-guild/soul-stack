@@ -165,11 +165,13 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*PushProvider, er
 // [UpdateLabel].
 //
 // Returns [ErrPushProviderNotFound] if the record does not exist.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*PushProvider, error) {
-	if err := UpdateLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*PushProvider, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectByName(ctx, s.pool, name)
+	p, err := SelectByName(ctx, s.pool, name)
+	return p, previous, err
 }
 
 // Delete removes a record and publishes invalidation.

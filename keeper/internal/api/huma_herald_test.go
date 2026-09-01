@@ -46,11 +46,15 @@ var heraldAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 type hHeraldPool struct {
 	heraldDeleteRows int64
 	heraldUpdateRows int64
-	tidingDeleteRows int64
-	heraldGetMissing bool // SELECT FROM heralds WHERE name → ErrNoRows (404)
-	tidingGetMissing bool // SELECT FROM tidings WHERE name → ErrNoRows (404)
-	heraldListRows   [][]any
-	tidingListRows   [][]any
+	// heraldPreviousLabel — what `UPDATE … SET label … RETURNING old.label`
+	// answers ([ADR-0085]): the caption the row held BEFORE the write, which the
+	// audit event records as `old_label`. nil = the row had none.
+	heraldPreviousLabel any
+	tidingDeleteRows    int64
+	heraldGetMissing    bool // SELECT FROM heralds WHERE name → ErrNoRows (404)
+	tidingGetMissing    bool // SELECT FROM tidings WHERE name → ErrNoRows (404)
+	heraldListRows      [][]any
+	tidingListRows      [][]any
 }
 
 func (p *hHeraldPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -69,6 +73,16 @@ func (p *hHeraldPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comm
 
 func (p *hHeraldPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	switch {
+	// The caption update is a QueryRow, not an Exec: it RETURNS the previous
+	// caption so the audit event can carry both sides ([ADR-0085]). Matched
+	// before the plain SELECT branches, because its `FROM <table> AS old`
+	// self-join makes it look like one.
+	case strings.Contains(sql, "SET label") &&
+		(strings.Contains(sql, "UPDATE heralds") || strings.Contains(sql, "UPDATE tidings")):
+		if p.heraldUpdateRows == 0 {
+			return hHeraldRow{err: pgx.ErrNoRows}
+		}
+		return hHeraldRow{values: []any{p.heraldPreviousLabel}}
 	case strings.Contains(sql, "INSERT INTO heralds"):
 		return hHeraldRow{values: []any{heraldAt, heraldAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "INSERT INTO tidings"):

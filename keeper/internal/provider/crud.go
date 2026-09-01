@@ -59,7 +59,13 @@ const selectColumns = `name, type, region, credentials_ref, created_by_aid, crea
 // updateLabelSQL replaces the display caption of one row ([ADR-0085]). It touches
 // `label` and nothing else — the PK is not in the SET list, because the
 // identifier is immutable and no rename operation exists anywhere.
-const updateLabelSQL = `UPDATE providers SET label = $2 WHERE name = $1`
+const updateLabelSQL = `
+UPDATE providers AS x
+SET label = $2
+FROM providers AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 
 const selectByNameSQL = `
 SELECT ` + selectColumns + `
@@ -180,33 +186,39 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 	return &p, nil
 }
 
-// UpdateLabel replaces the display caption of one Provider ([ADR-0085]).
-// [ErrProviderNotFound] when the row is absent (RowsAffected==0).
+// UpdateLabel replaces the display caption of one Provider and returns the caption
+// the row held BEFORE the write ([ADR-0085]). [ErrProviderNotFound] when the row is absent.
 //
 // label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
 // the caption back to NULL, and the consumer falls back to showing the name. The
 // value is stored as given otherwise: capitals, spaces and punctuation are what
-// the field is for, so there is no format check to fail and no 422 to raise.
+// the field is for, so there is no format check to fail.
+//
+// The previous value comes back from the SAME statement rather than from a read
+// before it: the audit event records `{old_label, new_label}` (parity with
+// `incarnation.traits_changed`, which carries old and new keys), and a separate
+// read would let a concurrent edit make that pair describe a transition that
+// never happened.
 //
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+		return nil, fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
-	tag, err := db.Exec(ctx, updateLabelSQL, name, v)
-	if err != nil {
-		return fmt.Errorf("provider: update label: %w", err)
+	var previous *string
+	if err := db.QueryRow(ctx, updateLabelSQL, name, v).Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrProviderNotFound
+		}
+		return nil, fmt.Errorf("provider: update label: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrProviderNotFound
-	}
-	return nil
+	return previous, nil
 }
 
 // Delete removes a Provider by PK. [ErrProviderNotFound] when the row is absent

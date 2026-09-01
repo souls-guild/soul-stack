@@ -37,23 +37,34 @@ type LabelSetInput struct {
 // while sharing one audit payload. Name addresses the row and is never written —
 // the identifier is immutable and this endpoint has no way to change it.
 type LabelWriteReply[V any] struct {
-	Body  V
-	Name  string
-	Label *string
+	Body V
+	Name string
+	// Label is the caption as it now reads; Previous is what the row held before
+	// the write. Both nil-able, and a nil means the caption was absent on that
+	// side of the transition rather than that it is unknown — the pair is read
+	// straight off the UPDATE, so it always describes one real change.
+	Label    *string
+	Previous *string
 }
 
 // AuditPayload assembles the audit payload of a label-set route: the identifier
-// that was addressed and the caption as it now reads.
+// that was addressed, and the caption on both sides of the change.
 //
-// `label` is always present, and it is explicitly null when the caption was
-// cleared — an omitted key would make "cleared" and "this event predates the
-// field" the same record. Only the new value is carried, matching the one other
-// free-text mutation in the tree (`synod.updated` records `{name, description}`).
-// The caption is operator-written display text, never a secret, so it is stored
-// as it reads.
+// `{name, old_label, new_label}`, following `incarnation.traits_changed`
+// (`{name, old_keys, new_keys}`) — the event this family is named after. A
+// caption is display text and the trail can afford to carry it whole, so unlike
+// traits (which record KEYS only, because a value may be sensitive) both values
+// are recorded verbatim.
+//
+// Both are always present and explicitly null where the caption was absent: an
+// omitted key would make "there was no caption" and "this event predates the
+// field" the same record. The pair comes from a single UPDATE ... RETURNING, so
+// it always describes a transition that actually happened — a read-then-write
+// could interleave with a concurrent edit and report one that did not.
 func (r LabelWriteReply[V]) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":  r.Name,
-		"label": r.Label,
+		"name":      r.Name,
+		"old_label": r.Previous,
+		"new_label": r.Label,
 	}
 }

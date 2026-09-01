@@ -1035,7 +1035,8 @@ func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Clai
 	// req.Label is NOT validated: free text with capitals, spaces and punctuation
 	// is what the field carries (ADR-0085).
 
-	if err := incarnation.UpdateLabel(ctx, h.db, name, req.Label); err != nil {
+	previous, err := incarnation.UpdateLabel(ctx, h.db, name, req.Label)
+	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
 		}
@@ -1059,8 +1060,9 @@ func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Clai
 			// Parity with handlers.LabelWriteReply.AuditPayload: the identifier
 			// addressed and the caption as it now reads (explicitly null when cleared).
 			Payload: map[string]any{
-				"name":  name,
-				"label": inc.Label,
+				"name":      name,
+				"old_label": previous,
+				"new_label": inc.Label,
 			},
 		})
 	}

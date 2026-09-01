@@ -282,10 +282,10 @@ func (h *OracleHandler) SetVigilLabelTyped(ctx context.Context, name string, req
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path param 'name' must match "+reOracleName.String())}
 	}
-	v, err := h.svc.SetVigilLabel(ctx, name, req.Label)
+	v, previous, err := h.svc.SetVigilLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[VigilView]{Body: toVigilView(v), Name: name, Label: v.Label}, nil
+		return LabelWriteReply[VigilView]{Body: toVigilView(v), Name: name, Label: v.Label, Previous: previous}, nil
 	case errors.Is(err, oracle.ErrVigilNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+name+" not found")}
 	default:
@@ -305,10 +305,10 @@ func (h *OracleHandler) SetDecreeLabelTyped(ctx context.Context, name string, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path param 'name' must match "+reOracleName.String())}
 	}
-	d, err := h.svc.SetDecreeLabel(ctx, name, req.Label)
+	d, previous, err := h.svc.SetDecreeLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[DecreeView]{Body: toDecreeView(d), Name: name, Label: d.Label}, nil
+		return LabelWriteReply[DecreeView]{Body: toDecreeView(d), Name: name, Label: d.Label, Previous: previous}, nil
 	case errors.Is(err, oracle.ErrDecreeNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+name+" not found")}
 	default:

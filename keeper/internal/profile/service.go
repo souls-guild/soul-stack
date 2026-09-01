@@ -83,11 +83,13 @@ func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
 // which that argument does not apply, because nothing reads it.
 //
 // [ErrProfileNotFound] when the row is absent.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Profile, error) {
-	if err := UpdateLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Profile, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectByName(ctx, s.pool, name)
+	p, err := SelectByName(ctx, s.pool, name)
+	return p, previous, err
 }
 
 // Delete removes a Profile by PK. [ErrProfileNotFound] when absent.

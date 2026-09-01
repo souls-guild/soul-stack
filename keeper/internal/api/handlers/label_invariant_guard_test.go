@@ -266,26 +266,53 @@ func TestIncarnationLabel_StateSecretPathIgnoresCaptionChanges(t *testing.T) {
 	}
 }
 
-// TestLabelWriteReply_AuditPayloadRecordsTheIdentifier pins the shared audit
-// payload of all ten label routes: the identifier that was ADDRESSED plus the
-// caption as it now reads, with an explicit null when cleared.
-func TestLabelWriteReply_AuditPayloadRecordsTheIdentifier(t *testing.T) {
-	label := guardScopeLabel
-	set := LabelWriteReply[ProviderView]{Name: guardScopeID, Label: &label}
-	p := set.AuditPayload()
+// TestLabelWriteReply_AuditPayloadRecordsBothSides pins the shared audit payload
+// of all ten label routes: the identifier that was ADDRESSED, plus the caption on
+// BOTH sides of the change, each explicitly null where it was absent.
+//
+// Both sides, not just the new one, because the event is named after
+// `incarnation.traits_changed` — which records `{name, old_keys, new_keys}` — and
+// an audit line that cannot say what a value used to be cannot answer the
+// question an investigation actually asks.
+func TestLabelWriteReply_AuditPayloadRecordsBothSides(t *testing.T) {
+	before, after := "redis-billing", guardScopeLabel
+	p := LabelWriteReply[ProviderView]{Name: guardScopeID, Previous: &before, Label: &after}.AuditPayload()
+
 	if p["name"] != guardScopeID {
 		t.Errorf("audit `name` = %v, want the identifier %q", p["name"], guardScopeID)
 	}
-	if got, _ := p["label"].(*string); got == nil || *got != guardScopeLabel {
-		t.Errorf("audit `label` = %v, want the caption %q", p["label"], guardScopeLabel)
+	if got, _ := p["old_label"].(*string); got == nil || *got != before {
+		t.Errorf("audit `old_label` = %v, want %q", p["old_label"], before)
+	}
+	if got, _ := p["new_label"].(*string); got == nil || *got != after {
+		t.Errorf("audit `new_label` = %v, want %q", p["new_label"], after)
+	}
+	// The identifier is what was addressed, never what changed — there is no
+	// rename operation anywhere.
+	if p["name"] == p["new_label"] {
+		t.Error("the audit payload conflates the identifier with the caption")
 	}
 
-	cleared := LabelWriteReply[ProviderView]{Name: guardScopeID}.AuditPayload()
-	if _, present := cleared["label"]; !present {
-		t.Error("a cleared caption omitted the `label` key entirely — " +
-			"an omitted key makes \"cleared\" indistinguishable from \"this event predates the field\"")
+	// Both keys present and explicitly nil at the ends of the range: setting a
+	// caption on a row that had none, and clearing one that did. An omitted key
+	// would make either indistinguishable from "this event predates the field".
+	firstEver := LabelWriteReply[ProviderView]{Name: guardScopeID, Label: &after}.AuditPayload()
+	if _, present := firstEver["old_label"]; !present {
+		t.Error("a first-ever caption omitted `old_label` entirely")
 	}
-	if v, _ := cleared["label"].(*string); v != nil {
-		t.Errorf("a cleared caption recorded %v, want an explicit nil", v)
+	if v, _ := firstEver["old_label"].(*string); v != nil {
+		t.Errorf("a first-ever caption recorded old_label=%v, want an explicit nil", v)
+	}
+
+	cleared := LabelWriteReply[ProviderView]{Name: guardScopeID, Previous: &before}.AuditPayload()
+	if _, present := cleared["new_label"]; !present {
+		t.Error("a cleared caption omitted `new_label` entirely")
+	}
+	if v, _ := cleared["new_label"].(*string); v != nil {
+		t.Errorf("a cleared caption recorded new_label=%v, want an explicit nil", v)
+	}
+	if got, _ := cleared["old_label"].(*string); got == nil || *got != before {
+		t.Errorf("a cleared caption lost what it was cleared FROM: old_label=%v, want %q",
+			cleared["old_label"], before)
 	}
 }

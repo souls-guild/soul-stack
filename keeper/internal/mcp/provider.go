@@ -204,12 +204,12 @@ func (h *Handler) callProviderSetLabel(ctx context.Context, claims *jwt.Claims, 
 		notConfigured: "provider registry is not configured",
 		validName:     provider.ValidName,
 		namePattern:   provider.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (providerViewOut, error) {
-			p, err := h.deps.ProviderSvc.SetLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (providerViewOut, *string, error) {
+			p, previous, err := h.deps.ProviderSvc.SetLabel(ctx, name, label)
 			if err != nil {
-				return providerViewOut{}, err
+				return providerViewOut{}, nil, err
 			}
-			return toProviderViewOut(p), nil
+			return toProviderViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, provider.ErrProviderNotFound) },
 		notFoundf:  func(name string) string { return "provider " + name + " not found" },

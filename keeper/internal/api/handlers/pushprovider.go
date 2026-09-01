@@ -224,10 +224,10 @@ func (h *PushProviderHandler) SetLabelTyped(ctx context.Context, name string, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'name' must match "+pushprovider.NamePattern)}
 	}
-	p, err := h.svc.SetLabel(ctx, name, req.Label)
+	p, previous, err := h.svc.SetLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[PushProviderView]{Body: toPushProviderView(p), Name: name, Label: p.Label}, nil
+		return LabelWriteReply[PushProviderView]{Body: toPushProviderView(p), Name: name, Label: p.Label, Previous: previous}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
 	default:

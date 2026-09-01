@@ -39,8 +39,20 @@ const vigilColumns = `name, sid, service, incarnation, coven, trait_key, trait_v
 // read as a rule change to an operator triaging one. Who changed the caption and
 // when is in the audit trail, under `vigil.label_changed` / `decree.label_changed`.
 const (
-	vigilUpdateLabelSQL  = `UPDATE vigils SET label = $2 WHERE name = $1`
-	decreeUpdateLabelSQL = `UPDATE decrees SET label = $2 WHERE name = $1`
+	vigilUpdateLabelSQL = `
+UPDATE vigils AS x
+SET label = $2
+FROM vigils AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
+	decreeUpdateLabelSQL = `
+UPDATE decrees AS x
+SET label = $2
+FROM decrees AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 )
 
 // UpdateVigilLabel replaces the display caption of one Vigil ([ADR-0085]).
@@ -54,35 +66,35 @@ const (
 // The name argument addresses the row; it is never written. Nothing derived
 // moves as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateVigilLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateVigilLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	return updateLabel(ctx, db, vigilUpdateLabelSQL, "vigil", name, label, ErrVigilNotFound)
 }
 
 // UpdateDecreeLabel replaces the display caption of one Decree ([ADR-0085]).
 // [ErrDecreeNotFound] when absent. Same semantics as [UpdateVigilLabel].
-func UpdateDecreeLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateDecreeLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	return updateLabel(ctx, db, decreeUpdateLabelSQL, "decree", name, label, ErrDecreeNotFound)
 }
 
 // updateLabel is the shared body of the two above: Vigil and Decree spell their
 // columns differently everywhere else in this package, but a caption is one
 // column with one meaning, so it gets one implementation.
-func updateLabel(ctx context.Context, db ExecQueryRower, sql, what, name string, label *string, notFound error) error {
+func updateLabel(ctx context.Context, db ExecQueryRower, sql, what, name string, label *string, notFound error) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("oracle: invalid %s name %q (must match %s)", what, name, NamePattern)
+		return nil, fmt.Errorf("oracle: invalid %s name %q (must match %s)", what, name, NamePattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
-	tag, err := db.Exec(ctx, sql, name, v)
-	if err != nil {
-		return fmt.Errorf("oracle: update %s label: %w", what, err)
+	var previous *string
+	if err := db.QueryRow(ctx, sql, name, v).Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, notFound
+		}
+		return nil, fmt.Errorf("oracle: update %s label: %w", what, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return notFound
-	}
-	return nil
+	return previous, nil
 }
 
 // SelectActiveVigilsForSubject returns the enabled Vigils whose subject reaches

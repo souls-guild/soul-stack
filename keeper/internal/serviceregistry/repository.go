@@ -56,7 +56,13 @@ RETURNING created_at, updated_at
 // stamp would make a cosmetic edit read as a re-pointing of the service. Who
 // changed the caption and when is in the audit trail, under
 // `service.label_changed`.
-const updateLabelServiceSQL = `UPDATE service_registry SET label = $2 WHERE name = $1`
+const updateLabelServiceSQL = `
+UPDATE service_registry AS x
+SET label = $2
+FROM service_registry AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 
 const selectServiceByNameSQL = `
 SELECT ` + serviceColumns + `
@@ -167,18 +173,19 @@ func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 // The name argument addresses the row; it is never written, and it — not the
 // caption — is segment 2 of every path this service's secrets derive onto.
 // Nothing derived moves as a result of this call.
-func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("serviceregistry: invalid name %q (must match %s)", name, NamePattern)
+		return nil, fmt.Errorf("serviceregistry: invalid name %q (must match %s)", name, NamePattern)
 	}
-	tag, err := db.Exec(ctx, updateLabelServiceSQL, name, strOrNil(registrylabel.Normalize(label)))
+	var previous *string
+	err := db.QueryRow(ctx, updateLabelServiceSQL, name, strOrNil(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
-		return fmt.Errorf("serviceregistry: update service label: %w", wrapPgErr(err))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("serviceregistry: update service label: %w", wrapPgErr(err))
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return previous, nil
 }
 
 // DeleteService deletes a Service record by PK. [ErrNotFound] if the row didn't exist.

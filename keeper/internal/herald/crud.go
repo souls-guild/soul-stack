@@ -118,7 +118,13 @@ RETURNING created_at, updated_at
 // Note also what [heraldUpdateSQL] does NOT set: `label` is absent from it, so a
 // full channel update leaves the caption standing rather than silently clearing
 // it — the two mutations are orthogonal in both directions.
-const heraldUpdateLabelSQL = `UPDATE heralds SET label = $2 WHERE name = $1`
+const heraldUpdateLabelSQL = `
+UPDATE heralds AS x
+SET label = $2
+FROM heralds AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 
 const heraldSelectByNameSQL = `
 SELECT ` + heraldColumns + `
@@ -278,35 +284,37 @@ OFFSET $1 LIMIT $2`
 // derived Vault path `secret/herald/<name>/<field>` is built from. Nothing
 // derived moves as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("herald: invalid name %q (must match %s)", name, NamePattern)
+		return nil, fmt.Errorf("herald: invalid name %q (must match %s)", name, NamePattern)
 	}
-	tag, err := db.Exec(ctx, heraldUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label)))
+	var previous *string
+	err := db.QueryRow(ctx, heraldUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
-		return fmt.Errorf("herald: update herald label: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrHeraldNotFound
+		}
+		return nil, fmt.Errorf("herald: update herald label: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrHeraldNotFound
-	}
-	return nil
+	return previous, nil
 }
 
 // UpdateTidingLabel replaces the display caption of one Tiding ([ADR-0085]).
 // [ErrTidingNotFound] when the row is absent. Same semantics as
 // [UpdateHeraldLabel].
-func UpdateTidingLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+func UpdateTidingLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
 	if !ValidName(name) {
-		return fmt.Errorf("herald: invalid tiding name %q (must match %s)", name, NamePattern)
+		return nil, fmt.Errorf("herald: invalid tiding name %q (must match %s)", name, NamePattern)
 	}
-	tag, err := db.Exec(ctx, tidingUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label)))
+	var previous *string
+	err := db.QueryRow(ctx, tidingUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
-		return fmt.Errorf("herald: update tiding label: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrTidingNotFound
+		}
+		return nil, fmt.Errorf("herald: update tiding label: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrTidingNotFound
-	}
-	return nil
+	return previous, nil
 }
 
 // UpdateHerald replaces mutable fields of Herald (type/config/secret_ref/enabled,
@@ -366,7 +374,13 @@ RETURNING created_at, updated_at
 // tidingUpdateLabelSQL replaces the display caption of one Tiding ([ADR-0085]).
 // Same shape and same reasoning as [heraldUpdateLabelSQL]: `label` only, no PK,
 // no `updated_at`, and [tidingUpdateSQL] leaves `label` alone in return.
-const tidingUpdateLabelSQL = `UPDATE tidings SET label = $2 WHERE name = $1`
+const tidingUpdateLabelSQL = `
+UPDATE tidings AS x
+SET label = $2
+FROM tidings AS old
+WHERE x.name = $1 AND old.name = x.name
+RETURNING old.label
+`
 
 const tidingSelectByNameSQL = `
 SELECT ` + tidingColumns + `

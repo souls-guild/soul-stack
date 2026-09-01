@@ -123,7 +123,7 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 
 	const renamed = "Redis — Billing (production)"
 	label := renamed
-	if err := UpdateLabel(ctx, integrationPool, "redis-billing", &label); err != nil {
+	if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", &label); err != nil {
 		t.Fatalf("UpdateLabel: %v", err)
 	}
 	after, err := SelectByName(ctx, integrationPool, "redis-billing")
@@ -168,7 +168,7 @@ func TestIntegration_UpdateLabel_AllowedWhileApplying(t *testing.T) {
 	}
 
 	label := "Redis — Billing"
-	if err := UpdateLabel(ctx, integrationPool, "redis-billing", &label); err != nil {
+	if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", &label); err != nil {
 		t.Fatalf("UpdateLabel while applying: %v\n"+
 			"ADR-0085: there is deliberately no status gate — no run reads the caption.", err)
 	}
@@ -201,10 +201,10 @@ func TestIntegration_UpdateLabel_ClearsToNull(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			restore := "Redis"
-			if err := UpdateLabel(ctx, integrationPool, "redis-billing", &restore); err != nil {
+			if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", &restore); err != nil {
 				t.Fatalf("UpdateLabel(restore): %v", err)
 			}
-			if err := UpdateLabel(ctx, integrationPool, "redis-billing", tc.label); err != nil {
+			if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", tc.label); err != nil {
 				t.Fatalf("UpdateLabel(clear): %v", err)
 			}
 			got, err := SelectByName(ctx, integrationPool, "redis-billing")
@@ -224,7 +224,7 @@ func TestIntegration_UpdateLabel_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	label := "whatever"
-	err := UpdateLabel(ctx, integrationPool, "no-such-incarnation", &label)
+	_, err := UpdateLabel(ctx, integrationPool, "no-such-incarnation", &label)
 	if err == nil {
 		t.Fatal("UpdateLabel on a missing row returned nil")
 	}
@@ -247,5 +247,72 @@ func TestIntegration_Label_IsNotUnique(t *testing.T) {
 	if err := Create(ctx, integrationPool, labelledIncarnation("redis-orders", "archon-alice", shared)); err != nil {
 		t.Fatalf("Create(second) with a duplicate caption: %v\n"+
 			"ADR-0085: label is deliberately NOT unique.", err)
+	}
+}
+
+// TestIntegration_UpdateLabel_ReturnsThePreviousCaption is the reason the write
+// is an `UPDATE … RETURNING old.label` rather than a read followed by a write:
+// the audit event records `{name, old_label, new_label}`, and both halves have
+// to describe ONE transition.
+//
+// A `FROM <table> AS old` self-join is not an obvious construction, and its whole
+// point is invisible over a fake — a fake returns whatever it was told to. Only a
+// real Postgres can show that the alias reads the PRE-update snapshot rather than
+// the row the same statement just wrote.
+func TestIntegration_UpdateLabel_ReturnsThePreviousCaption(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	ctx := context.Background()
+
+	const first = "Redis (staging)"
+	if err := Create(ctx, integrationPool, labelledIncarnation("redis-billing", "archon-alice", first)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// (a) caption → caption: the old value is what the row held, NOT the new one.
+	const second = "Redis — Billing (production)"
+	next := second
+	previous, err := UpdateLabel(ctx, integrationPool, "redis-billing", &next)
+	if err != nil {
+		t.Fatalf("UpdateLabel: %v", err)
+	}
+	if previous == nil || *previous != first {
+		t.Fatalf("previous caption = %v, want %q.\n"+
+			"If this equals the NEW caption, the RETURNING alias is reading the row the same "+
+			"statement wrote instead of the pre-update snapshot, and every audit event in the "+
+			"family records a transition from a value to itself.", previous, first)
+	}
+	if *previous == second {
+		t.Error("the previous caption equals the new one — the self-join is not reading the snapshot")
+	}
+
+	// (b) caption → cleared: the old value survives the clear.
+	cleared, err := UpdateLabel(ctx, integrationPool, "redis-billing", nil)
+	if err != nil {
+		t.Fatalf("UpdateLabel(clear): %v", err)
+	}
+	if cleared == nil || *cleared != second {
+		t.Errorf("clearing reported previous=%v, want %q — an audit line that cannot say what a "+
+			"caption was cleared FROM answers no question worth asking", cleared, second)
+	}
+
+	// (c) absent → caption: nil old value, which the audit records as an explicit
+	// null rather than an omitted key.
+	back := first
+	fromNothing, err := UpdateLabel(ctx, integrationPool, "redis-billing", &back)
+	if err != nil {
+		t.Fatalf("UpdateLabel(set again): %v", err)
+	}
+	if fromNothing != nil {
+		t.Errorf("setting a caption on a row that had none reported previous=%q, want nil", *fromNothing)
+	}
+
+	// (d) the row really ends where the last call said it did.
+	got, err := SelectByName(ctx, integrationPool, "redis-billing")
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if got.Label == nil || *got.Label != first {
+		t.Errorf("final caption = %v, want %q", got.Label, first)
 	}
 }

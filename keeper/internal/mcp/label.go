@@ -54,8 +54,9 @@ type labelSetSpec[V any] struct {
 	// identifier still has to be well-formed because it addresses the row.
 	validName   func(string) bool
 	namePattern string
-	// set performs the write and returns the row as it now reads.
-	set func(ctx context.Context, name string, label *string) (V, error)
+	// set performs the write and returns the row as it now reads, plus the
+	// caption it held BEFORE — which the audit event records as `old_label`.
+	set func(ctx context.Context, name string, label *string) (V, *string, error)
 	// isNotFound recognises the registry's own not-found sentinel.
 	isNotFound func(error) bool
 	// notFoundf and failMsg build the two error messages.
@@ -93,7 +94,7 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, spec.tool, mcpCodeForbidden,
 			"operator lacks required permission "+spec.resource+".label-set")
 	}
-	view, err := spec.set(ctx, a.Name, a.Label)
+	view, previous, err := spec.set(ctx, a.Name, a.Label)
 	if err != nil {
 		if spec.isNotFound(err) {
 			return h.toolError(req.ID, spec.tool, mcpCodeNotFound, spec.notFoundf(a.Name))
@@ -102,12 +103,15 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, spec.tool, mcpCodeInternalError, spec.failMsg)
 	}
 	// Payload parity with REST (handlers.LabelWriteReply.AuditPayload): the
-	// identifier addressed and the caption as it now reads, explicitly null when
-	// cleared. Normalized rather than echoed, so the trail records what the row
-	// holds — a caller sending "  " stored NULL and the audit must say so.
+	// identifier addressed and the caption on both sides. The NEW value is
+	// normalized rather than echoed, so the trail records what the row holds — a
+	// caller sending "  " stored NULL and the audit must say so; the OLD value
+	// comes off the UPDATE itself, so the pair always describes a transition that
+	// really happened.
 	h.writeAudit(spec.event, claims.Subject, map[string]any{
-		"name":  a.Name,
-		"label": registrylabel.Normalize(a.Label),
+		"name":      a.Name,
+		"old_label": previous,
+		"new_label": registrylabel.Normalize(a.Label),
 	})
 	return h.toolResult(req.ID, view)
 }

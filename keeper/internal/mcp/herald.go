@@ -293,12 +293,12 @@ func (h *Handler) callHeraldSetLabel(ctx context.Context, claims *jwt.Claims, re
 		notConfigured: heraldNotConfigured,
 		validName:     herald.ValidName,
 		namePattern:   herald.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (heraldView, error) {
-			updated, err := h.deps.HeraldSvc.SetHeraldLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (heraldView, *string, error) {
+			updated, previous, err := h.deps.HeraldSvc.SetHeraldLabel(ctx, name, label)
 			if err != nil {
-				return heraldView{}, err
+				return heraldView{}, nil, err
 			}
-			return toHeraldView(updated), nil
+			return toHeraldView(updated), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrHeraldNotFound) },
 		notFoundf:  func(name string) string { return "herald " + name + " not found" },
@@ -565,12 +565,12 @@ func (h *Handler) callTidingSetLabel(ctx context.Context, claims *jwt.Claims, re
 		notConfigured: heraldNotConfigured,
 		validName:     herald.ValidName,
 		namePattern:   herald.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (tidingView, error) {
-			updated, err := h.deps.HeraldSvc.SetTidingLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (tidingView, *string, error) {
+			updated, previous, err := h.deps.HeraldSvc.SetTidingLabel(ctx, name, label)
 			if err != nil {
-				return tidingView{}, err
+				return tidingView{}, nil, err
 			}
-			return toTidingView(updated), nil
+			return toTidingView(updated), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrTidingNotFound) },
 		notFoundf:  func(name string) string { return "tiding " + name + " not found" },

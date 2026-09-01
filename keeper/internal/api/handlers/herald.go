@@ -201,11 +201,11 @@ func (h *HeraldHandler) SetHeraldLabelTyped(ctx context.Context, name string, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'name' must match "+herald.NamePattern)}
 	}
-	updated, err := h.svc.SetHeraldLabel(ctx, name, req.Label)
+	updated, previous, err := h.svc.SetHeraldLabel(ctx, name, req.Label)
 	if err != nil {
 		return zero, h.heraldError(err, name, "label-set")
 	}
-	return LabelWriteReply[HeraldView]{Body: toHeraldView(updated), Name: name, Label: updated.Label}, nil
+	return LabelWriteReply[HeraldView]{Body: toHeraldView(updated), Name: name, Label: updated.Label, Previous: previous}, nil
 }
 
 // SetTidingLabelTyped — domain function for PUT /v1/tidings/{name}/label
@@ -217,11 +217,11 @@ func (h *HeraldHandler) SetTidingLabelTyped(ctx context.Context, name string, re
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'name' must match "+herald.NamePattern)}
 	}
-	updated, err := h.svc.SetTidingLabel(ctx, name, req.Label)
+	updated, previous, err := h.svc.SetTidingLabel(ctx, name, req.Label)
 	if err != nil {
 		return zero, h.tidingError(err, name, "label-set")
 	}
-	return LabelWriteReply[TidingView]{Body: toTidingView(updated), Name: name, Label: updated.Label}, nil
+	return LabelWriteReply[TidingView]{Body: toTidingView(updated), Name: name, Label: updated.Label, Previous: previous}, nil
 }
 
 // HeraldDeleteReply is the extracted result of [HeraldHandler.DeleteHeraldTyped]

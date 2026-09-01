@@ -42,7 +42,7 @@ Unlike `PUT /v1/push-providers/{name}` above, this publishes **no** `push-provid
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 PushProvider`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `push-provider.label_changed`, payload `{name, label}`.
+**Response `200 PushProvider`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `push-provider.label_changed`, payload `{name, old_label, new_label}`.
 
 ### `DELETE /v1/push-providers/{name}` - delete entry
 

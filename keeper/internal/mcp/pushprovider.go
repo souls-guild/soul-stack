@@ -66,12 +66,12 @@ func (h *Handler) callPushProviderSetLabel(ctx context.Context, claims *jwt.Clai
 		notConfigured: "push-provider registry is not configured",
 		validName:     pushprovider.ValidName,
 		namePattern:   pushprovider.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (pushProviderViewOut, error) {
-			p, err := h.deps.PushProviderSvc.SetLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (pushProviderViewOut, *string, error) {
+			p, previous, err := h.deps.PushProviderSvc.SetLabel(ctx, name, label)
 			if err != nil {
-				return pushProviderViewOut{}, err
+				return pushProviderViewOut{}, nil, err
 			}
-			return toPushProviderViewOut(p), nil
+			return toPushProviderViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, pushprovider.ErrPushProviderNotFound) },
 		notFoundf:  func(name string) string { return "push provider " + name + " not found" },

@@ -154,11 +154,13 @@ func (s *Service) GetVigil(ctx context.Context, name string) (*Vigil, error) {
 // which that argument does not apply, because nothing in the snapshot reads it.
 //
 // [ErrVigilNotFound] if the row doesn't exist.
-func (s *Service) SetVigilLabel(ctx context.Context, name string, label *string) (*Vigil, error) {
-	if err := UpdateVigilLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetVigilLabel(ctx context.Context, name string, label *string) (*Vigil, *string, error) {
+	previous, err := UpdateVigilLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectVigilByName(ctx, s.pool, name)
+	v, err := SelectVigilByName(ctx, s.pool, name)
+	return v, previous, err
 }
 
 // DeleteVigil removes a Vigil by PK. [ErrVigilNotFound] if the row didn't exist.
@@ -266,11 +268,13 @@ func (s *Service) GetDecree(ctx context.Context, name string) (*Decree, error) {
 // breaker.
 //
 // [ErrDecreeNotFound] if the row doesn't exist.
-func (s *Service) SetDecreeLabel(ctx context.Context, name string, label *string) (*Decree, error) {
-	if err := UpdateDecreeLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetDecreeLabel(ctx context.Context, name string, label *string) (*Decree, *string, error) {
+	previous, err := UpdateDecreeLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectDecreeByName(ctx, s.pool, name)
+	d, err := SelectDecreeByName(ctx, s.pool, name)
+	return d, previous, err
 }
 
 // DeleteDecree removes a Decree by PK (cooldown state in oracle_fires cascades

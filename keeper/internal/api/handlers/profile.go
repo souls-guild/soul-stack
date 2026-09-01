@@ -230,10 +230,10 @@ func (h *ProfileHandler) SetLabelTyped(ctx context.Context, name string, req Lab
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'name' must match "+profile.NamePattern)}
 	}
-	p, err := h.svc.SetLabel(ctx, name, req.Label)
+	p, previous, err := h.svc.SetLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[ProfileView]{Body: toProfileView(p), Name: name, Label: p.Label}, nil
+		return LabelWriteReply[ProfileView]{Body: toProfileView(p), Name: name, Label: p.Label, Previous: previous}, nil
 	case errors.Is(err, profile.ErrProfileNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+name+" not found")}
 	default:

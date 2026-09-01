@@ -130,12 +130,12 @@ func (h *Handler) callAugurOmenSetLabel(ctx context.Context, claims *jwt.Claims,
 		notConfigured: augurNotConfigured,
 		validName:     augur.ValidName,
 		namePattern:   augur.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (omenView, error) {
-			o, err := h.deps.AugurSvc.SetOmenLabel(ctx, name, label)
+		set: func(ctx context.Context, name string, label *string) (omenView, *string, error) {
+			o, previous, err := h.deps.AugurSvc.SetOmenLabel(ctx, name, label)
 			if err != nil {
-				return omenView{}, err
+				return omenView{}, nil, err
 			}
-			return toOmenView(o), nil
+			return toOmenView(o), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, augur.ErrOmenNotFound) },
 		notFoundf:  func(name string) string { return "omen " + name + " not found" },

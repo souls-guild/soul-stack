@@ -305,10 +305,10 @@ func (h *ServiceHandler) GetTyped(ctx context.Context, name string) (ServiceView
 // caption is neither.
 func (h *ServiceHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ServiceView], error) {
 	var zero LabelWriteReply[ServiceView]
-	entry, err := h.svc.SetServiceLabel(ctx, name, req.Label)
+	entry, previous, err := h.svc.SetServiceLabel(ctx, name, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[ServiceView]{Body: toServiceResponse(entry), Name: name, Label: entry.Label}, nil
+		return LabelWriteReply[ServiceView]{Body: toServiceResponse(entry), Name: name, Label: entry.Label, Previous: previous}, nil
 	case errors.Is(err, serviceregistry.ErrNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
 	default:

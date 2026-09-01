@@ -64,7 +64,7 @@ Deliberately narrower than `PUT /v1/heralds/{name}` above, which REPLACES the ch
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 Herald`** — the channel as it now reads. Errors: `400`, `403`, `404 not-found`, `422` (invalid path-`name`). Audit: `herald.label_changed`, payload `{name, label}` (`label` explicitly `null` when cleared).
+**Response `200 Herald`** — the channel as it now reads. Errors: `400`, `403`, `404 not-found`, `422` (invalid path-`name`). Audit: `herald.label_changed`, payload `{name, old_label, new_label}` (`label` explicitly `null` when cleared).
 
 ### `DELETE /v1/heralds/{name}` — delete channel
 

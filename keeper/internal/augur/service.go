@@ -141,11 +141,13 @@ func (s *Service) GetOmen(ctx context.Context, name string) (*Omen, error) {
 // field for which that argument does not apply, because nothing reads it.
 //
 // [ErrOmenNotFound] if the record doesn't exist.
-func (s *Service) SetOmenLabel(ctx context.Context, name string, label *string) (*Omen, error) {
-	if err := UpdateOmenLabel(ctx, s.pool, name, label); err != nil {
-		return nil, err
+func (s *Service) SetOmenLabel(ctx context.Context, name string, label *string) (*Omen, *string, error) {
+	previous, err := UpdateOmenLabel(ctx, s.pool, name, label)
+	if err != nil {
+		return nil, nil, err
 	}
-	return SelectOmenByName(ctx, s.pool, name)
+	o, err := SelectOmenByName(ctx, s.pool, name)
+	return o, previous, err
 }
 
 // DeleteOmen deletes an Omen by PK (its Rites cascade). [ErrOmenNotFound]
