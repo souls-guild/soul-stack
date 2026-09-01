@@ -64,7 +64,7 @@ If the new version does not start / crashes according to `keeper_*` metrics:
 
 ## State_schema migrations
 
-`state_schema` - versionable incarnation runtime data schema ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). The version is bumped into `service.yml::state_schema_version`; migrations live in the service repo under `migrations/<NNN>_to_<MMM>/`.
+`state_schema` - versionable incarnation runtime data schema ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). The version is not stored anywhere — it is the top of the ladder in the service repo, where a step is a directory `migrations/<NNN>_<slug>/` holding `main.yml` and its `tests/`. Adding a step raises the version; `service.yml` carries no `state_schema_version:` key (NIM-735).
 
 ### When to use
 
@@ -152,12 +152,13 @@ After Soul restart:
 
 Full migration spec - [`docs/migrations.md`](../migrations.md). Cycle for operator:
 
-1. **Service developer** edits `service.yml::state_schema_version` (bump) + puts `migrations/<N>_to_<M>/migration.yml` with DSL operations (`rename`/`set`/`delete`/`move`, optional `foreach` for collections) + tests `migrations/<N>_to_<M>/tests/<case>.yml`.
-2. **CI** runs `soul-trial` ([ADR-023](../adr/0023-trial-test-runner.md)) - migration is applied on state-fixtures, assertion `state_after`.
-3. **Service-repo** is merged, new git-ref is released ([ADR-007](../adr/0007-versioning-git-ref.md)).
-4. **Operator** updates `service_registry.ref` via Operator API: `POST /v1/services/{name}` with new `ref:`.
-5. **Operator** runs `incarnation.upgrade` via the Operator API on a specific incarnation: `POST /v1/incarnations/{name}/upgrade`. Atomic single PG transaction (see above).
-6. **Verify**: `GET /v1/incarnations/{name}` → `status: ready`, `state_schema_version: <M>`. Migration history - to `state_history` from `scenario: migration`.
+1. **Service developer** edits `state_schema` and adds the step that carries the old state to the new shape: `migrations/<NNN>_<slug>/main.yml` with DSL operations (`rename`/`set`/`delete`/`move`, optional `foreach` for collections) + tests `migrations/<NNN>_<slug>/tests/<case>.yml`. The directory number is the version the step leads to; nothing else records it.
+2. **Service developer** runs `make schema-stamp` and commits the regenerated `migrations/schema.lock` — it carries the new top of the ladder and the fingerprint of the edited `state_schema`, and `soul-lint` refuses a stale one on the service repo's next `make validate` — both targets live in the service repository (wherever it runs `soul-lint validate-service`), not in this core repo (planned, NIM-737 — the target does not exist yet).
+3. **CI** runs `soul-trial` ([ADR-023](../adr/0023-trial-test-runner.md)) - migration is applied on state-fixtures, assertion `state_after`.
+4. **Service-repo** is merged, new git-ref is released ([ADR-007](../adr/0007-versioning-git-ref.md)).
+5. **Operator** updates `service_registry.ref` via Operator API: `POST /v1/services/{name}` with new `ref:`.
+6. **Operator** runs `incarnation.upgrade` via the Operator API on a specific incarnation: `POST /v1/incarnations/{name}/upgrade`. Atomic single PG transaction (see above).
+7. **Verify**: `GET /v1/incarnations/{name}` → `status: ready`, `state_schema_version: <M>`. Migration history - to `state_history` from `scenario: migration`.
 
 If the problem is `status: migration_failed`, see § Rollback state_schema.
 

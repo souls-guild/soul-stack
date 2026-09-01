@@ -44,7 +44,7 @@ hello-world/
 
 What is specifically **not** here and why - it will be useful so as not to look for unnecessary things:
 
-- `migrations/` - migrations are only needed for `state_schema_version > 1` ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)); We have version `1`.
+- `migrations/` - the state-schema version is not stored anywhere — it is the top of the ladder. An empty `migrations/` means version 1 ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)), and version 1 is where we are.
 - `destiny[]` / `modules[]` in `service.yml` - our script uses only **core modules** (`core.file.present`), and they are always available and are not listed in the manifest ([ADR-009](../adr/0009-scenario-dsl.md)).
 - `templates/` - `.tmpl` files are needed when content is rendered by a Go template; Our content comes inline via `${ input.greeting }`.
 
@@ -58,19 +58,27 @@ The manifesto is short in design: only service metadata and **contract for the r
 
 ```yaml
 state_schema_version: 1
-description: Minimal service with real state-change for E2E (file write + commit to incarnation.state)
+description: Minimal service with a real state change for E2E (writes a file + commits to incarnation.state)
 
+# state_schema_version = 1 → the migrations/ directory is not required (ADR-019).
+# Unlike noop, incarnation.state here is non-empty: scenario/create
+# writes the created file's path into the greeting_file field.
 state_schema:
   type: object
   properties:
     greeting_file:
       type: string
+
+# No dependencies: scenario uses only core modules (ADR-015),
+# which are not listed in destiny[]/modules[] (ADR-009).
 ```
+
+> That first line is the file as it stands on disk today: `state_schema_version:` is retired by NIM-735 — the version is the top of the `migrations/` ladder — but the linter still requires the key until NIM-736 ships, and the bundled examples drop it with NIM-738. The excerpt is what you run against now; the bullet below is the target.
 
 Parsing fields:
 
 - **There is no `name`.** The manifest states no identity: you name the service when you register it (`POST /v1/services`), and that is the name Keeper resolves an incarnation against. Writing `name:` here is an error — a second copy nobody compared against the first is how a service ends up fencing the wrong Vault namespace (NIM-726).
-- **`state_schema_version`** is the **structure** version of `incarnation.state`, not the service version (version = git-ref). It is incremented only when there is a breaking change in the state structure and then requires migration. We have `1` → the `migrations/` directory is not needed.
+- **There is no state-schema version either** (the target model — see the note above the block for why the excerpt still shows one). The **structure** version of `incarnation.state` (not the service version — that is the git-ref) is not written in the manifest: it is the top of the `migrations/` ladder. An empty `migrations/` means version 1, which is where we are, so there is no ladder directory here at all. A breaking change to the state structure is a new ladder step, and the step's number is the new version.
 - **`description`** - one or two phrases; visible in the Keeper UI, MCP directory and `soul-lint` output.
 - **`state_schema`** - JSON Schema (draft-07-compatible, always `type: object` at the root), describing the JSONB field `incarnation.state` in Postgres. Here we declare a single field `greeting_file` of type string. Keeper validates state against this schema when creating an incarnation and when upgrading a schema version.
 
@@ -168,7 +176,7 @@ Before registering a service, run the static linter - it catches structural erro
 ./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml --service-name hello-world
 ```
 
-Both should give exit 0 and `OK: <path>`. `--service-name` is what the scenario check fences Vault paths on — drop it and you get an `own_namespace_fence_unchecked` warning saying the fence did not run ([docs/soul-lint.md](../soul-lint.md)); the manifest states no name to take it from. What exactly does the linter check (JSON Schema at the root, compliance with `state_schema_version` ↔ `migrations/`, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md).
+Both should give exit 0 and `OK: <path>`. `--service-name` is what the scenario check fences Vault paths on — drop it and you get an `own_namespace_fence_unchecked` warning saying the fence did not run ([docs/soul-lint.md](../soul-lint.md)); the manifest states no name to take it from. What exactly does the linter check (JSON Schema at the root, forbidden keys) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md); the `migrations/schema.lock` check against the ladder and the current schema is planned (NIM-737) and does not run today.
 
 **If your service uses plugin modules, add `--modules`.** The `params:` of a `core.*`
 task are checked against the declaration compiled into the linter; a plugin's schema
@@ -289,7 +297,7 @@ You've put together a single-script service. Further - as it grows:
 
 - **More operations.** Add scripts `scenario/<op>/main.yml` (`add_user`, `restart`, …) - each with its own `input:` and its own capture steps. Complete DSL grammar of tasks (loop / block / register / onchanges / retry / ...) - [docs/destiny/tasks.md](../destiny/tasks.md); orchestration delta scenario (`on:` / `where:` / `serial:` / `apply:`) - [docs/scenario/orchestration.md](../scenario/orchestration.md).
 - **Template files.** When the content is more complex than one line - Go text/template in `scenario/<name>/templates/<path>.tmpl` + module `core.file.rendered`. Templating engine spec - [docs/templating.md](../templating.md).
-- **Structural state and migrations.** When state outgrows one or two fields and changes incompatiblely, raise `state_schema_version` and add `migrations/<NNN>_to_<MMM>.yml`. Migrations format (flat DSL + CEL + `foreach`, forward-only) - [docs/migrations.md](../migrations.md).
+- **Structural state and migrations.** When state outgrows one or two fields and changes incompatiblely, add a ladder step and re-stamp. A migration step is a directory `migrations/<NNN>_<slug>/` holding `main.yml` and its `tests/`. The number is the version the step leads to; the "from" is derived — the ladder is forward-only and goes by one. Then `make schema-stamp` regenerates `migrations/schema.lock`, which you commit alongside (planned, NIM-737 — the target does not exist yet). Migrations format (flat DSL + CEL + `foreach`, forward-only) - [docs/migrations.md](../migrations.md).
 - **Dependencies.** Reused task packages - move them to separate destinies and connect them via `destiny[]` to `service.yml` + `apply:` in the script. Custom modules - via `modules[]`. Format - [docs/service/manifest.md](../service/manifest.md).
 - **Host facts.** Targeting and values ​​for system facts - `soulprint.self.*` (OS-family, pkg_mgr, IP, ...). Scheme - [docs/soul/soulprint.md](../soul/soulprint.md).
 - **Day-2 operations** (monitoring, upgrade, cluster restoration) - section [To do](../README.md) in the documentation map and [docs/operations/](../operations/README.md).

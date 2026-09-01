@@ -98,7 +98,7 @@ All three files next to `case.yml` are optional; the case runs without them:
 
 ### Where tests do NOT live
 
-- **service-level `tests/*.yml`** (smoke/system-test after successful `incarnation.create`) is a **different** entity: run on real Souls in a real incarnation, not on an ephemeral stand. The folder name `tests/` is intentional. The sample services currently use **script level** tests - `scenario/<name>/tests/<case>/case.yml` (L0 tests with `fixtures:`, see [`examples/service/redis/scenario/create/tests/`](../../examples/service/redis/scenario/create/tests/)) - and migration tests (`migrations/<NNN>_to_<MMM>/tests/`).
+- **service-level `tests/*.yml`** (smoke/system-test after successful `incarnation.create`) is a **different** entity: run on real Souls in a real incarnation, not on an ephemeral stand. The folder name `tests/` is intentional. The sample services currently use **script level** tests - `scenario/<name>/tests/<case>/case.yml` (L0 tests with `fixtures:`, see [`examples/service/redis/scenario/create/tests/`](../../examples/service/redis/scenario/create/tests/)) - and migration tests (`migrations/<NNN>_<slug>/tests/`).
 - **Coverage-metrics and run-tool** are not part of the test files. Tests are declarative; what is collected from the run and in what form is stored - a separate layer (open Q No. 6, No. 8).
 
 ### Three levels of tests: destiny-molecule vs scenario-test vs service-smoke

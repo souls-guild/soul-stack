@@ -1,6 +1,6 @@
 # State_schema migration DSL
 
-Normative specification of the `migrations/<NNN>_to_<MMM>.yml` format in the service repository. The source of truth for the solution is [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl). This document contains a grammar, allowed CEL functions in a migration context, test convention, examples.
+Normative specification of the `migrations/<NNN>_<slug>/main.yml` format in the service repository. The source of truth for the solution is [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl). This document contains a grammar, allowed CEL functions in a migration context, test convention, examples.
 
 ## Purpose
 
@@ -8,30 +8,25 @@ State_schema migration converts `incarnation.state` (jsonb in Postgres) from ver
 
 ## File layout
 
-`<service-repo>/migrations/<NNN>_to_<MMM>.yml` - one file = one migration step. The `001 → 002 → 003 → ...` chain is run sequentially by the keeper during upgrade.
+A migration step is a directory `migrations/<NNN>_<slug>/` holding `main.yml` and its `tests/`. The number is the version the step leads to; the "from" is derived — the ladder is forward-only and goes by one. The `1 → 2 → 3 → ...` chain is run sequentially by the keeper during upgrade.
 
 ```
 redis/
-├── service.yml                            # state_schema_version: 2
 ├── migrations/
-│   ├── 001_to_002.yml                     # format described below
-│   └── 001_to_002/                        # tests this migration
-│       └── tests/
-│           ├── users-list-to-map.yml
-│           ├── single-user.yml
-│           ├── empty-users.yml
-│           └── preserves-unrelated-fields.yml
+│   ├── 002_split_system_and_operator_users/
+│   │   ├── main.yml                        # format described below
+│   │   └── tests/                          # tests for this step
+│   │       ├── splits-system-and-operator-users.yml
+│   │       └── idempotent-on-repeat.yml
+│   └── schema.lock                         # GENERATED - see "The schema lock"
 └── ...
 ```
 
-File name: `NNN_to_MMM.yml` - three digits with leading zeros, delimiter `_to_`.
+Numbering rule: `<NNN>` is three digits with leading zeros and names the version the step **leads to** — `002_…` is the step that takes state from version 1 to version 2. `<slug>` says what the step does and carries no meaning for ordering. A step never states its own `from`: the ladder is forward-only, so the source version is always the number below.
 
 ## File structure
 
 ```yaml
-from_version: 1
-to_version: 2
-
 description: >
   Transition from redis_users[] array to map redis_users{name: {acl, state}}
   to support per-user ACL and enabled/disabled flag.
@@ -61,6 +56,36 @@ transform:
 
   - delete: { path: state.redis_users_legacy_v1 }
 ```
+
+`main.yml` states what the step does and nothing about where it stands. There is no `from_version:` and no `to_version:` — the directory name carries the position, once.
+
+## The schema version
+
+The state-schema version is not stored anywhere — it is the top of the ladder. An empty `migrations/` means version 1.
+
+There is no `state_schema_version:` key in `service.yml`: a service whose highest step is `007_…` is at version 7, and adding `008_…` puts it at 8. See the [ADR-007 amendment](adr/0007-versioning-git-ref.md#amendment-state_schema_version-leaves-the-manifest-2026-09-01-nim-735), which retires the manifest key as an exception to "an artifact's version is never in the manifest".
+
+The **column** `incarnation.state_schema_version` is a different thing and is unchanged: it records which version a given live incarnation currently sits on, which is a fact about a row in Postgres, not a declaration in a git repository. The same holds for the API/MCP field of that name.
+
+## The schema lock
+
+`schema.lock` is generated next to the ladder: `version` (the top of the ladder at stamp time) and `fingerprint` (a hash of the **parsed and canonicalized** `state_schema`, never of the file text — a comment would break a text hash). Written by `make schema-stamp` and read by `soul-lint` on the **service repo's** own `make validate` (wherever that repo runs `soul-lint validate-service`) — both targets live in the service repository, the tree holding `service.yml` and `migrations/`, not in this core repo.
+
+It exists because a service describes the shape of `incarnation.state` **twice** — declaratively in `state_schema` ([`docs/service/manifest.md`](service/manifest.md)) and imperatively in this ladder — both by hand, with nothing reconciling the two. Nothing reconciles them offline, and nothing reconciles them inside the upgrade transaction either (see [Atomicity](#atomicity) below). A schema edit that no step implements is therefore invisible until an incarnation is upgraded and its state comes out in a shape the schema does not describe.
+
+What catches what:
+
+| Failure | What catches it |
+|---|---|
+| A wrong version number on a step | Impossible — the number exists in exactly one place, the directory name. |
+| `state_schema` changed with no step added | `schema.lock` — the stamped fingerprint no longer matches the parsed schema. |
+| A step that leads to the wrong shape | The step's own tests under `tests/` (see [Testing](#testing)). |
+
+**The fingerprint does not prove the step is correct, only that a step was added.**
+
+**The stamp bypass is procedural, not mechanical.** `make schema-stamp` re-stamps whenever it is run, so an author can edit `state_schema` and re-stamp without adding a step. That is deliberate, and it is how `atlas migrate hash` behaves in Atlas: the bypass shows up in the diff — `schema.lock` changed, no new directory under `migrations/` — and the reviewer reads it there. A mechanical ban (refusing to stamp until the top of the ladder moves) was considered and rejected, because it would force an empty migration step for every harmless schema edit.
+
+> **Doc ahead of code (NIM-737).** This section is the target, not a description of the current tree: nothing writes or reads `schema.lock` yet, and `make schema-stamp` does not exist yet.
 
 ## Operations `transform:`
 
@@ -126,7 +151,7 @@ Optional `down:` block in the migration file can be added post-MVP without break
 
 ## Atomicity
 
-The migration chain `<from_version>` → `<to_version>` keeper executes in **one PG transaction**:
+The migration chain from the incarnation's current version to the target version keeper executes in **one PG transaction**:
 
 1. `BEGIN`.
 2. `SELECT state, state_schema_version FROM incarnation WHERE name = ? FOR UPDATE`.
@@ -137,9 +162,15 @@ The migration chain `<from_version>` → `<to_version>` keeper executes in **one
 
 If any step fails - `ROLLBACK`, the incarnation is marked `status: migration_failed` ([architecture.md → §"Versioning and migration state_schema"](architecture.md#versioning-and-state_schema-migrations)).
 
+**The transaction performs no reconciliation of the post-migration state against the target `state_schema`.** It applies the chain, writes a `state_history` snapshot per step and updates the row ([`keeper/internal/incarnation/crud.go:1791-1833`](../keeper/internal/incarnation/crud.go)); the target schema is never loaded into the transaction, and the only version check it makes is arithmetic on integers — the chain's endpoints against the current and target version numbers. A step that leaves state in a shape the new `state_schema` does not describe commits exactly like a correct one. This is the gap [`schema.lock`](#the-schema-lock) covers offline, and it covers only half of it: the lock catches a schema edited with no step behind it, not a step that produces the wrong shape.
+
+## Secrets and migrations
+
+A migration brings an incarnation up to the new schema, but **not to new secrets**. The migration DSL is a pure function of state and cannot reach Vault ([ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) sandbox). A step that re-points the path a secret is derived under therefore leaves the incarnation in one of two wrong states, and **which one depends on the route, not on the verb**: a day-2 step re-resolving an already-stored record **fails closed, loudly** — `config.StripDeclaredSecrets` ([`shared/config/secret_field.go:506-520`](../shared/config/secret_field.go)) removes the secret marker on the way into state, so the stored value carries no mint intent ([`keeper/internal/coremod/state/state.go:597-600`](../keeper/internal/coremod/state/state.go)) and the resolve refuses ([`state.go:679-681`](../keeper/internal/coremod/state/state.go), and [`state.go:682`](../keeper/internal/coremod/state/state.go) for a field with no value and no marker); a create-class step carrying `generate_secret({…})` **silently mints a fresh password at the new path** that the running service does not know ([`state.go:207-216`](../keeper/internal/coremod/state/state.go) pre-read → [`state.go:684-689`](../keeper/internal/coremod/state/state.go)). `core.state.present` guards neither: its semantics are "an existing value is kept, a missing one is minted", not "verify the secret is reachable". **That is why a step that changes a derived secret path must carry a plain-language item: hand the new passwords to consumers after the first run.** For the **shape** of such a change see [`examples/service/redis/migrations/014_to_015.yml`](../examples/service/redis/migrations/014_to_015.yml) — v14 minted under `secret/redis/<inc>/users/<name>`, v15 derives `secret/redis/<inc>/system_acl_users/<name>`. Cite it for the path shape only: its own description comment overstates the outcome of that particular step, and is corrected by NIM-738.
+
 ## Testing
 
-Migration tests live in `migrations/<NNN_to_MMM>/tests/<case>.yml`. Format:
+Migration tests live in `migrations/<NNN>_<slug>/tests/<case>.yml`, beside the `main.yml` they exercise. Format:
 
 ```yaml
 name: redis-users-array-to-map
@@ -162,14 +193,15 @@ Test:
 2. Applies migration operations.
 3. Checks the resulting `state` against `state_after` (deep-equal).
 
-Triggered via `soul-trial <service-repo>/migrations/<NNN_to_MMM>/` ([ADR-023](adr/0023-trial-test-runner.md): "executes → soul-trial", as opposed to the purely static `soul-lint`). The runner mechanics are a separate task after the spec.
+Triggered via `soul-trial <service-repo>/migrations/<NNN>_<slug>/` ([ADR-023](adr/0023-trial-test-runner.md): "executes → soul-trial", as opposed to the purely static `soul-lint`). The runner mechanics are a separate task after the spec.
 
 ## Related Documents
 
-- [ADR-019 in `docs/architecture.md`](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) - committing the solution.
+- [ADR-019 in `docs/architecture.md`](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) - committing the solution; the [2026-09-01 amendment](adr/0019-state-migration-dsl.md#amendment-a-step-states-its-place-once-2026-09-01-nim-735) is the one that fixes the layout above.
+- [ADR-007](adr/0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field) (amended) - version = git ref; its [2026-09-01 amendment](adr/0007-versioning-git-ref.md#amendment-state_schema_version-leaves-the-manifest-2026-09-01-nim-735) retires `state_schema_version:` from `service.yml`.
 - [ADR-009 in `docs/architecture.md`](adr/0009-scenario-dsl.md) - old mention of flat DSL (now replaced by ADR-019).
 - [ADR-010 in `docs/architecture.md`](adr/0010-templating.md) - CEL as a single expression engine.
 - [`docs/architecture.md` → §"Versioning and migrations state_schema"](architecture.md#versioning-and-state_schema-migrations) - high-level description (`state_schema_version`, upgrade mechanism, atomicity).
 - [`docs/architecture.md` → §"`state_history`"](architecture.md#state_history--state-change-log) - a log through which recovery in the event of an incident is available.
 - [`docs/templating.md`](templating.md) — CEL general spec.
-- [`examples/service/redis/migrations/`](../examples/service/redis/migrations/) - example (migration of `001_to_002`: `redis_users` from the list of names to map `name → {perms, state}` via `foreach`).
+- [`examples/service/redis/migrations/`](../examples/service/redis/migrations/) - the worked ladder (the first step turns `redis_users` from a list of names into a map `name → {perms, state}` via `foreach`). ⚠ The bundled services under `examples/` still carry the pre-NIM-735 flat form (`<NNN>_to_<MMM>.yml` beside `<NNN>_to_<MMM>/tests/`); they are relocated by NIM-738. Read them for the grammar, not for the layout — the layout is the one specified above.
