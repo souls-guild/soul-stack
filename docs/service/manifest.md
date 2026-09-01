@@ -129,6 +129,8 @@ state_schema:
 
 Derived paths — `<mount>/<service>/<incarnation>/redis_users/<name>#password` and `<mount>/<service>/<incarnation>/admin_token#value`.
 
+Reading them off the declarations is what [`soul-lint list-secret-paths`](../soul-lint.md#derived-secret-paths-list-secret-paths) is for — the path is written nowhere in the repository on purpose, so the tool prints it instead of the file.
+
 - **`key:`** names the sibling property that identifies one element of a collection, and therefore the `<key>` path segment. Required inside an array's `items`, refused on a scalar field, and it must name a sibling of type `string` — its value becomes a path segment.
 - **`label:`** is the optional UI caption in the reveal list.
 - Exactly **two** positions are legal: a top-level property, or a property of a top-level array's `items`. The derived path has one field segment and one optional key segment, so anything deeper is a load error, never a silent skip.

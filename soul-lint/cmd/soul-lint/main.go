@@ -14,6 +14,8 @@
 //	                                    artifact).
 //	plugin-init       <namespace>/<name> [flags]  scaffold a new SoulModule
 //	                                    plugin (ADR-016 amendment 2026-05-27).
+//	list-secret-paths <path> --service-name NAME  print the Vault address of
+//	                                    every secret declared in a service.yml.
 //
 // The validate-destiny / validate-service / validate-scenario subcommands also
 // take `--modules <alias>=<path>`, repeatable (NIM-228, reshaped by NIM-377).
@@ -32,15 +34,21 @@
 // repository states the name any more. Without it the fence cannot run, and says
 // so (`own_namespace_fence_unchecked`) rather than passing in silence.
 //
+// `list-secret-paths` takes the same flag and for the same reason, but there it is
+// REQUIRED rather than advisory: the name is a segment of every path it prints, so
+// without it there is nothing to print.
+//
 // Exit codes: 0 = ok, 1 = has errors, 2 = I/O fatal / usage.
 package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/soul-lint/internal/plugininit"
+	"github.com/souls-guild/soul-stack/soul-lint/internal/secretpaths"
 	"github.com/souls-guild/soul-stack/soul-lint/internal/validate"
 )
 
@@ -63,6 +71,8 @@ func main() {
 		os.Exit(runSubcommand(sub, "validate-manifest <path> [--json]", validate.KindManifest, os.Args[2:]))
 	case "plugin-init":
 		os.Exit(runPluginInit(os.Args[2:]))
+	case "list-secret-paths":
+		os.Exit(runListSecretPaths(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		os.Exit(0)
@@ -149,6 +159,73 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 		Modules:     modules,
 		ServiceName: serviceName,
 	}, os.Stdout, os.Stderr)
+}
+
+// runListSecretPaths parses flags for
+// `list-secret-paths <service.yml> --service-name NAME`.
+//
+// It does not go through runSubcommand: that one is the shape shared by the validate-*
+// family (a validate.Kind, --json, --modules), and this command is none of those — it
+// prints a derivation, not diagnostics. The `--service-name` spellings it accepts are
+// kept identical to that family's, so the flag behaves the same wherever it is typed.
+func runListSecretPaths(args []string) int {
+	return listSecretPaths(args, os.Stdout, os.Stderr)
+}
+
+// listSecretPaths is runListSecretPaths with the streams injected, so a test can assert
+// what was PRINTED and not merely the exit code. A CLI test that checks the code alone
+// passes with the wrong service name substituted under it.
+func listSecretPaths(args []string, out, errOut io.Writer) int {
+	const usageLine = "Usage: soul-lint list-secret-paths <service.yml> --service-name NAME"
+	var (
+		path        string
+		serviceName string
+		wantService bool // the previous arg was `--service-name`, so this one is its value
+	)
+	for _, a := range args {
+		if wantService {
+			// A flag-shaped token here is a missing value, not a service name. The
+			// validate-* family swallows it, where the cost is a fence that quietly
+			// does not run; here the cost is a printed path with `--json` in the
+			// service segment and exit 0 — a confident wrong answer. A name that
+			// genuinely starts with `-` is still reachable as `--service-name=-x`.
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(errOut, "soul-lint list-secret-paths: --service-name needs a <name>, got the flag %q — use --service-name=%s if that really is the name\n", a, a)
+				return secretpaths.ExitIOFatal
+			}
+			serviceName = a
+			wantService = false
+			continue
+		}
+		switch {
+		case a == "-h" || a == "--help":
+			fmt.Fprintln(out, usageLine)
+			return secretpaths.ExitOK
+		case a == "--service-name" || a == "-service-name":
+			wantService = true
+		case strings.HasPrefix(a, "--service-name=") || strings.HasPrefix(a, "-service-name="):
+			_, value, _ := strings.Cut(a, "=")
+			serviceName = value
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(errOut, "soul-lint list-secret-paths: unknown flag %q\n", a)
+			return secretpaths.ExitIOFatal
+		default:
+			if path != "" {
+				fmt.Fprintln(errOut, usageLine)
+				return secretpaths.ExitIOFatal
+			}
+			path = a
+		}
+	}
+	if wantService {
+		fmt.Fprintln(errOut, "soul-lint list-secret-paths: --service-name needs a <name>")
+		return secretpaths.ExitIOFatal
+	}
+	if path == "" {
+		fmt.Fprintln(errOut, usageLine)
+		return secretpaths.ExitIOFatal
+	}
+	return secretpaths.Run(secretpaths.Options{Path: path, ServiceName: serviceName}, out, errOut)
 }
 
 // runPluginInit parses flags for `plugin-init <namespace>/<name> [flags]`.
@@ -243,6 +320,8 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--service-name N] [--modules A=P]...  validate scenario/<name>/main.yml")
 	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate a plugin schema document")
 	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]      scaffold a new SoulModule plugin")
+	fmt.Fprintln(w, "  list-secret-paths <path> --service-name N       print the derived Vault address of")
+	fmt.Fprintln(w, "                 every secret declared in a service.yml")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "  --modules <alias>=<path>  bind a plugin's schema document to the alias a task")
 	fmt.Fprintln(w, "                 addresses it by (redis=./dist/schema.json). Repeatable. <path> is a")
@@ -256,4 +335,6 @@ func printUsage(w *os.File) {
 	fmt.Fprintln(w, "                 a flag because no file in a service repository states the name: it is")
 	fmt.Fprintln(w, "                 assigned once, at registration. Without it the fence cannot run and is")
 	fmt.Fprintln(w, "                 reported as own_namespace_fence_unchecked rather than skipped silently.")
+	fmt.Fprintln(w, "                 list-secret-paths takes the same flag and REQUIRES it: the name is a")
+	fmt.Fprintln(w, "                 segment of every path it prints.")
 }

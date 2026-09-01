@@ -213,6 +213,71 @@ derives `service-redis` where the registry says `redis`, and that name is non-em
 matches nothing. So the fence is never silently disabled at L0, but a repository whose
 directory is not its registered name must state `fixtures.service:` for it to mean anything.
 
+## Derived secret paths: `list-secret-paths`
+
+A declared secret's Vault path is **derived and never authored**
+([ADR-0083](adr/0083-declared-secret-state-fields.md) §1). That is the point of the
+design — a path written in the service repository would be a second source of truth,
+and reconciling two copies of one path is the bug class that ADR removes. The cost
+falls on the author, who cannot read off where their secret lands. Before this
+subcommand the only way to know was to read `config.SecretField.VaultPath`.
+
+```
+$ soul-lint list-secret-paths service.yml --service-name redis
+secret/redis/<incarnation>/admin_password#value               ← state_schema.admin_password
+secret/redis/<incarnation>/redis_users/<name>#password        ← state_schema.redis_users[].password
+secret/redis/<incarnation>/system_acl_users/<name>#password   ← state_schema.system_acl_users[].password
+```
+
+**What is printed is the shape, not a path.** Two segments cannot be known offline:
+
+- `<incarnation>` — there is no incarnation at authoring time, and the linter never
+  talks to a keeper.
+- the last segment of a **collection** — it comes from state *data*, an
+  operator-supplied element name. The declaration says only which sibling property
+  supplies it, so `key: name` prints as `<name>`: the key's **name**, never a value it
+  will take.
+
+The third unknown is the service, and it is the same `--service-name` the fence above
+takes, for the same reason (NIM-726). Here it is **required** rather than advisory: it
+is a segment of every line printed, so without it there is nothing to print.
+
+The two declaration shapes read differently, as they derive differently. A collection
+carries the extra `<key>` segment and stores the value under its own property name; a
+scalar has neither, so its value sits under the constant field `value`. The trailing
+`#<field>` is that field, in the form ADR-0083 §1 writes it — a line without it would
+name a KV entry and leave the reader guessing which key inside it holds the value.
+
+The mount is the default `secret`: `keeper.yml` is not a file of the service
+repository, so an offline linter has no configured mount to read.
+
+Three properties are worth stating, because each is a way the command could quietly
+mislead:
+
+- **The output is byte-identical run to run.** Declarations are walked in sorted order
+  (`config.CollectSecretFields`), not in map order.
+- **A service that declares no secrets prints nothing and exits 0.** An empty list is
+  an answer, not a failure — but only when the declarations were actually read. A file
+  that does not parse, or that carries no `state_schema:` map, is **refused** (exit 1)
+  rather than answered with an empty list. That covers every YAML in a service
+  repository which is not the manifest — `types.yml`, `covenant.yml`, a scenario's
+  `main.yml` — each of which parses cleanly and would otherwise come back looking like
+  a service with no secrets.
+- **A refused declaration is never absorbed into silence.** A `type: secret` in a
+  position with no place in the formula derives no path; the refusal goes to stderr,
+  the exit code is 1, and the command says the list above is incomplete. The same holds
+  for a `--service-name` the derivation itself refuses — a reserved namespace
+  ([ADR-0083](adr/0083-declared-secret-state-fields.md) §7) or a name that is not a
+  safe path segment — and for a `key:` whose *property name* is not a safe segment.
+  That last one is legal everywhere else (at runtime the key's **value** becomes the
+  segment, and that is what gets checked), but here the name itself is printed, and a
+  property called `a/b` would render `<a/b>`: punctuation claiming a segment boundary
+  the derivation does not make. A short list that reads as the whole list is the one
+  wrong belief this command can produce.
+
+The precedent for printing a derived thing is `passage_plan`, which shows a run order
+likewise written nowhere.
+
 ## Service vars checks (`validate-service`, `validate-scenario`)
 
 Implemented, [ADR-0082](adr/0082-service-vars.md). All four answer the same class:

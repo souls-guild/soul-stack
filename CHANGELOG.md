@@ -7,6 +7,20 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- `soul-lint list-secret-paths <service.yml> --service-name <name>` — the derived
+  Vault address of every secret a service declares
+  ([docs/soul-lint.md](docs/soul-lint.md), NIM-743). The path is derived and never
+  authored ([ADR-0083](docs/adr/0083-declared-secret-state-fields.md) §1), which is
+  the point of the design and also the reason the author cannot read it off any file;
+  this prints it instead. What is printed is the **shape** —
+  `secret/<service>/<incarnation>/redis_users/<name>#password` — because an offline
+  linter has no incarnation, and a collection's last segment comes from state data, so
+  `key: name` shows as `<name>`, the key's name rather than a value. `--service-name`
+  is required here (nothing in a service repository states the name since NIM-726) and
+  the mount is the default `secret`. A service declaring no secrets prints nothing and
+  exits 0; a file that does not parse or carries no `state_schema:` map is refused
+  rather than answered with an empty list, and a declaration the collector refuses —
+  or a service name the derivation refuses — exits 1 saying the list is incomplete.
 - Soul-side `core.http.request` for one explicit POST/PUT/PATCH/DELETE API
   mutation with the existing HTTP guards, a final post-redaction 64 KiB
   diagnostic response cap, echoed-header-value redaction, no redirect replay,

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/soul-lint/internal/secretpaths"
 	"github.com/souls-guild/soul-stack/soul-lint/internal/validate"
 )
 
@@ -115,6 +116,105 @@ func TestRunSubcommand_ModulesFlagNeedsABinding(t *testing.T) {
 		code := runSubcommand("validate-scenario", "validate-scenario <path>", validate.KindScenario, args)
 		if code != validate.ExitIOFatal {
 			t.Errorf("%v → %d, want %d", args, code, validate.ExitIOFatal)
+		}
+	}
+}
+
+// `list-secret-paths` has its own argument parser (it is not a validate-* kind), so its
+// flag handling needs its own cases. The derivation itself is tested in
+// internal/secretpaths; these pin the CLI surface.
+
+// The fixture declares both shapes, so the golden output pins the whole surface: the
+// derivation, the alignment, the sorted order, and — the part an exit-code assertion
+// cannot see — that the name from the flag is the name that reaches the path.
+const goldenSecretPaths = "" +
+	"secret/redis/<incarnation>/admin_password#value               ← state_schema.admin_password\n" +
+	"secret/redis/<incarnation>/redis_users/<name>#password        ← state_schema.redis_users[].password\n" +
+	"secret/redis/<incarnation>/system_acl_users/<name>#password   ← state_schema.system_acl_users[].password\n"
+
+func TestRunListSecretPaths_Golden(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "secret-paths", "service.yml")
+	for _, args := range [][]string{
+		{path, "--service-name", "redis"},
+		{path, "--service-name=redis"},
+		{"--service-name", "redis", path}, // flag before the positional
+	} {
+		var out, errOut bytes.Buffer
+		code := listSecretPaths(args, &out, &errOut)
+		if code != secretpaths.ExitOK {
+			t.Errorf("%v → %d, want ExitOK; stderr = %q", args, code, errOut.String())
+			continue
+		}
+		if out.String() != goldenSecretPaths {
+			t.Errorf("%v printed:\n%s\nwant:\n%s", args, out.String(), goldenSecretPaths)
+		}
+		if errOut.String() != "" {
+			t.Errorf("%v stderr = %q, want empty", args, errOut.String())
+		}
+	}
+}
+
+// A flag-shaped token after `--service-name` is a missing value, not a name. Left
+// unchecked it produces the worst outcome this command has: `secret/--json/…` printed
+// with exit 0, which is a wrong answer wearing the shape of a right one.
+func TestRunListSecretPaths_FlagIsNotAServiceName(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "secret-paths", "service.yml")
+	for _, args := range [][]string{
+		{"--service-name", "--json", path},
+		{"--service-name", "-h", path},
+		{path, "--service-name", "--modules=x=y"},
+	} {
+		var out, errOut bytes.Buffer
+		if code := listSecretPaths(args, &out, &errOut); code != secretpaths.ExitIOFatal {
+			t.Errorf("%v → %d, want ExitIOFatal; stdout = %q", args, code, out.String())
+		}
+		if out.String() != "" {
+			t.Errorf("%v printed %q, want nothing", args, out.String())
+		}
+	}
+	// The escape hatch stays open: a name that really does start with `-` is reachable
+	// through the `=` spelling, where nothing is being swallowed.
+	var out, errOut bytes.Buffer
+	if code := listSecretPaths([]string{path, "--service-name=-odd"}, &out, &errOut); code != secretpaths.ExitOK {
+		t.Errorf("--service-name=-odd → %d, want ExitOK; stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "secret/-odd/") {
+		t.Errorf("the `=` spelling did not carry the name through: %q", out.String())
+	}
+}
+
+// The name is a segment of every path printed, so an absent one is a usage error rather
+// than a run that guesses. `--service-name=` is the same statement spelled differently.
+func TestRunListSecretPaths_ServiceNameRequired(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "secret-paths", "service.yml")
+	for _, args := range [][]string{
+		{path},
+		{path, "--service-name"},
+		{path, "--service-name="},
+	} {
+		if code := runListSecretPaths(args); code != secretpaths.ExitIOFatal {
+			t.Errorf("%v → %d, want ExitIOFatal", args, code)
+		}
+	}
+}
+
+func TestRunListSecretPaths_UsageErrors(t *testing.T) {
+	path := filepath.Join("..", "..", "testdata", "secret-paths", "service.yml")
+	for _, args := range [][]string{
+		nil,                                     // no path
+		{"--json", path, "--service-name", "r"}, // this command prints no diagnostics
+		{path, path, "--service-name", "redis"}, // two positionals
+	} {
+		if code := runListSecretPaths(args); code != secretpaths.ExitIOFatal {
+			t.Errorf("%v → %d, want ExitIOFatal", args, code)
+		}
+	}
+}
+
+func TestRunListSecretPaths_HelpFlag(t *testing.T) {
+	for _, f := range []string{"-h", "--help"} {
+		if code := runListSecretPaths([]string{f}); code != secretpaths.ExitOK {
+			t.Errorf("%s → %d, want ExitOK", f, code)
 		}
 	}
 }
