@@ -109,7 +109,7 @@ func (f *hPushProviderPool) QueryRow(_ context.Context, sql string, args ...any)
 			return hErrRowPP{err: pgx.ErrNoRows}
 		}
 		paramsBytes, _ := json.Marshal(p.Params)
-		return hScanRowPP{values: []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID}}
+		return hScanRowPP{values: []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label}}
 	}
 	if strings.Contains(sql, "SELECT COUNT(*)") {
 		return hCountRowPP{n: len(f.entries)}
@@ -121,7 +121,7 @@ func (f *hPushProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx.Ro
 	rows := make([][]any, 0, len(f.entries))
 	for _, p := range f.entries {
 		paramsBytes, _ := json.Marshal(p.Params)
-		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID})
+		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
 	}
 	return &hRowsPP{rows: rows}, nil
 }

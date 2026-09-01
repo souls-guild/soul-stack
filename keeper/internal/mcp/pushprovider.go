@@ -20,7 +20,10 @@ import (
 
 // pushProviderViewOut — the JSON shape of the output (same as the HTTP handler).
 type pushProviderViewOut struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent when the row carries none, and
+	// a consumer then shows `name`.
+	Label        *string        `json:"label,omitempty"`
 	Params       map[string]any `json:"params"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
@@ -35,6 +38,7 @@ func toPushProviderViewOut(p *pushprovider.PushProvider) pushProviderViewOut {
 	}
 	return pushProviderViewOut{
 		Name:         p.Name,
+		Label:        p.Label,
 		Params:       params,
 		CreatedAt:    p.CreatedAt.UTC(),
 		UpdatedAt:    p.UpdatedAt.UTC(),
@@ -44,8 +48,36 @@ func toPushProviderViewOut(p *pushprovider.PushProvider) pushProviderViewOut {
 }
 
 type pushProviderCreateArgs struct {
-	Name   string         `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.push-provider.label-set.
+	Label  *string        `json:"label"`
 	Params map[string]any `json:"params"`
+}
+
+// callPushProviderSetLabel — keeper.push-provider.label-set, the MCP mirror of
+// PUT /v1/push-providers/{name}/label (ADR-0085). Publishes no invalidation:
+// the dispatcher snapshot carries params, and a caption is not one of them.
+func (h *Handler) callPushProviderSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[pushProviderViewOut]{
+		tool:          "keeper.push-provider.label-set",
+		resource:      "push-provider",
+		configured:    h.deps.PushProviderSvc != nil,
+		notConfigured: "push-provider registry is not configured",
+		validName:     pushprovider.ValidName,
+		namePattern:   pushprovider.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (pushProviderViewOut, error) {
+			p, err := h.deps.PushProviderSvc.SetLabel(ctx, name, label)
+			if err != nil {
+				return pushProviderViewOut{}, err
+			}
+			return toPushProviderViewOut(p), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, pushprovider.ErrPushProviderNotFound) },
+		notFoundf:  func(name string) string { return "push provider " + name + " not found" },
+		failMsg:    "set push provider label failed",
+		event:      audit.EventPushProviderLabelChanged,
+	})
 }
 
 func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
@@ -73,6 +105,7 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 
 	p, err := h.deps.PushProviderSvc.Create(ctx, pushprovider.CreateInput{
 		Name:      a.Name,
+		Label:     a.Label,
 		Params:    a.Params,
 		CallerAID: claims.Subject,
 	})
@@ -91,6 +124,7 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 
 	h.writeAudit(audit.EventPushProviderCreated, claims.Subject, map[string]any{
 		"name":        p.Name,
+		"label":       p.Label,
 		"params_keys": paramKeysSortedMCP(p.Params),
 	})
 	return h.toolResult(req.ID, toPushProviderViewOut(p))

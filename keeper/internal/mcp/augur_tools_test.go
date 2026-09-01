@@ -160,7 +160,9 @@ func scanAugurT(dest, values []any) error {
 }
 
 func omenTRow(name, src, endpoint, authRef string) []any {
-	return []any{name, src, endpoint, authRef, nil, time.Now()}
+	// The trailing nil is `label` (ADR-0085): the display caption, unset in these
+	// fixtures, so it reads NULL and a consumer shows the name.
+	return []any{name, src, endpoint, authRef, nil, time.Now(), nil}
 }
 
 // riteTRow — one `rites` row in riteColumns order (id, omen, the six subject

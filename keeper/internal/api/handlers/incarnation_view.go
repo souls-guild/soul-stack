@@ -32,11 +32,16 @@ import (
 // labels, ADR-060) and CreatedScenario (start scenario, multi-create mechanism)
 // project with omitempty (empty map / empty string → key omitted).
 type IncarnationGetView struct {
-	ApplyingApplyID    *string
-	Covens             []string
-	CreatedAt          time.Time
-	CreatedByAID       *string
-	CreatedScenario    string
+	ApplyingApplyID *string
+	Covens          []string
+	CreatedAt       time.Time
+	CreatedByAID    *string
+	CreatedScenario string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name. Not masked and never masked: it is
+	// operator-written display text, so no secret can be in it that the operator
+	// did not put there deliberately.
+	Label              *string
 	Name               string
 	Service            string
 	ServiceVersion     string
@@ -85,6 +90,7 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		CreatedAt:          inc.CreatedAt.UTC(),
 		CreatedByAID:       inc.CreatedByAID,
 		CreatedScenario:    derefString(inc.CreatedScenario),
+		Label:              inc.Label,
 		Name:               inc.Name,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,

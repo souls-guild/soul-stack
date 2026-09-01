@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -22,7 +23,9 @@ const augurNotConfigured = "augur registry is not configured"
 // auth_ref + audit metadata. No master credential in the record (auth_ref
 // is a vault-ref).
 type omenView struct {
-	Name         string  `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	Label        *string `json:"label,omitempty"`
 	SourceType   string  `json:"source_type"`
 	Endpoint     string  `json:"endpoint"`
 	AuthRef      string  `json:"auth_ref"`
@@ -33,6 +36,7 @@ type omenView struct {
 func toOmenView(o *augur.Omen) omenView {
 	return omenView{
 		Name:         o.Name,
+		Label:        o.Label,
 		SourceType:   string(o.SourceType),
 		Endpoint:     o.Endpoint,
 		AuthRef:      o.AuthRef,
@@ -43,10 +47,13 @@ func toOmenView(o *augur.Omen) omenView {
 
 // omenCreateArgs — arguments for keeper.augur.omen.create.
 type omenCreateArgs struct {
-	Name       string `json:"name"`
-	SourceType string `json:"source_type"`
-	Endpoint   string `json:"endpoint"`
-	AuthRef    string `json:"auth_ref"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.augur.omen.label-set.
+	Label      *string `json:"label"`
+	SourceType string  `json:"source_type"`
+	Endpoint   string  `json:"endpoint"`
+	AuthRef    string  `json:"auth_ref"`
 }
 
 // callAugurOmenCreate — mutating tool keeper.augur.omen.create. Transport
@@ -83,6 +90,7 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	callerAID := claims.Subject
 	o, err := h.deps.AugurSvc.CreateOmen(ctx, augur.CreateOmenInput{
 		Name:       a.Name,
+		Label:      a.Label,
 		SourceType: a.SourceType,
 		Endpoint:   a.Endpoint,
 		AuthRef:    a.AuthRef,
@@ -102,6 +110,7 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	// (no master cred in the record, augur.md §8).
 	h.writeAudit(audit.EventOmenCreated, callerAID, map[string]any{
 		"name":           o.Name,
+		"label":          o.Label,
 		"source_type":    string(o.SourceType),
 		"endpoint":       o.Endpoint,
 		"auth_ref":       o.AuthRef,
@@ -109,6 +118,30 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	})
 
 	return h.toolResult(req.ID, toOmenView(o))
+}
+
+// callAugurOmenSetLabel — keeper.augur.omen.label-set, the MCP mirror of
+// PUT /v1/augur/omens/{name}/label (ADR-0085). The registry's only mutation.
+func (h *Handler) callAugurOmenSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[omenView]{
+		tool:          "keeper.augur.omen.label-set",
+		resource:      "omen",
+		configured:    h.deps.AugurSvc != nil,
+		notConfigured: augurNotConfigured,
+		validName:     augur.ValidName,
+		namePattern:   augur.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (omenView, error) {
+			o, err := h.deps.AugurSvc.SetOmenLabel(ctx, name, label)
+			if err != nil {
+				return omenView{}, err
+			}
+			return toOmenView(o), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, augur.ErrOmenNotFound) },
+		notFoundf:  func(name string) string { return "omen " + name + " not found" },
+		failMsg:    "set omen label failed",
+		event:      audit.EventOmenLabelChanged,
+	})
 }
 
 // omenListOutput — output of keeper.augur.omen.list: the Omen registry

@@ -40,7 +40,16 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 // (vault:<path>)—validation occurs at service layer (Service.validateSensitive),
 // not storage.
 type PushProvider struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived — in
+	// particular NOT the env-var name SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS, which
+	// is built from Name alone. That is also why Name keeps the letter-first
+	// rule and Label needs no rule at all.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label        *string        `json:"label,omitempty"`
 	Params       map[string]any `json:"params"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`

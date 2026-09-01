@@ -133,6 +133,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaIncarnationRerunLast(api, stub)
 			registerHumaIncarnationDestroy(api, stub)
 			registerHumaIncarnationSetTraits(api, stub)
+			registerHumaIncarnationSetLabel(api, stub)
 			registerHumaIncarnationBindMembers(api, stub)
 			registerHumaIncarnationUnbindMember(api, stub)
 			registerHumaIncarnationListMembers(api, stub)
@@ -200,6 +201,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaServiceList(api, stub)
 			registerHumaServiceGet(api, stub)
 			registerHumaServiceUpdate(api, stub)
+			registerHumaServiceSetLabel(api, stub)
 			registerHumaServiceDeregister(api, stub)
 			registerHumaServiceRefs(api, stub)
 			registerHumaServiceScenarios(api, stub)
@@ -242,6 +244,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaPushProviderList(api, stub)
 			registerHumaPushProviderGet(api, stub)
 			registerHumaPushProviderUpdate(api, stub)
+			registerHumaPushProviderSetLabel(api, stub)
 			registerHumaPushProviderDelete(api, stub)
 			return nil
 		}},
@@ -250,6 +253,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaProviderCreate(api, stub)
 			registerHumaProviderList(api, stub)
 			registerHumaProviderGet(api, stub)
+			registerHumaProviderSetLabel(api, stub)
 			registerHumaProviderDelete(api, stub)
 			return nil
 		}},
@@ -258,6 +262,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaProfileCreate(api, stub)
 			registerHumaProfileList(api, stub)
 			registerHumaProfileGet(api, stub)
+			registerHumaProfileSetLabel(api, stub)
 			registerHumaProfileDelete(api, stub)
 			return nil
 		}},
@@ -309,6 +314,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaOmenCreate(api, stub)
 			registerHumaOmenList(api, stub)
 			registerHumaOmenGet(api, stub)
+			registerHumaOmenSetLabel(api, stub)
 			registerHumaOmenDelete(api, stub)
 			registerHumaRiteCreate(api, stub)
 			registerHumaRiteList(api, stub)
@@ -320,10 +326,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaVigilCreate(api, stub)
 			registerHumaVigilList(api, stub)
 			registerHumaVigilGet(api, stub)
+			registerHumaVigilSetLabel(api, stub)
 			registerHumaVigilDelete(api, stub)
 			registerHumaDecreeCreate(api, stub)
 			registerHumaDecreeList(api, stub)
 			registerHumaDecreeGet(api, stub)
+			registerHumaDecreeSetLabel(api, stub)
 			registerHumaDecreeDelete(api, stub)
 			return nil
 		}},
@@ -333,11 +341,13 @@ func fullSpecGroups() []specGroup {
 			registerHumaHeraldList(api, stub)
 			registerHumaHeraldGet(api, stub)
 			registerHumaHeraldUpdate(api, stub)
+			registerHumaHeraldSetLabel(api, stub)
 			registerHumaHeraldDelete(api, stub)
 			registerHumaTidingCreate(api, stub)
 			registerHumaTidingList(api, stub)
 			registerHumaTidingGet(api, stub)
 			registerHumaTidingUpdate(api, stub)
+			registerHumaTidingSetLabel(api, stub)
 			registerHumaTidingDelete(api, stub)
 			return nil
 		}},

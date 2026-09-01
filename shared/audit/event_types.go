@@ -1258,4 +1258,41 @@ const (
 	// (the gate is open by the time it is written) and exists so the trail
 	// bounds the blind window on both ends rather than only its start.
 	EventAuditEnabled EventType = "audit.enabled"
+
+	// `<resource>.label_changed` — an Archon replaced the DISPLAY CAPTION of one
+	// registry row ([ADR-0085], NIM-728), via `PUT /v1/<collection>/{name}/label`
+	// or the mirror MCP tool `keeper.<resource>.label-set`. `source: api`/`mcp`,
+	// `archon_aid` is the initiator, permission `<resource>.label-set`.
+	//
+	// Payload for every one of the ten: `{name, label}` — the identifier that was
+	// addressed and the caption as it NOW reads. `label` is explicitly `null` when
+	// the caption was cleared, so "cleared" and "written before the field existed"
+	// are different records. Only the new value is carried, matching
+	// `synod.updated`, the one other free-text mutation in the tree. The caption is
+	// operator-written display text and never a secret, so it is recorded as it
+	// reads.
+	//
+	// `name` is the identifier and it is NOT what changed — there is no rename
+	// operation anywhere. What makes these events cheap to read is the invariant
+	// behind the field: a caption participates in nothing derived (no Vault path,
+	// no RBAC scope, no snapshot directory, no CEL root), so one of these events
+	// can never be the cause of a secret, a permission or a run behaving
+	// differently afterwards.
+	//
+	// One type per registry, not one shared type with a `kind` in the payload:
+	// every other event in this catalog is prefixed by its entity, and a filter
+	// over the trail for "everything that touched Heralds" has to keep working the
+	// same way for all of them.
+	//
+	// [ADR-0085]: ../../docs/adr/0085-entity-id-and-label.md
+	EventIncarnationLabelChanged  EventType = "incarnation.label_changed"
+	EventServiceLabelChanged      EventType = "service.label_changed"
+	EventProviderLabelChanged     EventType = "provider.label_changed"
+	EventProfileLabelChanged      EventType = "profile.label_changed"
+	EventPushProviderLabelChanged EventType = "push-provider.label_changed"
+	EventOmenLabelChanged         EventType = "omen.label_changed"
+	EventHeraldLabelChanged       EventType = "herald.label_changed"
+	EventTidingLabelChanged       EventType = "tiding.label_changed"
+	EventVigilLabelChanged        EventType = "vigil.label_changed"
+	EventDecreeLabelChanged       EventType = "decree.label_changed"
 )

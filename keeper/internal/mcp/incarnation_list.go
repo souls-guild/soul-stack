@@ -116,6 +116,7 @@ func (h *Handler) callIncarnationList(ctx context.Context, claims *jwt.Claims, r
 	for _, inc := range items {
 		out.Items = append(out.Items, incarnationGetOutput{
 			Name:               inc.Name,
+			Label:              inc.Label,
 			Service:            inc.Service,
 			ServiceVersion:     inc.ServiceVersion,
 			StateSchemaVersion: inc.StateSchemaVersion,

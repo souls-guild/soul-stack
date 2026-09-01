@@ -21,7 +21,11 @@ import (
 // are optional. covens — declared env-Coven labels (passed into the
 // incarnation, affect RBAC-scope create); input — parameters for scenario `create`.
 type incarnationCreateArgs struct {
-	Name    string         `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.incarnation.label-set. Unlike Name it is never composed by a
+	// `name_template`.
+	Label   *string        `json:"label,omitempty"`
 	Service string         `json:"service"`
 	Covens  []string       `json:"covens,omitempty"`
 	Input   map[string]any `json:"input,omitempty"`
@@ -214,6 +218,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
 		Name:               name,
+		Label:              a.Label,
 		Service:            a.Service,
 		ServiceVersion:     serviceRef.Ref,
 		StateSchemaVersion: 1,

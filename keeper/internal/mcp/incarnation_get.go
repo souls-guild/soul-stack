@@ -26,7 +26,11 @@ type incarnationGetArgs struct {
 // (see callIncarnationGet) — defense-in-depth, parity with REST toDTO. The
 // MCP output never exposes sensitive-key values or vault-refs to the operator.
 type incarnationGetOutput struct {
-	Name               string         `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent when the row carries none, and
+	// a consumer then shows `name`. Not masked: it is operator-written display
+	// text, not state.
+	Label              *string        `json:"label,omitempty"`
 	Service            string         `json:"service"`
 	ServiceVersion     string         `json:"service_version"`
 	StateSchemaVersion int            `json:"state_schema_version"`
@@ -96,6 +100,7 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 
 	return h.toolResult(req.ID, incarnationGetOutput{
 		Name:               inc.Name,
+		Label:              inc.Label,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
 		StateSchemaVersion: inc.StateSchemaVersion,

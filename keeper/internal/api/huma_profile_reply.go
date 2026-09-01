@@ -14,12 +14,16 @@ import (
 // params — `map` with NO omitempty (handler gives {} when nil); cloud_init /
 // created_by_aid — `*string` WITH omitempty; created_at — nanosecond time-wire.
 type Profile struct {
-	CloudInit    *string                `json:"cloud_init,omitempty"`
-	CreatedAt    time.Time              `json:"created_at"`
-	CreatedByAID *string                `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	Name         string                 `json:"name"`
-	Params       map[string]interface{} `json:"params"`
-	Provider     string                 `json:"provider"`
+	CloudInit    *string   `json:"cloud_init,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedByAID *string   `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/profiles/{name}/label. Absent means the row carries none and the
+	// consumer shows `name`.
+	Label    *string                `json:"label,omitempty"`
+	Name     string                 `json:"name"`
+	Params   map[string]interface{} `json:"params"`
+	Provider string                 `json:"provider"`
 }
 
 // ProfileListReply — native 200 body for GET /v1/profiles (offset-envelope).

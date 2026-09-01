@@ -155,9 +155,11 @@ func ptr[T any](v T) *T { return &v }
 
 var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
-// omenRow returns SELECT-row values for omens in omenColumns order.
+// omenRow returns SELECT-row values for omens in omenColumns order. The trailing
+// nil is `label` (ADR-0085): a display caption these fixtures do not set, which
+// reads NULL and makes a consumer show the name.
 func omenRow(name, src, endpoint, authRef string, aid any) []any {
-	return []any{name, src, endpoint, authRef, aid, testNow}
+	return []any{name, src, endpoint, authRef, aid, testNow, any(nil)}
 }
 
 // --- InsertOmen -------------------------------------------------------
@@ -186,8 +188,8 @@ func TestInsertOmen_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO omens") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 5 {
-		t.Fatalf("args len = %d, want 5", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 6 {
+		t.Fatalf("args len = %d, want 6", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[1] != "vault" {
 		t.Errorf("args[1] source_type = %v, want vault", f.queryRowArgs[1])

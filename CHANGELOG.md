@@ -367,6 +367,13 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 - **Migration 116 drops `apply_run_plan.no_log`.** A scenario still carrying
   `no_log:` does not load; delete the key and let the module declare its own
   secret output.
+- **Migration 117 adds a nullable `label` to ten registries**
+  ([ADR-0085](docs/adr/0085-entity-id-and-label.md), NIM-728) — `incarnation`,
+  `service_registry`, `providers`, `profiles`, `push_providers`, `omens`,
+  `heralds`, `tidings`, `vigils`, `decrees`. Additive and backward-compatible:
+  existing rows read NULL and every consumer falls back to showing the
+  identifier, exactly as before. Nothing derived changes, because the caption
+  participates in nothing derived; the identifier keeps every job it had.
 
 Read this before upgrading a cluster that already has roles bound to operators.
 Several changes alter what an existing grant means; some widen it, some narrow
@@ -474,6 +481,16 @@ order to act in.
     on `incarnation=` is satisfied without ever looking at the host. Unbinding is
     grantable separately from binding: it drops a host out of the roster of every
     future run.
+  - **Every `<resource>.*` over a registry now also grants
+    `<resource>.label-set`** ([ADR-0085](docs/adr/0085-entity-id-and-label.md),
+    NIM-728) — for `incarnation`, `service`, `provider`, `profile`,
+    `push-provider`, `omen`, `herald`, `tiding`, `vigil` and `decree`. This is the
+    mildest widening in the list, and deliberately so: the action replaces a row's
+    display caption, and a caption participates in nothing derived — no Vault
+    path, no RBAC scope, no snapshot directory, no CEL root. A holder who gains it
+    on upgrade gains the ability to change a word on a screen and nothing else. It
+    is named here because the roster is meant to be complete, not because it is
+    alarming.
 
   A role that must not gain these enumerates actions instead of the wildcard.
   The full `soul.*` expansion as of this release is `soul.list`, `soul.create`,

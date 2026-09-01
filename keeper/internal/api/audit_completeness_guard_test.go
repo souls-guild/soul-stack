@@ -104,6 +104,26 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodDelete, "/v1/incarnations/{name}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
 	{http.MethodPost, "/v1/incarnations/{name}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
 
+	// The ten display-caption mutations ([ADR-0085], NIM-728). Audited like every
+	// other write, and for the same reason: the trail says who changed what and
+	// when, whether or not the change was consequential. This one is not — a
+	// caption participates in nothing derived — but "harmless" is a claim the
+	// trail should let a reader verify rather than a reason to omit the record.
+	//
+	// Class B (self-audit) on the incarnation, because that route is mounted under
+	// a scope selector rather than one of the NoSelector audit-middleware groups;
+	// class A (middleware-audit) on the other nine.
+	{http.MethodPut, "/v1/incarnations/{name}/label"}:   {events: []audit.EventType{audit.EventIncarnationLabelChanged}, note: "self-audit: handler writes inside SetLabelTyped"},
+	{http.MethodPut, "/v1/services/{name}/label"}:       {events: []audit.EventType{audit.EventServiceLabelChanged}},
+	{http.MethodPut, "/v1/providers/{name}/label"}:      {events: []audit.EventType{audit.EventProviderLabelChanged}},
+	{http.MethodPut, "/v1/profiles/{name}/label"}:       {events: []audit.EventType{audit.EventProfileLabelChanged}},
+	{http.MethodPut, "/v1/push-providers/{name}/label"}: {events: []audit.EventType{audit.EventPushProviderLabelChanged}},
+	{http.MethodPut, "/v1/augur/omens/{name}/label"}:    {events: []audit.EventType{audit.EventOmenLabelChanged}},
+	{http.MethodPut, "/v1/heralds/{name}/label"}:        {events: []audit.EventType{audit.EventHeraldLabelChanged}},
+	{http.MethodPut, "/v1/tidings/{name}/label"}:        {events: []audit.EventType{audit.EventTidingLabelChanged}},
+	{http.MethodPut, "/v1/vigils/{name}/label"}:         {events: []audit.EventType{audit.EventVigilLabelChanged}},
+	{http.MethodPut, "/v1/decrees/{name}/label"}:        {events: []audit.EventType{audit.EventDecreeLabelChanged}},
+
 	// choir (self-audit inside *Typed via writeAuditCtx).
 	{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        {events: []audit.EventType{audit.EventChoirCreated}, note: "self-audit"},
 	{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}"}:              {events: []audit.EventType{audit.EventChoirDeleted}, note: "self-audit"},

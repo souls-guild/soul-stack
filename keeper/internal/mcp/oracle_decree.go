@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -11,10 +12,37 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
+// callOracleDecreeSetLabel — keeper.oracle.decree.label-set, the MCP mirror of
+// PUT /v1/decrees/{name}/label (ADR-0085). Cooldown state and the circuit
+// breaker are keyed on the name and do not move.
+func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[decreeView]{
+		tool:          "keeper.oracle.decree.label-set",
+		resource:      "decree",
+		configured:    h.deps.OracleSvc != nil,
+		notConfigured: oracleNotConfigured,
+		validName:     oracle.ValidName,
+		namePattern:   oracle.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (decreeView, error) {
+			d, err := h.deps.OracleSvc.SetDecreeLabel(ctx, name, label)
+			if err != nil {
+				return decreeView{}, err
+			}
+			return toDecreeView(d), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrDecreeNotFound) },
+		notFoundf:  func(name string) string { return "decree " + name + " not found" },
+		failMsg:    "set decree label failed",
+		event:      audit.EventDecreeLabelChanged,
+	})
+}
+
 // decreeView — output projection of a Decree for oracle-tools (schemaDecreeView).
 // 1:1 with REST decreeResponse / [oracle.Decree].
 type decreeView struct {
-	Name            string          `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	Label           *string         `json:"label,omitempty"`
 	OnBeacon        string          `json:"on_beacon"`
 	WhereCEL        *string         `json:"where,omitempty"`
 	Subject         subjectPayload  `json:"subject"`
@@ -35,6 +63,7 @@ func toDecreeView(d *oracle.Decree) decreeView {
 	}
 	return decreeView{
 		Name:            d.Name,
+		Label:           d.Label,
 		OnBeacon:        d.OnBeacon,
 		WhereCEL:        d.WhereCEL,
 		Subject:         toSubjectPayload(d.Subject()),
@@ -53,7 +82,10 @@ func toDecreeView(d *oracle.Decree) decreeView {
 // exactly one of the four dimensions ([subjectPayload]); where is an optional CEL
 // predicate (compile-checked in Service); enabled is optional (omitted → true).
 type decreeCreateArgs struct {
-	Name            string          `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.oracle.decree.label-set.
+	Label           *string         `json:"label"`
 	OnBeacon        string          `json:"on_beacon"`
 	WhereCEL        *string         `json:"where"`
 	Subject         subjectPayload  `json:"subject"`
@@ -104,6 +136,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 	callerAID := claims.Subject
 	d, err := h.deps.OracleSvc.CreateDecree(ctx, oracle.CreateDecreeInput{
 		Name:            a.Name,
+		Label:           a.Label,
 		OnBeacon:        a.OnBeacon,
 		WhereCEL:        a.WhereCEL,
 		Subject:         a.Subject.selector(),
@@ -128,6 +161,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 	// are NOT put in the payload (action_input may carry a vault-ref in transit).
 	h.writeAudit(audit.EventDecreeCreated, callerAID, map[string]any{
 		"name":            d.Name,
+		"label":           d.Label,
 		"on_beacon":       d.OnBeacon,
 		"incarnation":     d.IncarnationName,
 		"action_scenario": d.ActionScenario,

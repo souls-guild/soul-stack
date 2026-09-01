@@ -80,6 +80,22 @@ func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler)
 	})
 }
 
+// registerHumaServiceSetLabel mounts PUT /v1/services/{name}/label via huma
+// (WRITE+AUDIT variant B — event service.label_changed). serviceH nil → no-op.
+func registerHumaServiceSetLabel(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
+	if serviceH == nil {
+		return
+	}
+	huma.Register(humaAPI, serviceSetLabelOperation(), func(ctx context.Context, in *serviceSetLabelInput) (*serviceSetLabelOutput, error) {
+		reply, err := serviceH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, serviceProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &serviceSetLabelOutput{Body: newServiceView(reply.Body)}, nil
+	})
+}
+
 // registerHumaServiceUpdate mounts PATCH /v1/services/{name} via huma (WRITE+AUDIT variant
 // B — event service.updated). serviceH nil → no-op. Handler: claims → UpdateTyped
 // (replace + invalidate) → audit payload → 200 WITH BODY.
@@ -297,6 +313,7 @@ func HumaServiceSpecYAML() (string, error) {
 		registerHumaServiceList(api, stub)
 		registerHumaServiceGet(api, stub)
 		registerHumaServiceUpdate(api, stub)
+		registerHumaServiceSetLabel(api, stub)
 		registerHumaServiceDeregister(api, stub)
 		registerHumaServiceRefs(api, stub)
 		registerHumaServiceScenarios(api, stub)

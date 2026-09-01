@@ -73,9 +73,15 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 			s := args[5].(string)
 			fqdnSuffix = &s
 		}
+		var label *string
+		if len(args) > 6 && args[6] != nil {
+			s := args[6].(string)
+			label = &s
+		}
 		p.providers[name] = &provider.Provider{
 			Name: name, Type: args[1].(string), Region: args[2].(string),
 			CredentialsRef: args[3].(string), FQDNSuffix: fqdnSuffix, CreatedByAID: createdBy, CreatedAt: now,
+			Label: label,
 		}
 		return cloudRow{[]any{now}}
 	case strings.Contains(sql, "INSERT INTO profiles"):
@@ -90,7 +96,12 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 		now := time.Now()
 		var params map[string]any
 		_ = json.Unmarshal(args[2].([]byte), &params)
-		p.profiles[name] = &profile.Profile{Name: name, Provider: prov, Params: params, CreatedAt: now}
+		var label *string
+		if len(args) > 5 && args[5] != nil {
+			s := args[5].(string)
+			label = &s
+		}
+		p.profiles[name] = &profile.Profile{Name: name, Provider: prov, Params: params, CreatedAt: now, Label: label}
 		return cloudRow{[]any{now}}
 	case strings.Contains(sql, "COUNT(*) FROM providers"):
 		return cloudRow{[]any{len(p.providers)}}
@@ -101,7 +112,7 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 		if !ok {
 			return cloudErrRow{pgx.ErrNoRows}
 		}
-		return cloudRow{[]any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix}}
+		return cloudRow{[]any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label}}
 	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE name = $1"):
 		pr, ok := p.profiles[args[0].(string)]
 		if !ok {
@@ -116,7 +127,7 @@ func (p *cloudFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows
 	rows := &cloudRows{}
 	if strings.Contains(sql, "FROM providers") {
 		for _, pr := range p.providers {
-			rows.data = append(rows.data, []any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix})
+			rows.data = append(rows.data, []any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label})
 		}
 		return rows, nil
 	}
@@ -131,7 +142,7 @@ func profileRowValues(pr *profile.Profile) []any {
 	if pr.Params != nil {
 		b, _ = json.Marshal(pr.Params)
 	}
-	return []any{pr.Name, pr.Provider, b, pr.CloudInit, pr.CreatedByAID, pr.CreatedAt}
+	return []any{pr.Name, pr.Provider, b, pr.CloudInit, pr.CreatedByAID, pr.CreatedAt, pr.Label}
 }
 
 type cloudErrRow struct{ err error }

@@ -158,12 +158,17 @@ type UnreleasedResourcesReply struct {
 type IncarnationGetReply struct {
 	// ApplyingApplyID — apply_id of the in-progress run (ADR-068 §A1); omitempty: nil (no run
 	// in progress / terminal) → key omitted. UI opens live-SSE using this apply_id.
-	ApplyingApplyID    *string                 `json:"applying_apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-	Covens             []string                `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"`                 // ← soul.CovenPattern (per-element)
-	CreatedAt          time.Time               `json:"created_at"`
-	CreatedByAID       *string                 `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	CreatedScenario    string                  `json:"created_scenario,omitempty"`                             // starting scenario (multiple-create mechanism); empty → omitted
-	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`               // ← incarnation.NamePattern
+	ApplyingApplyID *string   `json:"applying_apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
+	Covens          []string  `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"`                 // ← soul.CovenPattern (per-element)
+	CreatedAt       time.Time `json:"created_at"`
+	CreatedByAID    *string   `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedScenario string    `json:"created_scenario,omitempty"`                             // starting scenario (multiple-create mechanism); empty → omitted
+	// Label — the display caption ([ADR-0085]), free text and mutable via
+	// PUT /v1/incarnations/{name}/label. Absent means the row carries none and
+	// the consumer shows `name`. NOT the Vault path segment, NOT the RBAC
+	// `incarnation=` scope value and NOT the CEL root — `name` is all three.
+	Label              *string                 `json:"label,omitempty"`
+	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
 	Service            string                  `json:"service"`
 	ServiceVersion     string                  `json:"service_version"`
 	State              *map[string]interface{} `json:"state"`
@@ -276,6 +281,7 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		CreatedAt:          v.CreatedAt,
 		CreatedByAID:       v.CreatedByAID,
 		CreatedScenario:    v.CreatedScenario,
+		Label:              v.Label,
 		Name:               v.Name,
 		Service:            v.Service,
 		ServiceVersion:     v.ServiceVersion,

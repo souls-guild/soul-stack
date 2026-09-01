@@ -35,8 +35,37 @@ type pushProviderCreateInput struct {
 // takes reflect.Type.Name()) — aligned to the committed hand-written spec (rollout batch
 // N3). The register-func projects into the native handlers.PushProviderCreateInput.
 type PushProviderCreateRequest struct {
-	Name   string         `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider name (= plugins.ssh_providers[].name)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider name (= plugins.ssh_providers[].name)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/push-providers/{name}/label. No pattern — capitals and spaces
+	// are the point, and the letter-first rule on `name` exists because the NAME
+	// becomes an env-var name, which the caption never does.
+	Label  *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Params map[string]any `json:"params,omitempty" doc:"opaque params; sensitive — vault-refs (values are not logged)"`
+}
+
+// === PUT /v1/push-providers/{name}/label (label-set) — WRITE+AUDIT push-provider.label_changed ===
+
+type pushProviderSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider name"`
+	Body LabelSetRequest
+}
+
+type pushProviderSetLabelOutput struct {
+	Body PushProvider
+}
+
+func pushProviderSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setPushProviderLabel",
+		Method:        http.MethodPut,
+		Path:          "/{name}/label",
+		Summary:       "Set the Push-Provider display caption",
+		Description:   "Replaces the display caption of one Push-Provider (ADR-0085). Permission push-provider.label-set, audit push-provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Unlike PUT /v1/push-providers/{name} this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The identifier in the path is NOT touched.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
 }
 
 // pushProviderCreateOutput — huma output for POST /v1/push-providers (FULL-TYPED).

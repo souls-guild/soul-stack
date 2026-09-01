@@ -28,7 +28,11 @@ func NewService(pool ExecQueryRower) (*Service, error) {
 
 // CreateInput contains [Service.Create] parameters.
 type CreateInput struct {
-	Name      string
+	Name string
+	// Label is the optional display caption ([ADR-0085]): free text, set here at
+	// registration and changed afterwards by [Service.SetLabel]. nil/blank stores
+	// NULL and the consumer shows Name.
+	Label     *string
 	Provider  string
 	Params    map[string]any
 	CloudInit *string
@@ -50,6 +54,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) 
 	}
 	p := &Profile{
 		Name:         in.Name,
+		Label:        in.Label,
 		Provider:     in.Provider,
 		Params:       in.Params,
 		CloudInit:    in.CloudInit,
@@ -65,6 +70,22 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) 
 func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
+	}
+	return SelectByName(ctx, s.pool, name)
+}
+
+// SetLabel replaces the display caption of one Profile and returns the row as it
+// now reads ([ADR-0085], permission profile.label-set, audit
+// profile.label_changed).
+//
+// This is the registry's ONLY mutation: a Profile's VM spec stays immutable
+// (changing parameters means delete+create), and a caption is the one field for
+// which that argument does not apply, because nothing reads it.
+//
+// [ErrProfileNotFound] when the row is absent.
+func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Profile, error) {
+	if err := UpdateLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
 	}
 	return SelectByName(ctx, s.pool, name)
 }

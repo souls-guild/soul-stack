@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -103,10 +104,27 @@ const insertSQL = `
 INSERT INTO incarnation (
     name, service, service_version, state_schema_version,
     state, status, status_details, created_by_aid, covens, traits,
-    created_scenario
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_scenario, label
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING created_at, updated_at
 `
+
+// updateLabelSQL replaces the display caption of one row ([ADR-0085]).
+//
+// It sets `label` and NOTHING else — not the PK, which is segment 3 of every
+// derived secret path, the RBAC `incarnation=` scope value and the CEL root, and
+// which has no rename operation anywhere; and deliberately not `updated_at`
+// either. That stamp records changes to the incarnation's SUBSTANCE (its state,
+// its status, its traits), and the operator UI sorts and triages by it: a
+// caption edit would push a quiet incarnation to the top of a list of things
+// that just changed. Who changed the caption and when is in the audit trail,
+// under `incarnation.label_changed`.
+//
+// No row lock and no status gate: unlike every other write on this table, this
+// one cannot conflict with a run. It touches a column no run reads, so it is
+// safe while the incarnation is `applying` or `error_locked` — an operator
+// fixing a caption is not blocked by a stuck run, and does not disturb one.
+const updateLabelSQL = `UPDATE incarnation SET label = $2 WHERE name = $1`
 
 // selectByNameSQL — SELECT all columns by PK.
 const selectByNameSQL = `
@@ -114,7 +132,8 @@ SELECT name, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
-       applying_apply_id
+       applying_apply_id,
+       label
 FROM incarnation
 WHERE name = $1
 `
@@ -354,6 +373,14 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		createdScenario = *inc.CreatedScenario
 	}
 
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	inc.Label = registrylabel.Normalize(inc.Label)
+	var label any
+	if inc.Label != nil {
+		label = *inc.Label
+	}
+
 	row := db.QueryRow(ctx, insertSQL,
 		inc.Name,
 		inc.Service,
@@ -366,6 +393,7 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 		covens,
 		traitsBytes,
 		createdScenario,
+		label,
 	)
 	if err := row.Scan(&inc.CreatedAt, &inc.UpdatedAt); err != nil {
 		return mapInsertError(err)
@@ -387,6 +415,36 @@ func mapInsertError(err error) error {
 		}
 	}
 	return fmt.Errorf("incarnation: insert: %w", err)
+}
+
+// UpdateLabel replaces the display caption of one incarnation ([ADR-0085]).
+// [ErrIncarnationNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// The name argument addresses the row; it is never written, and it — not the
+// caption — is the Vault path segment, the RBAC scope value and the CEL root.
+// Nothing derived moves as a result of this call; see the package doc of
+// keeper/internal/registrylabel.
+func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("incarnation: invalid name %q (must match %s)", name, NamePattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	tag, err := db.Exec(ctx, updateLabelSQL, name, v)
+	if err != nil {
+		return fmt.Errorf("incarnation: update label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrIncarnationNotFound
+	}
+	return nil
 }
 
 // SelectByName reads incarnation by PK. [ErrIncarnationNotFound] on
@@ -420,6 +478,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		&traitsBytes,
 		&inc.CreatedScenario,
 		&inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, null on terminal
+		&inc.Label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -496,7 +555,8 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
-       applying_apply_id
+       applying_apply_id,
+       label
 FROM incarnation` + whereSQL + orderSQL +
 		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)

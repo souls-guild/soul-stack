@@ -89,14 +89,15 @@ func (f *fakeVoyageStore) QueryRow(_ context.Context, sql string, args ...any) p
 		return voyageScalarRow{vals: []any{f.listCount}}
 	case strings.Contains(sql, "FROM heralds\nWHERE name = $1"):
 		// notify existence-check: heralds(name,type,config,secret_ref,enabled,
-		// created_at,updated_at,created_by_aid). heraldExists=false → ErrNoRows
-		// (→ 422 in prepareNotify).
+		// created_at,updated_at,created_by_aid,label). heraldExists=false → ErrNoRows
+		// (→ 422 in prepareNotify). The trailing nil is the display caption
+		// (ADR-0085), unset here.
 		if !f.heraldExists {
 			return voyageErrRow{err: pgx.ErrNoRows}
 		}
 		return voyageFullRow{vals: []any{
 			args[0].(string), "webhook", []byte(`{}`), nil, true,
-			time.Now().UTC(), time.Now().UTC(), nil,
+			time.Now().UTC(), time.Now().UTC(), nil, nil,
 		}}
 	case strings.Contains(sql, "INSERT INTO tidings"):
 		f.mu.Lock()

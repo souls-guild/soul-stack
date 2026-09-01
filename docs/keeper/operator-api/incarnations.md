@@ -554,6 +554,34 @@ not a default group ([ADR-044 amendment 2026-06-30(b)](../../adr/0044-choir.md#a
 The **actual** role is unaffected and still comes only from a live probe +
 `register:` + `where:` ([ADR-008](../../adr/0008-coven-stable-tags.md)).
 
+#### `PUT /v1/incarnations/{name}/label` — set the display caption
+
+Permission: `incarnation.label-set`. MCP-tool: `keeper.incarnation.label-set`. Path-param: `name`. OperationID: `setIncarnationLabel`. **Sync operation**: editing a caption is not a run, and the response is the updated incarnation without `apply_id`.
+
+Replaces the incarnation's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is what an operator reads on a screen — `Redis — Billing (prod)` rather than `redis-billing-prod`; it is free text with capitals, spaces and punctuation, and nothing validates its form. An absent or blank caption reads NULL, and a consumer shows `name` instead, so clearing it is always safe.
+
+**What this route deliberately does NOT touch, and why the field exists at all.** The caption participates in **nothing derived**: not the second/third segment of a derived Vault path, not the RBAC `incarnation=` scope value, not the snapshot directory, not `incarnation.<…>` in CEL (`incarnation.label` does not resolve). That is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope, and it is guarded behaviourally at each of those derivations rather than only asserted here. The identifier keeps every one of those jobs and has no rename operation anywhere.
+
+Consequently there is **no status gate**: the caption may be fixed while the incarnation is `applying` or `error_locked`, because no run reads it.
+
+**Request `LabelSetRequest`:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `label` | `string` \| `null` | optional | The new caption. `null` — or an omitted field, or an empty body `{}` — **clears** it, after which consumers show `name` again. No `pattern` and no `maxLength`: free text is the point. Surrounding whitespace is trimmed, and an all-whitespace value stores NULL. |
+
+```json
+{ "label": "Redis — Billing (production)" }
+```
+
+**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{name}`), with the caption applied.
+
+**Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`name` — the caption itself has no form to fail), `500 internal-error`.
+
+**RBAC:** the same scope selector as every other incarnation mutation (`coven=`/`service=`/`incarnation=` by path-`name`). **Only that gate** — unlike `PUT .../traits` below there is no second, pair-level check, because a trait pair is a live scope dimension and grants visibility while a caption is in no dimension of anything and grants nothing.
+
+**Audit:** `incarnation.label_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, label}`) — written by the handler after the write. `label` is explicitly `null` when the caption was cleared; `name` is the identifier that was addressed and is not what changed.
+
 #### `PUT /v1/incarnations/{name}/traits` — replace incarnation trait marks
 
 Permission: `incarnation.traits-set`. MCP-tool: `keeper.incarnation.traits-set`. Path-param: `name`. **Sync operation** (not async): editing operator-set labels is not a run, the response returns an updated incarnation, without `apply_id`.

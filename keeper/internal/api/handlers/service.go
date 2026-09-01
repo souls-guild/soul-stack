@@ -153,7 +153,11 @@ func ServiceSpecStub() *ServiceHandler {
 // T5d). name+git+ref are required, refresh is optional (`*string`). Replaces
 // ServiceRegisterRequest.
 type ServiceRegisterInput struct {
-	Name    string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/services/{name}/label. nil/blank → NULL, and the consumer shows
+	// Name.
+	Label   *string
 	Git     string
 	Ref     string
 	Refresh *string
@@ -173,7 +177,10 @@ type ServiceUpdateInput struct {
 // updated_by_aid are `*string` (nil → key omitted in the native projection); dates are
 // truncated to seconds (UTC). Package api projects this into the native ServiceView schema.
 type ServiceView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Git          string
 	Ref          string
 	Refresh      *string
@@ -194,6 +201,7 @@ type ServiceListPage struct {
 type ServiceRegisterReply struct {
 	Body         ServiceView
 	Name         string
+	Label        *string
 	Git          string
 	Ref          string
 	CreatedByAID string
@@ -204,6 +212,7 @@ type ServiceRegisterReply struct {
 func (r ServiceRegisterReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.Name,
+		"label":          r.Label,
 		"git":            r.Git,
 		"ref":            r.Ref,
 		"created_by_aid": r.CreatedByAID,
@@ -225,6 +234,7 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 	}
 	entry, err := h.svc.CreateService(ctx, serviceregistry.CreateServiceInput{
 		Name:      req.Name,
+		Label:     req.Label,
 		Git:       req.Git,
 		Ref:       req.Ref,
 		Refresh:   req.Refresh,
@@ -237,6 +247,7 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 	return ServiceRegisterReply{
 		Body:         toServiceResponse(entry),
 		Name:         entry.Name,
+		Label:        entry.Label,
 		Git:          entry.Git,
 		Ref:          entry.Ref,
 		CreatedByAID: callerAID,
@@ -278,6 +289,32 @@ func (h *ServiceHandler) GetTyped(ctx context.Context, name string) (ServiceView
 			slog.Any("error", err),
 		)
 		return ServiceView{}, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
+	}
+}
+
+// SetLabelTyped — domain function for PUT /v1/services/{name}/label
+// (WRITE+AUDIT service.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only error this route
+// raises besides 404 is on the caller's own path parameter, which huma has
+// already checked against the name grammar.
+//
+// None of the artifact caches are invalidated, unlike UpdateTyped: every one of
+// them keys on the service NAME and holds material derived from git/ref, and a
+// caption is neither.
+func (h *ServiceHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ServiceView], error) {
+	var zero LabelWriteReply[ServiceView]
+	entry, err := h.svc.SetServiceLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[ServiceView]{Body: toServiceResponse(entry), Name: name, Label: entry.Label}, nil
+	case errors.Is(err, serviceregistry.ErrNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+	default:
+		h.logger.Error("service.label-set: service failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set service label failed")}
 	}
 }
 
@@ -1032,6 +1069,7 @@ func toDependencyViews(in []artifact.Dependency) []ServiceDependency {
 func toServiceResponse(e *serviceregistry.ServiceEntry) ServiceView {
 	return ServiceView{
 		Name:         e.Name,
+		Label:        e.Label,
 		Git:          e.Git,
 		Ref:          e.Ref,
 		Refresh:      e.Refresh,

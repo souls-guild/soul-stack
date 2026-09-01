@@ -57,7 +57,11 @@ func PushProviderSpecStub() *PushProviderHandler {
 // projects it into these fields. Params — an optional pointer (*map), the handler dereferences
 // it into pushprovider.CreateInput.
 type PushProviderCreateInput struct {
-	Name   string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/push-providers/{name}/label. nil/blank → NULL, and the consumer
+	// shows Name.
+	Label  *string
 	Params *map[string]any
 }
 
@@ -74,7 +78,10 @@ type PushProviderUpdateInput struct {
 // Package api projects it into native PushProvider (register func huma_pushprovider.go),
 // the native type fixes the wire field order.
 type PushProviderView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Params       map[string]any
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -103,6 +110,7 @@ func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 	}
 	return PushProviderView{
 		Name:         p.Name,
+		Label:        p.Label,
 		Params:       params,
 		CreatedAt:    p.CreatedAt.UTC(),
 		UpdatedAt:    p.UpdatedAt.UTC(),
@@ -118,6 +126,7 @@ func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 type PushProviderWriteReply struct {
 	Body       PushProviderView
 	Name       string
+	Label      *string
 	ParamsKeys []string
 }
 
@@ -126,6 +135,7 @@ type PushProviderWriteReply struct {
 func (r PushProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":        r.Name,
+		"label":       r.Label,
 		"params_keys": r.ParamsKeys,
 	}
 }
@@ -149,12 +159,13 @@ func (h *PushProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt
 	}
 	p, err := h.svc.Create(ctx, pushprovider.CreateInput{
 		Name:      req.Name,
+		Label:     req.Label,
 		Params:    params,
 		CallerAID: claims.Subject,
 	})
 	switch {
 	case err == nil:
-		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, ParamsKeys: paramKeysSorted(p.Params)}, nil
+		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypePushProviderExists, "",
 			"push provider "+req.Name+" already exists")}
@@ -186,7 +197,7 @@ func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt
 	})
 	switch {
 	case err == nil:
-		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, ParamsKeys: paramKeysSorted(p.Params)}, nil
+		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
 	case errors.Is(err, pushprovider.ErrSensitiveNotVaultRef):
@@ -197,6 +208,31 @@ func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "update push provider failed")}
+	}
+}
+
+// SetLabelTyped — domain function for PUT /v1/push-providers/{name}/label
+// (WRITE+AUDIT push-provider.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row.
+func (h *PushProviderHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[PushProviderView], error) {
+	var zero LabelWriteReply[PushProviderView]
+	if !pushprovider.ValidName(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'name' must match "+pushprovider.NamePattern)}
+	}
+	p, err := h.svc.SetLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[PushProviderView]{Body: toPushProviderView(p), Name: name, Label: p.Label}, nil
+	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
+	default:
+		h.logger.Error("push-provider.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set push provider label failed")}
 	}
 }
 

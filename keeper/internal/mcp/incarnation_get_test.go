@@ -53,6 +53,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		mustJSON(inc.Traits),
 		inc.CreatedScenario,
 		inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, nil once terminal
+		inc.Label,           // label (ADR-0085): the display caption
 	}}
 }
 

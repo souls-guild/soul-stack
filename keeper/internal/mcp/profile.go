@@ -21,7 +21,10 @@ import (
 
 // profileViewOut — JSON form of the output (same as the HTTP handler).
 type profileViewOut struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent when the row carries none, and
+	// a consumer then shows `name`.
+	Label        *string        `json:"label,omitempty"`
 	Provider     string         `json:"provider"`
 	Params       map[string]any `json:"params"`
 	CloudInit    *string        `json:"cloud_init,omitempty"`
@@ -36,6 +39,7 @@ func toProfileViewOut(p *profile.Profile) profileViewOut {
 	}
 	return profileViewOut{
 		Name:         p.Name,
+		Label:        p.Label,
 		Provider:     p.Provider,
 		Params:       params,
 		CloudInit:    p.CloudInit,
@@ -45,7 +49,10 @@ func toProfileViewOut(p *profile.Profile) profileViewOut {
 }
 
 type profileCreateArgs struct {
-	Name      string         `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.profile.label-set.
+	Label     *string        `json:"label"`
 	Provider  string         `json:"provider"`
 	Params    map[string]any `json:"params"`
 	CloudInit *string        `json:"cloud_init"`
@@ -80,6 +87,7 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 
 	p, err := h.deps.ProfileSvc.Create(ctx, profile.CreateInput{
 		Name:      a.Name,
+		Label:     a.Label,
 		Provider:  a.Provider,
 		Params:    a.Params,
 		CloudInit: a.CloudInit,
@@ -99,6 +107,7 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 
 	h.writeAudit(audit.EventProfileCreated, claims.Subject, map[string]any{
 		"name":        p.Name,
+		"label":       p.Label,
 		"provider":    p.Provider,
 		"params_keys": paramKeysSortedMCP(p.Params),
 	})
@@ -107,6 +116,30 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 
 type profileByNameArgs struct {
 	Name string `json:"name"`
+}
+
+// callProfileSetLabel — keeper.profile.label-set, the MCP mirror of
+// PUT /v1/profiles/{name}/label (ADR-0085). The registry's only mutation.
+func (h *Handler) callProfileSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[profileViewOut]{
+		tool:          "keeper.profile.label-set",
+		resource:      "profile",
+		configured:    h.deps.ProfileSvc != nil,
+		notConfigured: "profile registry is not configured",
+		validName:     profile.ValidName,
+		namePattern:   profile.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (profileViewOut, error) {
+			p, err := h.deps.ProfileSvc.SetLabel(ctx, name, label)
+			if err != nil {
+				return profileViewOut{}, err
+			}
+			return toProfileViewOut(p), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, profile.ErrProfileNotFound) },
+		notFoundf:  func(name string) string { return "profile " + name + " not found" },
+		failMsg:    "set profile label failed",
+		event:      audit.EventProfileLabelChanged,
+	})
 }
 
 func (h *Handler) callProfileRead(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {

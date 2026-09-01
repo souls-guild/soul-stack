@@ -596,7 +596,7 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `synod.grant-role` | Adding a role to the bundle group (`POST /v1/synods/{name}/roles`). Idempotent. **Under least-privilege subset:** the role is issued to all members of the group - the caller must hold all effective rights of the role, otherwise `403 forbidden`. | `synod.role-granted` |
 | `synod.revoke-role` | Removing a role from the bundle group (`DELETE /v1/synods/{name}/roles/{role_name}`). **Under self-lockout:** removal takes away the rights of the role from all members - prohibited if this is the last `*`-giving role of the group and someone held `*` only through it → `409 would-lock-out-cluster`. | `synod.role-revoked` |
 
-### Incarnation (13) - [ADR-009](../adr/0009-scenario-dsl.md) / [scenario/](../scenario/README.md) / [ADR-060](../adr/0060-traits.md)
+### Incarnation (14) - [ADR-009](../adr/0009-scenario-dsl.md) / [scenario/](../scenario/README.md) / [ADR-060](../adr/0060-traits.md)
 
 | Permission | Semantics |
 |---|---|
@@ -607,6 +607,7 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `incarnation.list` | Enumeration of instances (with filters). |
 | `incarnation.history` | Reading `state_history` instance (snapshot per-change). |
 | `incarnation.unlock` | Removal of `error_locked` status after manual disassembly of the consequences of a partial failure. |
+| `incarnation.label-set` | Replace the display caption of an incarnation (`PUT /v1/incarnations/{name}/label`; MCP `keeper.incarnation.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest WRITE in the catalog: nothing an operator or a run acts on moves as a result. Note what it is not narrow about: the `200` body is the full record (the same view the corresponding read returns, masked the same way), so holding `<resource>.label-set` also confers a read of the rows it can caption. That follows `incarnation.traits-set`, which returns the same view, and it is why the right is scoped like the other mutations of its registry rather than being handed out freely. Scope: the same incarnation gate (`coven=`/`service=`/`incarnation=` by path-`name`) as every other incarnation mutation, and **only** that gate - unlike `incarnation.traits-set` there is no second, pair-level check, because a caption is in no scope dimension and so grants no visibility to anyone. No status gate either: it is allowed while the incarnation is `applying` or `error_locked`, since no run reads it. Audit event `incarnation.label_changed` (`{name, label}`). |
 | `incarnation.upgrade` | Transferring instance to new `state_schema_version` (running migrations, [migrations.md](../migrations.md)). |
 | `incarnation.destroy` | Delete instance (with tombstone period for cloud VMs, [cloud.md](cloud.md)). |
 | `incarnation.traits-set` | Holistic replacement of operator-set key-value trait tags of incarnation (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a) via `PUT /v1/incarnations/{name}/traits`. It labels the incarnation and only the incarnation - member hosts get no projection and inherit nothing ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)); the per-host counterpart is the first-class `soul.traits-assign`. Action - kebab (`traits-set`), grammar `<resource>.<action>` (pattern `soul.traits-assign`). Authorization by **two** gates, the same pair as the per-host write (NIM-587): gate (a) the incarnation-scope-gate (`coven=`/`service=`/`incarnation=` by path-`name`, the same selector as the other incarnation mutations), **plus gate (b)** - every pair being stamped must lie inside the operator's own trait-scope, refused `422` otherwise. Gate (b) is not optional here: `trait.<key>` is a live read-side scope dimension for incarnations as well (`incScopeColumns.Traits`), so stamping a pair hands every role scoped on it sight of this incarnation - and, since [NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only), of its members through a `trait` Rite. Audit event `incarnation.traits_changed` (KEYS only, not values). MCP mirror - `keeper.incarnation.traits-set`. |
@@ -750,7 +751,7 @@ With this role, `POST /v1/souls/coven {mode: append, label: dev, selector: {all:
 
 Future Candidates (`soul.revoke` for SoulSeed Review) - Introduced as a separate PR when appropriate API operations occur. `soul.get` is deliberately not introduced: single-soul read is covered by `soul.list` (pattern service/omen/vigil/decree).
 
-### Service (4) — [ADR-029](../adr/0029-service-registry.md)
+### Service (5) — [ADR-029](../adr/0029-service-registry.md)
 
 Managing the Service registry `service_registry` (git source + service ref; routes - [operator-api.md → Service](operator-api.md), registry - [ADR-029](../adr/0029-service-registry.md)). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `provider.*` / `push-provider.*` / `operator.*`). Mutating three write audit ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), read-only `service.list` - no.
 
@@ -760,6 +761,7 @@ Managing the Service registry `service_registry` (git source + service ref; rout
 | `service.update` | Editing a registry entry (`PATCH /v1/services/{name}`; MCP `keeper.service.update`). |
 | `service.list` | Enumeration (`GET /v1/services`) + single-get (`GET /v1/services/{name}`) + four git projections (`/refs` / `/scenarios` / `/state-schema` / `/dependencies`) - one-permission-on-read, no separate `service.get`. MCP `keeper.service.list`. |
 | `service.deregister` | Removing Service from the registry (`DELETE /v1/services/{name}`; MCP `keeper.service.deregister`). |
+| `service.label-set` | Replace the display caption of a registry entry (`PUT /v1/services/{name}/label`; MCP `keeper.service.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Narrower than `service.update`, which re-points `git`/`ref` and invalidates every artifact cache; in particular the caption is NOT segment 2 of the derived secret path `<mount>/<service>/<incarnation>/<state-field>` and NOT the artifact cache directory, so changing it orphans no secret and re-clones nothing. Audit event `service.label_changed`. |
 
 ### Push (3) — [push.md](push.md)
 
@@ -769,7 +771,7 @@ Managing the Service registry `service_registry` (git source + service ref; rout
 | `push.cleanup` | Cleaning `/var/lib/soul-stack/` on the host when `revoke` or output from the registry ([push.md → Cleanup](push.md)). |
 | `push.read` | Read push run status (`GET /v1/push/{apply_id}`, Variant C orchestrator). |
 
-### Push-Provider (5) — [push.md → S7-2 migration](push.md#s7-2-migration-to-push_providers-pg-table-2026-05-26)
+### Push-Provider (6) — [push.md → S7-2 migration](push.md#s7-2-migration-to-push_providers-pg-table-2026-05-26)
 
 CRUD of the Push-Provider registry - per-provider env-payload params of SSH push-flow plugins (ADR-032 amendment 2026-05-26, S7-2). The entity is implemented as an "SSH Provider" variant of Provider (see amendment). The selector is NoSelector (like `provider.*` / `service.*`).
 
@@ -780,6 +782,7 @@ CRUD of the Push-Provider registry - per-provider env-payload params of SSH push
 | `push-provider.delete` | Delete entry (`DELETE /v1/push-providers/{name}`). |
 | `push-provider.list` | List records (`GET /v1/push-providers`). |
 | `push-provider.read` | Read one entry (`GET /v1/push-providers/{name}`). |
+| `push-provider.label-set` | Replace the display caption (`PUT /v1/push-providers/{name}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Unlike `push-provider.update` it publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` env-var name, which is why `name` keeps the letter-first rule and the caption needs no rule at all. Audit event `push-provider.label_changed`. |
 
 ### Errand (3) — [ADR-033](../adr/0033-errand.md)
 
@@ -841,9 +844,9 @@ The `cadence.*` right controls the **schedule** itself, but the Cadence recipe s
 
 The names of these Voyage-permission and kind-mapping are the same as those of the one-time Voyage-create ([ADR-043 §6](../adr/0043-voyage.md)). To start Cadence, you need **both** levels: both the right to manage the schedule and the right to launch what the schedule will spawn. Second level violation → `403 forbidden` (problem-detail of the form `cadence recipe requires Voyage-permission <resource>.<action> by kind=<kind>`); unknown `kind` → `422 validation-failed`. Target in a recipe is the choice from the creator's RBAC scope at the time of creation (parity [ADR-043 §5](../adr/0043-voyage.md)).
 
-### Herald / Tiding (10) - [ADR-052](../adr/0052-herald-notifications.md)
+### Herald / Tiding (12) - [ADR-052](../adr/0052-herald-notifications.md)
 
-CRUD registries for notifications about run events: **Herald** (delivery channels, `heralds`) and **Tiding** (subscription rules, `tidings`). Selector - NoSelector (cluster-level channel/rule management, pattern `push-provider.*` / `omen.*` / `role.*`); per-name scope - a separate slice when a multi-tenant RBAC appears. Mutating ones write audit (`herald.created`/`updated`/`deleted` + `tiding.*`), read-only `*.list`/`*.read` - no.
+CRUD registries for notifications about run events: **Herald** (delivery channels, `heralds`) and **Tiding** (subscription rules, `tidings`). Selector - NoSelector (cluster-level channel/rule management, pattern `push-provider.*` / `omen.*` / `role.*`); per-name scope - a separate slice when a multi-tenant RBAC appears. Mutating ones write audit (`herald.created`/`updated`/`label_changed`/`deleted` + `tiding.*`), read-only `*.list`/`*.read` - no.
 
 | Permission | Semantics |
 |---|---|
@@ -857,6 +860,8 @@ CRUD registries for notifications about run events: **Herald** (delivery channel
 | `tiding.list` | List Tiding Rules (`GET /v1/tidings`). |
 | `tiding.update` | Replace mutable fields of the rule (`PUT /v1/tidings/{name}`, replace). |
 | `tiding.delete` | Delete rule (`DELETE /v1/tidings/{name}`). |
+| `herald.label-set` | Replace a channel's display caption (`PUT /v1/heralds/{name}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Deliberately narrower than `herald.update`, which REPLACES the channel: granting a caption edit through that one would have granted a rewrite of `secret_ref`. And the caption is **not** the `<entity>` segment of `secret/herald/<entity>/<field>` - `name` is - which matters here more than anywhere: that path is one hop from the registry row with nothing in between to notice, and `secretwrite` replaces rather than merges, so a caption there would orphan the channel's signing secret in silence. Audit event `herald.label_changed`. |
+| `tiding.label-set` | Replace a rule's display caption (`PUT /v1/tidings/{name}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Narrower than `tiding.update`, which replaces the whole rule; the caption is not the `herald` FK. Audit event `tiding.label_changed`. |
 
 ### Provisioning (2) — [ADR-058](../adr/0058-operator-auth-ldap-oidc.md)
 
@@ -885,7 +890,7 @@ Read-only access to the audit event feed (`audit_log`) via `GET /v1/audit` (UI i
 |---|---|
 | `audit.read` | Reading `audit_log` with filters (`type` multi-value, `source` multi-value, `archon_aid`, `correlation_id`, `started_after`/`started_before`). Selector - NoSelector in MVP; per-AID/coven-scope on audit-trail - a separate slice if necessary. |
 
-### Cloud (6) — [cloud.md](cloud.md)
+### Cloud (8) — [cloud.md](cloud.md)
 
 CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017). Full surface **implemented** (REST `/v1/providers*` + `/v1/profiles*` and MCP `keeper.provider.*` / `keeper.profile.*`). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `push-provider.*` / `service.*`). **`update`-permission NO** - Provider/Profile are immutable (change parameters = `delete` + `create`); read-visibility (list + get) gates one permission `*.read` (pattern `operator.list`↔`read`). Those who mutate write audit, read-only - no.
 
@@ -897,8 +902,10 @@ CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`,
 | `profile.create` | Creating a Profile record (`POST /v1/profiles`) - a reusable VM-spec on top of the Provider. `409 profile-already-exists` per take `name`; `422 validation-failed` to a reference to a non-existent Provider (FK). | `profile.created` |
 | `profile.read` | Enumerating Profiles (`GET /v1/profiles`, optional filter `provider=`) and reading one (`GET /v1/profiles/{name}`). | — (read-only) |
 | `profile.delete` | Deleting Profile record (`DELETE /v1/profiles/{name}`). | `profile.deleted` |
+| `provider.label-set` | Replace the display caption (`PUT /v1/providers/{name}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. This is the registry's ONLY mutation: everything else about a Provider stays immutable, and a caption is the one field for which the "partial mutation of a live cloud spec" argument does not apply, because nothing reads it. It is not the `<entity>` segment of `secret/provider/<entity>/credentials`. (The self-onboard FQDN prediction is not at risk either, but for a different reason worth stating precisely: `<name>-<index>.<fqdn_suffix>` takes its `<name>` from the `core.cloud.provisioned` step's own `name` param, not from the registry row — the Provider contributes only `fqdn_suffix`.) | `provider.label_changed` |
+| `profile.label-set` | Replace the display caption (`PUT /v1/profiles/{name}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Same standing as `provider.label-set`: the registry's only mutation. | `profile.label_changed` |
 
-### Augur (6) - [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
+### Augur (7) - [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
 
 CRUD registries of the external access broker Augur (Omen - external system, Rite - grant). OpenAPI / MCP surface starts as **stub directory** ([augur.md](augur.md)); permissions are normalized here.
 
@@ -910,10 +917,11 @@ CRUD registries of the external access broker Augur (Omen - external system, Rit
 | `rite.create` | Creating a Rite record in Postgres (`rites`) - grant a subject (exactly one of `sid` / `incarnation` / `coven` / `trait`, [augur.md §4.2](augur.md)) access to an Omen with an allow-list and `delegate`. ⚠ Holding this permission is no longer the only way to widen a grant: since [NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only) a `coven`/`trait` Rite also reaches every member of an incarnation carrying that label, so `incarnation.traits-set` (labels the incarnation) and `incarnation.bind-member` (adds a host to its roster) extend an existing grant with no Rite edited - the audit trail records the incarnation change, not a grant change. |
 | `rite.list` | Listing Rites in the registry. |
 | `rite.delete` | Removing Rite record. |
+| `omen.label-set` | Replace an Omen's display caption (`PUT /v1/augur/omens/{name}/label`; MCP `keeper.augur.omen.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable so the Rites granted against an Omen cannot silently follow it to a different external system, and the caption is not the `rites.omen` FK. Audit event `omen.label_changed`. |
 
 > **Live-fetch from Soul (`AugurRequest`) RBAC-permission is not controlled** - this is not an operator operation via OpenAPI / MCP, but a machine request from Soul via gRPC EventStream. Live-fetch authorization is a separate Augur mechanism (Omen + Rite + allow-list, resolved mTLS→SID→subject match, [augur.md → Authorization](augur.md)), not the Archon's RBAC-permission.
 
-### Oracle (6) - [ADR-030](../adr/0030-vigil-oracle.md)
+### Oracle (8) - [ADR-030](../adr/0030-vigil-oracle.md)
 
 CRUD of Oracle beacons circuit registries (Vigil - Soul-side check, Decree - reactor rule). OpenAPI (`POST/GET/DELETE /v1/vigils*` + `/v1/decrees*`) and MCP (`keeper.oracle.vigil.*` / `keeper.oracle.decree.*`) - surface implemented (S3). All six are checked by `RequirePermission`-middleware (selector is NoSelector, like `omen.*`/`rite.*`); failure → 403 `forbidden`. Mutating ones (`*.create`/`*.delete`) write audit, read-only `*.list` (and get) do not.
 
@@ -925,6 +933,8 @@ CRUD of Oracle beacons circuit registries (Vigil - Soul-side check, Decree - rea
 | `decree.create` | Creating a Decree record in Postgres (`decrees`) - reactor rule (on_beacon × subject × incarnation_name → named scenario; option where-CEL + cooldown). The subject says WHO may fire it, `incarnation_name` WHAT the reaction acts on - two different fields. | `decree.created` |
 | `decree.list` | List Decrees in the registry (and get them by name). | — (read-only) |
 | `decree.delete` | Removing Decree record (cleans cooldown-state `oracle_fires` in a cascade). | `decree.deleted` |
+| `vigil.label-set` | Replace a Vigil's display caption (`PUT /v1/vigils/{name}/label`; MCP `keeper.oracle.vigil.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. The registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a `VigilSnapshot` were already told what to run. A Decree reacts through `on_beacon`, which is the name. | `vigil.label_changed` |
+| `decree.label-set` | Replace a Decree's display caption (`PUT /v1/decrees/{name}/label`; MCP `keeper.oracle.decree.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breaker (`oracle_circuit`) are keyed on the name, so no trigger history moves and no breaker resets. | `decree.label_changed` |
 
 > **Reactor-flow (`Portent` → match Decree → enqueue scenario) RBAC-permission is not controlled** - this is a machine Soul-initiated path via gRPC EventStream, not an operator operation. Protection - the Decree's subject binding (one of `sid` / `incarnation` / `coven` / `trait`) + the membership-check on `incarnation_name` + default-deny + whitelist scenario ([ADR-030(b)](../adr/0030-vigil-oracle.md)), not RBAC-permission of the Archon. ⚠ The `coven`/`trait` dimensions read the incarnation level too ([NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)), so labelling an incarnation widens which hosts may fire a rule - targeting only; an Archon's own scope is unaffected.
 

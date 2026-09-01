@@ -95,23 +95,26 @@ var pathAllowlist = map[route]string{
 	// push-provider.* — routes are wired ONLY when pushProviderH is non-nil
 	// (ADR-032 amendment 2026-05-26, S7-2); the drift-test builds the router
 	// with pushProviderH=nil → declared in the spec, but not in the router.
-	{method: http.MethodPost, path: "/v1/push-providers"}:          "S7-2 push-provider CRUD: route wired ONLY when non-nil pushProviderH",
-	{method: http.MethodGet, path: "/v1/push-providers"}:           "S7-2 push-provider list: route wired ONLY when non-nil pushProviderH",
-	{method: http.MethodGet, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider get: route wired ONLY when non-nil pushProviderH",
-	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider update: route wired ONLY when non-nil pushProviderH",
-	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}: "S7-2 push-provider delete: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodPost, path: "/v1/push-providers"}:             "S7-2 push-provider CRUD: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodGet, path: "/v1/push-providers"}:              "S7-2 push-provider list: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodGet, path: "/v1/push-providers/{name}"}:       "S7-2 push-provider get: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:       "S7-2 push-provider update: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider delete: route wired ONLY when non-nil pushProviderH",
+	{method: http.MethodPut, path: "/v1/push-providers/{name}/label"}: "[ADR-0085] push-provider caption: route wired ONLY when non-nil pushProviderH",
 
 	// provider.* / profile.* — Cloud CRUD (ADR-017): routes are wired ONLY when
 	// providerH/profileH is non-nil; the drift-test builds the router with nil →
 	// declared in the spec, absent from the router (documented opt-in, push-provider pattern).
-	{method: http.MethodPost, path: "/v1/providers"}:          "ADR-017 provider create: route wired ONLY when non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers"}:           "ADR-017 provider list: route wired ONLY when non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers/{name}"}:    "ADR-017 provider get: route wired ONLY when non-nil providerH",
-	{method: http.MethodDelete, path: "/v1/providers/{name}"}: "ADR-017 provider delete: route wired ONLY when non-nil providerH",
-	{method: http.MethodPost, path: "/v1/profiles"}:           "ADR-017 profile create: route wired ONLY when non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles"}:            "ADR-017 profile list: route wired ONLY when non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles/{name}"}:     "ADR-017 profile get: route wired ONLY when non-nil profileH",
-	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:  "ADR-017 profile delete: route wired ONLY when non-nil profileH",
+	{method: http.MethodPost, path: "/v1/providers"}:             "ADR-017 provider create: route wired ONLY when non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers"}:              "ADR-017 provider list: route wired ONLY when non-nil providerH",
+	{method: http.MethodGet, path: "/v1/providers/{name}"}:       "ADR-017 provider get: route wired ONLY when non-nil providerH",
+	{method: http.MethodDelete, path: "/v1/providers/{name}"}:    "ADR-017 provider delete: route wired ONLY when non-nil providerH",
+	{method: http.MethodPut, path: "/v1/providers/{name}/label"}: "[ADR-0085] provider caption: route wired ONLY when non-nil providerH",
+	{method: http.MethodPost, path: "/v1/profiles"}:              "ADR-017 profile create: route wired ONLY when non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles"}:               "ADR-017 profile list: route wired ONLY when non-nil profileH",
+	{method: http.MethodGet, path: "/v1/profiles/{name}"}:        "ADR-017 profile get: route wired ONLY when non-nil profileH",
+	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:     "ADR-017 profile delete: route wired ONLY when non-nil profileH",
+	{method: http.MethodPut, path: "/v1/profiles/{name}/label"}:  "[ADR-0085] profile caption: route wired ONLY when non-nil profileH",
 
 	// push-runs list: route wired ONLY when pushH is non-nil (UI-4); the
 	// drift-test builds the router with pushH=nil. The paired per-id detail
@@ -170,16 +173,18 @@ var pathAllowlist = map[route]string{
 	// the drift-test builds the router with heraldH=nil, so they're declared in
 	// the spec but absent from the router — a documented "opt-in" block (the
 	// push-provider pattern).
-	{method: http.MethodPost, path: "/v1/heralds"}:          "ADR-052 Herald create: route wired ONLY when non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/heralds"}:           "ADR-052 Herald list: route wired ONLY when non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/heralds/{name}"}:    "ADR-052 Herald get: route wired ONLY when non-nil heraldH",
-	{method: http.MethodPut, path: "/v1/heralds/{name}"}:    "ADR-052 Herald update: route wired ONLY when non-nil heraldH",
-	{method: http.MethodDelete, path: "/v1/heralds/{name}"}: "ADR-052 Herald delete: route wired ONLY when non-nil heraldH",
-	{method: http.MethodPost, path: "/v1/tidings"}:          "ADR-052 Tiding create: route wired ONLY when non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/tidings"}:           "ADR-052 Tiding list: route wired ONLY when non-nil heraldH",
-	{method: http.MethodGet, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding get: route wired ONLY when non-nil heraldH",
-	{method: http.MethodPut, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding update: route wired ONLY when non-nil heraldH",
-	{method: http.MethodDelete, path: "/v1/tidings/{name}"}: "ADR-052 Tiding delete: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPost, path: "/v1/heralds"}:             "ADR-052 Herald create: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/heralds"}:              "ADR-052 Herald list: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/heralds/{name}"}:       "ADR-052 Herald get: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/heralds/{name}"}:       "ADR-052 Herald update: route wired ONLY when non-nil heraldH",
+	{method: http.MethodDelete, path: "/v1/heralds/{name}"}:    "ADR-052 Herald delete: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/heralds/{name}/label"}: "[ADR-0085] Herald caption: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPost, path: "/v1/tidings"}:             "ADR-052 Tiding create: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/tidings"}:              "ADR-052 Tiding list: route wired ONLY when non-nil heraldH",
+	{method: http.MethodGet, path: "/v1/tidings/{name}"}:       "ADR-052 Tiding get: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/tidings/{name}"}:       "ADR-052 Tiding update: route wired ONLY when non-nil heraldH",
+	{method: http.MethodDelete, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding delete: route wired ONLY when non-nil heraldH",
+	{method: http.MethodPut, path: "/v1/tidings/{name}/label"}: "[ADR-0085] Tiding caption: route wired ONLY when non-nil heraldH",
 
 	// GET /v1/cluster — HA topology from the Conclave: route wired ONLY when
 	// clusterH is non-nil (Redis wire-up); the drift-test builds the router with

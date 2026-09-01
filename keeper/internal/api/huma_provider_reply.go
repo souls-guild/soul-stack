@@ -19,9 +19,13 @@ type Provider struct {
 	CreatedByAID   *string   `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CredentialsRef string    `json:"credentials_ref"`
 	FQDNSuffix     *string   `json:"fqdn_suffix,omitempty"`
-	Name           string    `json:"name"`
-	Region         string    `json:"region"`
-	Type           string    `json:"type"`
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/providers/{name}/label. Absent means the row carries none and the
+	// consumer shows `name`.
+	Label  *string `json:"label,omitempty"`
+	Name   string  `json:"name"`
+	Region string  `json:"region"`
+	Type   string  `json:"type"`
 }
 
 // ProviderListReply — the native 200 body of GET /v1/providers (offset envelope:

@@ -70,8 +70,9 @@ func (p *hAugurPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		if p.omenGetMissing {
 			return hAugurRow{err: pgx.ErrNoRows}
 		}
-		// scanOmen: name, source_type, endpoint, auth_ref, created_by_aid, created_at.
-		return hAugurRow{values: []any{"vault-prod", "vault", "https://vault:8200", "vault:secret/keeper/ar", nil, augurAt}}
+		// scanOmen: name, source_type, endpoint, auth_ref, created_by_aid, created_at,
+		// label. The trailing nil is the display caption (ADR-0085), unset here.
+		return hAugurRow{values: []any{"vault-prod", "vault", "https://vault:8200", "vault:secret/keeper/ar", nil, augurAt, nil}}
 	case strings.Contains(sql, "COUNT(*) FROM omens"):
 		return hAugurRow{values: []any{len(p.omenListRows)}}
 	}
@@ -333,7 +334,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnValidationFail(t *testing.T) {
 
 func TestHumaOmen_List_GoldenWire(t *testing.T) {
 	pool := &hAugurPool{omenListRows: [][]any{
-		{"vault-prod", "vault", "https://vault:8200", "vault:secret/keeper/ar", nil, augurAt},
+		{"vault-prod", "vault", "https://vault:8200", "vault:secret/keeper/ar", nil, augurAt, nil},
 	}}
 	r := humaAugurRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()

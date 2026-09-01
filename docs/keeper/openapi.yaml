@@ -61,6 +61,7 @@ components:
             - decree.circuit_tripped
             - decree.created
             - decree.deleted
+            - decree.label_changed
             - errand.cancelled
             - errand.completed
             - errand.failed
@@ -71,11 +72,13 @@ components:
             - herald.deleted
             - herald.delivered
             - herald.failed
+            - herald.label_changed
             - herald.updated
             - incarnation.created
             - incarnation.destroy_completed
             - incarnation.destroy_failed
             - incarnation.destroy_started
+            - incarnation.label_changed
             - incarnation.member_bound
             - incarnation.member_unbound
             - incarnation.rerun_last
@@ -87,6 +90,7 @@ components:
             - incarnation.upgrade_started
             - input.vault_resolved
             - omen.created
+            - omen.label_changed
             - omen.revoked
             - operator.created
             - operator.login
@@ -98,12 +102,15 @@ components:
             - plugin.revoked
             - profile.created
             - profile.deleted
+            - profile.label_changed
             - provider.created
             - provider.deleted
+            - provider.label_changed
             - provisioning.policy_changed
             - push-provider.created
             - push-provider.deleted
             - push-provider.imported_from_config
+            - push-provider.label_changed
             - push-provider.updated
             - push.applied
             - push.completed
@@ -127,6 +134,7 @@ components:
             - scenario_run.partial_failed
             - scenario_run.started
             - service.deregistered
+            - service.label_changed
             - service.registered
             - service.updated
             - setting.deleted
@@ -155,11 +163,13 @@ components:
             - task.executed
             - tiding.created
             - tiding.deleted
+            - tiding.label_changed
             - tiding.updated
             - vault.kv-present
             - vault.kv-read
             - vigil.created
             - vigil.deleted
+            - vigil.label_changed
             - voyage.reclaimed
           type: string
       required:
@@ -811,6 +821,9 @@ components:
           description: target incarnation of the reaction (required)
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Decree name (kebab-case, 1..63)
           pattern: ^[a-z0-9-]{1,63}$
@@ -873,6 +886,8 @@ components:
           type: boolean
         incarnation_name:
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
+        label:
           type: string
         name:
           pattern: ^[a-z0-9-]{1,63}$
@@ -1216,6 +1231,8 @@ components:
           type: string
         enabled:
           type: boolean
+        label:
+          type: string
         name:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
@@ -1244,6 +1261,9 @@ components:
         enabled:
           description: channel enabled (omitted → true)
           type: boolean
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Herald channel name (kebab-case, 1..63), unique in the cluster
           pattern: ^[a-z0-9-]{1,63}$
@@ -1448,6 +1468,9 @@ components:
           additionalProperties: {}
           description: input for selected create scenario
           type: object
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"
+          type: string
         name:
           description: new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
@@ -1506,6 +1529,8 @@ components:
             - string
             - "null"
         created_scenario:
+          type: string
+        label:
           type: string
         name:
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
@@ -2047,6 +2072,15 @@ components:
         - username
         - password
       type: object
+    LabelSetRequest:
+      additionalProperties: false
+      properties:
+        label:
+          description: "Display caption: free text, may carry capitals and spaces. null - or an omitted field, or an empty body - clears it, after which consumers show the identifier instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root: changing it moves nothing"
+          type:
+            - string
+            - "null"
+      type: object
     ModuleCatalogItem:
       additionalProperties: false
       properties:
@@ -2244,6 +2278,9 @@ components:
         endpoint:
           description: external system URL (not a secret)
           type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Omen name (kebab-case, 1..63)
           pattern: ^[a-z0-9-]{1,63}$
@@ -2296,6 +2333,8 @@ components:
         created_by_aid:
           type: string
         endpoint:
+          type: string
+        label:
           type: string
         name:
           pattern: ^[a-z0-9-]{1,63}$
@@ -2562,6 +2601,8 @@ components:
         created_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        label:
+          type: string
         name:
           type: string
         params:
@@ -2580,6 +2621,9 @@ components:
       properties:
         cloud_init:
           description: raw cloud-init userdata (optional)
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         name:
           description: Cloud Profile name (kebab)
@@ -2634,6 +2678,8 @@ components:
           type: string
         fqdn_suffix:
           type: string
+        label:
+          type: string
         name:
           type: string
         region:
@@ -2659,6 +2705,9 @@ components:
           type: string
         fqdn_suffix:
           description: "VM FQDN suffix (self-onboard: keeper predicts FQDN=<name>-<index>.<fqdn_suffix>). If omitted, self-onboard is unavailable"
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         name:
           description: Cloud Provider name (kebab)
@@ -2821,6 +2870,8 @@ components:
         created_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        label:
+          type: string
         name:
           type: string
         params:
@@ -2842,6 +2893,9 @@ components:
     PushProviderCreateRequest:
       additionalProperties: false
       properties:
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Push Provider name (= plugins.ssh_providers[].name)
           pattern: ^[a-z][a-z0-9-]{0,62}$
@@ -3667,6 +3721,9 @@ components:
         git:
           description: git source of the service repo (URL; not a secret)
           type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Service name (kebab-case)
           pattern: ^[a-z][a-z0-9-]*$
@@ -3788,6 +3845,8 @@ components:
         created_by_aid:
           type: string
         git:
+          type: string
+        label:
           type: string
         name:
           pattern: ^[a-z][a-z0-9-]*$
@@ -4855,6 +4914,8 @@ components:
           type: string
         incarnation:
           type: string
+        label:
+          type: string
         name:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
@@ -4908,6 +4969,9 @@ components:
           type: string
         incarnation:
           description: opt. selector binding to the source incarnation
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         name:
           description: Tiding rule name (kebab-case, 1..63)
@@ -5178,6 +5242,9 @@ components:
         interval:
           description: check frequency (duration convention, e.g. '30s')
           type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
+          type: string
         name:
           description: Vigil name (kebab-case, 1..63)
           pattern: ^[a-z0-9-]{1,63}$
@@ -5230,6 +5297,8 @@ components:
         enabled:
           type: boolean
         interval:
+          type: string
+        label:
           type: string
         name:
           pattern: ^[a-z0-9-]{1,63}$
@@ -6243,6 +6312,64 @@ paths:
       summary: Omen card
       tags:
         - augur
+  /v1/augur/omens/{name}/label:
+    put:
+      description: "Replaces the display caption of one Omen (ADR-0085). Permission omen.label-set, audit omen.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only mutation: endpoint and auth_ref stay immutable, because the Rites granted against an Omen must not silently follow it to a different external system. The caption participates in nothing derived, so changing it moves nothing."
+      operationId: setOmenLabel
+      parameters:
+        - description: Omen name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Omen name
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OmenView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Omen display caption
+      tags:
+        - augur
   /v1/augur/rites:
     get:
       description: Rites (grants) of a single Omen (ADR-025). Permission rite.list. Required filter omen=<name>. Read-only, no audit.
@@ -7231,6 +7358,64 @@ paths:
       summary: Decree card
       tags:
         - oracle
+  /v1/decrees/{name}/label:
+    put:
+      description: "Replaces the display caption of one Decree (ADR-0085). Permission decree.label-set, audit decree.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The reactor is untouched: cooldown state (oracle_fires) and the circuit breaker (oracle_circuit) are keyed on the name, so no trigger history moves and no breaker resets."
+      operationId: setDecreeLabel
+      parameters:
+        - description: Decree name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Decree name
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecreeView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Decree display caption
+      tags:
+        - oracle
   /v1/deprecations:
     get:
       description: "Which incarnations still pass a module param marked `deprecated:` in its manifest, and the release it stops working in (ADR-0076(v)). Sourced from the DEFINITIONS the incarnations are pinned to - NOT from run history, which would miss an incarnation nobody has run lately and still list one fixed yesterday. `items` is ordered by `removed_in`: what breaks first comes first. `gaps` lists what could not be checked (most often a plugin module, whose manifest ships beside its binary rather than with the definition) - an empty `items` with a non-empty `gaps` means \"not checked\", not \"clean\". Visibility scoped by RBAC exactly as the incarnation list (fail-closed: empty scope -> empty survey). Permission incarnation.list. Read-only."
@@ -7740,6 +7925,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Update Herald channel (replace)
+      tags:
+        - herald
+  /v1/heralds/{name}/label:
+    put:
+      description: "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{name}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret."
+      operationId: setHeraldLabel
+      parameters:
+        - description: Herald channel name (immutable)
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Herald channel name (immutable)
+            pattern: ^[a-z0-9-]{1,63}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Herald"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Herald display caption
       tags:
         - herald
   /v1/incarnations:
@@ -8449,6 +8693,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Incarnation state transition history (paged)
+      tags:
+        - incarnation
+  /v1/incarnations/{name}/label:
+    put:
+      description: "Replaces the display caption of one incarnation (ADR-0085). Permission incarnation.label-set, audit incarnation.label_changed, same incarnation scope as every other incarnation mutation. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Deliberately narrower than PUT .../traits beside it: a trait pair is a live scope dimension, so stamping one grants visibility and needs a second gate; a caption is in no dimension of anything. It is NOT segment 3 of the derived secret path, NOT the RBAC incarnation= scope value and NOT the CEL root (incarnation.label does not resolve) - so changing it moves nothing, and it is allowed while the incarnation is applying or error_locked because no run reads it."
+      operationId: setIncarnationLabel
+      parameters:
+        - description: incarnation name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: incarnation name
+            pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncarnationGetReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the incarnation display caption
       tags:
         - incarnation
   /v1/incarnations/{name}/members:
@@ -10220,6 +10523,65 @@ paths:
       summary: Cloud Profile card
       tags:
         - profile
+  /v1/profiles/{name}/label:
+    put:
+      description: "Replaces the display caption of one Cloud-Profile (ADR-0085). Permission profile.label-set, audit profile.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing."
+      operationId: setProfileLabel
+      parameters:
+        - description: Cloud Profile name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Cloud Profile name
+            pattern: ^[a-z0-9-]{1,63}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Cloud-Profile display caption
+      tags:
+        - profile
   /v1/providers:
     get:
       description: Cloud-Provider registry with pagination (ADR-017). Permission provider.read. Read-only, no audit.
@@ -10419,6 +10781,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Cloud-Provider detail
+      tags:
+        - provider
+  /v1/providers/{name}/label:
+    put:
+      description: "Replaces the display caption of one Cloud-Provider (ADR-0085). Permission provider.label-set, audit provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched and has no rename operation anywhere: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing."
+      operationId: setProviderLabel
+      parameters:
+        - description: Cloud Provider name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Cloud Provider name
+            pattern: ^[a-z0-9-]{1,63}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Provider"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Cloud-Provider display caption
       tags:
         - provider
   /v1/provisioning-policy:
@@ -10754,6 +11175,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Replace a Push Provider's params
+      tags:
+        - push-provider
+  /v1/push-providers/{name}/label:
+    put:
+      description: "Replaces the display caption of one Push-Provider (ADR-0085). Permission push-provider.label-set, audit push-provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Unlike PUT /v1/push-providers/{name} this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The identifier in the path is NOT touched."
+      operationId: setPushProviderLabel
+      parameters:
+        - description: Push Provider name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Push Provider name
+            pattern: ^[a-z][a-z0-9-]{0,62}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushProvider"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Push-Provider display caption
       tags:
         - push-provider
   /v1/push-runs:
@@ -11789,6 +12269,65 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Bad Gateway
       summary: catalog of valid redis.conf directives by version
+      tags:
+        - service
+  /v1/services/{name}/label:
+    put:
+      description: Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PATCH /v1/services/{name}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.
+      operationId: setServiceLabel
+      parameters:
+        - description: Service name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Service name
+            pattern: ^[a-z][a-z0-9-]*$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Service display caption
       tags:
         - service
   /v1/services/{name}/refs:
@@ -13757,6 +14296,65 @@ paths:
       summary: Update Tiding rule (replace)
       tags:
         - tiding
+  /v1/tidings/{name}/label:
+    put:
+      description: Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{name}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.
+      operationId: setTidingLabel
+      parameters:
+        - description: Tiding rule name (immutable)
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Tiding rule name (immutable)
+            pattern: ^[a-z0-9-]{1,63}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tiding"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Tiding display caption
+      tags:
+        - tiding
   /v1/vigils:
     get:
       description: Vigil registry with pagination (ADR-030). Permission vigil.list. Read-only, no audit.
@@ -13948,6 +14546,64 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Vigil card
+      tags:
+        - oracle
+  /v1/vigils/{name}/label:
+    put:
+      description: "Replaces the display caption of one Vigil (ADR-0085). Permission vigil.label-set, audit vigil.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a VigilSnapshot were already told what to run. The caption participates in nothing derived - a Decree reacts through `on_beacon`, which is the name - so changing it moves nothing."
+      operationId: setVigilLabel
+      parameters:
+        - description: Vigil name
+          in: path
+          name: name
+          required: true
+          schema:
+            description: Vigil name
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LabelSetRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VigilView"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the Vigil display caption
       tags:
         - oracle
   /v1/voyages:

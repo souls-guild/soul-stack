@@ -151,13 +151,14 @@ func (r memberIncRow) Scan(dest ...any) error {
 	// Column order of incarnation.scanIncarnation (crud.go): name, service,
 	// service_version, state_schema_version, state, status, status_details,
 	// created_by_aid, created_at, updated_at, covens, traits, created_scenario,
-	// applying_apply_id.
+	// applying_apply_id, label.
 	vals := []any{
 		r.name, "redis", "v1.0.0", 1,
 		[]byte(`{}`), "ready", []byte(`{}`),
 		(*string)(nil), time.Unix(0, 0).UTC(), time.Unix(0, 0).UTC(),
 		[]string{}, []byte(`{}`),
 		(*string)(nil), (*string)(nil),
+		(*string)(nil), // label (ADR-0085): unset here, reads NULL
 	}
 	return scanInto(dest, vals)
 }

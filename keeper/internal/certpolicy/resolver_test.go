@@ -92,6 +92,7 @@ func incRow(service, serviceVersion string) staticRow {
 		[]byte("{}"),
 		any(nil), // created_scenario
 		any(nil), // applying_apply_id
+		any(nil), // label (ADR-0085): unset here, reads NULL
 	}}
 }
 

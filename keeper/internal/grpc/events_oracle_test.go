@@ -225,7 +225,7 @@ func oracleAssign(dest, src any) {
 // name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation,
 // subject_coven, subject_trait_key, subject_trait_value, incarnation_name,
 // action_scenario, action_input, cooldown, enabled, created_at, updated_at,
-// created_by_aid.
+// created_by_aid, label.
 func decreeRow(d *oracle.Decree) []any {
 	// nil → SQL NULL in a **string target.
 	deref := func(p *string) any {
@@ -244,6 +244,7 @@ func decreeRow(d *oracle.Decree) []any {
 		d.SubjectCoven, deref(d.SubjectTraitKey), deref(d.SubjectTraitValue),
 		d.IncarnationName, d.ActionScenario, []byte(input), d.Cooldown, d.Enabled,
 		time.Now(), time.Now(), deref(d.CreatedByAID),
+		deref(d.Label), // label (ADR-0085)
 	}
 }
 
@@ -1147,7 +1148,7 @@ func oracleVigilSelector(r []any) subject.Selector {
 
 // vigilRow in vigilColumns order: name, sid, service, incarnation, coven,
 // trait_key, trait_value, interval_spec, check_addr, params, enabled,
-// created_at, updated_at, created_by_aid.
+// created_at, updated_at, created_by_aid, label.
 func vigilRow(name string, sel subject.Selector, interval, check string) []any {
 	nilIfEmpty := func(s string) any {
 		if s == "" {
@@ -1161,5 +1162,6 @@ func vigilRow(name string, sel subject.Selector, interval, check string) []any {
 		nilIfEmpty(sel.TraitKey), nilIfEmpty(sel.TraitValue),
 		interval, check,
 		[]byte("{}"), true, time.Now(), time.Now(), nil,
+		nil, // label (ADR-0085): unset here, reads NULL
 	}
 }

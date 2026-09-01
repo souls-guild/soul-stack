@@ -80,6 +80,22 @@ func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
+// registerHumaOmenSetLabel mounts PUT /v1/augur/omens/{name}/label via huma
+// (WRITE+AUDIT variant B — event omen.label_changed). augurH nil → no-op.
+func registerHumaOmenSetLabel(humaAPI huma.API, augurH *handlers.AugurHandler) {
+	if augurH == nil {
+		return
+	}
+	huma.Register(humaAPI, omenSetLabelOperation(), func(ctx context.Context, in *omenSetLabelInput) (*omenSetLabelOutput, error) {
+		reply, err := augurH.SetOmenLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, augurProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &omenSetLabelOutput{Body: newOmenView(reply.Body)}, nil
+	})
+}
+
 // registerHumaOmenDelete mounts DELETE /v1/augur/omens/{name} via huma
 // (WRITE+AUDIT variant B — event omen.revoked). augurH nil → no-op. Handler:
 // DeleteOmenTyped(name) → audit payload → empty 204 output.
@@ -172,6 +188,7 @@ func newOmenView(v handlers.OmenView) OmenView {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Endpoint:     v.Endpoint,
+		Label:        v.Label,
 		Name:         v.Name,
 		SourceType:   OmenViewSourceType(v.SourceType),
 	}
@@ -253,6 +270,7 @@ func HumaAugurSpecYAML() (string, error) {
 		registerHumaOmenCreate(api, stub)
 		registerHumaOmenList(api, stub)
 		registerHumaOmenGet(api, stub)
+		registerHumaOmenSetLabel(api, stub)
 		registerHumaOmenDelete(api, stub)
 		registerHumaRiteCreate(api, stub)
 		registerHumaRiteList(api, stub)

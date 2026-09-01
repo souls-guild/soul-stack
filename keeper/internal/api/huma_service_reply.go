@@ -40,6 +40,10 @@ type ServiceView struct {
 	CreatedAt    time.Time `json:"created_at"`
 	CreatedByAID *string   `json:"created_by_aid,omitempty"`
 	Git          string    `json:"git"`
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/services/{name}/label. Absent means the row carries none and the
+	// consumer shows `name`. NOT segment 2 of a derived secret path — `name` is.
+	Label        *string   `json:"label,omitempty"`
 	Name         string    `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← serviceregistry.NamePattern
 	Ref          string    `json:"ref"`
 	Refresh      *string   `json:"refresh,omitempty"`
@@ -115,6 +119,7 @@ func newServiceView(v handlers.ServiceView) ServiceView {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Git:          v.Git,
+		Label:        v.Label,
 		Name:         v.Name,
 		Ref:          v.Ref,
 		Refresh:      v.Refresh,

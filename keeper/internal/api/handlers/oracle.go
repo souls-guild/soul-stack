@@ -80,7 +80,10 @@ func OracleSpecStub() *OracleHandler {
 // reorder keys). created_at/updated_at — UTC + Truncate(Second) (pinned here, as in the
 // oracle (w,r) reference).
 type VigilView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Subject      subject.Selector
 	Interval     string
 	Check        string
@@ -98,6 +101,7 @@ func toVigilView(v *oracle.Vigil) VigilView {
 	}
 	return VigilView{
 		Name:         v.Name,
+		Label:        v.Label,
 		Subject:      v.Subject(),
 		Interval:     v.IntervalSpec,
 		Check:        v.CheckAddr,
@@ -115,7 +119,10 @@ func toVigilView(v *oracle.Vigil) VigilView {
 // category D); enabled — pointer-optional (omitted → true). The subject and the form of
 // interval/check/params are validated by the service.
 type VigilCreateInput struct {
-	Name     string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/vigils/{name}/label.
+	Label    *string
 	Subject  subject.Selector
 	Interval string
 	Check    string
@@ -139,6 +146,7 @@ type VigilCreateReply struct {
 func (r VigilCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.View.Name,
+		"label":          r.View.Label,
 		"check":          r.Check,
 		"interval":       r.Interval,
 		"subject":        r.Subject,
@@ -155,6 +163,7 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 	callerAID := claims.Subject
 	v, err := h.svc.CreateVigil(ctx, oracle.CreateVigilInput{
 		Name:      req.Name,
+		Label:     req.Label,
 		Subject:   req.Subject,
 		Interval:  req.Interval,
 		Check:     req.Check,
@@ -260,6 +269,55 @@ func (h *OracleHandler) DeleteVigilTyped(ctx context.Context, name string) (Vigi
 	}
 }
 
+// SetVigilLabelTyped — domain function for PUT /v1/vigils/{name}/label
+// (WRITE+AUDIT vigil.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row and is what a Decree's on_beacon points at.
+func (h *OracleHandler) SetVigilLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[VigilView], error) {
+	var zero LabelWriteReply[VigilView]
+	if !reOracleName.MatchString(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path param 'name' must match "+reOracleName.String())}
+	}
+	v, err := h.svc.SetVigilLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[VigilView]{Body: toVigilView(v), Name: name, Label: v.Label}, nil
+	case errors.Is(err, oracle.ErrVigilNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+name+" not found")}
+	default:
+		h.logger.Error("oracle.vigil.label-set: service failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set vigil label failed")}
+	}
+}
+
+// SetDecreeLabelTyped — domain function for PUT /v1/decrees/{name}/label
+// (WRITE+AUDIT decree.label_changed). 404 if absent. Same contract as
+// [OracleHandler.SetVigilLabelTyped]; the reactor's cooldown and circuit state
+// are keyed on the name and do not move.
+func (h *OracleHandler) SetDecreeLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[DecreeView], error) {
+	var zero LabelWriteReply[DecreeView]
+	if !reOracleName.MatchString(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path param 'name' must match "+reOracleName.String())}
+	}
+	d, err := h.svc.SetDecreeLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[DecreeView]{Body: toDecreeView(d), Name: name, Label: d.Label}, nil
+	case errors.Is(err, oracle.ErrDecreeNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+name+" not found")}
+	default:
+		h.logger.Error("oracle.decree.label-set: service failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set decree label failed")}
+	}
+}
+
 // vigilError maps [oracle.Service] sentinels (Vigil create) to *problemError:
 //   - ErrValidation         → validation-failed (422).
 //   - ErrVigilAlreadyExists  → vigil-already-exists (409).
@@ -285,7 +343,10 @@ func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error 
 // JSONB ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is.
 // created_at/updated_at — UTC + Truncate(Second).
 type DecreeView struct {
-	Name            string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label           *string
 	OnBeacon        string
 	Where           *string
 	Subject         subject.Selector
@@ -306,6 +367,7 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 	}
 	return DecreeView{
 		Name:            d.Name,
+		Label:           d.Label,
 		OnBeacon:        d.OnBeacon,
 		Where:           d.WhereCEL,
 		Subject:         d.Subject(),
@@ -327,7 +389,10 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 // cooldown/enabled — pointer-optional (enabled omitted → true). The subject / where-CEL /
 // cooldown are validated by the service.
 type DecreeCreateInput struct {
-	Name            string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/decrees/{name}/label.
+	Label           *string
 	OnBeacon        string
 	Subject         subject.Selector
 	IncarnationName string
@@ -354,6 +419,7 @@ type DecreeCreateReply struct {
 func (r DecreeCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":            r.View.Name,
+		"label":           r.View.Label,
 		"on_beacon":       r.View.OnBeacon,
 		"incarnation":     r.View.IncarnationName,
 		"action_scenario": r.View.ActionScenario,
@@ -371,6 +437,7 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 	callerAID := claims.Subject
 	d, err := h.svc.CreateDecree(ctx, oracle.CreateDecreeInput{
 		Name:            req.Name,
+		Label:           req.Label,
 		OnBeacon:        req.OnBeacon,
 		WhereCEL:        req.Where,
 		Subject:         req.Subject,

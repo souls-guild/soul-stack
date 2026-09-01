@@ -34,6 +34,16 @@ Permission: `push-provider.update`. MCP-tool: `keeper.push-provider.update`. `na
 
 **Response `200 PushProvider`.** Errors: `400`, `404 not-found`, `422 validation-failed`. Audit: `push_provider.updated`.
 
+### `PUT /v1/push-providers/{name}/label` — set the display caption
+
+Permission: `push-provider.label-set`. MCP-tool: `keeper.push-provider.label-set`. OperationID: `setPushProviderLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` env-var name — which is why `name` keeps its letter-first rule and the caption needs no rule at all.
+
+Unlike `PUT /v1/push-providers/{name}` above, this publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them.
+
+**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
+
+**Response `200 PushProvider`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `push-provider.label_changed`, payload `{name, label}`.
+
 ### `DELETE /v1/push-providers/{name}` - delete entry
 
 Permission: `push-provider.delete`. MCP-tool: `keeper.push-provider.delete`. Response `204`; `404 not-found`. Audit: `push_provider.deleted`.

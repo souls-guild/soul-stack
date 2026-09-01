@@ -2,7 +2,7 @@
 
 Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.incarnation.*` (creating / running scripts / reading / unlock / upgrade / destroy / traits-set / membership bind-member / unbind-member / members). Transport, auth, tool declaration format, async-convention `_apply_id`, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Incarnation](../operator-api/incarnations.md).
 
-### Incarnation (11)
+### Incarnation (12)
 
 #### `keeper.incarnation.create`
 
@@ -157,6 +157,12 @@ Transfer to new `state_schema_version` + change `service_version`. Permission: `
 | Field | Type | Meaning |
 |---|---|---|
 | `_apply_id` | `string` (ULID) | Migration start ID. |
+
+#### `keeper.incarnation.label-set`
+
+Replaces the incarnation's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Deliberately narrower than `keeper.incarnation.traits-set`: a trait pair is a live RBAC scope dimension, so stamping one grants visibility and needs a second, pair-level gate; a caption is in no dimension of anything - not the `incarnation=` scope value, not segment 3 of the derived secret path, not the CEL root (`incarnation.label` does not resolve) - so it needs only the ordinary incarnation scope gate. Allowed while the incarnation is `applying` or `error_locked`, because no run reads it. Permission: `incarnation.label-set` (scope `coven=`/`service=`/`incarnation=`). Endpoint: [`PUT /v1/incarnations/{name}/label`](../operator-api/incarnations.md). Async: no.
+
+**Input** (`required: name`): `{name (^[a-z0-9][a-z0-9-]{0,62}$), label? (string|null)}`. **Output:** `{incarnation, label}` - which row was addressed and what its caption now reads; the full record stays behind `keeper.incarnation.get`. Errors: `not-found`, `forbidden`.
 
 #### `keeper.incarnation.destroy`
 

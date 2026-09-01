@@ -31,6 +31,7 @@ func newPushProvider(v handlers.PushProviderView) PushProvider {
 	return PushProvider{
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
+		Label:        v.Label,
 		Name:         v.Name,
 		Params:       v.Params,
 		UpdatedAt:    v.UpdatedAt,
@@ -110,6 +111,22 @@ func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushP
 	})
 }
 
+// registerHumaPushProviderSetLabel mounts PUT /v1/push-providers/{name}/label
+// (WRITE+AUDIT variant B — event push-provider.label_changed). nil → no-op.
+func registerHumaPushProviderSetLabel(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
+	if pushProviderH == nil {
+		return
+	}
+	huma.Register(humaAPI, pushProviderSetLabelOperation(), func(ctx context.Context, in *pushProviderSetLabelInput) (*pushProviderSetLabelOutput, error) {
+		reply, err := pushProviderH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, pushProviderProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &pushProviderSetLabelOutput{Body: newPushProvider(reply.Body)}, nil
+	})
+}
+
 // registerHumaPushProviderUpdate mounts PUT /v1/push-providers/{name} via huma
 // (WRITE+AUDIT variant B — event push-provider.updated). pushProviderH nil → no-op.
 // Handler: claims → UpdateTyped (replace params) → audit-payload → 200 WITH BODY.
@@ -181,6 +198,7 @@ func HumaPushProviderSpecYAML() (string, error) {
 		registerHumaPushProviderList(api, stub)
 		registerHumaPushProviderGet(api, stub)
 		registerHumaPushProviderUpdate(api, stub)
+		registerHumaPushProviderSetLabel(api, stub)
 		registerHumaPushProviderDelete(api, stub)
 		return nil
 	})

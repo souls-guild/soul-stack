@@ -104,18 +104,21 @@ func (p *hHeraldPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 // heraldScanRow — scanHerald columns: name, type, config(jsonb-bytes), secret_ref,
 // enabled, created_at, updated_at, created_by_aid.
 func heraldScanRow() []any {
-	return []any{"ops-webhook", "webhook", []byte(`{"url":"https://hook.test/notify"}`), nil, true, heraldAt, heraldAt, nil}
+	// The trailing nil is `label` (ADR-0085): the display caption, unset here, so
+	// it reads NULL and a consumer shows the name.
+	return []any{"ops-webhook", "webhook", []byte(`{"url":"https://hook.test/notify"}`), nil, true, heraldAt, heraldAt, nil, nil}
 }
 
 // tidingScanRow — scanTiding columns: name, herald, event_types, only_failures,
 // only_changes, incarnation, cadence, task, ephemeral, voyage_id,
 // created_from_cadence_id, annotations(jsonb-bytes), projection([]string), enabled,
-// created_at, updated_at, created_by_aid.
+// created_at, updated_at, created_by_aid, label.
 func tidingScanRow() []any {
 	return []any{
 		"on-fail", "ops-webhook", []string{"scenario_run.*"}, false, false,
 		nil, nil, nil, false, nil, nil, []byte(nil), []string{}, true,
 		heraldAt, heraldAt, nil,
+		nil, // label (ADR-0085): unset here, reads NULL
 	}
 }
 
@@ -220,6 +223,9 @@ func humaHeraldRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, au
 		})
 		r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "herald", "update", apimiddleware.NoSelector)).Group(func(r chi.Router) {
 			registerHumaHeraldUpdate(newHumaHeraldAPI(r, auditW, audit.EventHeraldUpdated, nil), heraldH)
+		})
+		r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "herald", "label-set", apimiddleware.NoSelector)).Group(func(r chi.Router) {
+			registerHumaHeraldSetLabel(newHumaHeraldAPI(r, auditW, audit.EventHeraldLabelChanged, nil), heraldH)
 		})
 		r.With(injectClaims, apimiddleware.RequirePermission(enforcer, "herald", "delete", apimiddleware.NoSelector)).Group(func(r chi.Router) {
 			registerHumaHeraldDelete(newHumaHeraldAPI(r, auditW, audit.EventHeraldDeleted, nil), heraldH)

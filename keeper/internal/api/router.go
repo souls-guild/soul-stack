@@ -58,6 +58,7 @@ import (
 //	GET    /v1/incarnations/{name}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
 //	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
 //	PUT    /v1/incarnations/{name}/traits            — replace operator-set trait labels (ADR-060).
+//	PUT    /v1/incarnations/{name}/label             — set the display caption ([ADR-0085]).
 //	POST   /v1/voyages                               — create Voyage (ADR-043 S5, RBAC-by-kind).
 //	POST   /v1/voyages/preview                       — dry-resolve scope without creating a Voyage (ADR-043 amendment §4).
 //	GET    /v1/voyages                                — list Voyage runs (ADR-043 S5).
@@ -112,14 +113,17 @@ import (
 //	GET    /v1/push-providers                         — list Push-Providers (S7-2).
 //	GET    /v1/push-providers/{name}                 — read Push-Provider (S7-2).
 //	PUT    /v1/push-providers/{name}                 — update Push-Provider (S7-2).
+//	PUT    /v1/push-providers/{name}/label           — set Push-Provider caption ([ADR-0085]).
 //	DELETE /v1/push-providers/{name}                 — delete Push-Provider (S7-2).
 //	POST   /v1/providers                             — create Cloud-Provider (ADR-017).
 //	GET    /v1/providers                             — list Cloud-Providers (ADR-017).
 //	GET    /v1/providers/{name}                      — read Cloud-Provider (ADR-017).
+//	PUT    /v1/providers/{name}/label                — set Cloud-Provider caption ([ADR-0085]).
 //	DELETE /v1/providers/{name}                      — delete Cloud-Provider (ADR-017).
 //	POST   /v1/profiles                              — create Cloud-Profile (ADR-017).
 //	GET    /v1/profiles                              — list Cloud-Profiles (ADR-017).
 //	GET    /v1/profiles/{name}                       — read Cloud-Profile (ADR-017).
+//	PUT    /v1/profiles/{name}/label                 — set Cloud-Profile caption ([ADR-0085]).
 //	DELETE /v1/profiles/{name}                       — delete Cloud-Profile (ADR-017).
 //	POST   /v1/modules/{name}/form-prep              — resolver of source catalogs for the module UI form (ADR-045 S3).
 //	GET    /v1/permissions                           — catalog of RBAC permissions (auth-only, fixes UI hardcode).
@@ -720,6 +724,22 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationSetTraits(newHumaCadenceAPI(r), incH)
 			})
 
+			// PUT /v1/incarnations/{name}/label — replace the display caption
+			// ([ADR-0085], NIM-728). Permission incarnation.label-set, scope incScope
+			// (the same boundary as every other incarnation mutation).
+			// WRITE-SELF-AUDIT: incarnation.label_changed is written by the handler
+			// itself (audit-middleware is NOT wired on this scoped group, exactly as
+			// for traits-set above).
+			//
+			// The caption participates in nothing derived, so unlike traits-set there
+			// is no second gate: a trait pair is a scope dimension and stamping one
+			// grants visibility, while a caption grants nothing and addresses nothing.
+			r.With(
+				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "label-set", incScope),
+			).Group(func(r chi.Router) {
+				registerHumaIncarnationSetLabel(newHumaCadenceAPI(r), incH)
+			})
+
 			// /v1/incarnations/{name}/members — the OPERATOR path for membership
 			// (ADR-008 amendment 2026-07-28, NIM-209). Before it the only bind act was
 			// `core.soul.registered` INSIDE a run, so a scenario that deploys onto a ready
@@ -1157,6 +1177,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				r.With(
+					apimiddleware.RequirePermission(enforcer, "service", "label-set", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaServiceSetLabel(newHumaServiceAPI(r, auditWriter, audit.EventServiceLabelChanged, logger), serviceH)
+				})
+
+				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "deregister", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaServiceDeregister(newHumaServiceAPI(r, auditWriter, audit.EventServiceDeregistered, logger), serviceH)
@@ -1435,6 +1461,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				r.With(
+					apimiddleware.RequirePermission(enforcer, "omen", "label-set", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaOmenSetLabel(newHumaAugurAPI(r, auditWriter, audit.EventOmenLabelChanged, logger), augurH)
+				})
+
+				r.With(
 					apimiddleware.RequirePermission(enforcer, "omen", "delete", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaOmenDelete(newHumaAugurAPI(r, auditWriter, audit.EventOmenRevoked, logger), augurH)
@@ -1505,6 +1537,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			r.With(
+				apimiddleware.RequirePermission(enforcer, "vigil", "label-set", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaVigilSetLabel(newHumaOracleAPI(r, auditWriter, audit.EventVigilLabelChanged, logger), oracleH)
+			})
+
+			r.With(
 				apimiddleware.RequirePermission(enforcer, "vigil", "delete", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaVigilDelete(newHumaOracleAPI(r, auditWriter, audit.EventVigilDeleted, logger), oracleH)
@@ -1526,6 +1564,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermission(enforcer, "decree", "list", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaDecreeGet(newHumaCadenceAPI(r), oracleH)
+			})
+
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "decree", "label-set", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaDecreeSetLabel(newHumaOracleAPI(r, auditWriter, audit.EventDecreeLabelChanged, logger), oracleH)
 			})
 
 			r.With(
@@ -1602,8 +1646,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// by the service).
 		//
 		// Permission mapping: POST→push-provider.create, GET list→push-provider.list,
-		// GET {name}→push-provider.read, PUT→push-provider.update, DELETE→
-		// push-provider.delete.
+		// GET {name}→push-provider.read, PUT→push-provider.update, PUT
+		// {name}/label→push-provider.label-set, DELETE→push-provider.delete.
 		//
 		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2b of the entire push-provider domain over
 		// the role/operator references): create/update/delete — WRITE+AUDIT variant B
@@ -1642,6 +1686,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				r.With(
+					apimiddleware.RequirePermission(enforcer, "push-provider", "label-set", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaPushProviderSetLabel(newHumaPushProviderAPI(r, auditWriter, audit.EventPushProviderLabelChanged, logger), pushProviderH)
+				})
+
+				r.With(
 					apimiddleware.RequirePermission(enforcer, "push-provider", "delete", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaPushProviderDelete(newHumaPushProviderAPI(r, auditWriter, audit.EventPushProviderDeleted, logger), pushProviderH)
@@ -1658,7 +1708,11 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// audit. credentials_ref is returned as a vault path, the secret is not resolved.
 		//
 		// Permission mapping: POST→provider.create, GET list/{name}→provider.read,
-		// DELETE→provider.delete. create/delete — WRITE+AUDIT variant B (huma-audit-
+		// PUT {name}/label→provider.label-set, DELETE→provider.delete. The label
+		// route is the registry's ONLY mutation ([ADR-0085]): everything else about
+		// a Provider stays immutable, and a caption is the one field for which the
+		// "partial mutation of a live cloud spec" argument does not apply, because
+		// nothing reads it. create/label-set/delete — WRITE+AUDIT variant B (huma-audit-
 		// middleware, its own chi group with its own event type). MCP provider-tools
 		// call provider.Service directly (bypassing the handler).
 		if providerH != nil {
@@ -1677,6 +1731,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 
 				r.With(
+					apimiddleware.RequirePermission(enforcer, "provider", "label-set", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProviderSetLabel(newHumaProviderAPI(r, auditWriter, audit.EventProviderLabelChanged, logger), providerH)
+				})
+
+				r.With(
 					apimiddleware.RequirePermission(enforcer, "provider", "delete", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaProviderDelete(newHumaProviderAPI(r, auditWriter, audit.EventProviderDeleted, logger), providerH)
@@ -1690,7 +1750,8 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// VALUE params are NOT written to audit (keys only).
 		//
 		// Permission mapping: POST→profile.create, GET list/{name}→profile.read,
-		// DELETE→profile.delete.
+		// PUT {name}/label→profile.label-set, DELETE→profile.delete. The label
+		// route is the registry's ONLY mutation ([ADR-0085]).
 		if profileH != nil {
 			r.Route("/profiles", func(r chi.Router) {
 				r.With(
@@ -1704,6 +1765,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				).Group(func(r chi.Router) {
 					registerHumaProfileList(newHumaCadenceAPI(r), profileH)
 					registerHumaProfileGet(newHumaCadenceAPI(r), profileH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "profile", "label-set", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaProfileSetLabel(newHumaProfileAPI(r, auditWriter, audit.EventProfileLabelChanged, logger), profileH)
 				})
 
 				r.With(
@@ -1766,6 +1833,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 
 			r.With(
+				apimiddleware.RequirePermission(enforcer, "herald", "label-set", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaHeraldSetLabel(newHumaHeraldAPI(r, auditWriter, audit.EventHeraldLabelChanged, logger), heraldH)
+			})
+
+			r.With(
 				apimiddleware.RequirePermission(enforcer, "herald", "delete", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaHeraldDelete(newHumaHeraldAPI(r, auditWriter, audit.EventHeraldDeleted, logger), heraldH)
@@ -1793,6 +1866,12 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermission(enforcer, "tiding", "update", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaTidingUpdate(newHumaHeraldAPI(r, auditWriter, audit.EventTidingUpdated, logger), heraldH)
+			})
+
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "tiding", "label-set", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaTidingSetLabel(newHumaHeraldAPI(r, auditWriter, audit.EventTidingLabelChanged, logger), heraldH)
 			})
 
 			r.With(

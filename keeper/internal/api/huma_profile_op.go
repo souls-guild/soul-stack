@@ -24,7 +24,11 @@ type profileCreateInput struct {
 // — the name of an existing Provider (FK, 422 on missing); params — opaque VM-spec
 // (optional, nil → {}); cloud_init — optional userdata.
 type ProfileCreateRequest struct {
-	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name (kebab)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name (kebab)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/profiles/{name}/label. No pattern — capitals and spaces are the
+	// point.
+	Label     *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Provider  string         `json:"provider" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"name of an existing Cloud Provider"`
 	Params    map[string]any `json:"params,omitempty" doc:"opaque VM-spec (validated against CloudDriver.Schema at the scenario layer)"`
 	CloudInit *string        `json:"cloud_init,omitempty" doc:"raw cloud-init userdata (optional)"`
@@ -105,6 +109,30 @@ type profileDeleteInput struct {
 // profileNoContentOutput — 204 No Content (no Body).
 type profileNoContentOutput struct {
 	Status int `json:"-"`
+}
+
+// === PUT /v1/profiles/{name}/label (label-set) — WRITE+AUDIT profile.label_changed ===
+
+type profileSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
+	Body LabelSetRequest
+}
+
+type profileSetLabelOutput struct {
+	Body Profile
+}
+
+func profileSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setProfileLabel",
+		Method:        http.MethodPut,
+		Path:          "/{name}/label",
+		Summary:       "Set the Cloud-Profile display caption",
+		Description:   "Replaces the display caption of one Cloud-Profile (ADR-0085). Permission profile.label-set, audit profile.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing.",
+		Tags:          []string{"profile"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
 }
 
 func profileDeleteOperation() huma.Operation {

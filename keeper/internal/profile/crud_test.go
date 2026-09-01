@@ -153,8 +153,8 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO profiles") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 5 {
-		t.Fatalf("args len = %d, want 5", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 6 {
+		t.Fatalf("args len = %d, want 6", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "web-small" || f.queryRowArgs[1] != "aws-eu" {
 		t.Errorf("args head = %v / %v", f.queryRowArgs[0], f.queryRowArgs[1])
@@ -307,6 +307,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				any("#cloud-config"),
 				any("archon-alice"),
 				now,
+				any(nil), // label (ADR-0085): unset here, reads NULL
 			}}
 		},
 	}
@@ -335,6 +336,7 @@ func TestSelectByName_NullCloudInit(t *testing.T) {
 			return staticRow{values: []any{
 				"web-small", "aws-eu", []byte("{}"),
 				any(nil), any(nil), now,
+				any(nil), // label (ADR-0085): unset here, reads NULL
 			}}
 		},
 	}
@@ -366,8 +368,8 @@ func TestSelectAll_HappyPath(t *testing.T) {
 		queryRowFunc: func(_ string) pgx.Row { return staticRow{values: []any{int(2)}} },
 		queryFunc: func(_ string) (pgx.Rows, error) {
 			return &fakeRows{rows: []staticRow{
-				{values: []any{"web-small", "aws-eu", []byte("{}"), any(nil), any(nil), now}},
-				{values: []any{"db-large", "aws-eu", []byte("{}"), any(nil), any(nil), now}},
+				{values: []any{"web-small", "aws-eu", []byte("{}"), any(nil), any(nil), now, any(nil)}},
+				{values: []any{"db-large", "aws-eu", []byte("{}"), any(nil), any(nil), now, any(nil)}},
 			}}, nil
 		},
 	}

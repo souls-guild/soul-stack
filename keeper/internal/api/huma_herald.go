@@ -109,6 +109,22 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
+// registerHumaHeraldSetLabel mounts PUT /v1/heralds/{name}/label via huma
+// (WRITE+AUDIT variant B — event herald.label_changed). heraldH nil → no-op.
+func registerHumaHeraldSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
+	if heraldH == nil {
+		return
+	}
+	huma.Register(humaAPI, heraldSetLabelOperation(), func(ctx context.Context, in *heraldSetLabelInput) (*heraldSetLabelOutput, error) {
+		reply, err := heraldH.SetHeraldLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, heraldProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &heraldSetLabelOutput{Body: newHerald(reply.Body)}, nil
+	})
+}
+
 // registerHumaHeraldDelete mounts DELETE /v1/heralds/{name} via huma (WRITE+AUDIT
 // variant B — event herald.deleted). heraldH nil → no-op. Handler: DeleteHeraldTyped →
 // audit-payload → empty 204 output.
@@ -221,6 +237,22 @@ func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
+// registerHumaTidingSetLabel mounts PUT /v1/tidings/{name}/label via huma
+// (WRITE+AUDIT variant B — event tiding.label_changed). heraldH nil → no-op.
+func registerHumaTidingSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
+	if heraldH == nil {
+		return
+	}
+	huma.Register(humaAPI, tidingSetLabelOperation(), func(ctx context.Context, in *tidingSetLabelInput) (*tidingSetLabelOutput, error) {
+		reply, err := heraldH.SetTidingLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, heraldProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &tidingSetLabelOutput{Body: newTiding(reply.Body)}, nil
+	})
+}
+
 // registerHumaTidingDelete mounts DELETE /v1/tidings/{name} via huma (WRITE+AUDIT
 // variant B — event tiding.deleted). heraldH nil → no-op. Handler: DeleteTidingTyped →
 // audit-payload → empty 204 output.
@@ -273,11 +305,13 @@ func HumaHeraldSpecYAML() (string, error) {
 		registerHumaHeraldList(api, stub)
 		registerHumaHeraldGet(api, stub)
 		registerHumaHeraldUpdate(api, stub)
+		registerHumaHeraldSetLabel(api, stub)
 		registerHumaHeraldDelete(api, stub)
 		registerHumaTidingCreate(api, stub)
 		registerHumaTidingList(api, stub)
 		registerHumaTidingGet(api, stub)
 		registerHumaTidingUpdate(api, stub)
+		registerHumaTidingSetLabel(api, stub)
 		registerHumaTidingDelete(api, stub)
 		return nil
 	})

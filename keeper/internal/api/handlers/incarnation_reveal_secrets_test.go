@@ -29,6 +29,7 @@ func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
 		[]byte("{}"), // traits
 		"create",     // created_scenario
 		any(nil),     // applying_apply_id
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 

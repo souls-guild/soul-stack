@@ -44,7 +44,11 @@ func ProfileSpecStub() *ProfileHandler {
 // ProfileCreateInput — the NATIVE request shape of POST /v1/profiles (handler-native).
 // Params — optional pointer (nil → {}); CloudInit — optional userdata.
 type ProfileCreateInput struct {
-	Name      string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/profiles/{name}/label. nil/blank → NULL, and the consumer shows
+	// Name.
+	Label     *string
 	Provider  string
 	Params    *map[string]any
 	CloudInit *string
@@ -54,7 +58,10 @@ type ProfileCreateInput struct {
 // params normalized nil→{}; cloud_init / created_by_aid — optional pointers;
 // created_at — nanosecond time-wire.
 type ProfileView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Provider     string
 	Params       map[string]any
 	CloudInit    *string
@@ -77,6 +84,7 @@ func toProfileView(p *profile.Profile) ProfileView {
 	}
 	return ProfileView{
 		Name:         p.Name,
+		Label:        p.Label,
 		Provider:     p.Provider,
 		Params:       params,
 		CloudInit:    p.CloudInit,
@@ -90,6 +98,7 @@ func toProfileView(p *profile.Profile) ProfileView {
 type ProfileWriteReply struct {
 	Body       ProfileView
 	Name       string
+	Label      *string
 	Provider   string
 	ParamsKeys []string
 }
@@ -98,6 +107,7 @@ type ProfileWriteReply struct {
 func (r ProfileWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":        r.Name,
+		"label":       r.Label,
 		"provider":    r.Provider,
 		"params_keys": r.ParamsKeys,
 	}
@@ -139,6 +149,7 @@ func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Clai
 	}
 	p, err := h.svc.Create(ctx, profile.CreateInput{
 		Name:      req.Name,
+		Label:     req.Label,
 		Provider:  req.Provider,
 		Params:    params,
 		CloudInit: req.CloudInit,
@@ -149,6 +160,7 @@ func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Clai
 		return ProfileWriteReply{
 			Body:       toProfileView(p),
 			Name:       p.Name,
+			Label:      p.Label,
 			Provider:   p.Provider,
 			ParamsKeys: paramKeysSorted(p.Params),
 		}, nil
@@ -202,6 +214,31 @@ func (h *ProfileHandler) DeleteTyped(ctx context.Context, name string) (ProfileD
 	default:
 		h.logger.Error("profile.delete: service failed", slog.String("name", name), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete profile failed")}
+	}
+}
+
+// SetLabelTyped — domain function for PUT /v1/profiles/{name}/label
+// (WRITE+AUDIT profile.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row.
+func (h *ProfileHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ProfileView], error) {
+	var zero LabelWriteReply[ProfileView]
+	if !profile.ValidName(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'name' must match "+profile.NamePattern)}
+	}
+	p, err := h.svc.SetLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[ProfileView]{Body: toProfileView(p), Name: name, Label: p.Label}, nil
+	case errors.Is(err, profile.ErrProfileNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+name+" not found")}
+	default:
+		h.logger.Error("profile.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set profile label failed")}
 	}
 }
 

@@ -181,8 +181,8 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.lastQuerySQL, "INSERT INTO push_providers") {
 		t.Errorf("SQL: %q", f.lastQuerySQL)
 	}
-	if len(f.lastExecArgs) != 3 {
-		t.Fatalf("args len = %d, want 3", len(f.lastExecArgs))
+	if len(f.lastExecArgs) != 4 {
+		t.Fatalf("args len = %d, want 4", len(f.lastExecArgs))
 	}
 	if f.lastExecArgs[0] != "vault-bastion" {
 		t.Errorf("args[0] name = %v", f.lastExecArgs[0])
@@ -265,6 +265,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				now,
 				"archon-alice",
 				&updatedBy,
+				(*string)(nil), // label (ADR-0085): unset here, reads NULL
 			}}
 		},
 	}
@@ -347,8 +348,8 @@ func TestSelectAll_HappyPath(t *testing.T) {
 		queryFunc: func() (pgx.Rows, error) {
 			listCalled = true
 			return &fakeRows{rows: [][]any{
-				{"vault-bastion", paramsJSON, now, now, "archon-alice", (*string)(nil)},
-				{"static", []byte("{}"), now, now, "archon-alice", (*string)(nil)},
+				{"vault-bastion", paramsJSON, now, now, "archon-alice", (*string)(nil), (*string)(nil)},
+				{"static", []byte("{}"), now, now, "archon-alice", (*string)(nil), (*string)(nil)},
 			}}, nil
 		},
 	}

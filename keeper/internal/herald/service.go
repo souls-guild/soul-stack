@@ -138,6 +138,36 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	return updated, nil
 }
 
+// SetHeraldLabel replaces the display caption of one Herald and returns the row
+// as it now reads ([ADR-0085], permission herald.label-set, audit
+// herald.label_changed).
+//
+// No invalidation follows, unlike every other write here: the snapshot the
+// channel refreshes carries the delivery rules a dispatcher acts on, and a
+// caption is not one of them. Republishing would wake every Keeper instance to
+// learn a word no code reads.
+//
+// [ErrHeraldNotFound] if missing.
+func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string) (*Herald, error) {
+	if err := UpdateHeraldLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
+	return SelectHeraldByName(ctx, s.pool, name)
+}
+
+// SetTidingLabel replaces the display caption of one Tiding and returns the row
+// as it now reads ([ADR-0085], permission tiding.label-set, audit
+// tiding.label_changed). No invalidation, for the same reason as
+// [Service.SetHeraldLabel].
+//
+// [ErrTidingNotFound] if missing.
+func (s *Service) SetTidingLabel(ctx context.Context, name string, label *string) (*Tiding, error) {
+	if err := UpdateTidingLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
+	return SelectTidingByName(ctx, s.pool, name)
+}
+
 // DeleteHerald deletes channel (its Tidings cascade delete) + invalidates.
 // [ErrHeraldNotFound] if missing.
 func (s *Service) DeleteHerald(ctx context.Context, name string) error {

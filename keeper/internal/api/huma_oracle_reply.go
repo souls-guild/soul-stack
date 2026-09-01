@@ -40,15 +40,18 @@ import (
 // (nil → key omitted); params — json.RawMessage WITHOUT omitempty (nil → `null`);
 // created_at/updated_at — nanosecond time-wire.
 type VigilView struct {
-	Check        string          `json:"check"`
-	CreatedAt    time.Time       `json:"created_at"`
-	CreatedByAID *string         `json:"created_by_aid,omitempty"`
-	Enabled      bool            `json:"enabled"`
-	Interval     string          `json:"interval"`
-	Name         string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern
-	Params       json.RawMessage `json:"params"`
-	Subject      Subject         `json:"subject"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	Check        string    `json:"check"`
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedByAID *string   `json:"created_by_aid,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	Interval     string    `json:"interval"`
+	// Label — the display caption (ADR-0085), mutable via
+	// PUT /v1/vigils/{name}/label. Absent → the consumer shows `name`.
+	Label     *string         `json:"label,omitempty"`
+	Name      string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern
+	Params    json.RawMessage `json:"params"`
+	Subject   Subject         `json:"subject"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 // DecreeView — native projection of a decrees registry record. subject — WHO may fire the
@@ -64,11 +67,14 @@ type DecreeView struct {
 	CreatedByAID    *string         `json:"created_by_aid,omitempty"`
 	Enabled         bool            `json:"enabled"`
 	IncarnationName string          `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← oracle.IncarnationPattern
-	Name            string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"`                     // ← oracle.NamePattern
-	OnBeacon        string          `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"`                // ← oracle.NamePattern (FK to a Vigil name)
-	Subject         Subject         `json:"subject"`
-	UpdatedAt       time.Time       `json:"updated_at"`
-	Where           *string         `json:"where,omitempty"`
+	// Label — the display caption (ADR-0085), mutable via
+	// PUT /v1/decrees/{name}/label. Absent → the consumer shows `name`.
+	Label     *string   `json:"label,omitempty"`
+	Name      string    `json:"name" pattern:"^[a-z0-9-]{1,63}$"`      // ← oracle.NamePattern
+	OnBeacon  string    `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern (FK to a Vigil name)
+	Subject   Subject   `json:"subject"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Where     *string   `json:"where,omitempty"`
 }
 
 // === envelope reply-DTO (element field → native, shape 1:1) ===
@@ -100,6 +106,7 @@ func newVigilView(v handlers.VigilView) VigilView {
 		CreatedByAID: v.CreatedByAID,
 		Enabled:      v.Enabled,
 		Interval:     v.Interval,
+		Label:        v.Label,
 		Name:         v.Name,
 		Params:       v.Params,
 		Subject:      newSubject(v.Subject),
@@ -117,6 +124,7 @@ func newDecreeView(d handlers.DecreeView) DecreeView {
 		CreatedByAID:    d.CreatedByAID,
 		Enabled:         d.Enabled,
 		IncarnationName: d.IncarnationName,
+		Label:           d.Label,
 		Name:            d.Name,
 		OnBeacon:        d.OnBeacon,
 		Subject:         newSubject(d.Subject),

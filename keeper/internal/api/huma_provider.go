@@ -26,6 +26,7 @@ func newProvider(v handlers.ProviderView) Provider {
 		CreatedByAID:   v.CreatedByAID,
 		CredentialsRef: v.CredentialsRef,
 		FQDNSuffix:     v.FQDNSuffix,
+		Label:          v.Label,
 		Name:           v.Name,
 		Region:         v.Region,
 		Type:           v.Type,
@@ -103,6 +104,22 @@ func registerHumaProviderGet(humaAPI huma.API, providerH *handlers.ProviderHandl
 	})
 }
 
+// registerHumaProviderSetLabel mounts PUT /v1/providers/{name}/label (WRITE+AUDIT —
+// provider.label_changed). providerH nil → no-op.
+func registerHumaProviderSetLabel(humaAPI huma.API, providerH *handlers.ProviderHandler) {
+	if providerH == nil {
+		return
+	}
+	huma.Register(humaAPI, providerSetLabelOperation(), func(ctx context.Context, in *providerSetLabelInput) (*providerSetLabelOutput, error) {
+		reply, err := providerH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, providerProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &providerSetLabelOutput{Body: newProvider(reply.Body)}, nil
+	})
+}
+
 // registerHumaProviderDelete mounts DELETE /v1/providers/{name} (WRITE+AUDIT —
 // provider.deleted). providerH nil → no-op.
 func registerHumaProviderDelete(humaAPI huma.API, providerH *handlers.ProviderHandler) {
@@ -148,6 +165,7 @@ func HumaProviderSpecYAML() (string, error) {
 		registerHumaProviderCreate(api, stub)
 		registerHumaProviderList(api, stub)
 		registerHumaProviderGet(api, stub)
+		registerHumaProviderSetLabel(api, stub)
 		registerHumaProviderDelete(api, stub)
 		return nil
 	})

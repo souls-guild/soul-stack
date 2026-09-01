@@ -31,8 +31,12 @@ import (
 // the response body (empirically 200, not 500). created_by_aid/updated_by_aid ←
 // operator.AIDPattern (format for client codegen); the pattern does not affect json.Marshal.
 type PushProvider struct {
-	CreatedAt    time.Time              `json:"created_at"`
-	CreatedByAID string                 `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedByAID string    `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/push-providers/{name}/label. Absent means the row carries none and
+	// the consumer shows `name`.
+	Label        *string                `json:"label,omitempty"`
 	Name         string                 `json:"name"`
 	Params       map[string]interface{} `json:"params"`
 	UpdatedAt    time.Time              `json:"updated_at"`

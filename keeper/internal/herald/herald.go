@@ -66,7 +66,19 @@ func ValidHeraldType(t HeraldType) bool {
 // opt. opt-out flags http_allowed/allow_private). SecretRef is vault-ref of
 // channel secret (signing-token), nullable: not every webhook needs signature.
 type Herald struct {
-	Name      string         `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetHeraldLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived — in
+	// particular NOT the `<entity>` segment of `secret/herald/<entity>/<field>`,
+	// which is built from Name alone (guarded by
+	// label_invariant_guard_test.go). That is the sharpest instance in the
+	// platform: it is one hop, with no state schema in between and nothing to
+	// notice, so a caption that reached it would orphan a signing secret in
+	// silence.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label     *string        `json:"label,omitempty"`
 	Type      HeraldType     `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref,omitempty"`
@@ -119,7 +131,11 @@ type Herald struct {
 // removes ONLY form-rules, not manually created with same cadence
 // selector. Binding by ULID (cadences.id), not name — rename-safe.
 type Tiding struct {
-	Name                 string         `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetTidingLabel, not unique, optional. nil → the consumer shows Name.
+	// It participates in nothing derived and is NOT the `herald` FK below.
+	Label                *string        `json:"label,omitempty"`
 	Herald               string         `json:"herald"`
 	EventTypes           []string       `json:"event_types"`
 	OnlyFailures         bool           `json:"only_failures"`

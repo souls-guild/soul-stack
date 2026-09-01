@@ -77,7 +77,10 @@ func AugurSpecStub() *AugurHandler {
 // flat string (package api projects it into the native enum OmenViewSourceType).
 // created_at is UTC + Truncate(Second) (pinned here, as in the operator reference).
 type OmenView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	SourceType   string
 	Endpoint     string
 	AuthRef      string
@@ -88,6 +91,7 @@ type OmenView struct {
 func toOmenView(o *augur.Omen) OmenView {
 	return OmenView{
 		Name:         o.Name,
+		Label:        o.Label,
 		SourceType:   string(o.SourceType),
 		Endpoint:     o.Endpoint,
 		AuthRef:      o.AuthRef,
@@ -101,7 +105,10 @@ func toOmenView(o *augur.Omen) OmenView {
 // body against these fields, then calls CreateOmenTyped. The service validates the
 // closed source_type set (domain ValidSourceType).
 type OmenCreateInput struct {
-	Name       string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/augur/omens/{name}/label.
+	Label      *string
 	SourceType string
 	Endpoint   string
 	AuthRef    string
@@ -119,6 +126,7 @@ type OmenCreateReply struct {
 func (r OmenCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
 		"name":           r.View.Name,
+		"label":          r.View.Label,
 		"source_type":    r.View.SourceType,
 		"endpoint":       r.View.Endpoint,
 		"auth_ref":       r.View.AuthRef,
@@ -134,6 +142,7 @@ func (h *AugurHandler) CreateOmenTyped(ctx context.Context, claims *keeperjwt.Cl
 	callerAID := claims.Subject
 	o, err := h.svc.CreateOmen(ctx, augur.CreateOmenInput{
 		Name:       req.Name,
+		Label:      req.Label,
 		SourceType: req.SourceType,
 		Endpoint:   req.Endpoint,
 		AuthRef:    req.AuthRef,
@@ -196,6 +205,32 @@ func (h *AugurHandler) GetOmenTyped(ctx context.Context, name string) (OmenView,
 		h.logger.Error("augur.omen.get: service failed",
 			slog.String("name", name), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get omen failed")}
+	}
+}
+
+// SetOmenLabelTyped — domain function for PUT /v1/augur/omens/{name}/label
+// (WRITE+AUDIT omen.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row and is what Rites grant against.
+func (h *AugurHandler) SetOmenLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[OmenView], error) {
+	var zero LabelWriteReply[OmenView]
+	if !reOmenName.MatchString(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path param 'name' must match "+reOmenName.String())}
+	}
+	o, err := h.svc.SetOmenLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[OmenView]{Body: toOmenView(o), Name: name, Label: o.Label}, nil
+	case errors.Is(err, augur.ErrOmenNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+name+" not found")}
+	default:
+		h.logger.Error("augur.omen.label-set: service failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "augur.omen.label-set failed")}
 	}
 }
 

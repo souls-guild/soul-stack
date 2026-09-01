@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -10,6 +11,30 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
+
+// callOracleVigilSetLabel — keeper.oracle.vigil.label-set, the MCP mirror of
+// PUT /v1/vigils/{name}/label (ADR-0085). The registry's only operator mutation.
+func (h *Handler) callOracleVigilSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[vigilView]{
+		tool:          "keeper.oracle.vigil.label-set",
+		resource:      "vigil",
+		configured:    h.deps.OracleSvc != nil,
+		notConfigured: oracleNotConfigured,
+		validName:     oracle.ValidName,
+		namePattern:   oracle.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (vigilView, error) {
+			v, err := h.deps.OracleSvc.SetVigilLabel(ctx, name, label)
+			if err != nil {
+				return vigilView{}, err
+			}
+			return toVigilView(v), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrVigilNotFound) },
+		notFoundf:  func(name string) string { return "vigil " + name + " not found" },
+		failMsg:    "set vigil label failed",
+		event:      audit.EventVigilLabelChanged,
+	})
+}
 
 // oracleNotConfigured — public-detail of oracle-tools' nil-guard. OracleSvc is
 // an optional HandlerDeps field (production wire-up passes the same
@@ -20,7 +45,9 @@ const oracleNotConfigured = "oracle registry is not configured"
 // vigilView — output projection of a Vigil for oracle-tools (schemaVigilView).
 // 1:1 with REST vigilResponse / [oracle.Vigil].
 type vigilView struct {
-	Name         string          `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	Label        *string         `json:"label,omitempty"`
 	Subject      subjectPayload  `json:"subject"`
 	Interval     string          `json:"interval"`
 	Check        string          `json:"check"`
@@ -38,6 +65,7 @@ func toVigilView(v *oracle.Vigil) vigilView {
 	}
 	return vigilView{
 		Name:         v.Name,
+		Label:        v.Label,
 		Subject:      toSubjectPayload(v.Subject()),
 		Interval:     v.IntervalSpec,
 		Check:        v.CheckAddr,
@@ -53,7 +81,10 @@ func toVigilView(v *oracle.Vigil) vigilView {
 // subject carries exactly one of the four dimensions ([subjectPayload]);
 // enabled is optional (omitted → true).
 type vigilCreateArgs struct {
-	Name     string          `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.oracle.vigil.label-set.
+	Label    *string         `json:"label"`
 	Subject  subjectPayload  `json:"subject"`
 	Interval string          `json:"interval"`
 	Check    string          `json:"check"`
@@ -100,6 +131,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 	callerAID := claims.Subject
 	v, err := h.deps.OracleSvc.CreateVigil(ctx, oracle.CreateVigilInput{
 		Name:      a.Name,
+		Label:     a.Label,
 		Subject:   a.Subject.selector(),
 		Interval:  a.Interval,
 		Check:     a.Check,
@@ -120,6 +152,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 	// subject, created_by_aid}. params is NOT included in the payload.
 	h.writeAudit(audit.EventVigilCreated, callerAID, map[string]any{
 		"name":           v.Name,
+		"label":          v.Label,
 		"check":          v.CheckAddr,
 		"interval":       v.IntervalSpec,
 		"subject":        v.Subject().String(),

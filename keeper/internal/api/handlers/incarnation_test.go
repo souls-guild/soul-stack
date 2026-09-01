@@ -360,6 +360,7 @@ func makeIncarnationRow(name string) pgx.Row {
 		[]byte("{}"), // traits (ADR-060 amend R1)
 		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -633,6 +634,7 @@ func TestIncarnation_Get_200_StateMasked(t *testing.T) {
 				[]byte("{}"), // traits
 				"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 				any(nil),     // applying_apply_id (ADR-068 §A1)
+				any(nil),     // label (ADR-0085): unset here, reads NULL
 			}}
 		},
 	}
@@ -1109,6 +1111,7 @@ func incListRow(name string, covens []string, state map[string]any) staticRow {
 		[]byte("{}"), // traits
 		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -1214,6 +1217,7 @@ func incListRowBare(name string) staticRow {
 		[]byte("{}"), // traits
 		any(nil),     // created_scenario = NULL (bare, migration 090)
 		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -1582,6 +1586,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 			[]byte("{}"), // traits
 			"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 			any(nil),     // applying_apply_id (ADR-068 §A1)
+			any(nil),     // label (ADR-0085): unset here, reads NULL
 		}}
 	}}
 	sel := IncarnationScopeSelector(db)
@@ -1795,6 +1800,7 @@ func makeIncStatusRow(name, status string) pgx.Row {
 		[]byte("{}"), // traits
 		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -1967,6 +1973,7 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil),     // created_scenario = NULL (bare, migration 090)
 		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -2254,6 +2261,7 @@ func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 		[]byte("{}"), // traits
 		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 

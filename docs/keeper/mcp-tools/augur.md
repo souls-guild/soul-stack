@@ -2,7 +2,7 @@
 
 Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.augur.omen.*` / `keeper.augur.rite.*` (registries of external systems and grants of the Augur broker, [ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api/augur.md](../operator-api/augur.md).
 
-### Augur (6)
+### Augur (7)
 
 Augur registries - Omen (external system) and Rite (grant) ([ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). 4-segment tool-name `keeper.augur.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (`omen.create` / `rite.list` / …, selector - NoSelector). Business logic (validation `name`/`source_type`/`auth_ref`, exactly-one-of subject, allow-shape by `source_type`, token fields only for vault-delegate) lives in `augur.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("augur registry is not configured"). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** - this is a machine gRPC request, not an operator operation ([rbac.md §Augur](../rbac.md)).
 
@@ -35,6 +35,12 @@ Enumeration of Omens (sort `created_at` DESC, `name` ASC). Permission: `omen.lis
 | `limit` | `integer` | no | Page size (≥ 1). |
 
 **Output:** `{omens: array<OmenView>, total}`.
+
+#### `keeper.augur.omen.label-set`
+
+Replaces the Omen's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable so the Rites granted against an Omen cannot silently follow it to a different external system, and the caption is not the `rites.omen` FK. Permission: `omen.label-set`. Endpoint: [`PUT /v1/augur/omens/{name}/label`](../operator-api/augur.md). Async: no.
+
+**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Omen` - the row as it now reads. Errors: `not-found`.
 
 #### `keeper.augur.omen.delete`
 

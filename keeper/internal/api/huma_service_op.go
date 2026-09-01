@@ -36,7 +36,11 @@ type serviceRegisterInput struct {
 // domain validation lives in RegisterTyped (422/409/404). The struct name = the contract
 // schema name in OpenAPI (committed hand-written spec → ServiceRegisterRequest).
 type ServiceRegisterRequest struct {
-	Name    string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name (kebab-case)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name (kebab-case)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/services/{name}/label. No pattern — capitals and spaces are the
+	// point. `name`, not this, is segment 2 of every derived secret path.
+	Label   *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Git     string  `json:"git" required:"true" doc:"git source of the service repo (URL; not a secret)"`
 	Ref     string  `json:"ref" required:"true" doc:"git ref (tag/branch) - Service version (ADR-007)"`
 	Refresh *string `json:"refresh,omitempty" doc:"opt. auto-refresh duration ('5m'); omitted - no auto-refresh"`
@@ -149,6 +153,30 @@ type ServiceUpdateRequest struct {
 type serviceUpdateOutput struct {
 	Status int `json:"-"`
 	Body   ServiceView
+}
+
+// === PUT /v1/services/{name}/label (label-set) — WRITE+AUDIT service.label_changed ===
+
+type serviceSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name"`
+	Body LabelSetRequest
+}
+
+type serviceSetLabelOutput struct {
+	Body ServiceView
+}
+
+func serviceSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setServiceLabel",
+		Method:        http.MethodPut,
+		Path:          "/{name}/label",
+		Summary:       "Set the Service display caption",
+		Description:   "Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PATCH /v1/services/{name}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.",
+		Tags:          []string{"service"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
 }
 
 // serviceUpdateOperation — metadata for PATCH /v1/services/{name}. DefaultStatus=200.

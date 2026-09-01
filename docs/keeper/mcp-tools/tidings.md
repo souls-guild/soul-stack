@@ -2,7 +2,7 @@
 
 Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.tiding.*` (registry CRUD `tidings`, [ADR-052](../../adr/0052-herald-notifications.md), S4). Transport, auth, tool declaration format, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics, bodies, error codes is [operator-api/tidings.md](../operator-api/tidings.md).
 
-### Tiding (5)
+### Tiding (6)
 
 5 tools 1:1 `keeper.tiding.<verb>` ↔ permission `tiding.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/tidings*` (selector - NoSelector). `event_types` — area-glob (`scenario_run.*`) in the scope of runs; `herald` - FK to existing Herald. Same `HeraldSvc` / nil-guard as herald-tools; when the registry is turned off - `internal-error`.
 
@@ -21,6 +21,12 @@ Creates a PERMANENT Tiding subscription rule: for which `event_types` (area-glob
 Replaces the mutable fields of the Tiding rule (replace semantics; `name` is the key). Permission: `tiding.update`. Endpoint: [`PUT /v1/tidings/{name}`](../operator-api/tidings.md). Async: no.
 
 **Input** (`required: name, herald, event_types`): `{name, herald, event_types, only_failures?, only_changes?, incarnation? (|null), cadence? (|null), task? (|null), annotations? (object), projection? (array<string>), enabled?}` (replace: omitted `incarnation`/`cadence`/`task`/`annotations`/`projection` are cleared - omit==clear; `ephemeral`/`voyage_id` are not accepted for input - server ones). **Output:** `Tiding`. Errors: `not-found` (no rule or `herald` by FK does not exist).
+
+#### `keeper.tiding.label-set`
+
+Replaces the rule's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Narrower than `keeper.tiding.update`, which replaces the whole rule; the caption is not the `herald` FK and participates in nothing derived. Permission: `tiding.label-set`. Endpoint: [`PUT /v1/tidings/{name}/label`](../operator-api/tidings.md). Async: no.
+
+**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Tiding` - the rule as it now reads. Errors: `not-found`.
 
 #### `keeper.tiding.delete`
 

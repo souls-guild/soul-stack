@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 )
 
 // ExecQueryRower — the narrow subset of pgxpool.Pool the repository needs.
@@ -36,13 +38,25 @@ const (
 
 // --- service_registry -------------------------------------------------
 
-const serviceColumns = `name, git, ref, refresh, created_by_aid, updated_by_aid, created_at, updated_at`
+const serviceColumns = `name, git, ref, refresh, created_by_aid, updated_by_aid, created_at, updated_at, label`
 
 const insertServiceSQL = `
-INSERT INTO service_registry (name, git, ref, refresh, created_by_aid, updated_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO service_registry (name, git, ref, refresh, created_by_aid, updated_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at, updated_at
 `
+
+// updateLabelServiceSQL replaces the display caption of one row ([ADR-0085]).
+//
+// It sets `label` and NOTHING else — not the PK, which is segment 2 of every
+// derived secret path and has no rename operation, and deliberately not
+// `updated_at` / `updated_by_aid` either. Those record changes to the record's
+// SUBSTANCE (git/ref/refresh — where the artifact comes from, which the loader
+// acts on); a caption edit changes nothing anybody acts on, and bumping the
+// stamp would make a cosmetic edit read as a re-pointing of the service. Who
+// changed the caption and when is in the audit trail, under
+// `service.label_changed`.
+const updateLabelServiceSQL = `UPDATE service_registry SET label = $2 WHERE name = $1`
 
 const selectServiceByNameSQL = `
 SELECT ` + serviceColumns + `
@@ -50,11 +64,15 @@ FROM service_registry
 WHERE name = $1
 `
 
+// updateServiceSQL leaves `label` alone: a re-point of git/ref must not clear a
+// caption an operator set, and the two mutations are orthogonal in both
+// directions. It is RETURNED so the caller's fresh struct carries the caption the
+// row still holds instead of reporting it as absent.
 const updateServiceSQL = `
 UPDATE service_registry
 SET git = $2, ref = $3, refresh = $4, updated_by_aid = $5, updated_at = NOW()
 WHERE name = $1
-RETURNING created_at, updated_at
+RETURNING created_at, updated_at, label
 `
 
 const deleteServiceSQL = `DELETE FROM service_registry WHERE name = $1`
@@ -70,8 +88,12 @@ func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 	if e == nil {
 		return fmt.Errorf("serviceregistry: nil service entry")
 	}
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	e.Label = registrylabel.Normalize(e.Label)
 	row := db.QueryRow(ctx, insertServiceSQL,
 		e.Name, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.CreatedByAID), strOrNil(e.UpdatedByAID),
+		strOrNil(e.Label),
 	)
 	if err := row.Scan(&e.CreatedAt, &e.UpdatedAt); err != nil {
 		return mapServiceWriteError(err)
@@ -125,11 +147,36 @@ func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 	row := db.QueryRow(ctx, updateServiceSQL,
 		e.Name, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.UpdatedByAID),
 	)
-	if err := row.Scan(&e.CreatedAt, &e.UpdatedAt); err != nil {
+	if err := row.Scan(&e.CreatedAt, &e.UpdatedAt, &e.Label); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		return mapServiceWriteError(err)
+	}
+	return nil
+}
+
+// UpdateServiceLabel replaces the display caption of one Service ([ADR-0085]).
+// [ErrNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// The name argument addresses the row; it is never written, and it — not the
+// caption — is segment 2 of every path this service's secrets derive onto.
+// Nothing derived moves as a result of this call.
+func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("serviceregistry: invalid name %q (must match %s)", name, NamePattern)
+	}
+	tag, err := db.Exec(ctx, updateLabelServiceSQL, name, strOrNil(registrylabel.Normalize(label)))
+	if err != nil {
+		return fmt.Errorf("serviceregistry: update service label: %w", wrapPgErr(err))
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
@@ -152,8 +199,9 @@ func scanService(row pgx.Row) (*ServiceEntry, error) {
 		refresh      *string
 		createdByAID *string
 		updatedByAID *string
+		label        *string
 	)
-	err := row.Scan(&e.Name, &e.Git, &e.Ref, &refresh, &createdByAID, &updatedByAID, &e.CreatedAt, &e.UpdatedAt)
+	err := row.Scan(&e.Name, &e.Git, &e.Ref, &refresh, &createdByAID, &updatedByAID, &e.CreatedAt, &e.UpdatedAt, &label)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -163,6 +211,7 @@ func scanService(row pgx.Row) (*ServiceEntry, error) {
 	e.Refresh = refresh
 	e.CreatedByAID = createdByAID
 	e.UpdatedByAID = updatedByAID
+	e.Label = label
 	return &e, nil
 }
 

@@ -522,6 +522,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callIncarnationUpgrade(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.destroy":
 		return h.callIncarnationDestroy(ctx, claims, req, p.Arguments), false
+	case "keeper.incarnation.label-set":
+		return h.callIncarnationLabelSet(ctx, claims, req, p.Arguments), false
 	case "keeper.incarnation.traits-set":
 		return h.callIncarnationTraitsSet(ctx, claims, req, p.Arguments), false
 	// Membership (ADR-008 amendment 2026-07-28, NIM-209) — the operator path for
@@ -586,6 +588,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callServiceRegister(ctx, claims, req, p.Arguments), false
 	case "keeper.service.update":
 		return h.callServiceUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.service.label-set":
+		return h.callServiceSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.service.list":
 		return h.callServiceList(ctx, claims, req, p.Arguments), false
 	case "keeper.service.deregister":
@@ -608,6 +612,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callAugurOmenCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.augur.omen.list":
 		return h.callAugurOmenList(ctx, claims, req, p.Arguments), false
+	case "keeper.augur.omen.label-set":
+		return h.callAugurOmenSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.augur.omen.delete":
 		return h.callAugurOmenDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.augur.rite.create":
@@ -626,12 +632,16 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callOracleVigilCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.oracle.vigil.list":
 		return h.callOracleVigilList(ctx, claims, req, p.Arguments), false
+	case "keeper.oracle.vigil.label-set":
+		return h.callOracleVigilSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.oracle.vigil.delete":
 		return h.callOracleVigilDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.oracle.decree.create":
 		return h.callOracleDecreeCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.oracle.decree.list":
 		return h.callOracleDecreeList(ctx, claims, req, p.Arguments), false
+	case "keeper.oracle.decree.label-set":
+		return h.callOracleDecreeSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.oracle.decree.delete":
 		return h.callOracleDecreeDelete(ctx, claims, req, p.Arguments), false
 
@@ -658,6 +668,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callPushProviderList(ctx, claims, req, p.Arguments), false
 	case "keeper.push-provider.read":
 		return h.callPushProviderRead(ctx, claims, req, p.Arguments), false
+	case "keeper.push-provider.label-set":
+		return h.callPushProviderSetLabel(ctx, claims, req, p.Arguments), false
 
 	// Cloud Provider / Profile-tools (CRUD providers/profiles registries,
 	// ADR-017). 1:1 with REST POST/GET/DELETE /v1/providers* and /v1/profiles*
@@ -665,11 +677,14 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 	// keeper.profile.<verb> ↔ profile.<verb>). Dispatch only when
 	// ProviderSvc/ProfileSvc is non-nil (optional HandlerDeps fields);
 	// otherwise the call method returns "... registry is not configured".
-	// No update (Provider/Profile are immutable).
+	// No update (Provider/Profile are immutable) — except the display caption,
+	// which is the one field nothing derives from ([ADR-0085], NIM-728).
 	case "keeper.provider.create":
 		return h.callProviderCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.provider.read":
 		return h.callProviderRead(ctx, claims, req, p.Arguments), false
+	case "keeper.provider.label-set":
+		return h.callProviderSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.provider.delete":
 		return h.callProviderDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.provider.list":
@@ -678,6 +693,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callProfileCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.profile.read":
 		return h.callProfileRead(ctx, claims, req, p.Arguments), false
+	case "keeper.profile.label-set":
+		return h.callProfileSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.profile.delete":
 		return h.callProfileDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.profile.list":
@@ -693,6 +710,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callHeraldCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.herald.update":
 		return h.callHeraldUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.herald.label-set":
+		return h.callHeraldSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.herald.delete":
 		return h.callHeraldDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.herald.list":
@@ -703,6 +722,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callTidingCreate(ctx, claims, req, p.Arguments), false
 	case "keeper.tiding.update":
 		return h.callTidingUpdate(ctx, claims, req, p.Arguments), false
+	case "keeper.tiding.label-set":
+		return h.callTidingSetLabel(ctx, claims, req, p.Arguments), false
 	case "keeper.tiding.delete":
 		return h.callTidingDelete(ctx, claims, req, p.Arguments), false
 	case "keeper.tiding.list":

@@ -64,11 +64,11 @@ func (r enqErrRow) Scan(...any) error { return r.err }
 // enqIncRow emulates an incarnation row in scanIncarnation order:
 // name, service, service_version, state_schema_version, state, status,
 // status_details, created_by_aid, created_at, updated_at, covens, traits,
-// created_scenario, applying_apply_id.
+// created_scenario, applying_apply_id, label.
 type enqIncRow struct{ inc *incarnation.Incarnation }
 
 func (r enqIncRow) Scan(dest ...any) error {
-	if len(dest) != 14 {
+	if len(dest) != 15 {
 		return errors.New("enqIncRow: len mismatch")
 	}
 	*dest[0].(*string) = r.inc.Name
@@ -88,6 +88,9 @@ func (r enqIncRow) Scan(dest ...any) error {
 	*dest[12].(**string) = r.inc.CreatedScenario
 	// applying_apply_id (ADR-068 §A1, migration 082): non-null while applying, nil at terminal.
 	*dest[13].(**string) = r.inc.ApplyingApplyID
+	// label (ADR-0085): the display caption. Display-only — nothing in the enqueue
+	// path reads it, which is the invariant, so the fixture passes it through.
+	*dest[14].(**string) = r.inc.Label
 	return nil
 }
 

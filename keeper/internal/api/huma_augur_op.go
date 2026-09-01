@@ -36,10 +36,13 @@ type omenCreateInput struct {
 // schema name in OpenAPI (DefaultSchemaNamer takes reflect.Type.Name()) — aligned
 // with the committed handwritten spec (OmenCreateRequest).
 type OmenCreateRequest struct {
-	Name       string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Omen name (kebab-case, 1..63)"`
-	SourceType string `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"external system type; a value outside the enum -> 422"`
-	Endpoint   string `json:"endpoint" required:"true" doc:"external system URL (not a secret)"`
-	AuthRef    string `json:"auth_ref" required:"true" doc:"vault-ref on master-credential (vault:<mount>/<path>); the secret itself is not stored"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Omen name (kebab-case, 1..63)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/augur/omens/{name}/label.
+	Label      *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
+	SourceType string  `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"external system type; a value outside the enum -> 422"`
+	Endpoint   string  `json:"endpoint" required:"true" doc:"external system URL (not a secret)"`
+	AuthRef    string  `json:"auth_ref" required:"true" doc:"vault-ref on master-credential (vault:<mount>/<path>); the secret itself is not stored"`
 }
 
 // omenCreateOutput — huma-output for POST /v1/augur/omens (FULL-TYPED). Status=201;
@@ -153,6 +156,30 @@ type augurNoContentOutput struct {
 // omenDeleteOperation — metadata for DELETE /v1/augur/omens/{name}. DefaultStatus=204.
 // Permission omen.delete + audit omen.revoked (the cascade cleans up related Rites).
 // Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
+// === PUT /v1/augur/omens/{name}/label (label-set) — WRITE+AUDIT omen.label_changed ===
+
+type omenSetLabelInput struct {
+	Name string `path:"name" doc:"Omen name"`
+	Body LabelSetRequest
+}
+
+type omenSetLabelOutput struct {
+	Body OmenView
+}
+
+func omenSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setOmenLabel",
+		Method:        http.MethodPut,
+		Path:          "/omens/{name}/label",
+		Summary:       "Set the Omen display caption",
+		Description:   "Replaces the display caption of one Omen (ADR-0085). Permission omen.label-set, audit omen.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only mutation: endpoint and auth_ref stay immutable, because the Rites granted against an Omen must not silently follow it to a different external system. The caption participates in nothing derived, so changing it moves nothing.",
+		Tags:          []string{"augur"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 func omenDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteOmen",

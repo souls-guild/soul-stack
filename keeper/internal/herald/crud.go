@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 )
 
 // Sentinel errors of CRUD layer. Handler-side (OpenAPI/MCP, slice S4) maps:
@@ -95,13 +97,28 @@ var (
 
 // --- Herald -----------------------------------------------------------
 
-const heraldColumns = `name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid`
+const heraldColumns = `name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid, label`
 
 const heraldInsertSQL = `
-INSERT INTO heralds (name, type, config, secret_ref, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO heralds (name, type, config, secret_ref, enabled, created_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at, updated_at
 `
+
+// heraldUpdateLabelSQL replaces the display caption of one Herald ([ADR-0085]).
+//
+// It sets `label` and NOTHING else — not the PK, which is immutable and has no
+// rename operation, and deliberately not `updated_at` either. That stamp records
+// changes to the channel's SUBSTANCE (type/config/secret_ref/enabled, which the
+// dispatcher acts on) and the listing sorts by it; a caption edit changes nothing
+// anybody acts on, and bumping it would reorder every operator's list for a word.
+// Who changed the caption and when is in the audit trail, under
+// `herald.label_changed`.
+//
+// Note also what [heraldUpdateSQL] does NOT set: `label` is absent from it, so a
+// full channel update leaves the caption standing rather than silently clearing
+// it — the two mutations are orthogonal in both directions.
+const heraldUpdateLabelSQL = `UPDATE heralds SET label = $2 WHERE name = $1`
 
 const heraldSelectByNameSQL = `
 SELECT ` + heraldColumns + `
@@ -142,8 +159,13 @@ func InsertHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 		return fmt.Errorf("herald: marshal config: %w", err)
 	}
 
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	h.Label = registrylabel.Normalize(h.Label)
+
 	row := db.QueryRow(ctx, heraldInsertSQL,
 		h.Name, string(h.Type), configBytes, secretRefArg(h.SecretRef), h.Enabled, aidArg(h.CreatedByAID),
+		optStrArg(h.Label),
 	)
 	if err := row.Scan(&h.CreatedAt, &h.UpdatedAt); err != nil {
 		return mapHeraldInsertError(err)
@@ -178,10 +200,11 @@ func scanHerald(row pgx.Row) (*Herald, error) {
 		configBytes  []byte
 		secretRef    *string
 		createdByAID *string
+		label        *string
 	)
 	err := row.Scan(
 		&h.Name, &typeStr, &configBytes, &secretRef, &h.Enabled,
-		&h.CreatedAt, &h.UpdatedAt, &createdByAID,
+		&h.CreatedAt, &h.UpdatedAt, &createdByAID, &label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -192,6 +215,7 @@ func scanHerald(row pgx.Row) (*Herald, error) {
 	h.Type = HeraldType(typeStr)
 	h.SecretRef = secretRef
 	h.CreatedByAID = createdByAID
+	h.Label = label
 	if len(configBytes) > 0 {
 		if err := json.Unmarshal(configBytes, &h.Config); err != nil {
 			return nil, fmt.Errorf("herald: unmarshal config: %w", err)
@@ -242,6 +266,49 @@ OFFSET $1 LIMIT $2`
 	return out, total, nil
 }
 
+// UpdateHeraldLabel replaces the display caption of one Herald ([ADR-0085]).
+// [ErrHeraldNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail and no CHECK to violate.
+//
+// The name argument addresses the row; it is never written, and it is what the
+// derived Vault path `secret/herald/<name>/<field>` is built from. Nothing
+// derived moves as a result of this call — see the package doc of
+// keeper/internal/registrylabel.
+func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("herald: invalid name %q (must match %s)", name, NamePattern)
+	}
+	tag, err := db.Exec(ctx, heraldUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label)))
+	if err != nil {
+		return fmt.Errorf("herald: update herald label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrHeraldNotFound
+	}
+	return nil
+}
+
+// UpdateTidingLabel replaces the display caption of one Tiding ([ADR-0085]).
+// [ErrTidingNotFound] when the row is absent. Same semantics as
+// [UpdateHeraldLabel].
+func UpdateTidingLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("herald: invalid tiding name %q (must match %s)", name, NamePattern)
+	}
+	tag, err := db.Exec(ctx, tidingUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label)))
+	if err != nil {
+		return fmt.Errorf("herald: update tiding label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrTidingNotFound
+	}
+	return nil
+}
+
 // UpdateHerald replaces mutable fields of Herald (type/config/secret_ref/enabled,
 // replace semantics). name (PK) is immutable. [ErrHeraldNotFound] if PK not found.
 func UpdateHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
@@ -288,13 +355,18 @@ func DeleteHerald(ctx context.Context, db ExecQueryRower, name string) error {
 
 // --- Tiding -----------------------------------------------------------
 
-const tidingColumns = `name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_at, updated_at, created_by_aid`
+const tidingColumns = `name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_at, updated_at, created_by_aid, label`
 
 const tidingInsertSQL = `
-INSERT INTO tidings (name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+INSERT INTO tidings (name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING created_at, updated_at
 `
+
+// tidingUpdateLabelSQL replaces the display caption of one Tiding ([ADR-0085]).
+// Same shape and same reasoning as [heraldUpdateLabelSQL]: `label` only, no PK,
+// no `updated_at`, and [tidingUpdateSQL] leaves `label` alone in return.
+const tidingUpdateLabelSQL = `UPDATE tidings SET label = $2 WHERE name = $1`
 
 const tidingSelectByNameSQL = `
 SELECT ` + tidingColumns + `
@@ -344,12 +416,15 @@ func InsertTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 		return fmt.Errorf("herald: marshal annotations: %w", err)
 	}
 
+	// The label is canonicalised, never validated ([ADR-0085]).
+	t.Label = registrylabel.Normalize(t.Label)
+
 	row := db.QueryRow(ctx, tidingInsertSQL,
 		t.Name, t.Herald, t.EventTypes, t.OnlyFailures, t.OnlyChanges,
 		optStrArg(t.Incarnation), optStrArg(t.Cadence), optStrArg(t.Task),
 		t.Ephemeral, optStrArg(t.VoyageID), optStrArg(t.CreatedFromCadenceID),
 		annotationsBytes, projectionArg(t.Projection),
-		t.Enabled, aidArg(t.CreatedByAID),
+		t.Enabled, aidArg(t.CreatedByAID), optStrArg(t.Label),
 	)
 	if err := row.Scan(&t.CreatedAt, &t.UpdatedAt); err != nil {
 		return mapTidingInsertError(err)
@@ -390,12 +465,13 @@ func scanTiding(row pgx.Row) (*Tiding, error) {
 		createdFromCadenceID *string
 		annotationsBytes     []byte
 		createdByAID         *string
+		label                *string
 	)
 	err := row.Scan(
 		&t.Name, &t.Herald, &t.EventTypes, &t.OnlyFailures, &t.OnlyChanges,
 		&incarnation, &cadence, &task, &t.Ephemeral, &voyageID, &createdFromCadenceID,
 		&annotationsBytes, &t.Projection,
-		&t.Enabled, &t.CreatedAt, &t.UpdatedAt, &createdByAID,
+		&t.Enabled, &t.CreatedAt, &t.UpdatedAt, &createdByAID, &label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -409,6 +485,7 @@ func scanTiding(row pgx.Row) (*Tiding, error) {
 	t.VoyageID = voyageID
 	t.CreatedFromCadenceID = createdFromCadenceID
 	t.CreatedByAID = createdByAID
+	t.Label = label
 	if len(annotationsBytes) > 0 {
 		if err := json.Unmarshal(annotationsBytes, &t.Annotations); err != nil {
 			return nil, fmt.Errorf("herald: unmarshal annotations: %w", err)

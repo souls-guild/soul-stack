@@ -487,9 +487,13 @@ func TestRoleTools_InManifest(t *testing.T) {
 // .unbind-member / .members per the ADR-008 amendment 2026-07-28, NIM-209,
 // MINUS keeper.incarnation.check-drift, removed with the drift circuit in
 // NIM-446, PLUS keeper.soul.forget per NIM-386).
+// PLUS the ten keeper.<resource>.label-set tools ([ADR-0085], NIM-728), one per
+// registry that carries a display caption: incarnation / service / provider /
+// profile / push-provider / augur.omen / herald / tiding / oracle.vigil /
+// oracle.decree.
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 97 {
-		t.Errorf("catalog size = %d, want 97", n)
+	if n := len(listAllTools()); n != 107 {
+		t.Errorf("catalog size = %d, want 107", n)
 	}
 }
 

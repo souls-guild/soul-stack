@@ -151,8 +151,8 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO providers") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 6 {
-		t.Fatalf("args len = %d, want 6", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 7 {
+		t.Fatalf("args len = %d, want 7", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "aws-eu" || f.queryRowArgs[1] != "aws" {
 		t.Errorf("args head = %v / %v", f.queryRowArgs[0], f.queryRowArgs[1])
@@ -284,6 +284,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 			return staticRow{values: []any{
 				"aws-eu", "aws", "eu-central-1", "vault:secret/cloud/aws-eu",
 				any("archon-alice"), now, any(nil),
+				any(nil), // label (ADR-0085): unset in this fixture, reads NULL
 			}}
 		},
 	}
@@ -320,8 +321,8 @@ func TestSelectAll_HappyPath(t *testing.T) {
 		},
 		queryFunc: func(_ string) (pgx.Rows, error) {
 			return &fakeRows{rows: []staticRow{
-				{values: []any{"aws-eu", "aws", "eu", "vault:a", any(nil), now, any(nil)}},
-				{values: []any{"yc-ru", "yc", "ru", "vault:b", any("archon-alice"), now, any("ns.vm.example")}},
+				{values: []any{"aws-eu", "aws", "eu", "vault:a", any(nil), now, any(nil), any(nil)}},
+				{values: []any{"yc-ru", "yc", "ru", "vault:b", any("archon-alice"), now, any("ns.vm.example"), any(nil)}},
 			}}, nil
 		},
 	}

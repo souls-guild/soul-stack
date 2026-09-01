@@ -177,6 +177,26 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
+// registerHumaIncarnationSetLabel mounts PUT /v1/incarnations/{name}/label
+// (SELF-AUDIT incarnation.label_changed — written BY the handler itself inside
+// SetLabelTyped, like the traits route beside it). incH nil → no-op.
+func registerHumaIncarnationSetLabel(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incSetLabelOperation(), func(ctx context.Context, in *incSetLabelInput) (*incSetLabelOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, incMissingClaims()
+		}
+		body, err := incH.SetLabelTyped(ctx, claims, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incSetLabelOutput{Body: newIncarnationGetReply(body)}, nil
+	})
+}
+
 // registerHumaIncarnationSetTraits mounts PUT /v1/incarnations/{name}/traits
 // (SELF-AUDIT incarnation.traits_changed — written BY the handler itself inside SetTraitsTyped).
 // incH nil → no-op.
@@ -434,6 +454,7 @@ func HumaIncarnationSpecYAML() (string, error) {
 		registerHumaIncarnationRerunLast(api, stub)
 		registerHumaIncarnationDestroy(api, stub)
 		registerHumaIncarnationSetTraits(api, stub)
+		registerHumaIncarnationSetLabel(api, stub)
 		registerHumaIncarnationRevealSecret(api, stub)
 		registerHumaIncarnationRevealableSecrets(api, stub)
 		return nil

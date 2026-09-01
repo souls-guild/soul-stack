@@ -56,7 +56,10 @@ func (p *svcRegFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.R
 			return svcRegErrRow{p.updateErr}
 		}
 		now := time.Now()
-		return svcRegRow{[]any{now, now}}
+		// RETURNING created_at, updated_at, label — the caption is returned so an
+		// update that does not touch it reports what the row still holds
+		// (ADR-0085), rather than reporting it absent.
+		return svcRegRow{[]any{now, now, nil}}
 	case strings.Contains(sql, "FROM service_registry"):
 		if p.getErr != nil {
 			return svcRegErrRow{p.getErr}
@@ -128,7 +131,9 @@ func scanSvcReg(dest, values []any) error {
 
 func svcRegEntryRow(name, git, ref string) []any {
 	now := time.Now()
-	return []any{name, git, ref, nil, nil, nil, now, now}
+	// The trailing nil is `label` (ADR-0085): the display caption, unset in these
+	// fixtures, so it reads NULL and a consumer shows the name.
+	return []any{name, git, ref, nil, nil, nil, now, now, nil}
 }
 
 // --- harness ---

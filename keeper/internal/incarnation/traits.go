@@ -83,7 +83,8 @@ SELECT name, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
-       applying_apply_id
+       applying_apply_id,
+       label
 FROM incarnation
 WHERE name = $1
 FOR UPDATE

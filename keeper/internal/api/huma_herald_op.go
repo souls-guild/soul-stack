@@ -36,7 +36,12 @@ type heraldCreateInput struct {
 // CreateHeraldTyped (422). The struct name = the contract schema name in the OpenAPI
 // (committed hand-written spec → HeraldCreateRequest).
 type HeraldCreateRequest struct {
-	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), unique in the cluster"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), unique in the cluster"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/heralds/{name}/label. No pattern — capitals and spaces are the
+	// point. `name`, not this, is the `<entity>` segment of the channel's
+	// derived Vault path.
+	Label     *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Type      string         `json:"type" required:"true" enum:"custom,discord,email,mattermost,slack,telegram,webhook" doc:"channel type (closed-enum: webhook|telegram|slack|mattermost|discord|custom|email); value outside the enum -> 422"`
 	Config    map[string]any `json:"config" required:"true" doc:"per-type config (form depends on type; see catalog GET /v1/herald-types). Channel secret (bot_token/webhook_url/header_secret) — dual-mode: value (plaintext) OR *_ref (vault path)"`
 	SecretRef *string        `json:"secret_ref,omitempty" doc:"opt. vault-ref on webhook signing-token (vault:<mount>/<path>); XOR with secret"`
@@ -163,6 +168,30 @@ type heraldUpdateOutput struct {
 	Body   Herald
 }
 
+// === PUT /v1/heralds/{name}/label (label-set) — WRITE+AUDIT herald.label_changed ===
+
+type heraldSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (immutable)"`
+	Body LabelSetRequest
+}
+
+type heraldSetLabelOutput struct {
+	Body Herald
+}
+
+func heraldSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setHeraldLabel",
+		Method:        http.MethodPut,
+		Path:          "/heralds/{name}/label",
+		Summary:       "Set the Herald display caption",
+		Description:   "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{name}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret.",
+		Tags:          []string{"herald"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 // heraldUpdateOperation — metadata for PUT /v1/heralds/{name}. DefaultStatus=200.
 // Permission herald.update + audit herald.updated. Errors: 400 unknown/malformed,
 // 403 RBAC, 404 not-found, 422 body/path-name validation, 500.
@@ -224,7 +253,10 @@ type tidingCreateInput struct {
 // projection format — domain validation in CreateTidingTyped (422/409/404). The struct name =
 // the contract schema name in the OpenAPI (committed hand-written spec → TidingCreateRequest).
 type TidingCreateRequest struct {
-	Name         string          `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (kebab-case, 1..63)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (kebab-case, 1..63)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/tidings/{name}/label.
+	Label        *string         `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Herald       string          `json:"herald" required:"true" doc:"Herald channel name for delivery (FK on heralds.name)"`
 	EventTypes   []string        `json:"event_types" required:"true" doc:"list of event-types in run scope (area-glob or exact); empty -> 422"`
 	OnlyFailures *bool           `json:"only_failures,omitempty" doc:"deliver only failures (omitted → false)"`
@@ -357,6 +389,30 @@ type TidingUpdateRequest struct {
 type tidingUpdateOutput struct {
 	Status int `json:"-"`
 	Body   Tiding
+}
+
+// === PUT /v1/tidings/{name}/label (label-set) — WRITE+AUDIT tiding.label_changed ===
+
+type tidingSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (immutable)"`
+	Body LabelSetRequest
+}
+
+type tidingSetLabelOutput struct {
+	Body Tiding
+}
+
+func tidingSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setTidingLabel",
+		Method:        http.MethodPut,
+		Path:          "/tidings/{name}/label",
+		Summary:       "Set the Tiding display caption",
+		Description:   "Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{name}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.",
+		Tags:          []string{"tiding"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
 }
 
 // tidingUpdateOperation — metadata for PUT /v1/tidings/{name}. DefaultStatus=200.

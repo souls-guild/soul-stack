@@ -1299,6 +1299,7 @@ func incRow(name, status, state string) pgx.Row {
 		[]byte("{}"), // traits
 		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
@@ -1315,6 +1316,7 @@ func incRowBare(name, status, state string) pgx.Row {
 		[]byte("{}"), // traits
 		any(nil),     // created_scenario = NULL (bare, migration 090)
 		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
 	}}
 }
 

@@ -67,7 +67,10 @@ func HeraldSpecStub() *HeraldHandler {
 // (package api projects to the native enum HeraldType). created_at/updated_at — UTC
 // (nanosecond wire, no Truncate — parity with the legacy `.UTC()`).
 type HeraldView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Type         string
 	Config       map[string]any
 	SecretRef    *string
@@ -84,6 +87,7 @@ func toHeraldView(h *herald.Herald) HeraldView {
 	}
 	return HeraldView{
 		Name:         h.Name,
+		Label:        h.Label,
 		Type:         string(h.Type),
 		Config:       config,
 		SecretRef:    h.SecretRef,
@@ -99,7 +103,11 @@ func toHeraldView(h *herald.Herald) HeraldView {
 // (per-type) + optional secret_ref (vault-ref) + optional enabled. The service
 // validates field formats.
 type HeraldCreateInput struct {
-	Name      string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/heralds/{name}/label. nil/blank → NULL, and the consumer shows
+	// Name.
+	Label     *string
 	Type      string
 	Config    map[string]any
 	SecretRef *string
@@ -143,6 +151,7 @@ func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt
 	var zero HeraldWriteReply
 	hr := &herald.Herald{
 		Name:         req.Name,
+		Label:        req.Label,
 		Type:         herald.HeraldType(req.Type),
 		Config:       req.Config,
 		SecretRef:    req.SecretRef,
@@ -176,6 +185,43 @@ func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req 
 		return zero, h.heraldError(err, name, "update")
 	}
 	return HeraldWriteReply{View: toHeraldView(updated), herald: updated}, nil
+}
+
+// SetHeraldLabelTyped — domain function for PUT /v1/heralds/{name}/label
+// (WRITE+AUDIT herald.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row — and because THAT name, not the caption, is the
+// `<entity>` segment of the channel's derived Vault path.
+func (h *HeraldHandler) SetHeraldLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[HeraldView], error) {
+	var zero LabelWriteReply[HeraldView]
+	if !herald.ValidName(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'name' must match "+herald.NamePattern)}
+	}
+	updated, err := h.svc.SetHeraldLabel(ctx, name, req.Label)
+	if err != nil {
+		return zero, h.heraldError(err, name, "label-set")
+	}
+	return LabelWriteReply[HeraldView]{Body: toHeraldView(updated), Name: name, Label: updated.Label}, nil
+}
+
+// SetTidingLabelTyped — domain function for PUT /v1/tidings/{name}/label
+// (WRITE+AUDIT tiding.label_changed). 404 if absent. Same contract as
+// [HeraldHandler.SetHeraldLabelTyped].
+func (h *HeraldHandler) SetTidingLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[TidingView], error) {
+	var zero LabelWriteReply[TidingView]
+	if !herald.ValidName(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'name' must match "+herald.NamePattern)}
+	}
+	updated, err := h.svc.SetTidingLabel(ctx, name, req.Label)
+	if err != nil {
+		return zero, h.tidingError(err, name, "label-set")
+	}
+	return LabelWriteReply[TidingView]{Body: toTidingView(updated), Name: name, Label: updated.Label}, nil
 }
 
 // HeraldDeleteReply is the extracted result of [HeraldHandler.DeleteHeraldTyped]
@@ -274,6 +320,7 @@ func (h *HeraldHandler) heraldError(err error, name, op string) error {
 func heraldAuditPayload(h *herald.Herald) middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"name":    h.Name,
+		"label":   h.Label,
 		"type":    string(h.Type),
 		"enabled": h.Enabled,
 	}
@@ -309,7 +356,10 @@ func aidPtr(aid string) *string {
 // *map with omitempty; cadence/created_by_aid/ephemeral/incarnation/projection/task/
 // voyage_id — optional pointers with omitempty. created_at/updated_at — UTC (nanosecond wire).
 type TidingView struct {
-	Name         string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label        *string
 	Herald       string
 	EventTypes   []string
 	OnlyFailures bool
@@ -335,6 +385,7 @@ func toTidingView(t *herald.Tiding) TidingView {
 	ephemeral := t.Ephemeral
 	return TidingView{
 		Name:         t.Name,
+		Label:        t.Label,
 		Herald:       t.Herald,
 		EventTypes:   eventTypes,
 		OnlyFailures: t.OnlyFailures,
@@ -358,7 +409,10 @@ func toTidingView(t *herald.Tiding) TidingView {
 // optional filters/selectors + annotations/projection. ephemeral/voyage_id are absent —
 // server-side (ADR-052(g)). The service validates field formats.
 type TidingCreateInput struct {
-	Name         string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/tidings/{name}/label.
+	Label        *string
 	Herald       string
 	EventTypes   []string
 	OnlyFailures *bool
@@ -408,6 +462,7 @@ func (h *HeraldHandler) CreateTidingTyped(ctx context.Context, claims *keeperjwt
 	var zero TidingWriteReply
 	tg := &herald.Tiding{
 		Name:         req.Name,
+		Label:        req.Label,
 		Herald:       req.Herald,
 		EventTypes:   req.EventTypes,
 		OnlyFailures: boolOr(req.OnlyFailures, false),
@@ -553,6 +608,7 @@ func (h *HeraldHandler) tidingError(err error, name, op string) error {
 func tidingAuditPayload(t *herald.Tiding) middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"name":          t.Name,
+		"label":         t.Label,
 		"herald":        t.Herald,
 		"event_types":   t.EventTypes,
 		"only_failures": t.OnlyFailures,

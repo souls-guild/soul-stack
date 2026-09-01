@@ -81,7 +81,13 @@ func NewService(d ServiceDeps) (*Service, error) {
 // ADR-030). CallerAID is optional (nil → created_by_aid IS NULL; the transport
 // fills it in from claims).
 type CreateVigilInput struct {
-	Name      string
+	Name string
+	// Label is the optional display caption ([ADR-0085]): free text, set here at
+	// registration and changed afterwards by [Service.SetVigilLabel]. nil/blank
+	// stores NULL and the consumer shows Name.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label     *string
 	Subject   subject.Selector
 	Interval  string
 	Check     string
@@ -113,6 +119,7 @@ func (s *Service) CreateVigil(ctx context.Context, in CreateVigilInput) (*Vigil,
 
 	v := &Vigil{
 		Name:         in.Name,
+		Label:        in.Label,
 		IntervalSpec: in.Interval,
 		CheckAddr:    in.Check,
 		Params:       in.Params,
@@ -137,6 +144,23 @@ func (s *Service) GetVigil(ctx context.Context, name string) (*Vigil, error) {
 	return SelectVigilByName(ctx, s.pool, name)
 }
 
+// SetVigilLabel replaces the display caption of one Vigil and returns the row as
+// it now reads ([ADR-0085], permission vigil.label-set, audit
+// vigil.label_changed).
+//
+// This is the registry's ONLY operator mutation: a Vigil's interval, check and
+// subject stay immutable (the Souls holding a VigilSnapshot were told what to
+// run, and there is no rule-update push), and a caption is the one field for
+// which that argument does not apply, because nothing in the snapshot reads it.
+//
+// [ErrVigilNotFound] if the row doesn't exist.
+func (s *Service) SetVigilLabel(ctx context.Context, name string, label *string) (*Vigil, error) {
+	if err := UpdateVigilLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
+	return SelectVigilByName(ctx, s.pool, name)
+}
+
 // DeleteVigil removes a Vigil by PK. [ErrVigilNotFound] if the row didn't exist.
 func (s *Service) DeleteVigil(ctx context.Context, name string) error {
 	return DeleteVigil(ctx, s.pool, name)
@@ -151,7 +175,11 @@ func (s *Service) DeleteVigil(ctx context.Context, name string) error {
 // (compile-checked on create). ActionInput — the raw JSONB scenario input.
 // CallerAID is optional.
 type CreateDecreeInput struct {
-	Name            string
+	Name string
+	// Label is the optional display caption ([ADR-0085]), changed afterwards by
+	// [Service.SetDecreeLabel]. Not OnBeacon and not IncarnationName: neither is
+	// derived from it.
+	Label           *string
 	OnBeacon        string
 	WhereCEL        *string
 	Subject         subject.Selector
@@ -202,6 +230,7 @@ func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decr
 	d := &Decree{
 		Name:            in.Name,
 		OnBeacon:        in.OnBeacon,
+		Label:           in.Label,
 		WhereCEL:        in.WhereCEL,
 		IncarnationName: in.IncarnationName,
 		ActionScenario:  in.ActionScenario,
@@ -225,6 +254,22 @@ func (s *Service) ListDecrees(ctx context.Context, offset, limit int) ([]*Decree
 
 // GetDecree reads a Decree by PK. [ErrDecreeNotFound] if it doesn't exist.
 func (s *Service) GetDecree(ctx context.Context, name string) (*Decree, error) {
+	return SelectDecreeByName(ctx, s.pool, name)
+}
+
+// SetDecreeLabel replaces the display caption of one Decree and returns the row
+// as it now reads ([ADR-0085], permission decree.label-set, audit
+// decree.label_changed).
+//
+// The reactor is untouched: `oracle_fires` and `oracle_circuit` are keyed on the
+// Decree's NAME, so a caption edit moves no cooldown state and resets no circuit
+// breaker.
+//
+// [ErrDecreeNotFound] if the row doesn't exist.
+func (s *Service) SetDecreeLabel(ctx context.Context, name string, label *string) (*Decree, error) {
+	if err := UpdateDecreeLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
 	return SelectDecreeByName(ctx, s.pool, name)
 }
 

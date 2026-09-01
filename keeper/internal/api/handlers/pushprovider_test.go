@@ -77,8 +77,14 @@ func (f *fakePushProviderPool) QueryRow(_ context.Context, sql string, args ...a
 		var params map[string]any
 		_ = json.Unmarshal(paramsBytes, &params)
 		now := time.Now()
+		var label *string
+		if len(args) > 3 && args[3] != nil {
+			s := args[3].(string)
+			label = &s
+		}
 		f.entries[name] = &pushprovider.PushProvider{
 			Name:         name,
+			Label:        label,
 			Params:       params,
 			CreatedAt:    now,
 			UpdatedAt:    now,
@@ -97,7 +103,7 @@ func (f *fakePushProviderPool) QueryRow(_ context.Context, sql string, args ...a
 		}
 		paramsBytes, _ := json.Marshal(p.Params)
 		return scanRowPP{values: []any{
-			p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID,
+			p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label,
 		}}
 	}
 	if strings.Contains(sql, "SELECT COUNT(*)") {
@@ -110,7 +116,7 @@ func (f *fakePushProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx
 	rows := make([][]any, 0, len(f.entries))
 	for _, p := range f.entries {
 		paramsBytes, _ := json.Marshal(p.Params)
-		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID})
+		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
 	}
 	return &fakeRowsPP{rows: rows}, nil
 }

@@ -83,6 +83,22 @@ func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
+// registerHumaVigilSetLabel mounts PUT /v1/vigils/{name}/label via huma
+// (WRITE+AUDIT variant B — event vigil.label_changed). oracleH nil → no-op.
+func registerHumaVigilSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler) {
+	if oracleH == nil {
+		return
+	}
+	huma.Register(humaAPI, vigilSetLabelOperation(), func(ctx context.Context, in *vigilSetLabelInput) (*vigilSetLabelOutput, error) {
+		reply, err := oracleH.SetVigilLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, oracleProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &vigilSetLabelOutput{Body: newVigilView(reply.Body)}, nil
+	})
+}
+
 // registerHumaVigilDelete mounts DELETE /v1/vigils/{name} via huma (WRITE+AUDIT
 // variant B — event vigil.deleted). oracleH nil → no-op. Handler: DeleteVigilTyped →
 // audit payload → empty 204 output.
@@ -163,6 +179,22 @@ func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
+// registerHumaDecreeSetLabel mounts PUT /v1/decrees/{name}/label via huma
+// (WRITE+AUDIT variant B — event decree.label_changed). oracleH nil → no-op.
+func registerHumaDecreeSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler) {
+	if oracleH == nil {
+		return
+	}
+	huma.Register(humaAPI, decreeSetLabelOperation(), func(ctx context.Context, in *decreeSetLabelInput) (*decreeSetLabelOutput, error) {
+		reply, err := oracleH.SetDecreeLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, oracleProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &decreeSetLabelOutput{Body: newDecreeView(reply.Body)}, nil
+	})
+}
+
 // registerHumaDecreeDelete mounts DELETE /v1/decrees/{name} via huma (WRITE+AUDIT
 // variant B — event decree.deleted). oracleH nil → no-op. Handler: DeleteDecreeTyped
 // → audit payload → empty 204 output.
@@ -214,10 +246,12 @@ func HumaOracleSpecYAML() (string, error) {
 		registerHumaVigilCreate(api, stub)
 		registerHumaVigilList(api, stub)
 		registerHumaVigilGet(api, stub)
+		registerHumaVigilSetLabel(api, stub)
 		registerHumaVigilDelete(api, stub)
 		registerHumaDecreeCreate(api, stub)
 		registerHumaDecreeList(api, stub)
 		registerHumaDecreeGet(api, stub)
+		registerHumaDecreeSetLabel(api, stub)
 		registerHumaDecreeDelete(api, stub)
 		return nil
 	})

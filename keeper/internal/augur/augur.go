@@ -81,7 +81,18 @@ func ValidAuthRef(ref string) bool {
 
 // Omen — runtime representation of an omens registry row (external system).
 type Omen struct {
-	Name         string     `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetOmenLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived — not the
+	// Rite grant's `omen` FK, and not any Vault path.
+	//
+	// Not to be confused with [Rite.ID], the int64 surrogate that lives in this
+	// same package: an entity id is a kebab code word, a surrogate is neither
+	// ([ADR-0085] "`id` means code word, not opaque identifier").
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label        *string    `json:"label,omitempty"`
 	SourceType   SourceType `json:"source_type"`
 	Endpoint     string     `json:"endpoint"`
 	AuthRef      string     `json:"auth_ref"`

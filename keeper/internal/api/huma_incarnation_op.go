@@ -40,7 +40,11 @@ type incCreateInput struct {
 // The domain still rejects an omitted name when nothing composes one (422
 // "field 'name' is required"), so the contract did not loosen, it moved one layer in.
 type IncarnationCreateRequest struct {
-	Name    string         `json:"name,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components"`
+	Name string `json:"name,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/incarnations/{name}/label. Unlike `name` it is never composed by
+	// a name_template — a template composes an identifier, and a caption is not one.
+	Label   *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags (ADR-008 amendment a)"`
 	Input   map[string]any `json:"input,omitempty" doc:"input for selected create scenario"`
@@ -487,6 +491,34 @@ func incDestroyOperation() huma.Operation {
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusAccepted,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/incarnations/{name}/label (label-set) — SELF-AUDIT incarnation.label_changed (200+body) ===
+
+// incSetLabelInput — huma input for PUT .../label. Name — path; Body — the shared
+// LabelSetRequest.
+type incSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"incarnation name"`
+	Body LabelSetRequest
+}
+
+// incSetLabelOutput — huma-output PUT .../label (FULL-TYPED). Status=200; Body —
+// the full native IncarnationGetReply after the replacement (byte-exact with GET).
+type incSetLabelOutput struct {
+	Body IncarnationGetReply
+}
+
+func incSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setIncarnationLabel",
+		Method:        http.MethodPut,
+		Path:          "/{name}/label",
+		Summary:       "Set the incarnation display caption",
+		Description:   "Replaces the display caption of one incarnation (ADR-0085). Permission incarnation.label-set, audit incarnation.label_changed, same incarnation scope as every other incarnation mutation. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Deliberately narrower than PUT .../traits beside it: a trait pair is a live scope dimension, so stamping one grants visibility and needs a second gate; a caption is in no dimension of anything. It is NOT segment 3 of the derived secret path, NOT the RBAC incarnation= scope value and NOT the CEL root (incarnation.label does not resolve) - so changing it moves nothing, and it is allowed while the incarnation is applying or error_locked because no run reads it.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 

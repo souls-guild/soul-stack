@@ -25,6 +25,7 @@ func newProfile(v handlers.ProfileView) Profile {
 		CloudInit:    v.CloudInit,
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
+		Label:        v.Label,
 		Name:         v.Name,
 		Params:       v.Params,
 		Provider:     v.Provider,
@@ -102,6 +103,22 @@ func registerHumaProfileGet(humaAPI huma.API, profileH *handlers.ProfileHandler)
 	})
 }
 
+// registerHumaProfileSetLabel mounts PUT /v1/profiles/{name}/label (WRITE+AUDIT —
+// profile.label_changed). profileH nil → no-op.
+func registerHumaProfileSetLabel(humaAPI huma.API, profileH *handlers.ProfileHandler) {
+	if profileH == nil {
+		return
+	}
+	huma.Register(humaAPI, profileSetLabelOperation(), func(ctx context.Context, in *profileSetLabelInput) (*profileSetLabelOutput, error) {
+		reply, err := profileH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		if err != nil {
+			return nil, profileProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &profileSetLabelOutput{Body: newProfile(reply.Body)}, nil
+	})
+}
+
 // registerHumaProfileDelete mounts DELETE /v1/profiles/{name} (WRITE+AUDIT —
 // profile.deleted). profileH nil → no-op.
 func registerHumaProfileDelete(humaAPI huma.API, profileH *handlers.ProfileHandler) {
@@ -143,6 +160,7 @@ func HumaProfileSpecYAML() (string, error) {
 		registerHumaProfileCreate(api, stub)
 		registerHumaProfileList(api, stub)
 		registerHumaProfileGet(api, stub)
+		registerHumaProfileSetLabel(api, stub)
 		registerHumaProfileDelete(api, stub)
 		return nil
 	})

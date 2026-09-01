@@ -185,9 +185,9 @@ Moved to a domain file - [mcp-tools/roles.md](mcp-tools/roles.md): `keeper.role.
 
 Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.synod.create`, `keeper.synod.delete`, `keeper.synod.list`, `keeper.synod.update`, `keeper.synod.add-operator`, `keeper.synod.remove-operator`, `keeper.synod.grant-role`, `keeper.synod.revoke-role`. The source of truth for semantics is [operator-api/synods.md](operator-api/synods.md) (bodies and invariants are [rbac.md → REST `/v1/synods`](rbac.md#rest-v1synods)).
 
-### Incarnation (11)
+### Incarnation (12)
 
-Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` - ten tools with MCP pairing to REST routes [operator-api.md → Incarnation (17)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
+Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set`, `keeper.incarnation.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)) - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (18)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (8)
 
@@ -205,7 +205,7 @@ Moved to a domain file - [mcp-tools/plugins.md](mcp-tools/plugins.md): `keeper.p
 
 Moved to a domain file - [mcp-tools/sigils.md](mcp-tools/sigils.md): `keeper.sigil.key.introduce`, `keeper.sigil.key.list`, `keeper.sigil.key.set-primary`, `keeper.sigil.key.retire`. The source of truth for semantics is [operator-api/sigils.md](operator-api/sigils.md). Tolerances of the binaries themselves (allow-list) - [mcp-tools/plugins.md](mcp-tools/plugins.md).
 
-### Service (4)
+### Service (5)
 
 Service registry `service_registry` (ADR-028 RBAC-storage pattern: directory `services[]` is transferred from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table). 1:1 with REST `POST/GET/PATCH/DELETE /v1/services*` and permission (`keeper.service.<action>` ↔ `service.<action>`, selector - NoSelector, like `operator.*`/`role.*`). Business logic (validation `name`/`git`/`ref`/`refresh`, cluster-wide snapshot validation after commit) lives in `serviceregistry.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("service registry is not configured").
 
@@ -253,7 +253,24 @@ List of registered Services (sort `name` ASC). Permission: `service.list`. Endpo
 
 | Field | Type | Meaning |
 |---|---|---|
-| `services` | `array<ServiceView>` | Items - `{name, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`. |
+| `services` | `array<ServiceView>` | Items - `{name, label?, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}` (`label` - the display caption, [ADR-0085](../adr/0085-entity-id-and-label.md); absent when the row carries none). |
+
+#### `keeper.service.label-set`
+
+Replaces a registry entry's **display caption** ([ADR-0085](../adr/0085-entity-id-and-label.md)). Permission: `service.label-set`. Endpoint: [`PUT /v1/services/{name}/label`](operator-api.md). Async: no.
+
+The caption is free text — capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. Narrower than `keeper.service.update`, which re-points `git`/`ref` and invalidates every artifact cache: the caption participates in **nothing derived** — in particular it is NOT segment 2 of the derived secret path `<mount>/<service>/<incarnation>/<state-field>` and NOT the artifact cache directory — so changing it orphans no secret and re-clones nothing.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | `string` | yes | Service name. Addresses the row; NOT changed by this tool. |
+| `label` | `string` \| `null` | no | The new caption. `null` or omitted clears it. |
+
+**Output:** `ServiceView` — the entry as it now reads.
+
+Errors: `not-found` (no entry). Audit: `service.label_changed`, payload `{name, label}`.
 
 #### `keeper.service.deregister`
 
@@ -316,13 +333,13 @@ Drops the override, so the value below (`keeper.yml`, or the built-in default) i
 
 Errors: `not-found` (unknown key, or no override to drop), `validation-failed` (dropping it would leave an invalid configuration - the layer below can break an invariant the override was holding up). Audit: `setting.deleted`.
 
-### Augur (6)
+### Augur (7)
 
-Moved to a domain file - [mcp-tools/augur.md](mcp-tools/augur.md): `keeper.augur.omen.create`, `keeper.augur.omen.list`, `keeper.augur.omen.delete`, `keeper.augur.rite.create`, `keeper.augur.rite.list`, `keeper.augur.rite.delete`. The source of truth for semantics is [operator-api/augur.md](operator-api/augur.md). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** ([rbac.md §Augur](rbac.md)).
+Moved to a domain file - [mcp-tools/augur.md](mcp-tools/augur.md): `keeper.augur.omen.create`, `keeper.augur.omen.list`, `keeper.augur.omen.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.augur.omen.delete`, `keeper.augur.rite.create`, `keeper.augur.rite.list`, `keeper.augur.rite.delete`. The source of truth for semantics is [operator-api/augur.md](operator-api/augur.md). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** ([rbac.md §Augur](rbac.md)).
 
-### Oracle (6)
+### Oracle (8)
 
-Moved to a domain file - [mcp-tools/oracle.md](mcp-tools/oracle.md): `keeper.oracle.vigil.create`, `keeper.oracle.vigil.list`, `keeper.oracle.vigil.delete`, `keeper.oracle.decree.create`, `keeper.oracle.decree.list`, `keeper.oracle.decree.delete`. The source of truth for semantics is [operator-api/oracle.md](operator-api/oracle.md). **Reactor flow (Portent → match Decree → enqueue) is NOT controlled by these tools** ([rbac.md §Oracle](rbac.md)).
+Moved to a domain file - [mcp-tools/oracle.md](mcp-tools/oracle.md): `keeper.oracle.vigil.create`, `keeper.oracle.vigil.list`, `keeper.oracle.vigil.label-set`, `keeper.oracle.vigil.delete`, `keeper.oracle.decree.create`, `keeper.oracle.decree.list`, `keeper.oracle.decree.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.oracle.decree.delete`. The source of truth for semantics is [operator-api/oracle.md](operator-api/oracle.md). **Reactor flow (Portent → match Decree → enqueue) is NOT controlled by these tools** ([rbac.md §Oracle](rbac.md)).
 
 ### Errand (4)
 
@@ -336,9 +353,9 @@ Moved to a domain file - [mcp-tools/voyages.md](mcp-tools/voyages.md): `keeper.v
 
 Moved to a domain file - [mcp-tools/push.md](mcp-tools/push.md): `keeper.push.apply`, `keeper.push.cleanup`. The source of truth for semantics is [operator-api/push.md](operator-api/push.md).
 
-### Cloud (8)
+### Cloud (10)
 
-CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017, [cloud.md → Provider and Profile](cloud.md)). **Implemented** (REST + MCP, one source of truth `provider.Service` / `profile.Service`): four tools per entity - `create` / `list` / `get` / `delete`. **`update`-tool-but no** - Provider/Profile are immutable (change parameters = `delete` + `create`, protection against partial mutation spec of living VMs); therefore read-visibility gates one permission `provider.read` / `profile.read` (pattern `operator.list`↔`read`). Selector - NoSelector. Tools are only available when the registry is connected; when disabled, the call returns `internal-error`. Async: no. The source of truth for semantics is [cloud.md](cloud.md), permission directory is [rbac.md → Cloud](rbac.md#cloud-6--cloudmd).
+CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017, [cloud.md → Provider and Profile](cloud.md)). **Implemented** (REST + MCP, one source of truth `provider.Service` / `profile.Service`): five tools per entity - `create` / `list` / `get` / `label-set` / `delete`. **No `update`-tool** - Provider/Profile are immutable (change parameters = `delete` + `create`, protection against partial mutation spec of living VMs); therefore read-visibility gates one permission `provider.read` / `profile.read` (pattern `operator.list`↔`read`). The one mutation is `keeper.provider.label-set` / `keeper.profile.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728), which replaces the row's free-text display caption: the immutability argument is about a live cloud spec, and a caption is the one field nothing reads. Selector - NoSelector. Tools are only available when the registry is connected; when disabled, the call returns `internal-error`. Async: no. The source of truth for semantics is [cloud.md](cloud.md), permission directory is [rbac.md → Cloud](rbac.md#cloud-8--cloudmd).
 
 `credentials_ref` (Provider only) is stored and returned as **path** `vault:<mount>/<path>` - the credentials themselves are NOT resolved or returned by the API; The path is also written in audit (not a secret).
 
@@ -412,17 +429,17 @@ Deleting Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{
 
 **Input:** `{name}`. **Output:** empty object. Errors: `not-found`.
 
-### Push-Provider (5)
+### Push-Provider (6)
 
-Moved to a domain file - [mcp-tools/push-providers.md](mcp-tools/push-providers.md): `keeper.push-provider.create`, `keeper.push-provider.update`, `keeper.push-provider.delete`, `keeper.push-provider.list`, `keeper.push-provider.read`. The source of truth for semantics is [operator-api/push-providers.md](operator-api/push-providers.md). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs.
+Moved to a domain file - [mcp-tools/push-providers.md](mcp-tools/push-providers.md): `keeper.push-provider.create`, `keeper.push-provider.update`, `keeper.push-provider.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.push-provider.delete`, `keeper.push-provider.list`, `keeper.push-provider.read`. The source of truth for semantics is [operator-api/push-providers.md](operator-api/push-providers.md). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs.
 
-### Herald (5)
+### Herald (6)
 
-Moved to a domain file - [mcp-tools/heralds.md](mcp-tools/heralds.md): `keeper.herald.create`, `keeper.herald.update`, `keeper.herald.delete`, `keeper.herald.list`, `keeper.herald.read`. The source of truth for semantics is [operator-api/heralds.md](operator-api/heralds.md). Run notification delivery channels ([ADR-052](../adr/0052-herald-notifications.md)); webhook + SSRF-guard (https-only/deny-private by default), `secret_ref` - vault-ref to signing-token (signature `X-SoulStack-Signature: sha256=<hex>`).
+Moved to a domain file - [mcp-tools/heralds.md](mcp-tools/heralds.md): `keeper.herald.create`, `keeper.herald.update`, `keeper.herald.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.herald.delete`, `keeper.herald.list`, `keeper.herald.read`. The source of truth for semantics is [operator-api/heralds.md](operator-api/heralds.md). Run notification delivery channels ([ADR-052](../adr/0052-herald-notifications.md)); webhook + SSRF-guard (https-only/deny-private by default), `secret_ref` - vault-ref to signing-token (signature `X-SoulStack-Signature: sha256=<hex>`).
 
-### Tiding (5)
+### Tiding (6)
 
-Moved to a domain file - [mcp-tools/tidings.md](mcp-tools/tidings.md): `keeper.tiding.create`, `keeper.tiding.update`, `keeper.tiding.delete`, `keeper.tiding.list`, `keeper.tiding.read`. The source of truth for semantics is [operator-api/tidings.md](operator-api/tidings.md). Subscription rules (`event_types` area-glob in scope runs → Herald); `herald` - FK to existing Herald.
+Moved to a domain file - [mcp-tools/tidings.md](mcp-tools/tidings.md): `keeper.tiding.create`, `keeper.tiding.update`, `keeper.tiding.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.tiding.delete`, `keeper.tiding.list`, `keeper.tiding.read`. The source of truth for semantics is [operator-api/tidings.md](operator-api/tidings.md). Subscription rules (`event_types` area-glob in scope runs → Herald); `herald` - FK to existing Herald.
 
 ### Cadence (0) and Choir (0) - REST-only
 

@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 )
 
 // Sentinel errors for seeding.
@@ -28,17 +30,20 @@ func InsertVigil(ctx context.Context, db ExecQueryRower, v *Vigil) error {
 		return fmt.Errorf("oracle: nil vigil")
 	}
 	const sql = `
-INSERT INTO vigils (name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, '{}'::jsonb), $11, $12)
+INSERT INTO vigils (name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, '{}'::jsonb), $11, $12, $13)
 RETURNING created_at, updated_at`
 	var paramsArg any
 	if len(v.Params) > 0 {
 		paramsArg = []byte(v.Params)
 	}
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	v.Label = registrylabel.Normalize(v.Label)
 	row := db.QueryRow(ctx, sql,
 		v.Name, v.SID, v.Service, v.Incarnation, v.Coven, v.TraitKey, v.TraitValue,
 		v.IntervalSpec, v.CheckAddr,
-		paramsArg, v.Enabled, v.CreatedByAID,
+		paramsArg, v.Enabled, v.CreatedByAID, v.Label,
 	)
 	if err := row.Scan(&v.CreatedAt, &v.UpdatedAt); err != nil {
 		return mapInsertErr(err, ErrVigilAlreadyExists, "vigil")
@@ -66,18 +71,21 @@ func InsertDecree(ctx context.Context, db ExecQueryRower, d *Decree) error {
 		cooldown = "0s"
 	}
 	const sql = `
-INSERT INTO decrees (name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, '{}'::jsonb), $13, $14, $15)
+INSERT INTO decrees (name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, '{}'::jsonb), $13, $14, $15, $16)
 RETURNING cooldown, created_at, updated_at`
 	var inputArg any
 	if len(d.ActionInput) > 0 {
 		inputArg = []byte(d.ActionInput)
 	}
+	// The label is canonicalised, never validated ([ADR-0085]).
+	d.Label = registrylabel.Normalize(d.Label)
 	row := db.QueryRow(ctx, sql,
 		d.Name, d.OnBeacon, d.WhereCEL,
 		d.SubjectSID, d.SubjectService, d.SubjectIncarnation, d.SubjectCoven,
 		d.SubjectTraitKey, d.SubjectTraitValue,
 		d.IncarnationName, d.ActionScenario, inputArg, cooldown, d.Enabled, d.CreatedByAID,
+		d.Label,
 	)
 	if err := row.Scan(&d.Cooldown, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return mapInsertErr(err, ErrDecreeAlreadyExists, "decree")

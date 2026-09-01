@@ -290,7 +290,7 @@ func augurAllowPaths(paths ...string) []byte {
 
 // augurOmenRowVault — a vault-type omen row. nil = NULL column.
 func augurOmenRowVault(name string) pgx.Row {
-	return augurValRow{vals: []any{name, "vault", "https://vault:8200", "vault:secret/keeper/augur/" + name, nil, augurTestNow}}
+	return augurValRow{vals: []any{name, "vault", "https://vault:8200", "vault:secret/keeper/augur/" + name, nil, augurTestNow, nil}}
 }
 
 // augurRiteRow — a rite row in riteColumns order (id, omen, sid, service,
@@ -769,11 +769,11 @@ func assertNoSecretInPayload(t *testing.T, payload map[string]any) {
 // --- prom / elk round-trip + semaphore ----------------------------------
 
 func augurOmenRowProm(name string) pgx.Row {
-	return augurValRow{vals: []any{name, "prometheus", "https://prom.example.com:9090", "vault:secret/keeper/" + name, nil, augurTestNow}}
+	return augurValRow{vals: []any{name, "prometheus", "https://prom.example.com:9090", "vault:secret/keeper/" + name, nil, augurTestNow, nil}}
 }
 
 func augurOmenRowELK(name string) pgx.Row {
-	return augurValRow{vals: []any{name, "elk", "https://elk.example.com:9200", "vault:secret/keeper/" + name, nil, augurTestNow}}
+	return augurValRow{vals: []any{name, "elk", "https://elk.example.com:9200", "vault:secret/keeper/" + name, nil, augurTestNow, nil}}
 }
 
 func augurRiteRowQueries(id int, omen, coven string, queries ...string) []any {

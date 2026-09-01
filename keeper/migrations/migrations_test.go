@@ -261,6 +261,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"115_plugin_sigils_source_identity.up.sql",
 		"116_drop_apply_run_plan_no_log.down.sql",
 		"116_drop_apply_run_plan_no_log.up.sql",
+		"117_registry_label.down.sql",
+		"117_registry_label.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

@@ -1027,6 +1027,7 @@ func scopedIncReader() *fakeIncDB {
 			[]byte("{}"), // traits
 			"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
 			any(nil),     // applying_apply_id (ADR-068 §A1)
+			any(nil),     // label (ADR-0085): unset here, reads NULL
 		}}
 	}}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pgutil"
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
@@ -25,7 +26,64 @@ var (
 	ErrDecreeNotFound = errors.New("oracle: decree not found")
 )
 
-const vigilColumns = `name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid`
+const vigilColumns = `name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid, label`
+
+// vigilUpdateLabelSQL / decreeUpdateLabelSQL replace the display caption of one
+// row ([ADR-0085]).
+//
+// Each sets `label` and NOTHING else — not the PK, which is immutable and has no
+// rename operation, and deliberately not `updated_at` either. That stamp records
+// changes to the rule's SUBSTANCE (an interval, a subject, an action, or the
+// circuit breaker flipping `enabled` in [TripDecree]); a caption edit changes
+// nothing the reactor acts on, and bumping the stamp would make a cosmetic edit
+// read as a rule change to an operator triaging one. Who changed the caption and
+// when is in the audit trail, under `vigil.label_changed` / `decree.label_changed`.
+const (
+	vigilUpdateLabelSQL  = `UPDATE vigils SET label = $2 WHERE name = $1`
+	decreeUpdateLabelSQL = `UPDATE decrees SET label = $2 WHERE name = $1`
+)
+
+// UpdateVigilLabel replaces the display caption of one Vigil ([ADR-0085]).
+// [ErrVigilNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// The name argument addresses the row; it is never written. Nothing derived
+// moves as a result of this call — see the package doc of
+// keeper/internal/registrylabel.
+func UpdateVigilLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	return updateLabel(ctx, db, vigilUpdateLabelSQL, "vigil", name, label, ErrVigilNotFound)
+}
+
+// UpdateDecreeLabel replaces the display caption of one Decree ([ADR-0085]).
+// [ErrDecreeNotFound] when absent. Same semantics as [UpdateVigilLabel].
+func UpdateDecreeLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	return updateLabel(ctx, db, decreeUpdateLabelSQL, "decree", name, label, ErrDecreeNotFound)
+}
+
+// updateLabel is the shared body of the two above: Vigil and Decree spell their
+// columns differently everywhere else in this package, but a caption is one
+// column with one meaning, so it gets one implementation.
+func updateLabel(ctx context.Context, db ExecQueryRower, sql, what, name string, label *string, notFound error) error {
+	if !ValidName(name) {
+		return fmt.Errorf("oracle: invalid %s name %q (must match %s)", what, name, NamePattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	tag, err := db.Exec(ctx, sql, name, v)
+	if err != nil {
+		return fmt.Errorf("oracle: update %s label: %w", what, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return notFound
+	}
+	return nil
+}
 
 // SelectActiveVigilsForSubject returns the enabled Vigils whose subject reaches
 // this host, resolving the set for VigilSnapshot on connect.
@@ -73,7 +131,7 @@ func scanVigil(row pgx.Row) (*Vigil, error) {
 	err := row.Scan(
 		&v.Name, &v.SID, &v.Service, &v.Incarnation, &v.Coven, &v.TraitKey, &v.TraitValue,
 		&v.IntervalSpec, &v.CheckAddr,
-		&v.Params, &v.Enabled, &v.CreatedAt, &v.UpdatedAt, &v.CreatedByAID,
+		&v.Params, &v.Enabled, &v.CreatedAt, &v.UpdatedAt, &v.CreatedByAID, &v.Label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -138,7 +196,7 @@ func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-const decreeColumns = `name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid`
+const decreeColumns = `name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid, label`
 
 // SelectDecreesByBeacon returns enabled Decrees reacting to the given
 // Vigil (decrees.on_beacon == beacon). Hot path of the match flow: for every
@@ -182,7 +240,7 @@ func scanDecree(row pgx.Row) (*Decree, error) {
 		&d.SubjectSID, &d.SubjectService, &d.SubjectIncarnation, &d.SubjectCoven,
 		&d.SubjectTraitKey, &d.SubjectTraitValue,
 		&d.IncarnationName, &d.ActionScenario, &d.ActionInput, &d.Cooldown,
-		&d.Enabled, &d.CreatedAt, &d.UpdatedAt, &d.CreatedByAID,
+		&d.Enabled, &d.CreatedAt, &d.UpdatedAt, &d.CreatedByAID, &d.Label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

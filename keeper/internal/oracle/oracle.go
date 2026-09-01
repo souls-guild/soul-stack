@@ -59,7 +59,15 @@ var (
 // layer S3). Read-only-by-construction of the Vigil is guaranteed by the Soul
 // side (S1), not by this type.
 type Vigil struct {
-	Name         string          `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetVigilLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived — not the
+	// `on_beacon` a Decree reacts through, not the subject selector, not any
+	// Vault path.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label        *string         `json:"label,omitempty"`
 	SID          []string        `json:"sid,omitempty"`
 	Service      *string         `json:"service,omitempty"`
 	Incarnation  *string         `json:"incarnation,omitempty"`
@@ -112,7 +120,12 @@ func (v *Vigil) Subject() subject.Selector {
 // the same thing, and they are opposite ends of the rule — who fires it versus
 // what it acts on.
 type Decree struct {
-	Name               string          `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetDecreeLabel. nil → the consumer shows Name. It participates in nothing
+	// derived — notably not IncarnationName, the reaction's target, and not the
+	// `decree` key `oracle_fires` / `oracle_circuit` are keyed on.
+	Label              *string         `json:"label,omitempty"`
 	OnBeacon           string          `json:"on_beacon"`
 	WhereCEL           *string         `json:"where_cel,omitempty"`
 	SubjectSID         []string        `json:"subject_sid,omitempty"`

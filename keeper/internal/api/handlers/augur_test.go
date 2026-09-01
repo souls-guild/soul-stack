@@ -193,9 +193,11 @@ func wantAugurProblem(t *testing.T, err error, want string) {
 }
 
 // omenRow — an omens row (scanOmen: name, source_type, endpoint, auth_ref,
-// created_by_aid, created_at).
+// created_by_aid, created_at, label). The trailing nil is the display caption
+// (ADR-0085), unset in these fixtures: it reads NULL and a consumer shows the
+// name.
 func omenRow(name, src, endpoint, authRef string) []any {
-	return []any{name, src, endpoint, authRef, nil, time.Now()}
+	return []any{name, src, endpoint, authRef, nil, time.Now(), nil}
 }
 
 // riteRow — a rites row in riteColumns order (scanRite: id, omen, sid, service,

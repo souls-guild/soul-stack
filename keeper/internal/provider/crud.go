@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 )
 
 // Sentinel errors for the CRUD layer. Handler side (Cloud.CRUD.b) maps:
@@ -47,12 +49,17 @@ var (
 // insertSQL is INSERT with RETURNING to fetch server-side created_at
 // (DEFAULT NOW()) in one round trip.
 const insertSQL = `
-INSERT INTO providers (name, type, region, credentials_ref, created_by_aid, fqdn_suffix)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO providers (name, type, region, credentials_ref, created_by_aid, fqdn_suffix, label)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at
 `
 
-const selectColumns = `name, type, region, credentials_ref, created_by_aid, created_at, fqdn_suffix`
+const selectColumns = `name, type, region, credentials_ref, created_by_aid, created_at, fqdn_suffix, label`
+
+// updateLabelSQL replaces the display caption of one row ([ADR-0085]). It touches
+// `label` and nothing else — the PK is not in the SET list, because the
+// identifier is immutable and no rename operation exists anywhere.
+const updateLabelSQL = `UPDATE providers SET label = $2 WHERE name = $1`
 
 const selectByNameSQL = `
 SELECT ` + selectColumns + `
@@ -105,9 +112,16 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 	if p.FQDNSuffix != nil {
 		fqdnSuffix = *p.FQDNSuffix
 	}
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	p.Label = registrylabel.Normalize(p.Label)
+	var label any
+	if p.Label != nil {
+		label = *p.Label
+	}
 
 	row := db.QueryRow(ctx, insertSQL,
-		p.Name, p.Type, p.Region, p.CredentialsRef, createdByAID, fqdnSuffix,
+		p.Name, p.Type, p.Region, p.CredentialsRef, createdByAID, fqdnSuffix, label,
 	)
 	if err := row.Scan(&p.CreatedAt); err != nil {
 		return mapInsertError(err)
@@ -142,6 +156,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 		p            Provider
 		createdByAID *string
 		fqdnSuffix   *string
+		label        *string
 	)
 	err := row.Scan(
 		&p.Name,
@@ -151,6 +166,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 		&createdByAID,
 		&p.CreatedAt,
 		&fqdnSuffix,
+		&label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -160,7 +176,37 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 	}
 	p.CreatedByAID = createdByAID
 	p.FQDNSuffix = fqdnSuffix
+	p.Label = label
 	return &p, nil
+}
+
+// UpdateLabel replaces the display caption of one Provider ([ADR-0085]).
+// [ErrProviderNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name. The
+// value is stored as given otherwise: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail and no 422 to raise.
+//
+// The name argument addresses the row; it is never written. Nothing derived moves
+// as a result of this call — see the package doc of
+// keeper/internal/registrylabel.
+func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	tag, err := db.Exec(ctx, updateLabelSQL, name, v)
+	if err != nil {
+		return fmt.Errorf("provider: update label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrProviderNotFound
+	}
+	return nil
 }
 
 // Delete removes a Provider by PK. [ErrProviderNotFound] when the row is absent

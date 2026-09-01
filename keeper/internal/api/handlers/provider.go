@@ -50,7 +50,11 @@ func ProviderSpecStub() *ProviderHandler {
 
 // ProviderCreateInput — NATIVE request form of POST /v1/providers (handler-native).
 type ProviderCreateInput struct {
-	Name           string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/providers/{name}/label. nil/blank → NULL, and the consumer shows
+	// Name.
+	Label          *string
 	Type           string
 	Region         string
 	CredentialsRef string
@@ -66,7 +70,10 @@ type ProviderCreateInput struct {
 // created_at — nanosecond time-wire; created_by_aid — an optional pointer (NULL for
 // rows that outlived the operator's deletion).
 type ProviderView struct {
-	Name           string
+	Name string
+	// Label — display caption (ADR-0085); nil when the column is NULL, and the
+	// consumer then shows Name.
+	Label          *string
 	Type           string
 	Region         string
 	CredentialsRef string
@@ -86,6 +93,7 @@ type ProviderListPage struct {
 func toProviderView(p *provider.Provider) ProviderView {
 	return ProviderView{
 		Name:           p.Name,
+		Label:          p.Label,
 		Type:           p.Type,
 		Region:         p.Region,
 		CredentialsRef: p.CredentialsRef,
@@ -100,6 +108,7 @@ func toProviderView(p *provider.Provider) ProviderView {
 type ProviderWriteReply struct {
 	Body           ProviderView
 	Name           string
+	Label          *string
 	Type           string
 	Region         string
 	CredentialsRef string
@@ -115,6 +124,7 @@ func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 		"type":            r.Type,
 		"region":          r.Region,
 		"credentials_ref": r.CredentialsRef,
+		"label":           r.Label,
 	}
 	if r.FQDNSuffix != nil {
 		p["fqdn_suffix"] = *r.FQDNSuffix
@@ -169,6 +179,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 
 	p, err := h.svc.Create(ctx, provider.CreateInput{
 		Name:           req.Name,
+		Label:          req.Label,
 		Type:           req.Type,
 		Region:         req.Region,
 		CredentialsRef: req.CredentialsRef,
@@ -181,6 +192,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 		return ProviderWriteReply{
 			Body:           toProviderView(p),
 			Name:           p.Name,
+			Label:          p.Label,
 			Type:           p.Type,
 			Region:         p.Region,
 			CredentialsRef: p.CredentialsRef,
@@ -240,6 +252,31 @@ func (h *ProviderHandler) DeleteTyped(ctx context.Context, name string) (Provide
 	default:
 		h.logger.Error("provider.delete: service failed", slog.String("name", name), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete provider failed")}
+	}
+}
+
+// SetLabelTyped — domain function for PUT /v1/providers/{name}/label
+// (WRITE+AUDIT provider.label_changed). 404 if absent.
+//
+// The label itself is NOT validated: free text with capitals, spaces and
+// punctuation is what the field carries (ADR-0085), so the only 422 this route
+// can raise is on the path identifier, which must still be a well-formed name
+// because it addresses the row.
+func (h *ProviderHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ProviderView], error) {
+	var zero LabelWriteReply[ProviderView]
+	if !provider.ValidName(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'name' must match "+provider.NamePattern)}
+	}
+	p, err := h.svc.SetLabel(ctx, name, req.Label)
+	switch {
+	case err == nil:
+		return LabelWriteReply[ProviderView]{Body: toProviderView(p), Name: name, Label: p.Label}, nil
+	case errors.Is(err, provider.ErrProviderNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+name+" not found")}
+	default:
+		h.logger.Error("provider.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set provider label failed")}
 	}
 }
 

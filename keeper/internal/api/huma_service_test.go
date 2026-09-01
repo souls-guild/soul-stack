@@ -61,7 +61,9 @@ func (p *hSvcPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	case strings.Contains(sql, "INSERT INTO service_registry"):
 		return hSvcRow{values: []any{svcAt, svcAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "UPDATE service_registry"):
-		return hSvcRow{values: []any{svcAt, svcAt}}
+		// RETURNING created_at, updated_at, label — the caption comes back so an
+		// update that does not touch it reports what the row still holds (ADR-0085).
+		return hSvcRow{values: []any{svcAt, svcAt, nil}}
 	case strings.Contains(sql, "FROM service_registry"):
 		if p.getMissing || p.getValues == nil {
 			return hSvcRow{err: pgx.ErrNoRows}
@@ -271,7 +273,9 @@ func humaServiceRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, a
 // svcGetRow — the Get/List row: name, git, ref, refresh(null), created_by(null),
 // updated_by(null), created_at, updated_at.
 func svcGetRow() []any {
-	return []any{"web", "https://git/web.git", "v1.0.0", nil, nil, nil, svcAt, svcAt}
+	// The trailing nil is `label` (ADR-0085): the display caption, unset here, so
+	// it reads NULL and a consumer shows the name.
+	return []any{"web", "https://git/web.git", "v1.0.0", nil, nil, nil, svcAt, svcAt, nil}
 }
 
 // === REGISTER (WRITE+AUDIT service.registered) ===

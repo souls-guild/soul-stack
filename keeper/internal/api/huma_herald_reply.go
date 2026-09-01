@@ -41,10 +41,14 @@ type Herald struct {
 	CreatedAt    time.Time              `json:"created_at"`
 	CreatedByAID *string                `json:"created_by_aid,omitempty"`
 	Enabled      bool                   `json:"enabled"`
-	Name         string                 `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
-	SecretRef    *string                `json:"secret_ref,omitempty"`
-	Type         HeraldType             `json:"type"`
-	UpdatedAt    time.Time              `json:"updated_at"`
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/heralds/{name}/label. Absent means the row carries none and the
+	// consumer shows `name`. NOT the `<entity>` Vault segment — `name` is.
+	Label     *string    `json:"label,omitempty"`
+	Name      string     `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
+	SecretRef *string    `json:"secret_ref,omitempty"`
+	Type      HeraldType `json:"type"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 // Tiding — native body for tiding create (201) / get (200) / update (200). Shape 1:1 with
@@ -62,13 +66,16 @@ type Tiding struct {
 	EventTypes   []string                `json:"event_types"`
 	Herald       string                  `json:"herald" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern (FK to heralds.name)
 	Incarnation  *string                 `json:"incarnation,omitempty"`
-	Name         string                  `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
-	OnlyChanges  bool                    `json:"only_changes"`
-	OnlyFailures bool                    `json:"only_failures"`
-	Projection   *[]string               `json:"projection,omitempty"`
-	Task         *string                 `json:"task,omitempty"`
-	UpdatedAt    time.Time               `json:"updated_at"`
-	VoyageID     *string                 `json:"voyage_id,omitempty"`
+	// Label — the display caption (ADR-0085), mutable via
+	// PUT /v1/tidings/{name}/label. Absent → the consumer shows `name`.
+	Label        *string   `json:"label,omitempty"`
+	Name         string    `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
+	OnlyChanges  bool      `json:"only_changes"`
+	OnlyFailures bool      `json:"only_failures"`
+	Projection   *[]string `json:"projection,omitempty"`
+	Task         *string   `json:"task,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	VoyageID     *string   `json:"voyage_id,omitempty"`
 }
 
 // === envelope reply-DTO (shape 1:1 with the former legacy generator; element → native) ===
@@ -102,6 +109,7 @@ func newHerald(v handlers.HeraldView) Herald {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Enabled:      v.Enabled,
+		Label:        v.Label,
 		Name:         v.Name,
 		SecretRef:    v.SecretRef,
 		Type:         HeraldType(v.Type),
@@ -121,6 +129,7 @@ func newTiding(v handlers.TidingView) Tiding {
 		EventTypes:   v.EventTypes,
 		Herald:       v.Herald,
 		Incarnation:  v.Incarnation,
+		Label:        v.Label,
 		Name:         v.Name,
 		OnlyChanges:  v.OnlyChanges,
 		OnlyFailures: v.OnlyFailures,

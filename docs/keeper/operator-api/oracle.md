@@ -55,6 +55,16 @@ Permission: `vigil.list`. MCP-tool: `keeper.oracle.vigil.list`. Query `offset`/`
 
 Permission: `vigil.list` (one permission covers list+get). MCP-tool: `keeper.oracle.vigil.list`. Response `200 VigilView`; `404 not-found` - no entry.
 
+### `PUT /v1/vigils/{name}/label` — set the display caption
+
+Permission: `vigil.label-set`. MCP-tool: `keeper.oracle.vigil.label-set`. OperationID: `setVigilLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
+
+This is the registry's only operator mutation: `interval`, `check` and the subject stay immutable, because the Souls holding a `VigilSnapshot` were already told what to run and there is no rule-update push. A Decree reacts through `on_beacon`, which is the name.
+
+**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
+
+**Response `200 VigilView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `vigil.label_changed`, payload `{name, label}`.
+
 ### `DELETE /v1/vigils/{name}` - remove Vigil
 
 Permission: `vigil.delete`. MCP-tool: `keeper.oracle.vigil.delete`. Stops distributing to hosts in `VigilSnapshot`; connected Decrees **DO NOT cascade**. Response `204`; `404 not-found`. Audit: `vigil.deleted`.
@@ -88,6 +98,16 @@ Permission: `decree.list`. MCP-tool: `keeper.oracle.decree.list`. Query `offset`
 ### `GET /v1/decrees/{name}` — read Decree
 
 Permission: `decree.list`. MCP-tool: `keeper.oracle.decree.list`. Response `200 DecreeView`; `404 not-found`.
+
+### `PUT /v1/decrees/{name}/label` — set the display caption
+
+Permission: `decree.label-set`. MCP-tool: `keeper.oracle.decree.label-set`. OperationID: `setDecreeLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
+
+The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breaker (`oracle_circuit`) are keyed on the Decree's name, so no trigger history moves and no breaker resets.
+
+**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
+
+**Response `200 DecreeView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `decree.label_changed`, payload `{name, label}`.
 
 ### `DELETE /v1/decrees/{name}` - remove Decree
 

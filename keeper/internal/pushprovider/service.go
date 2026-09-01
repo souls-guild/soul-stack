@@ -76,7 +76,13 @@ func NewService(d ServiceDeps) (*Service, error) {
 
 // CreateInput are the parameters for [Service.Create].
 type CreateInput struct {
-	Name      string
+	Name string
+	// Label is the optional display caption ([ADR-0085]): free text, set here at
+	// registration and changed afterwards by [Service.SetLabel]. nil/blank stores
+	// NULL and the consumer shows Name.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label     *string
 	Params    map[string]any
 	CallerAID string
 }
@@ -103,6 +109,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*PushProvider, er
 
 	p := &PushProvider{
 		Name:         in.Name,
+		Label:        in.Label,
 		Params:       in.Params,
 		CreatedByAID: in.CallerAID,
 	}
@@ -147,6 +154,22 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*PushProvider, er
 	}
 	s.publishChanged(ctx, in.Name)
 	return updated, nil
+}
+
+// SetLabel replaces the display caption of one PushProvider and returns the row
+// as it now reads ([ADR-0085], permission push-provider.label-set, audit
+// push-provider.label_changed).
+//
+// No invalidation is published, unlike [Service.Update]: the dispatcher snapshot
+// the channel refreshes carries params, and a caption is not one of them. See
+// [UpdateLabel].
+//
+// Returns [ErrPushProviderNotFound] if the record does not exist.
+func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*PushProvider, error) {
+	if err := UpdateLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
+	return SelectByName(ctx, s.pool, name)
 }
 
 // Delete removes a record and publishes invalidation.

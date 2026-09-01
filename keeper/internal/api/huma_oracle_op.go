@@ -34,7 +34,10 @@ type vigilCreateInput struct {
 // CreateVigilTyped (422). required:"true" — missing→422; additionalProperties:false → unknown→400.
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec → VigilCreateRequest).
 type VigilCreateRequest struct {
-	Name     string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/vigils/{name}/label.
+	Label    *string          `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Subject  Subject          `json:"subject" required:"true" doc:"which hosts run the check — exactly one of sid / incarnation / coven / trait"`
 	Interval string           `json:"interval" required:"true" doc:"check frequency (duration convention, e.g. '30s')"`
 	Check    string           `json:"check" required:"true" doc:"core-beacon address (e.g. 'core.beacon.file_changed')"`
@@ -143,6 +146,30 @@ type oracleNoContentOutput struct {
 	Status int `json:"-"`
 }
 
+// === PUT /v1/vigils/{name}/label (label-set) — WRITE+AUDIT vigil.label_changed ===
+
+type vigilSetLabelInput struct {
+	Name string `path:"name" doc:"Vigil name"`
+	Body LabelSetRequest
+}
+
+type vigilSetLabelOutput struct {
+	Body VigilView
+}
+
+func vigilSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setVigilLabel",
+		Method:        http.MethodPut,
+		Path:          "/vigils/{name}/label",
+		Summary:       "Set the Vigil display caption",
+		Description:   "Replaces the display caption of one Vigil (ADR-0085). Permission vigil.label-set, audit vigil.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a VigilSnapshot were already told what to run. The caption participates in nothing derived - a Decree reacts through `on_beacon`, which is the name - so changing it moves nothing.",
+		Tags:          []string{"oracle"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
 // vigilDeleteOperation — metadata for DELETE /v1/vigils/{name}. DefaultStatus=204.
 // Permission vigil.delete + audit vigil.deleted. Errors: 403, 404, 422 bad path-name,
 // 500.
@@ -177,7 +204,10 @@ type decreeCreateInput struct {
 // the first says WHO may fire it, the second WHAT the reaction acts on.
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
 type DecreeCreateRequest struct {
-	Name            string           `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/decrees/{name}/label.
+	Label           *string          `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name whose Portent the rule reacts to"`
 	Subject         Subject          `json:"subject" required:"true" doc:"which hosts may fire the rule — exactly one of sid / incarnation / coven / trait"`
 	IncarnationName string           `json:"incarnation_name" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"target incarnation of the reaction (required)"`
@@ -278,6 +308,30 @@ func decreeGetOperation() huma.Operation {
 // decreeDeleteInput — huma input DELETE /v1/decrees/{name}. Name — path. No Body.
 type decreeDeleteInput struct {
 	Name string `path:"name" doc:"Decree name"`
+}
+
+// === PUT /v1/decrees/{name}/label (label-set) — WRITE+AUDIT decree.label_changed ===
+
+type decreeSetLabelInput struct {
+	Name string `path:"name" doc:"Decree name"`
+	Body LabelSetRequest
+}
+
+type decreeSetLabelOutput struct {
+	Body DecreeView
+}
+
+func decreeSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setDecreeLabel",
+		Method:        http.MethodPut,
+		Path:          "/decrees/{name}/label",
+		Summary:       "Set the Decree display caption",
+		Description:   "Replaces the display caption of one Decree (ADR-0085). Permission decree.label-set, audit decree.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The reactor is untouched: cooldown state (oracle_fires) and the circuit breaker (oracle_circuit) are keyed on the name, so no trigger history moves and no breaker resets.",
+		Tags:          []string{"oracle"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
 }
 
 // decreeDeleteOperation — metadata for DELETE /v1/decrees/{name}. DefaultStatus=204.

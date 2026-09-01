@@ -23,7 +23,10 @@ import (
 
 // providerViewOut — JSON shape of the output (same as the HTTP handler).
 type providerViewOut struct {
-	Name           string    `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent when the row carries none, and
+	// a consumer then shows `name`.
+	Label          *string   `json:"label,omitempty"`
 	Type           string    `json:"type"`
 	Region         string    `json:"region"`
 	CredentialsRef string    `json:"credentials_ref"`
@@ -34,6 +37,7 @@ type providerViewOut struct {
 func toProviderViewOut(p *provider.Provider) providerViewOut {
 	return providerViewOut{
 		Name:           p.Name,
+		Label:          p.Label,
 		Type:           p.Type,
 		Region:         p.Region,
 		CredentialsRef: p.CredentialsRef,
@@ -43,10 +47,13 @@ func toProviderViewOut(p *provider.Provider) providerViewOut {
 }
 
 type providerCreateArgs struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Region         string `json:"region"`
-	CredentialsRef string `json:"credentials_ref"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.provider.label-set.
+	Label          *string `json:"label"`
+	Type           string  `json:"type"`
+	Region         string  `json:"region"`
+	CredentialsRef string  `json:"credentials_ref"`
 	// Credentials — optional plaintext cloud-credentials (dual-mode, ADR-064);
 	// XOR with credentials_ref. keeper writes them to Vault, plaintext is never
 	// persisted.
@@ -85,6 +92,7 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 
 	p, err := h.deps.ProviderSvc.Create(ctx, provider.CreateInput{
 		Name:           a.Name,
+		Label:          a.Label,
 		Type:           a.Type,
 		Region:         a.Region,
 		CredentialsRef: a.CredentialsRef,
@@ -109,6 +117,7 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 		"type":            p.Type,
 		"region":          p.Region,
 		"credentials_ref": p.CredentialsRef,
+		"label":           p.Label,
 	}
 	if p.SecretWritten {
 		auditPayload["plaintext_ingested"] = true
@@ -183,6 +192,30 @@ func (h *Handler) callProviderDelete(ctx context.Context, claims *jwt.Claims, re
 	}
 	h.writeAudit(audit.EventProviderDeleted, claims.Subject, map[string]any{"name": a.Name})
 	return h.toolResult(req.ID, struct{}{})
+}
+
+// callProviderSetLabel — keeper.provider.label-set, the MCP mirror of
+// PUT /v1/providers/{name}/label (ADR-0085). The registry's only mutation.
+func (h *Handler) callProviderSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[providerViewOut]{
+		tool:          "keeper.provider.label-set",
+		resource:      "provider",
+		configured:    h.deps.ProviderSvc != nil,
+		notConfigured: "provider registry is not configured",
+		validName:     provider.ValidName,
+		namePattern:   provider.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (providerViewOut, error) {
+			p, err := h.deps.ProviderSvc.SetLabel(ctx, name, label)
+			if err != nil {
+				return providerViewOut{}, err
+			}
+			return toProviderViewOut(p), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, provider.ErrProviderNotFound) },
+		notFoundf:  func(name string) string { return "provider " + name + " not found" },
+		failMsg:    "set provider label failed",
+		event:      audit.EventProviderLabelChanged,
+	})
 }
 
 type providerListArgs struct {

@@ -178,8 +178,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO incarnation") {
 		t.Errorf("SQL: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 11 {
-		t.Fatalf("args len = %d, want 11", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 12 {
+		t.Fatalf("args len = %d, want 12", len(f.queryRowArgs))
 	}
 	if f.queryRowArgs[0] != "redis-prod" {
 		t.Errorf("args[0] name = %v", f.queryRowArgs[0])
@@ -378,6 +378,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 				[]byte(`{"team":"dba"}`), // traits
 				"create",                 // created_scenario
 				any(nil),                 // applying_apply_id
+				any(nil),                 // label (ADR-0085): unset here, reads NULL
 			}}
 		},
 	}
@@ -431,6 +432,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte("{}"), // traits
 					"create",     // created_scenario
 					any(nil),     // applying_apply_id
+					any(nil),     // label (ADR-0085): unset here, reads NULL
 				}},
 				{values: []any{
 					"b", "redis", "v1", 1,
@@ -439,6 +441,7 @@ func TestSelectAll_NoFilter(t *testing.T) {
 					[]byte("{}"), // traits
 					"create",     // created_scenario
 					any(nil),     // applying_apply_id
+					any(nil),     // label (ADR-0085): unset here, reads NULL
 				}},
 			}}, nil
 		},
@@ -1539,6 +1542,7 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 					[]byte("{}"),
 					createdScenario, // created_scenario (string | nil=NULL)
 					any(nil),        // applying_apply_id
+					any(nil),        // label (ADR-0085)
 				}}
 			},
 		}
@@ -1578,6 +1582,7 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 					[]byte("{}"),
 					"create",        // created_scenario
 					applyingApplyID, // applying_apply_id (string=applying | nil=terminal)
+					any(nil),        // label (ADR-0085)
 				}}
 			},
 		}

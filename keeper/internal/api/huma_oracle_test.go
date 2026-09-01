@@ -71,7 +71,7 @@ func (p *hOraclePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 		// scanVigil (vigilColumns): name, sid, service, incarnation, coven,
 		// trait_key, trait_value, interval_spec, check_addr, params, enabled,
 		// created_at, updated_at, created_by_aid.
-		return hOracleRow{values: []any{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil}}
+		return hOracleRow{values: []any{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil, nil}}
 	case strings.Contains(sql, "FROM decrees") && strings.Contains(sql, "WHERE name"):
 		if p.decreeGetMissing {
 			return hOracleRow{err: pgx.ErrNoRows}
@@ -80,7 +80,7 @@ func (p *hOraclePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 		// subject_service, subject_incarnation, subject_coven, subject_trait_key,
 		// subject_trait_value, incarnation_name, action_scenario, action_input,
 		// cooldown, enabled, created_at, updated_at, created_by_aid.
-		return hOracleRow{values: []any{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil}}
+		return hOracleRow{values: []any{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil, nil}}
 	case strings.Contains(sql, "COUNT(*) FROM vigils"):
 		return hOracleRow{values: []any{len(p.vigilListRows)}}
 	case strings.Contains(sql, "COUNT(*) FROM decrees"):
@@ -332,7 +332,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 
 func TestHumaVigil_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{vigilListRows: [][]any{
-		{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil},
+		{"web-conf", nil, nil, nil, []string{"web"}, nil, nil, "30s", "core.beacon.file_changed", []byte(`{}`), true, oracleAt, oracleAt, nil, nil},
 	}}
 	r := humaOracleRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()
@@ -562,7 +562,7 @@ func TestHumaAudit_DecreeCreate_RecordsOnSuccess(t *testing.T) {
 
 func TestHumaDecree_List_GoldenWire(t *testing.T) {
 	pool := &hOraclePool{decreeListRows: [][]any{
-		{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil},
+		{"on-conf", "web-conf", nil, nil, nil, nil, []string{"web"}, nil, nil, "web", "reload", []byte(`{}`), "0s", true, oracleAt, oracleAt, nil, nil},
 	}}
 	r := humaOracleRouter(t, strictAllowAll{}, nil, pool)
 	rec := httptest.NewRecorder()

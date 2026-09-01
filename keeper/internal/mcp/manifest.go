@@ -305,6 +305,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.incarnation.label-set",
+			Description:  "Replaces the incarnation's display caption (ADR-0085). The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Permission: incarnation.label-set (scope incarnation/coven/service by name, the same boundary as every other incarnation mutation). Deliberately narrower than keeper.incarnation.traits-set: a trait pair is a live scope dimension, so stamping one grants visibility and needs a second gate; a caption is in no dimension of anything - not the RBAC scope value, not segment 3 of the derived secret path, not the CEL root (incarnation.label does not resolve) - so changing it moves nothing. Allowed while the incarnation is applying or error_locked, because no run reads it. Fails with code=not-found if the incarnation doesn't exist.",
+			InputSchema:  schemaIncarnationLabelSetInput,
+			OutputSchema: schemaIncarnationLabelSetOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.incarnation.traits-set",
 			Description:  "Wholesale REPLACES the incarnation's operator-set trait labels (incarnation.traits jsonb, ADR-060). 'traits' - full key->(scalar|list of scalars) set; empty/omitted = clear labels. The labels describe the INCARNATION and reach no host: a member carries only the traits an operator attached to it (NIM-281), assigned with keeper.soul.traits-assign. Permission: incarnation.traits-set (scope incarnation/coven/service by name). Two gates: the incarnation lies inside the operator scope, and every pair stamped must lie inside the operator's own trait-scope (an incarnation-attached pair grants visibility, same rule as keeper.soul.traits-assign). Fails with code=validation-failed on a malformed key / nested value or a pair outside that trait-scope; not-found if the incarnation doesn't exist.",
 			InputSchema:  schemaIncarnationTraitsSetInput,
@@ -537,6 +546,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.service.label-set",
+			Description:  "Replaces the display caption of a Service registry entry (ADR-0085). Permission: service.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Narrower than keeper.service.update, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - notably not segment 2 of <mount>/<service>/<incarnation>/<state-field> and not the artifact cache directory - so changing it orphans no secret. code=not-found if the entry doesn't exist.",
+			InputSchema:  schemaServiceLabelSetInput,
+			OutputSchema: schemaServiceView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.service.list",
 			Description:  "Lists registered Services (sort name ASC). Permission: service.list.",
 			InputSchema:  schemaEmptyObject,
@@ -616,6 +634,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.augur.omen.label-set",
+			Description:  "Replaces the display caption of an Omen (ADR-0085). Permission: omen.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. This is the registry's only mutation: endpoint and auth_ref stay immutable so the Rites granted against an Omen cannot silently follow it elsewhere. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaOmenLabelSetInput,
+			OutputSchema: schemaOmenView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.augur.omen.delete",
 			Description:  "Deletes an Omen by name; cascades to remove related Rites (ON DELETE CASCADE). Permission: omen.delete. Fails with code=not-found if the record doesn't exist.",
 			InputSchema:  schemaOmenDeleteInput,
@@ -680,6 +707,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.oracle.vigil.label-set",
+			Description:  "Replaces the display caption of a Vigil (ADR-0085). Permission: vigil.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. This is the registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a VigilSnapshot were already told what to run. A Decree reacts through on_beacon, which is the name, so changing the caption moves nothing. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaOracleLabelSetInput,
+			OutputSchema: schemaVigilView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.oracle.vigil.delete",
 			Description:  "Deletes a Vigil by name (stops being distributed to hosts in VigilSnapshot; Decrees are NOT cascaded). Permission: vigil.delete. Fails with code=not-found if the record doesn't exist.",
 			InputSchema:  schemaOracleNameInput,
@@ -702,6 +738,15 @@ var catalogManifest = []toolEntry{
 			Description:  "Lists registry Decrees (sort created_at DESC, name ASC; opt. offset/limit). Permission: decree.list.",
 			InputSchema:  schemaOraclePaginatedInput,
 			OutputSchema: schemaDecreeListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.oracle.decree.label-set",
+			Description:  "Replaces the display caption of a Decree (ADR-0085). Permission: decree.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. The reactor is untouched: cooldown state (oracle_fires) and the circuit breaker (oracle_circuit) are keyed on the name, so no trigger history moves and no breaker resets. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaOracleLabelSetInput,
+			OutputSchema: schemaDecreeView,
 		},
 	},
 	{
@@ -861,6 +906,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.provider.label-set",
+			Description:  "Replaces the display caption of a Cloud Provider (ADR-0085). Permission: provider.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), so changing it moves nothing. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaProviderLabelSetInput,
+			OutputSchema: schemaProviderCreateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.provider.delete",
 			Description:  "Deletes a Cloud Provider. Permission: provider.delete. code=not-found if the record doesn't exist; code=provider-has-profiles if Profiles reference it (FK RESTRICT).",
 			InputSchema:  schemaProviderByNameInput,
@@ -903,6 +957,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.profile.label-set",
+			Description:  "Replaces the display caption of a Cloud Profile (ADR-0085). Permission: profile.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed: the caption participates in nothing derived, so changing it moves nothing. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaProfileLabelSetInput,
+			OutputSchema: schemaProfileCreateOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.profile.delete",
 			Description:  "Deletes a Cloud Profile. Permission: profile.delete. code=not-found if the record doesn't exist.",
 			InputSchema:  schemaProfileByNameInput,
@@ -934,6 +997,15 @@ var catalogManifest = []toolEntry{
 			Name:         "keeper.push-provider.update",
 			Description:  "Replaces a Push-Provider's params (replace semantics; name - the key, unchanged). Same sensitive invariant. Permission: push-provider.update. Fails with code=not-found if the record doesn't exist.",
 			InputSchema:  schemaPushProviderUpdateInput,
+			OutputSchema: schemaPushProviderView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.push-provider.label-set",
+			Description:  "Replaces the display caption of a Push-Provider (ADR-0085). Permission: push-provider.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Unlike keeper.push-provider.update this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaPushProviderLabelSetInput,
 			OutputSchema: schemaPushProviderView,
 		},
 	},
@@ -994,6 +1066,15 @@ var catalogManifest = []toolEntry{
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
+			Name:         "keeper.herald.label-set",
+			Description:  "Replaces the display caption of a Herald channel (ADR-0085). Permission: herald.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Narrower than keeper.herald.update, deliberately: that one REPLACES the channel, so a caption edit through it would also rewrite secret_ref. The caption participates in nothing derived - in particular it is NOT the <entity> segment of secret/herald/<entity>/<field>, which is `name` - so changing it orphans no signing secret. code=not-found if the record doesn't exist.",
+			InputSchema:  schemaHeraldLabelSetInput,
+			OutputSchema: schemaHeraldView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
 			Name:         "keeper.herald.delete",
 			Description:  "Deletes a Herald channel; cascades to tear down related Tiding subscriptions (ON DELETE CASCADE). Permission: herald.delete. Fails with code=not-found if the record doesn't exist.",
 			InputSchema:  schemaHeraldByNameInput,
@@ -1040,6 +1121,15 @@ var catalogManifest = []toolEntry{
 			Name:         "keeper.tiding.update",
 			Description:  "Replaces a Tiding rule's mutable fields (replace semantics; name - the key). Permission: tiding.update. Fails with code=not-found if the rule doesn't exist or the FK herald doesn't exist.",
 			InputSchema:  schemaTidingUpdateInput,
+			OutputSchema: schemaTidingView,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.tiding.label-set",
+			Description:  "Replaces the display caption of a Tiding rule (ADR-0085). Permission: tiding.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Narrower than keeper.tiding.update, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK. code=not-found if the rule doesn't exist.",
+			InputSchema:  schemaTidingLabelSetInput,
 			OutputSchema: schemaTidingView,
 		},
 	},
@@ -1401,6 +1491,7 @@ var (
 "required":["service"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance name (kebab-case). Omit when the chosen create scenario declares name_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - not the Vault path segment, not the RBAC incarnation= scope value, not the CEL root (incarnation.label does not resolve). Unlike name it is never composed by a name_template."},
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven labels for the incarnation (ADR-008 amendment a). Affect RBAC create-scope: an operator with scoped-permission incarnation.create on coven=X can only create an incarnation with covens within their scope."},
 "input":{"type":"object"},
@@ -1530,6 +1621,24 @@ var (
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
 "traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Full set of operator-set trait labels key->(scalar|list of scalars). Empty/omitted = clear labels. Wholesale replaces incarnation.traits."}}}`)
+
+	schemaIncarnationLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name. Addresses the row; NOT changed by this tool - and it, not the caption, is the Vault path segment, the RBAC incarnation= scope value and the CEL root."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it, after which consumers show name again."}}}`)
+
+	schemaIncarnationLabelSetOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["incarnation","label"],
+"properties":{
+"incarnation":{"type":"string"},
+"label":{"type":["string","null"],"description":"The caption as it now reads; null when cleared."}}}`)
 
 	schemaIncarnationTraitsSetOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1889,9 +1998,19 @@ var (
 "required":["name","git","ref"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service name (kebab-case)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - notably not segment 2 of the derived secret path."},
 "git":{"type":"string","description":"git source of the service repo (URL; not a secret)."},
 "ref":{"type":"string","description":"git ref (tag/branch) - the Service's version (ADR-007)."},
 "refresh":{"type":"string","description":"Opt. auto-refresh duration ('5m'); omitted - no auto-refresh."}}}`)
+
+	schemaServiceLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service name. Addresses the row; NOT changed by this tool - and it, not the caption, is segment 2 of every derived secret path."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaServiceUpdateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1919,6 +2038,7 @@ var (
 "required":["name","git","ref","created_at","updated_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "git":{"type":"string"},
 "ref":{"type":"string"},
 "refresh":{"type":"string"},
@@ -2012,6 +2132,7 @@ var (
 "required":["name","source_type","endpoint","auth_ref"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen name (kebab-case)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "source_type":{"type":"string","enum":["vault","prometheus","elk"],"description":"External system type."},
 "endpoint":{"type":"string","description":"External system URL (not a secret)."},
 "auth_ref":{"type":"string","pattern":"^vault:","description":"vault-ref to the master credential (vault:<mount>/<path>); the secret itself isn't transmitted."}}}`)
@@ -2023,6 +2144,15 @@ var (
 "properties":{
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"maximum":1000}}}`)
+
+	schemaOmenLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen name. Addresses the row; NOT changed by this tool - Rites grant against it by FK."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaOmenDeleteInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2039,6 +2169,7 @@ var (
 "required":["name","source_type","endpoint","auth_ref","created_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "source_type":{"type":"string","enum":["vault","prometheus","elk"]},
 "endpoint":{"type":"string"},
 "auth_ref":{"type":"string"},
@@ -2156,6 +2287,19 @@ var (
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
 
+	// schemaOracleLabelSetInput — the argument shape of
+	// keeper.oracle.vigil.label-set and keeper.oracle.decree.label-set. One
+	// schema for both: Vigil and Decree share [oracle.NamePattern], and a caption
+	// is one column with one meaning on either.
+	schemaOracleLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil / Decree name. Addresses the row; NOT changed by this tool."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
+
 	schemaVigilCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2163,6 +2307,7 @@ var (
 "required":["name","subject","interval","check"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil name (kebab-case)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 ` + schemaSubjectProperty + `,
 "interval":{"type":"string","description":"Check frequency (duration convention, e.g. '30s')."},
 "check":{"type":"string","description":"core-beacon address (e.g. 'core.beacon.file_changed')."},
@@ -2176,6 +2321,7 @@ var (
 "required":["name","subject","interval","check","params","enabled","created_at","updated_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 ` + schemaSubjectProperty + `,
 "interval":{"type":"string"},
 "check":{"type":"string"},
@@ -2214,6 +2360,7 @@ var (
 "required":["name","on_beacon","subject","incarnation_name","action_scenario"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Decree name (kebab-case)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "on_beacon":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Name of the Vigil whose Portent the rule reacts to."},
 "where":{"type":"string","description":"Opt. CEL predicate over event.data (e.g. 'event.data.severity == \"critical\"'); compile-checked on create."},
 ` + schemaSubjectProperty + `,
@@ -2230,6 +2377,7 @@ var (
 "required":["name","on_beacon","subject","incarnation_name","action_scenario","action_input","cooldown","enabled","created_at","updated_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "on_beacon":{"type":"string"},
 "where":{"type":"string"},
 ` + schemaSubjectProperty + `,
@@ -2296,6 +2444,7 @@ var (
 "required":["name","type","region","credentials_ref"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "type":{"type":"string"},
 "region":{"type":"string"},
 "credentials_ref":{"type":"string","pattern":"^vault:"}}}`)
@@ -2307,11 +2456,21 @@ var (
 "required":["name","type","region","credentials_ref","created_at","created_by_aid"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "type":{"type":"string"},
 "region":{"type":"string"},
 "credentials_ref":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"},
 "created_by_aid":{"type":"string"}}}`)
+
+	schemaProviderLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Provider name. Addresses the row; NOT changed by this tool."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaProfileCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2320,9 +2479,19 @@ var (
 "required":["name","provider","params"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "provider":{"type":"string"},
 "params":{"type":"object"},
 "cloud_init":{"type":"string"}}}`)
+
+	schemaProfileLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Profile name. Addresses the row; NOT changed by this tool."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	// --- Errand (ADR-033) ---
 	//
@@ -2565,6 +2734,7 @@ var (
 "required":["name","provider","params","created_at","created_by_aid"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "provider":{"type":"string"},
 "params":{"type":"object"},
 "cloud_init":{"type":"string"},
@@ -2615,7 +2785,17 @@ var (
 "required":["name"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Plugin name (= plugins.ssh_providers[].name)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - including the SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS env-var name."},
 "params":{"type":"object","description":"Opaque per-provider params. Sensitive keys (secret_id/token/password/private_key) MUST be vault-refs (vault:<path>)."}}}`)
+
+	schemaPushProviderLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Push-Provider name. Addresses the row; NOT changed by this tool."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaPushProviderUpdateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2650,6 +2830,7 @@ var (
 "required":["name","params","created_at","updated_at","created_by_aid"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "params":{"type":"object"},
 "created_at":{"type":"string","format":"date-time"},
 "updated_at":{"type":"string","format":"date-time"},
@@ -2664,6 +2845,7 @@ var (
 "required":["name","type","config"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel name (kebab-case)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "type":{"type":"string","enum":["webhook"],"description":"Channel type (webhook in MVP)."},
 "config":{"type":"object","description":"Per-type config (webhook - { url, opt. headers, opt. http_allowed/allow_private })."},
 "secret_ref":{"type":["string","null"],"description":"Opt. vault-ref to the signing token (vault:<mount>/<path>); signs webhooks X-SoulStack-Signature."},
@@ -2680,6 +2862,24 @@ var (
 "config":{"type":"object","description":"Full new config (replace semantics)."},
 "secret_ref":{"type":["string","null"]},
 "enabled":{"type":"boolean"}}}`)
+
+	schemaHeraldLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel name. Addresses the row; NOT changed by this tool - and it, not the caption, is the <entity> segment of secret/herald/<entity>/<field>."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
+
+	schemaTidingLabelSetInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["name"],
+"properties":{
+"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Tiding rule name. Addresses the row; NOT changed by this tool."},
+"label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaHeraldByNameInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2704,6 +2904,7 @@ var (
 "required":["name","type","config","enabled","created_at","updated_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "type":{"type":"string","enum":["webhook"]},
 "config":{"type":"object"},
 "secret_ref":{"type":["string","null"]},
@@ -2719,6 +2920,7 @@ var (
 "required":["name","herald","event_types"],
 "properties":{
 "name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "herald":{"type":"string","description":"Delivery Herald channel name (FK)."},
 "event_types":{"type":"array","items":{"type":"string"},"description":"area-glob scenario_run.* within run scope (scenario_run/command_run/voyage/cadence + incarnation.run_completed)."},
 "only_failures":{"type":"boolean"},
@@ -2768,6 +2970,7 @@ var (
 "required":["name","herald","event_types","only_failures","only_changes","enabled","created_at","updated_at"],
 "properties":{
 "name":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "herald":{"type":"string"},
 "event_types":{"type":"array","items":{"type":"string"}},
 "only_failures":{"type":"boolean"},

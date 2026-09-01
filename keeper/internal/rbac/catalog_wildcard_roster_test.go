@@ -72,12 +72,21 @@ func TestCatalog_WildcardRostersPinnedForReleaseNotes(t *testing.T) {
 		// attaches no label to the host (NIM-281), but it decides which
 		// incarnation's config the host is served and which membership-gated
 		// Decrees reach it — privilege worth naming in the roster on its own.
+		//
+		// incarnation.label-set is the NIM-728 addition ([ADR-0085]), and it is
+		// the mildest entry in this roster by construction: a display caption
+		// participates in nothing derived — no Vault path, no RBAC scope, no
+		// snapshot directory, no CEL root — so a holder of `incarnation.*` who
+		// gains it on upgrade gains the ability to change a word on a screen and
+		// nothing else. It is enumerated anyway, because the point of this guard
+		// is that the roster is complete, not that every entry is alarming.
 		"incarnation": {
 			"incarnation.bind-member",
 			"incarnation.create",
 			"incarnation.destroy",
 			"incarnation.get",
 			"incarnation.history",
+			"incarnation.label-set",
 			"incarnation.list",
 			"incarnation.rerun-last",
 			"incarnation.run",

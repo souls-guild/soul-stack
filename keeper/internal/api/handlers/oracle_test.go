@@ -214,18 +214,20 @@ func subjectCols(sel subject.Selector) []any {
 func vigilRow(name, interval, check string, sel subject.Selector) []any {
 	now := time.Now()
 	row := append([]any{name}, subjectCols(sel)...)
-	return append(row, interval, check, []byte("{}"), true, now, now, nil)
+	// The trailing nil is `label` (ADR-0085): the display caption, unset here.
+	return append(row, interval, check, []byte("{}"), true, now, now, nil, nil)
 }
 
 // decreeRow — a decrees row in decreeColumns order (collectDecrees: name,
 // on_beacon, where_cel, subject_sid, subject_service, subject_incarnation,
 // subject_coven, subject_trait_key, subject_trait_value, incarnation_name,
 // action_scenario, action_input, cooldown, enabled, created_at, updated_at,
-// created_by_aid).
+// created_by_aid, label).
 func decreeRow(name, onBeacon, incarnation, scenario string, sel subject.Selector) []any {
 	now := time.Now()
 	row := append([]any{name, onBeacon, nil}, subjectCols(sel)...)
-	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil)
+	// The trailing nil is `label` (ADR-0085): the display caption, unset here.
+	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil, nil)
 }
 
 // --- Vigil CreateVigilTyped: domain classification ---

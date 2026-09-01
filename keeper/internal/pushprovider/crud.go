@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 )
 
 // Sentinel errors of CRUD layer. Handler side maps:
@@ -49,11 +51,11 @@ type ListFilter struct {
 	NamePattern string
 }
 
-const selectColumns = `name, params, created_at, updated_at, created_by_aid, updated_by_aid`
+const selectColumns = `name, params, created_at, updated_at, created_by_aid, updated_by_aid, label`
 
 const insertSQL = `
-INSERT INTO push_providers (name, params, created_by_aid)
-VALUES ($1, $2, $3)
+INSERT INTO push_providers (name, params, created_by_aid, label)
+VALUES ($1, $2, $3, $4)
 RETURNING created_at, updated_at
 `
 
@@ -72,6 +74,17 @@ WHERE name = $1
 `
 
 const deleteSQL = `DELETE FROM push_providers WHERE name = $1`
+
+// updateLabelSQL replaces the display caption of one row ([ADR-0085]).
+//
+// It sets `label` and NOTHING else — not the PK, which is immutable and has no
+// rename operation, and deliberately not `updated_at` / `updated_by_aid` either.
+// Those two record changes to the row's SUBSTANCE (a provider's params, which a
+// dispatcher acts on), and a caption edit changes nothing anybody acts on:
+// bumping the stamp would make a cosmetic edit read as a reconfiguration to
+// every consumer that sorts or filters by it. Who changed the caption and when
+// is in the audit trail, under `push-provider.label_changed`.
+const updateLabelSQL = `UPDATE push_providers SET label = $2 WHERE name = $1`
 
 // Insert inserts a new PushProvider record.
 //
@@ -99,7 +112,15 @@ func Insert(ctx context.Context, db ExecQueryRower, p *PushProvider) error {
 		return fmt.Errorf("pushprovider: marshal params: %w", err)
 	}
 
-	row := db.QueryRow(ctx, insertSQL, p.Name, paramsBytes, p.CreatedByAID)
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	p.Label = registrylabel.Normalize(p.Label)
+	var label any
+	if p.Label != nil {
+		label = *p.Label
+	}
+
+	row := db.QueryRow(ctx, insertSQL, p.Name, paramsBytes, p.CreatedByAID, label)
 	if err := row.Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
 		return mapInsertError(err)
 	}
@@ -133,6 +154,7 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 		p            PushProvider
 		paramsBytes  []byte
 		updatedByAID *string
+		label        *string
 	)
 	err := row.Scan(
 		&p.Name,
@@ -141,6 +163,7 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 		&p.UpdatedAt,
 		&p.CreatedByAID,
 		&updatedByAID,
+		&label,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -149,12 +172,42 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 		return nil, fmt.Errorf("pushprovider: scan: %w", err)
 	}
 	p.UpdatedByAID = updatedByAID
+	p.Label = label
 	if len(paramsBytes) > 0 {
 		if err := json.Unmarshal(paramsBytes, &p.Params); err != nil {
 			return nil, fmt.Errorf("pushprovider: unmarshal params: %w", err)
 		}
 	}
 	return &p, nil
+}
+
+// UpdateLabel replaces the display caption of one PushProvider ([ADR-0085]).
+// [ErrPushProviderNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// No `push-providers:changed` invalidation follows this write, unlike [Update].
+// The dispatcher's snapshot carries params, and a caption is not one of them —
+// republishing would wake every Keeper instance to learn a word no code reads.
+func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	tag, err := db.Exec(ctx, updateLabelSQL, name, v)
+	if err != nil {
+		return fmt.Errorf("pushprovider: update label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPushProviderNotFound
+	}
+	return nil
 }
 
 // Update replaces params of an existing record (replace semantics).

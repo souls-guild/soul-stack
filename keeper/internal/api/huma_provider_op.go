@@ -27,9 +27,13 @@ type providerCreateInput struct {
 // (huma default) → an unknown field → 400. Domain format validation is in
 // CreateTyped (422).
 type ProviderCreateRequest struct {
-	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name (kebab)"`
-	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"CloudDriver plugin name (= plugins.cloud_drivers[].name)"`
-	Region string `json:"region" required:"true" doc:"provider region"`
+	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name (kebab)"`
+	// label is the optional display caption (ADR-0085): free text, changed later
+	// by PUT /v1/providers/{name}/label. No pattern — capitals and spaces are the
+	// point. Omitted → NULL, and consumers show `name`.
+	Label  *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
+	Type   string  `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"CloudDriver plugin name (= plugins.cloud_drivers[].name)"`
+	Region string  `json:"region" required:"true" doc:"provider region"`
 	// credentials_ref XOR credentials (dual-mode, ADR-064): exactly one. ref — a
 	// vault path (the value is NOT resolved); credentials — plaintext (keeper writes
 	// it to Vault itself). The service validates format/XOR (422); pattern dropped
@@ -101,6 +105,30 @@ func providerGetOperation() huma.Operation {
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/providers/{name}/label (label-set) — WRITE+AUDIT provider.label_changed ===
+
+type providerSetLabelInput struct {
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
+	Body LabelSetRequest
+}
+
+type providerSetLabelOutput struct {
+	Body Provider
+}
+
+func providerSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setProviderLabel",
+		Method:        http.MethodPut,
+		Path:          "/{name}/label",
+		Summary:       "Set the Cloud-Provider display caption",
+		Description:   "Replaces the display caption of one Cloud-Provider (ADR-0085). Permission provider.label-set, audit provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched and has no rename operation anywhere: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing.",
+		Tags:          []string{"provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 

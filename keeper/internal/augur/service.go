@@ -73,7 +73,11 @@ func NewService(d ServiceDeps) (*Service, error) {
 // CreateOmenInput — CreateOmen's parameters. CallerAID is optional (nil →
 // created_by_aid IS NULL; transport fills it in from the caller's claims).
 type CreateOmenInput struct {
-	Name       string
+	Name string
+	// Label is the optional display caption ([ADR-0085]): free text, set here at
+	// registration and changed afterwards by [Service.SetOmenLabel]. nil/blank
+	// stores NULL and the consumer shows Name.
+	Label      *string
 	SourceType string
 	Endpoint   string
 	AuthRef    string
@@ -104,6 +108,7 @@ func (s *Service) CreateOmen(ctx context.Context, in CreateOmenInput) (*Omen, er
 
 	o := &Omen{
 		Name:         in.Name,
+		Label:        in.Label,
 		SourceType:   src,
 		Endpoint:     in.Endpoint,
 		AuthRef:      in.AuthRef,
@@ -123,6 +128,23 @@ func (s *Service) ListOmens(ctx context.Context, offset, limit int) ([]*Omen, in
 
 // GetOmen reads an Omen by PK. [ErrOmenNotFound] if it doesn't exist.
 func (s *Service) GetOmen(ctx context.Context, name string) (*Omen, error) {
+	return SelectOmenByName(ctx, s.pool, name)
+}
+
+// SetOmenLabel replaces the display caption of one Omen and returns the row as
+// it now reads ([ADR-0085], permission omen.label-set, audit
+// omen.label_changed).
+//
+// This is the registry's ONLY mutation: an Omen's endpoint and auth_ref stay
+// immutable (a moved external system is a new Omen, and the Rites granted
+// against the old one should not silently follow it), and a caption is the one
+// field for which that argument does not apply, because nothing reads it.
+//
+// [ErrOmenNotFound] if the record doesn't exist.
+func (s *Service) SetOmenLabel(ctx context.Context, name string, label *string) (*Omen, error) {
+	if err := UpdateOmenLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
 	return SelectOmenByName(ctx, s.pool, name)
 }
 

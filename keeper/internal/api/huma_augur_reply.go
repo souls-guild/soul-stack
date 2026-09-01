@@ -34,12 +34,15 @@ import (
 // source_type — OmenViewSourceType (inline string-enum, no $ref); created_at —
 // nanosecond time-wire.
 type OmenView struct {
-	AuthRef      string             `json:"auth_ref"`
-	CreatedAt    time.Time          `json:"created_at"`
-	CreatedByAID *string            `json:"created_by_aid,omitempty"`
-	Endpoint     string             `json:"endpoint"`
-	Name         string             `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.NamePattern
-	SourceType   OmenViewSourceType `json:"source_type"`
+	AuthRef      string    `json:"auth_ref"`
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedByAID *string   `json:"created_by_aid,omitempty"`
+	Endpoint     string    `json:"endpoint"`
+	// Label — the display caption (ADR-0085), free text and mutable via
+	// PUT /v1/augur/omens/{name}/label. Absent → the consumer shows `name`.
+	Label      *string            `json:"label,omitempty"`
+	Name       string             `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.NamePattern
+	SourceType OmenViewSourceType `json:"source_type"`
 }
 
 // OmenListReply — native envelope of GET /v1/augur/omens (4-field offset). Shape 1:1 with

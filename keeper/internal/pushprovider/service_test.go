@@ -114,6 +114,7 @@ func TestService_Update_PublishesInvalidate(t *testing.T) {
 		selectCalled++
 		return staticRow{values: []any{
 			"vault", []byte(`{"role":"keeper"}`), now, now, "archon-alice", &updatedBy,
+			(*string)(nil), // label (ADR-0085): unset here, reads NULL
 		}}
 	}
 	pub := &recordingPublisher{}

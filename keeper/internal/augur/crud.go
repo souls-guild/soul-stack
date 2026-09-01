@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
 	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
@@ -48,12 +49,17 @@ var (
 // --- Omen -------------------------------------------------------------
 
 const omenInsertSQL = `
-INSERT INTO omens (name, source_type, endpoint, auth_ref, created_by_aid)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO omens (name, source_type, endpoint, auth_ref, created_by_aid, label)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING created_at
 `
 
-const omenColumns = `name, source_type, endpoint, auth_ref, created_by_aid, created_at`
+const omenColumns = `name, source_type, endpoint, auth_ref, created_by_aid, created_at, label`
+
+// omenUpdateLabelSQL replaces the display caption of one Omen ([ADR-0085]). It
+// sets `label` and nothing else — the PK is not in the SET list, because the
+// identifier is immutable and Rites grant against it by FK.
+const omenUpdateLabelSQL = `UPDATE omens SET label = $2 WHERE name = $1`
 
 const omenSelectByNameSQL = `
 SELECT ` + omenColumns + `
@@ -93,8 +99,16 @@ func InsertOmen(ctx context.Context, db ExecQueryRower, o *Omen) error {
 		createdByAID = *o.CreatedByAID
 	}
 
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	o.Label = registrylabel.Normalize(o.Label)
+	var label any
+	if o.Label != nil {
+		label = *o.Label
+	}
+
 	row := db.QueryRow(ctx, omenInsertSQL,
-		o.Name, string(o.SourceType), o.Endpoint, o.AuthRef, createdByAID,
+		o.Name, string(o.SourceType), o.Endpoint, o.AuthRef, createdByAID, label,
 	)
 	if err := row.Scan(&o.CreatedAt); err != nil {
 		return mapOmenInsertError(err)
@@ -128,8 +142,9 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 		o            Omen
 		srcType      string
 		createdByAID *string
+		label        *string
 	)
-	err := row.Scan(&o.Name, &srcType, &o.Endpoint, &o.AuthRef, &createdByAID, &o.CreatedAt)
+	err := row.Scan(&o.Name, &srcType, &o.Endpoint, &o.AuthRef, &createdByAID, &o.CreatedAt, &label)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrOmenNotFound
@@ -138,7 +153,37 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 	}
 	o.SourceType = SourceType(srcType)
 	o.CreatedByAID = createdByAID
+	o.Label = label
 	return &o, nil
+}
+
+// UpdateOmenLabel replaces the display caption of one Omen ([ADR-0085]).
+// [ErrOmenNotFound] when the row is absent (RowsAffected==0).
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name.
+// Anything else is stored as given: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// The name argument addresses the row; it is never written. Nothing derived moves
+// as a result of this call — see the package doc of
+// keeper/internal/registrylabel.
+func UpdateOmenLabel(ctx context.Context, db ExecQueryRower, name string, label *string) error {
+	if !ValidName(name) {
+		return fmt.Errorf("augur: invalid omen name %q (must match %s)", name, NamePattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	tag, err := db.Exec(ctx, omenUpdateLabelSQL, name, v)
+	if err != nil {
+		return fmt.Errorf("augur: update omen label: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOmenNotFound
+	}
+	return nil
 }
 
 // SelectAllOmens returns a page of Omens and the total count.

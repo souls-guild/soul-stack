@@ -43,6 +43,7 @@ var allEventTypes = []EventType{
 	"decree.circuit_tripped",                    // EventDecreeCircuitTripped
 	"decree.created",                            // EventDecreeCreated
 	"decree.deleted",                            // EventDecreeDeleted
+	"decree.label_changed",                      // EventDecreeLabelChanged
 	"errand.cancelled",                          // EventTypeErrandCancelled
 	"errand.completed",                          // EventTypeErrandCompleted
 	"errand.failed",                             // EventTypeErrandFailed
@@ -53,11 +54,13 @@ var allEventTypes = []EventType{
 	"herald.deleted",                            // EventHeraldDeleted
 	"herald.delivered",                          // EventHeraldDelivered
 	"herald.failed",                             // EventHeraldFailed
+	"herald.label_changed",                      // EventHeraldLabelChanged
 	"herald.updated",                            // EventHeraldUpdated
 	"incarnation.created",                       // EventIncarnationCreated
 	"incarnation.destroy_completed",             // EventIncarnationDestroyCompleted
 	"incarnation.destroy_failed",                // EventIncarnationDestroyFailed
 	"incarnation.destroy_started",               // EventIncarnationDestroyStarted
+	"incarnation.label_changed",                 // EventIncarnationLabelChanged
 	"incarnation.member_bound",                  // EventIncarnationMemberBound
 	"incarnation.member_unbound",                // EventIncarnationMemberUnbound
 	"incarnation.rerun_last",                    // EventIncarnationRerunLast
@@ -69,6 +72,7 @@ var allEventTypes = []EventType{
 	"incarnation.upgrade_started",               // EventIncarnationUpgradeStarted
 	"input.vault_resolved",                      // EventInputVaultResolved
 	"omen.created",                              // EventOmenCreated
+	"omen.label_changed",                        // EventOmenLabelChanged
 	"omen.revoked",                              // EventOmenRevoked
 	"operator.created",                          // EventOperatorCreated
 	"operator.login",                            // EventOperatorLogin
@@ -80,12 +84,15 @@ var allEventTypes = []EventType{
 	"plugin.revoked",                            // EventPluginRevoked
 	"profile.created",                           // EventProfileCreated
 	"profile.deleted",                           // EventProfileDeleted
+	"profile.label_changed",                     // EventProfileLabelChanged
 	"provider.created",                          // EventProviderCreated
 	"provider.deleted",                          // EventProviderDeleted
+	"provider.label_changed",                    // EventProviderLabelChanged
 	"provisioning.policy_changed",               // EventProvisioningPolicyChanged
 	"push-provider.created",                     // EventPushProviderCreated
 	"push-provider.deleted",                     // EventPushProviderDeleted
 	"push-provider.imported_from_config",        // EventPushProviderImportedFromConfig
+	"push-provider.label_changed",               // EventPushProviderLabelChanged
 	"push-provider.updated",                     // EventPushProviderUpdated
 	"push.applied",                              // EventPushApplied
 	"push.completed",                            // EventPushCompleted
@@ -109,6 +116,7 @@ var allEventTypes = []EventType{
 	"scenario_run.partial_failed",               // EventScenarioRunPartialFailed
 	"scenario_run.started",                      // EventScenarioRunStarted
 	"service.deregistered",                      // EventServiceDeregistered
+	"service.label_changed",                     // EventServiceLabelChanged
 	"service.registered",                        // EventServiceRegistered
 	"service.updated",                           // EventServiceUpdated
 	"setting.deleted",                           // EventSettingDeleted
@@ -137,10 +145,12 @@ var allEventTypes = []EventType{
 	"task.executed",                             // EventTaskExecuted
 	"tiding.created",                            // EventTidingCreated
 	"tiding.deleted",                            // EventTidingDeleted
+	"tiding.label_changed",                      // EventTidingLabelChanged
 	"tiding.updated",                            // EventTidingUpdated
 	"vault.kv-present",                          // EventVaultKVPresent
 	"vault.kv-read",                             // EventVaultKVRead
 	"vigil.created",                             // EventVigilCreated
 	"vigil.deleted",                             // EventVigilDeleted
+	"vigil.label_changed",                       // EventVigilLabelChanged
 	"voyage.reclaimed",                          // EventVoyageReclaimed
 }

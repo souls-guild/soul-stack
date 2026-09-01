@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -27,7 +28,10 @@ const heraldNotConfigured = "herald registry is not configured"
 
 // heraldView — output form of a Herald (same as REST toHeraldResponse).
 type heraldView struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent when the row carries none, and
+	// a consumer then shows `name`. NOT the derived Vault `<entity>` segment.
+	Label        *string        `json:"label,omitempty"`
 	Type         string         `json:"type"`
 	Config       map[string]any `json:"config"`
 	SecretRef    *string        `json:"secret_ref,omitempty"`
@@ -44,6 +48,7 @@ func toHeraldView(h *herald.Herald) heraldView {
 	}
 	return heraldView{
 		Name:         h.Name,
+		Label:        h.Label,
 		Type:         string(h.Type),
 		Config:       config,
 		SecretRef:    h.SecretRef,
@@ -57,7 +62,10 @@ func toHeraldView(h *herald.Herald) heraldView {
 // --- Herald: args ----------------------------------------------------
 
 type heraldCreateArgs struct {
-	Name      string         `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.herald.label-set.
+	Label     *string        `json:"label"`
 	Type      string         `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref"`
@@ -119,6 +127,7 @@ func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req 
 	}
 	created, err := h.deps.HeraldSvc.CreateHerald(ctx, &herald.Herald{
 		Name:         a.Name,
+		Label:        a.Label,
 		Type:         herald.HeraldType(a.Type),
 		Config:       a.Config,
 		SecretRef:    a.SecretRef,
@@ -256,7 +265,7 @@ func (h *Handler) heraldErr(id json.RawMessage, toolName string, err error, op, 
 }
 
 func heraldAuditMCP(h *herald.Herald) map[string]any {
-	p := map[string]any{"name": h.Name, "type": string(h.Type), "enabled": h.Enabled}
+	p := map[string]any{"name": h.Name, "label": h.Label, "type": string(h.Type), "enabled": h.Enabled}
 	if url, ok := h.Config["url"].(string); ok {
 		p["url"] = url
 	}
@@ -273,10 +282,37 @@ func heraldAuditMCP(h *herald.Herald) map[string]any {
 	return p
 }
 
+// callHeraldSetLabel — keeper.herald.label-set, the MCP mirror of
+// PUT /v1/heralds/{name}/label (ADR-0085). Narrower than keeper.herald.update,
+// which replaces the channel including its secret_ref.
+func (h *Handler) callHeraldSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[heraldView]{
+		tool:          "keeper.herald.label-set",
+		resource:      "herald",
+		configured:    h.deps.HeraldSvc != nil,
+		notConfigured: heraldNotConfigured,
+		validName:     herald.ValidName,
+		namePattern:   herald.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (heraldView, error) {
+			updated, err := h.deps.HeraldSvc.SetHeraldLabel(ctx, name, label)
+			if err != nil {
+				return heraldView{}, err
+			}
+			return toHeraldView(updated), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrHeraldNotFound) },
+		notFoundf:  func(name string) string { return "herald " + name + " not found" },
+		failMsg:    "set herald label failed",
+		event:      audit.EventHeraldLabelChanged,
+	})
+}
+
 // --- Tiding: output projections -----------------------------------------
 
 type tidingView struct {
-	Name         string   `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	Label        *string  `json:"label,omitempty"`
 	Herald       string   `json:"herald"`
 	EventTypes   []string `json:"event_types"`
 	OnlyFailures bool     `json:"only_failures"`
@@ -297,6 +333,7 @@ func toTidingView(t *herald.Tiding) tidingView {
 	}
 	return tidingView{
 		Name:         t.Name,
+		Label:        t.Label,
 		Herald:       t.Herald,
 		EventTypes:   eventTypes,
 		OnlyFailures: t.OnlyFailures,
@@ -314,7 +351,10 @@ func toTidingView(t *herald.Tiding) tidingView {
 // --- Tiding: args ----------------------------------------------------
 
 type tidingCreateArgs struct {
-	Name         string   `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.tiding.label-set.
+	Label        *string  `json:"label"`
 	Herald       string   `json:"herald"`
 	EventTypes   []string `json:"event_types"`
 	OnlyFailures *bool    `json:"only_failures"`
@@ -375,6 +415,7 @@ func (h *Handler) callTidingCreate(ctx context.Context, claims *jwt.Claims, req 
 	}
 	created, err := h.deps.HeraldSvc.CreateTiding(ctx, &herald.Tiding{
 		Name:         a.Name,
+		Label:        a.Label,
 		Herald:       a.Herald,
 		EventTypes:   a.EventTypes,
 		OnlyFailures: boolOrMCP(a.OnlyFailures, false),
@@ -514,9 +555,34 @@ func (h *Handler) tidingErr(id json.RawMessage, toolName string, err error, op, 
 	return h.toolError(id, toolName, code, detail)
 }
 
+// callTidingSetLabel — keeper.tiding.label-set, the MCP mirror of
+// PUT /v1/tidings/{name}/label (ADR-0085).
+func (h *Handler) callTidingSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[tidingView]{
+		tool:          "keeper.tiding.label-set",
+		resource:      "tiding",
+		configured:    h.deps.HeraldSvc != nil,
+		notConfigured: heraldNotConfigured,
+		validName:     herald.ValidName,
+		namePattern:   herald.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (tidingView, error) {
+			updated, err := h.deps.HeraldSvc.SetTidingLabel(ctx, name, label)
+			if err != nil {
+				return tidingView{}, err
+			}
+			return toTidingView(updated), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrTidingNotFound) },
+		notFoundf:  func(name string) string { return "tiding " + name + " not found" },
+		failMsg:    "set tiding label failed",
+		event:      audit.EventTidingLabelChanged,
+	})
+}
+
 func tidingAuditMCP(t *herald.Tiding) map[string]any {
 	p := map[string]any{
 		"name":          t.Name,
+		"label":         t.Label,
 		"herald":        t.Herald,
 		"event_types":   t.EventTypes,
 		"only_failures": t.OnlyFailures,

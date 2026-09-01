@@ -1098,8 +1098,10 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(res.Tools) != 97 {
-		t.Errorf("tool count = %d, want 97", len(res.Tools))
+	// 107 = 97 + the ten `keeper.<resource>.label-set` tools ([ADR-0085], NIM-728),
+	// one per registry that carries a display caption.
+	if len(res.Tools) != 107 {
+		t.Errorf("tool count = %d, want 107", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}

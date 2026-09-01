@@ -13,31 +13,33 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 110 names (sum of the categories below):
+// §Catalog of permissions. 120 names (sum of the categories below):
 //
 //   - operator (5): create / revoke / issue-token / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
-//   - incarnation (13): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209);
+//   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209) / label-set ([ADR-0085]);
 //   - soul (8): list / create / issue-token / coven-assign / traits-assign / ssh-target-update / console (ADR-0074) / forget (NIM-386);
 //   - plugin (3): allow / revoke / list;
 //   - sigil (4): key-introduce / key-retire / key-list / key-set-primary;
-//   - service (4): register / update / list / deregister;
-//   - omen (3): create / list / delete;
+//   - service (5): register / update / list / deregister / label-set ([ADR-0085]);
+//   - omen (4): create / list / delete / label-set ([ADR-0085]);
 //   - rite (3): create / list / delete;
-//   - vigil (3): create / list / delete;
-//   - decree (3): create / list / delete;
+//   - vigil (4): create / list / delete / label-set ([ADR-0085]);
+//   - decree (4): create / list / delete / label-set ([ADR-0085]);
 //   - push (3): apply / cleanup / read;
-//   - push-provider (5): create / update / delete / list / read (ADR-032 amendment S7-2);
+//   - push-provider (6): create / update / delete / list / read (ADR-032 amendment S7-2) / label-set ([ADR-0085]);
 //   - errand (3): run / cancel / list (ADR-033);
 //   - choir (5): create / delete / list / add-voice / remove-voice (ADR-044, S-T3);
 //   - cadence (6): create / list / update / delete / enable / disable (ADR-046, S4; enable/disable — amendment 2026-06-02);
-//   - herald (5): create / read / list / update / delete (ADR-052, S4);
-//   - tiding (5): create / read / list / update / delete (ADR-052, S4);
+//   - herald (6): create / read / list / update / delete (ADR-052, S4) / label-set ([ADR-0085]);
+//   - tiding (6): create / read / list / update / delete (ADR-052, S4) / label-set ([ADR-0085]);
+//   - setting (3): read / update / delete ([ADR-0073] — the cluster settings store; this
+//     line was missing while the total said 117, which is why the sum did not check out);
 //   - provisioning (2): read / update (ADR-058 Part B — operator-creation-method policy);
 //   - audit (1): read;
-//   - provider (3): create / read / delete (ADR-017, Cloud CRUD);
-//   - profile (3): create / read / delete (ADR-017, Cloud CRUD).
+//   - provider (4): create / read / delete (ADR-017, Cloud CRUD) / label-set ([ADR-0085]);
+//   - profile (4): create / read / delete (ADR-017, Cloud CRUD) / label-set ([ADR-0085]).
 //
 // A wildcard `*` in `<action>` (`incarnation.*`) expands at resolve time
 // and matches any known `<action>` for that `<resource>`. Wildcard in
@@ -432,6 +434,37 @@ var AllowedPermissions = map[string]struct{}{
 	"profile.create":  {},
 	"profile.read":    {},
 	"profile.delete":  {},
+
+	// <resource>.label-set — replace the DISPLAY CAPTION of one registry row
+	// ([ADR-0085], NIM-728). One name per registry rather than one shared name,
+	// because the catalog grammar is `<resource>.<action>` and a role that may
+	// caption incarnations has no business captioning heralds; the action spells
+	// `<field>-<verb>` after the existing `incarnation.traits-set`, which grants
+	// the same kind of thing — a mutable operator-set attribute on a row.
+	//
+	// Deliberately NOT `<resource>.update`. Half these registries have no update
+	// at all (`provider`/`profile`/`omen`/`vigil`/`decree` are immutable by
+	// decision, and `incarnation.update` was DELETED by migration 109 / NIM-330),
+	// and where an update does exist it REPLACES the whole row — granting a
+	// caption edit would have granted a rewrite of a Herald's secret_ref.
+	//
+	// A caption participates in nothing derived: no Vault path, no RBAC scope, no
+	// snapshot directory, no CEL root. So this permission is the narrowest write
+	// in the catalog — it can move a screen and nothing else.
+	//
+	// Audit: `<resource>.label_changed`. Selector: NoSelector for the registry
+	// families that are already NoSelector; `incarnation.label-set` carries the
+	// same scope as the other incarnation mutations.
+	"incarnation.label-set":   {},
+	"service.label-set":       {},
+	"provider.label-set":      {},
+	"profile.label-set":       {},
+	"push-provider.label-set": {},
+	"omen.label-set":          {},
+	"herald.label-set":        {},
+	"tiding.label-set":        {},
+	"vigil.label-set":         {},
+	"decree.label-set":        {},
 }
 
 // IsAllowedPermission checks a `<resource>.<action>` string against the

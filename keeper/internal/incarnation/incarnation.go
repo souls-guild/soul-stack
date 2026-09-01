@@ -77,7 +77,30 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 // freeform data; typing for a concrete service / scenario lives in their
 // manifests, not in this layer.
 type Incarnation struct {
-	Name               string         `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead.
+	//
+	// It participates in NOTHING derived, and this is the entity where that
+	// matters most. Name is segment 3 of every derived secret path
+	// (`<mount>/<service>/<incarnation>/<state-field>[/<key>]`, [ADR-0083] §1),
+	// substituted verbatim with no case folding; it is the value of the RBAC
+	// `incarnation=` scope dimension; and it is the CEL root `incarnation.name`.
+	// Label reaches none of the three — deliberately, and guarded by
+	// keeper/internal/render/label_invariant_guard_test.go and
+	// keeper/internal/servicevars/label_invariant_guard_test.go (the CEL roots,
+	// all three environments) and
+	// keeper/internal/api/handlers/label_invariant_guard_test.go (the RBAC scope
+	// value, and the derived secret path at the reveal route).
+	//
+	// In particular it is NOT projected into CEL: `incarnation.label` does not
+	// resolve, because the CEL root is built from [render.IncarnationMeta], which
+	// carries the identifier and no caption.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	// [ADR-0083]: ../../../docs/adr/0083-declared-secret-state-fields.md
+	Label              *string        `json:"label,omitempty"`
 	Service            string         `json:"service"`
 	ServiceVersion     string         `json:"service_version"`
 	StateSchemaVersion int            `json:"state_schema_version"`

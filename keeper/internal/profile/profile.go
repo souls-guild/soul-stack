@@ -29,7 +29,13 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 // lives in its schema, not in this layer. CloudInit nil means NULL column (userdata
 // absent).
 type Profile struct {
-	Name         string         `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label        *string        `json:"label,omitempty"`
 	Provider     string         `json:"provider"`
 	Params       map[string]any `json:"params"`
 	CloudInit    *string        `json:"cloud_init,omitempty"`

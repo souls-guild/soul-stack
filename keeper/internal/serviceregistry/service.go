@@ -101,7 +101,11 @@ func (s *Service) invalidate(ctx context.Context) {
 // (nil → created_by_aid IS NULL for seed/system creation; transport fills it
 // from claims).
 type CreateServiceInput struct {
-	Name      string
+	Name string
+	// Label is the optional display caption ([ADR-0085]): free text, set here at
+	// registration and changed afterwards by [Service.SetServiceLabel].
+	// nil/blank stores NULL and the consumer shows Name.
+	Label     *string
 	Git       string
 	Ref       string
 	Refresh   *string
@@ -121,6 +125,7 @@ func (s *Service) CreateService(ctx context.Context, in CreateServiceInput) (*Se
 	}
 	e := &ServiceEntry{
 		Name:         in.Name,
+		Label:        in.Label,
 		Git:          in.Git,
 		Ref:          in.Ref,
 		Refresh:      in.Refresh,
@@ -183,6 +188,22 @@ func (s *Service) UpdateService(ctx context.Context, in UpdateServiceInput) (*Se
 	}
 	s.invalidate(ctx)
 	return e, nil
+}
+
+// SetServiceLabel replaces the display caption of one Service and returns the
+// row as it now reads ([ADR-0085], permission service.label-set, audit
+// service.label_changed).
+//
+// No invalidation is published, unlike every other write here: the snapshot the
+// `service:invalidate` channel refreshes carries git/ref/refresh and the caches
+// derived from an artifact, and a caption is none of them.
+//
+// [ErrNotFound] if no record with that name.
+func (s *Service) SetServiceLabel(ctx context.Context, name string, label *string) (*ServiceEntry, error) {
+	if err := UpdateServiceLabel(ctx, s.pool, name, label); err != nil {
+		return nil, err
+	}
+	return GetService(ctx, s.pool, name)
 }
 
 // DeleteService deletes a Service record by name. [ErrNotFound] if none.

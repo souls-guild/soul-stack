@@ -262,7 +262,7 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 
 `PATCH /v1/synods/{name}` (ADR-049 amend) changes **ONLY `description`** groups (body `{description}`, required, 1..1024 characters); `name` (PK) immutable. Codes: `204` (success), `404 synod-not-found` (no group), `422 validation-failed` (empty `description` / limit exceeded), `400 malformed-request` (broken JSON / unknown field - including `name` in the body). builtin group is editable (`description` cosmetics, without subset/self-lockout). Audit-event `synod.updated`.
 
-### Incarnation (17) - life cycle of runtime instances, [ADR-009](../adr/0009-scenario-dsl.md)
+### Incarnation (18) - life cycle of runtime instances, [ADR-009](../adr/0009-scenario-dsl.md)
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -279,10 +279,13 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 | `POST` | `/v1/incarnations/{name}/upgrade` | `incarnation.upgrade` | `keeper.incarnation.upgrade` |
 | `DELETE` | `/v1/incarnations/{name}` | `incarnation.destroy` | `keeper.incarnation.destroy` |
 | `PUT` | `/v1/incarnations/{name}/traits` | `incarnation.traits-set` | `keeper.incarnation.traits-set` |
+| `PUT` | `/v1/incarnations/{name}/label` | `incarnation.label-set` | `keeper.incarnation.label-set` |
 | `POST` | `/v1/incarnations/{name}/secrets/reveal` | `incarnation.view-secrets` | — (REST only) |
 | `GET` | `/v1/incarnations/{name}/secrets/revealable` | `incarnation.view-secrets` | — (REST only) |
 
 `PATCH /v1/incarnations/{name}/hosts` is **removed** and answers 404, together with the field it edited (`incarnation.spec.hosts[]`), the permissions `incarnation.update-hosts` / `incarnation.update` and the audit event `incarnation.hosts_updated` ([ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role), NIM-330). A declared role is an attribute of a Choir Voice: set it in a scenario with `core.choir.present` (`on: keeper`) or day-2 with `POST /v1/incarnations/{name}/choirs/{choir}/voices`. Detail - [operator-api/incarnations.md → PATCH .../hosts](operator-api/incarnations.md).
+
+`PUT /v1/incarnations/{name}/label` replaces the incarnation's display caption ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728) - free text, `null` clears it and consumers fall back to showing `name`. Permission `incarnation.label-set`, the same incarnation scope as every other mutation and **only** that gate: unlike `traits-set` below there is no second, pair-level check, because a caption is in no scope dimension and grants nobody visibility. No status gate either - it is allowed while the incarnation is `applying` or `error_locked`, since no run reads it. The caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root - `incarnation.label` does not resolve). Audit `incarnation.label_changed` (`{name, label}`), written by the handler itself. Detail - [operator-api/incarnations.md → PUT .../label](operator-api/incarnations.md).
 
 `PUT /v1/incarnations/{name}/traits` holistically replaces the operator-set trait incarnation marks (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a). The write touches that row and nothing else: member hosts neither receive a projection nor inherit the set ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Permission `incarnation.traits-set` (scope incarnation/coven/service on path-`name`, like the other incarnation mutations). Audit `incarnation.traits_changed` is written by the handler itself (payload - only old/new KEYS, not values). MCP mirror - `keeper.incarnation.traits-set`. Per-host counterpart - `POST /v1/souls/traits` (first-class, see Soul). Detail - [operator-api/incarnations.md → PUT .../traits](operator-api/incarnations.md).
 
@@ -394,7 +397,7 @@ Schedules that spawn a regular Voyage run in time (registry `cadences`). Execute
 
 **Two-level RBAC** (security-critical fail-closed, [ADR-046 §7](../adr/0046-cadence.md)): `cadence.create`/`cadence.update` gates middleware, but the recipe spawns Voyage on behalf of the creator - therefore, the create/patch handler additionally requires Voyage-permission by `kind` recipe (`scenario`→`incarnation.run`, `command`→`errand.run`), otherwise Cadence would become a privilege-escalation bypass of RBAC → `403`. `enable`/`disable` - OR gate `cadence.enable|disable` OR backcompat `cadence.update`. `/runs` (child Voyage) reuse `incarnation.history` (parity Voyage-list). **Floor limit:** `interval_seconds < 30` → `422` (sub-30s reaction - via Beacons, [ADR-030](../adr/0030-vigil-oracle.md)). Mutating routes (`create`/`update`/`delete`/`enable`/`disable`) are audited ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `list`/`get`/`runs` - read-only, no audit.
 
-### Oracle (8) - Vigil / Decree registries (event-driven monitoring), [ADR-030](../adr/0030-vigil-oracle.md)
+### Oracle (10) - Vigil / Decree registries (event-driven monitoring), [ADR-030](../adr/0030-vigil-oracle.md)
 
 CRUD registry Beacons: Vigil (Soul-side check) and Decree (rule reactor: Portent → match → enqueue scenario). `vigil.*`/`decree.*` - NoSelector. Connect only when the Oracle registry is configured. The source of truth for semantics, bodies, error codes is [operator-api/oracle.md](operator-api/oracle.md); MCP side - [mcp-tools/oracle.md](mcp-tools/oracle.md).
 
@@ -403,15 +406,17 @@ CRUD registry Beacons: Vigil (Soul-side check) and Decree (rule reactor: Portent
 | `POST` | `/v1/vigils` | `vigil.create` | `keeper.oracle.vigil.create` |
 | `GET` | `/v1/vigils` | `vigil.list` | `keeper.oracle.vigil.list` |
 | `GET` | `/v1/vigils/{name}` | `vigil.list` | `keeper.oracle.vigil.list` |
+| `PUT` | `/v1/vigils/{name}/label` | `vigil.label-set` | `keeper.oracle.vigil.label-set` |
 | `DELETE` | `/v1/vigils/{name}` | `vigil.delete` | `keeper.oracle.vigil.delete` |
 | `POST` | `/v1/decrees` | `decree.create` | `keeper.oracle.decree.create` |
 | `GET` | `/v1/decrees` | `decree.list` | `keeper.oracle.decree.list` |
 | `GET` | `/v1/decrees/{name}` | `decree.list` | `keeper.oracle.decree.list` |
+| `PUT` | `/v1/decrees/{name}/label` | `decree.label-set` | `keeper.oracle.decree.label-set` |
 | `DELETE` | `/v1/decrees/{name}` | `decree.delete` | `keeper.oracle.decree.delete` |
 
-4-segment MCP-tool `keeper.oracle.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (resource `vigil`/`decree`; one permission covers list+get). Reactor flow (Portent → match Decree → enqueue) by these permissions is **NOT controlled** - this is a machine Soul-initiated path ([rbac.md §Oracle](rbac.md)). Mutating 4 routes (vigil/decree create/delete) are audited; list/get - read-only, no audit.
+4-segment MCP-tool `keeper.oracle.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (resource `vigil`/`decree`; one permission covers list+get). Reactor flow (Portent → match Decree → enqueue) by these permissions is **NOT controlled** - this is a machine Soul-initiated path ([rbac.md §Oracle](rbac.md)). Mutating 6 routes (vigil/decree create/label-set/delete) are audited - `*.created` / `*.label_changed` / `*.deleted`; list/get - read-only, no audit.
 
-### Push-Provider (5) - registry env-payload params SSH push-flow plugins, [ADR-032](../adr/0032-push-orchestrator.md) amendment S7-2
+### Push-Provider (6) - registry env-payload params SSH push-flow plugins, [ADR-032](../adr/0032-push-orchestrator.md) amendment S7-2
 
 CRUD registry `push_providers` (per-provider params of the SSH plugin; long-term canon instead of `keeper.yml::push.providers[]`). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs. `push-provider.*` - NoSelector. Connect only when the registry is configured. The source of truth for semantics, bodies, error codes is [operator-api/push-providers.md](operator-api/push-providers.md); MCP side - [mcp-tools/push-providers.md](mcp-tools/push-providers.md).
 
@@ -421,11 +426,12 @@ CRUD registry `push_providers` (per-provider params of the SSH plugin; long-term
 | `GET` | `/v1/push-providers` | `push-provider.list` | `keeper.push-provider.list` |
 | `GET` | `/v1/push-providers/{name}` | `push-provider.read` | `keeper.push-provider.read` |
 | `PUT` | `/v1/push-providers/{name}` | `push-provider.update` | `keeper.push-provider.update` |
+| `PUT` | `/v1/push-providers/{name}/label` | `push-provider.label-set` | `keeper.push-provider.label-set` |
 | `DELETE` | `/v1/push-providers/{name}` | `push-provider.delete` | `keeper.push-provider.delete` |
 
-5 tools 1:1 `keeper.push-provider.<verb>` ↔ permission `push-provider.<verb>` ↔ REST. `read` (one entry) is separate from `list` - parallel to `operator.read`↔`operator.list`. Mutating 3 routes (`create`/`update`/`delete`) are audited; `list`/`read` - read-only, no audit. After committing the mutation - cluster-wide invalidate via Redis pub/sub `push-providers:changed`.
+6 tools 1:1 `keeper.push-provider.<verb>` ↔ permission `push-provider.<verb>` ↔ REST. `read` (one entry) is separate from `list` - parallel to `operator.read`↔`operator.list`. Mutating 4 routes (`create`/`update`/`label-set`/`delete`) are audited; `list`/`read` - read-only, no audit. After committing the mutation - cluster-wide invalidate via Redis pub/sub `push-providers:changed`.
 
-### Herald (5) - register of delivery channels for notifications of runs, [ADR-052](../adr/0052-herald-notifications.md)
+### Herald (6) - register of delivery channels for notifications of runs, [ADR-052](../adr/0052-herald-notifications.md)
 
 CRUD registry `heralds` (notification delivery channel; webhook in MVP). SSRF circuit (https-only + deny private IPs) is enabled by default, disabled by per-Herald opt-out flags `config.http_allowed` / `config.allow_private`; `secret_ref` - vault-ref to signing-token (webhook signature `X-SoulStack-Signature: sha256=<hex>`, HMAC-SHA256). `herald.*` - NoSelector. Connect only when the registry is configured (`router.go`: `if heraldH != nil`). Source of truth for semantics, bodies, error codes - [operator-api/heralds.md](operator-api/heralds.md); MCP side - [mcp-tools/heralds.md](mcp-tools/heralds.md).
 
@@ -435,11 +441,12 @@ CRUD registry `heralds` (notification delivery channel; webhook in MVP). SSRF ci
 | `GET` | `/v1/heralds` | `herald.list` | `keeper.herald.list` |
 | `GET` | `/v1/heralds/{name}` | `herald.read` | `keeper.herald.read` |
 | `PUT` | `/v1/heralds/{name}` | `herald.update` | `keeper.herald.update` |
+| `PUT` | `/v1/heralds/{name}/label` | `herald.label-set` | `keeper.herald.label-set` |
 | `DELETE` | `/v1/heralds/{name}` | `herald.delete` | `keeper.herald.delete` |
 
-5 tools 1:1 `keeper.herald.<verb>` ↔ permission `herald.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/heralds*`. `read` is separate from `list` (parallel `operator.read`↔`operator.list`). Mutating 3 routes (`create`/`update`/`delete`) are audited - audit events `herald.created` / `herald.updated` / `herald.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `list`/`read` - read-only, no audit. `PUT` - replace semantics (complete replacement of mutable fields, not PATCH), like Push-Provider. After committing the mutation - cluster-wide invalidate dispatcher cache via Redis pub/sub `herald:invalidate`. Delivery terminals (`herald.delivered` / `herald.failed`) are written by workers, not CRUD routes.
+6 tools 1:1 `keeper.herald.<verb>` ↔ permission `herald.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/heralds*`. `read` is separate from `list` (parallel `operator.read`↔`operator.list`). Mutating 4 routes (`create`/`update`/`label-set`/`delete`) are audited - audit events `herald.created` / `herald.updated` / `herald.label_changed` / `herald.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `list`/`read` - read-only, no audit. `PUT` - replace semantics (complete replacement of mutable fields, not PATCH), like Push-Provider. After committing the mutation - cluster-wide invalidate dispatcher cache via Redis pub/sub `herald:invalidate`. Delivery terminals (`herald.delivered` / `herald.failed`) are written by workers, not CRUD routes.
 
-### Tiding (5) - register of notification subscription rules, [ADR-052](../adr/0052-herald-notifications.md)
+### Tiding (6) - register of notification subscription rules, [ADR-052](../adr/0052-herald-notifications.md)
 
 CRUD registry `tidings` (subscription rule: which `event_types` to respond to → which Herald to deliver). `event_types` - area-glob in the scope of runs (`scenario_run.*` / `command_run.*` / `voyage.*` / `cadence.*` + the point type `incarnation.run_completed`); arbitrary wildcard is prohibited. `herald` - FK to existing Herald. Opt. selector `task` (address `register ∪ id`) subscribes to change a specific task and matches only `incarnation.run_completed` by its `changed_tasks` ([ADR-052 §l](../adr/0052-herald-notifications.md)). `tiding.*` - NoSelector. Connect only when the registry is configured. The source of truth for semantics, bodies, error codes is [operator-api/tidings.md](operator-api/tidings.md); MCP side - [mcp-tools/tidings.md](mcp-tools/tidings.md).
 
@@ -449,9 +456,10 @@ CRUD registry `tidings` (subscription rule: which `event_types` to respond to �
 | `GET` | `/v1/tidings` | `tiding.list` | `keeper.tiding.list` |
 | `GET` | `/v1/tidings/{name}` | `tiding.read` | `keeper.tiding.read` |
 | `PUT` | `/v1/tidings/{name}` | `tiding.update` | `keeper.tiding.update` |
+| `PUT` | `/v1/tidings/{name}/label` | `tiding.label-set` | `keeper.tiding.label-set` |
 | `DELETE` | `/v1/tidings/{name}` | `tiding.delete` | `keeper.tiding.delete` |
 
-5 tools 1:1 `keeper.tiding.<verb>` ↔ permission `tiding.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/tidings*`. `read` is separate from `list`. Mutating 3 routes are audited - audit events `tiding.created` / `tiding.updated` / `tiding.deleted`; `list`/`read` - read-only, no audit. `PUT` - replace semantics (like Herald). Link to missing Herald (`herald` FK) on create/update → `404`. Demolition of the Herald channel cascades away its Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Valid `event_types` subscriptions - from the `GET /v1/event-types` directory (UI fetches, not hardcode); the same scope validates CRUD Tiding (arbitrary wildcard / type outside scope → `422`).
+6 tools 1:1 `keeper.tiding.<verb>` ↔ permission `tiding.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/tidings*`. `read` is separate from `list`. Mutating 4 routes are audited - audit events `tiding.created` / `tiding.updated` / `tiding.label_changed` / `tiding.deleted`; `list`/`read` - read-only, no audit. `PUT` - replace semantics (like Herald). Link to missing Herald (`herald` FK) on create/update → `404`. Demolition of the Herald channel cascades away its Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Valid `event_types` subscriptions - from the `GET /v1/event-types` directory (UI fetches, not hardcode); the same scope validates CRUD Tiding (arbitrary wildcard / type outside scope → `422`).
 
 ### Choir (6) - named topology of hosts within an incarnation, [ADR-044](../adr/0044-choir.md)
 
@@ -480,26 +488,28 @@ Self-describing read routes for permission-aware UI. **Auth-only** (`RequireJWT`
 
 `GET /v1/permissions` - machine-readable RBAC-permissions directory (source - `rbac.catalog.go`), UI fetches real names to assign role rights. `GET /v1/event-types` - machine-readable directory of event-types valid for [Tiding](operator-api/tidings.md) subscription (source - `herald/eventtypes.go`, the same scope that validates CRUD Tiding); UI Tiding forms fetch valid types instead of hardcode. Body - two groups: `areas` (areas of area-glob-subscription, finished form `<area>.*` - `scenario_run.*`/`command_run.*`/`voyage.*`/`cadence.*`) + `point_events` (dot types outside area-glob - `incarnation.run_completed`). `GET /v1/me/permissions` — effective rights of the current Archon (show/hide buttons). All three are always mounted (static from packages `rbac`/`herald` / snapshot of the enforcer, without external dependencies).
 
-### Cloud (8) - Cloud-Provider / Cloud-Profile registries, [ADR-017](../adr/0017-keeper-side-core.md) / [cloud.md](cloud.md)
+### Cloud (10) - Cloud-Provider / Cloud-Profile registries, [ADR-017](../adr/0017-keeper-side-core.md) / [cloud.md](cloud.md)
 
-CRUD registries `providers` (cloud accounting) and `profiles` (VM-spec on top of Provider) in Postgres, managed via OpenAPI/MCP. `provider.*` / `profile.*` - NoSelector (CRUD operates on the registry itself, like `service.*` / `push-provider.*`). **Immutability:** `update`-operations **no** - changing parameters = `delete` + `create` (protection against partial mutation spec of already-living VMs), so read-visibility gates one permission `provider.read` / `profile.read`. `credentials_ref` accepts the string `vault:<mount>/<path>`; The credentials API themselves **DO NOT resolve or return** (secret hygiene). Source of truth for semantics, bodies - [cloud.md → Provider and Profile](cloud.md); MCP side - [mcp-tools.md → Cloud](mcp-tools.md#cloud-8). Routes are mounted only when the registry is configured (`Deps.ProviderSvc` / `Deps.ProfileSvc`).
+CRUD registries `providers` (cloud accounting) and `profiles` (VM-spec on top of Provider) in Postgres, managed via OpenAPI/MCP. `provider.*` / `profile.*` - NoSelector (CRUD operates on the registry itself, like `service.*` / `push-provider.*`). **Immutability:** `update`-operations **no** - changing parameters = `delete` + `create` (protection against partial mutation spec of already-living VMs), so read-visibility gates one permission `provider.read` / `profile.read`. The **one** mutation is the display caption ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728): the immutability argument is about a live cloud spec, and a caption is the one field for which it does not apply, because nothing reads it - not a Vault path segment, not an RBAC scope, not the self-onboard FQDN prediction. `credentials_ref` accepts the string `vault:<mount>/<path>`; The credentials API themselves **DO NOT resolve or return** (secret hygiene). Source of truth for semantics, bodies - [cloud.md → Provider and Profile](cloud.md); MCP side - [mcp-tools.md → Cloud](mcp-tools.md#cloud-10). Routes are mounted only when the registry is configured (`Deps.ProviderSvc` / `Deps.ProfileSvc`).
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
 | `POST` | `/v1/providers` | `provider.create` | `keeper.provider.create` |
 | `GET` | `/v1/providers` | `provider.read` | `keeper.provider.list` |
 | `GET` | `/v1/providers/{name}` | `provider.read` | `keeper.provider.get` |
+| `PUT` | `/v1/providers/{name}/label` | `provider.label-set` | `keeper.provider.label-set` |
 | `DELETE` | `/v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` |
 | `POST` | `/v1/profiles` | `profile.create` | `keeper.profile.create` |
 | `GET` | `/v1/profiles` | `profile.read` | `keeper.profile.list` |
 | `GET` | `/v1/profiles/{name}` | `profile.read` | `keeper.profile.get` |
+| `PUT` | `/v1/profiles/{name}/label` | `profile.label-set` | `keeper.profile.label-set` |
 | `DELETE` | `/v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` |
 
-Permission mapping: `POST`→`<resource>.create`, `GET`(list + get-`{name}`)→`<resource>.read`, `DELETE`→`<resource>.delete`. Mutating 4 routes (create/delete for each entity) are audited - audit events `provider.created` / `provider.deleted` / `profile.created` / `profile.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `provider.read`/`profile.read` (list + get) - read-only, without audit (audit Profile-create only writes `params` keys, not values). Boundary cases: `409 provider-already-exists` / `409 profile-already-exists` per double `name`; `409 provider-has-profiles` when deleting a Provider with associated Profiles (FK `ON DELETE RESTRICT`, migration 020 - first delete dependent Profiles); `422 validation-failed` to the Profile link to a non-existent Provider (FK) or broken `name`/`type`/`region`/`credentials_ref`; `404 not-found` on get/delete missing entry. 3-segment MCP-tool `keeper.<resource>.<verb>` ↔ 2-segment permission `<resource>.<verb>` (read-tool named `get`, permission verb - `read`).
+Permission mapping: `POST`→`<resource>.create`, `GET`(list + get-`{name}`)→`<resource>.read`, `DELETE`→`<resource>.delete`. Mutating 6 routes (create/label-set/delete for each entity) are audited - audit events `provider.created` / `provider.label_changed` / `provider.deleted` / `profile.created` / `profile.label_changed` / `profile.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `provider.read`/`profile.read` (list + get) - read-only, without audit (audit Profile-create only writes `params` keys, not values). Boundary cases: `409 provider-already-exists` / `409 profile-already-exists` per double `name`; `409 provider-has-profiles` when deleting a Provider with associated Profiles (FK `ON DELETE RESTRICT`, migration 020 - first delete dependent Profiles); `422 validation-failed` to the Profile link to a non-existent Provider (FK) or broken `name`/`type`/`region`/`credentials_ref`; `404 not-found` on get/delete missing entry. 3-segment MCP-tool `keeper.<resource>.<verb>` ↔ 2-segment permission `<resource>.<verb>` (read-tool named `get`, permission verb - `read`).
 
-### Service (9) - registry of Services (CRUD + git projections), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) / [service/manifest.md](../service/manifest.md)
+### Service (10) - registry of Services (CRUD + git projections), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) / [service/manifest.md](../service/manifest.md)
 
-Registry `service_registry`: directory `services[]` is moved from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). `service.*` - NoSelector (CRUD operates on the registry itself). The source of truth for semantics, bodies, image invalidation is `serviceregistry.Service`; MCP side - [mcp-tools.md → Service](mcp-tools.md#service-4).
+Registry `service_registry`: directory `services[]` is moved from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). `service.*` - NoSelector (CRUD operates on the registry itself). The source of truth for semantics, bodies, image invalidation is `serviceregistry.Service`; MCP side - [mcp-tools.md → Service](mcp-tools.md#service-5).
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -507,13 +517,14 @@ Registry `service_registry`: directory `services[]` is moved from static `keeper
 | `GET` | `/v1/services` | `service.list` | `keeper.service.list` |
 | `GET` | `/v1/services/{name}` | `service.list` | `keeper.service.list` |
 | `PATCH` | `/v1/services/{name}` | `service.update` | `keeper.service.update` |
+| `PUT` | `/v1/services/{name}/label` | `service.label-set` | `keeper.service.label-set` |
 | `DELETE` | `/v1/services/{name}` | `service.deregister` | `keeper.service.deregister` |
 | `GET` | `/v1/services/{name}/refs` | `service.list` | — (REST only) |
 | `GET` | `/v1/services/{name}/scenarios` | `service.list` | — (REST only) |
 | `GET` | `/v1/services/{name}/state-schema` | `service.list` | — (REST only) |
 | `GET` | `/v1/services/{name}/dependencies` | `service.list` | — (REST only) |
 
-Permission mapping: `POST`→`service.register`, `GET`(list + get-`{name}`)→`service.list`, `PATCH`→`service.update`, `DELETE`→`service.deregister`. Mutating 3 routes (`register`/`update`/`deregister`) are audited ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); readings - read-only, without audit. Four git projections (`/refs` - tags and branches for Upgrade-modal; `/scenarios` - dropdown Run-modal; `/state-schema` - Schema explorer; `/dependencies` - destiny/module dependencies) reuse `service.list` (projections of one Service record, without separate permission and without MCP-tools); if the external git source fails - `502`. Routes are connected only when the Service registry is configured.
+Permission mapping: `POST`→`service.register`, `GET`(list + get-`{name}`)→`service.list`, `PATCH`→`service.update`, `PUT {name}/label`→`service.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md): the display caption, narrower than `update` — it re-points nothing and invalidates no artifact cache), `DELETE`→`service.deregister`. Mutating 4 routes (`register`/`update`/`label-set`/`deregister`) are audited ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); readings - read-only, without audit. Four git projections (`/refs` - tags and branches for Upgrade-modal; `/scenarios` - dropdown Run-modal; `/state-schema` - Schema explorer; `/dependencies` - destiny/module dependencies) reuse `service.list` (projections of one Service record, without separate permission and without MCP-tools); if the external git source fails - `502`. Routes are connected only when the Service registry is configured.
 
 **The scenario directory `GET /v1/services/{name}/scenarios`** contains for each scenario the field **`runnable: bool`** - the sign "launched by the operator from the Run-form". Marked by Keeper according to the canon of the scenario package (`IsRunnableScenario`), not from the manifest: `create` = `true`, `destroy` = `false` (special deletion flow via `DELETE /v1/incarnations/{name}`), operational scenarios (including `converge`) = `true`. The UI filters the Run-form by `runnable`, and not by the name hardcode ([ADR-042](../adr/0042-backend-driven-ui.md), [architecture.md → Service](../architecture.md)).
 
@@ -564,13 +575,14 @@ Machine-readable directory of core modules (doc-data from core-registry) + activ
 
 All three read-only/resolve routes are without audit (pattern `service.list` / `soul.list`). Selector - NoSelector (global directory, resolve cluster-wide by `souls`).
 
-### Augur (7) - Omen / Rite registries, [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
+### Augur (8) - Omen / Rite registries, [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
 | `POST` | `/v1/augur/omens` | `omen.create` | `keeper.augur.omen.create` |
 | `GET` | `/v1/augur/omens` | `omen.list` | `keeper.augur.omen.list` |
 | `GET` | `/v1/augur/omens/{name}` | `omen.list` | `keeper.augur.omen.list` |
+| `PUT` | `/v1/augur/omens/{name}/label` | `omen.label-set` | `keeper.augur.omen.label-set` |
 | `DELETE` | `/v1/augur/omens/{name}` | `omen.delete` | `keeper.augur.omen.delete` |
 | `POST` | `/v1/augur/rites` | `rite.create` | `keeper.augur.rite.create` |
 | `GET` | `/v1/augur/rites` | `rite.list` | `keeper.augur.rite.list` |
@@ -586,7 +598,7 @@ All three read-only/resolve routes are without audit (pattern `service.list` / `
 
 Read-only event feed `audit_log` for UI iteration 2 (placeholder `/audit`). The Read-endpoint itself is NOT written to audit-trail (we avoid recursion - each GET would double the table). MCP-tool-symmetry deferred.
 
-**Total: 4 health/meta on the API facade (`/healthz`, `/readyz`, `/openapi.yaml`, `/openapi.json`) + 132 endpoints under permissions/auth-only** (Operator 5 + Audit 1 + Role 6 + Synod 8 + Incarnation 15 + Runs 2 + Choir 6 + Soul 8 + Errand 4 + Plugin 3 + Sigil-key 4 + Service 9 + Module-catalog 3 + Self-describing 3 + Augur 7 + Oracle 8 + Push 2 + Push-runs 1 + Push-Provider 5 + Cloud 8 + Herald 5 + Tiding 5 + Voyage 6 + Cadence 8) **= 132 route in this table.** `/metrics` is **not included in this facade account** - Prometheus endpoint is placed on a separate metrics-listener (`listen.metrics.addr`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)), not mounted in `router.go` facade. (Voyage "(6)" - five MCP-paired/RBAC-by-kind lines + sixth REST route `GET /v1/voyages/{id}/targets`, read/REST-only. Augur - 7 routes: 4 omen + 3 rite. Cloud - 8 routes: 4 provider (create/list/get/delete) + 4 profile, implemented and mounted.)
+**Total: 4 health/meta on the API facade (`/healthz`, `/readyz`, `/openapi.yaml`, `/openapi.json`) + 142 endpoints under permissions/auth-only** (Operator 5 + Audit 1 + Role 6 + Synod 8 + Incarnation 16 + Runs 2 + Choir 6 + Soul 8 + Errand 4 + Plugin 3 + Sigil-key 4 + Service 10 + Module-catalog 3 + Self-describing 3 + Augur 8 + Oracle 10 + Push 2 + Push-runs 1 + Push-Provider 6 + Cloud 10 + Herald 6 + Tiding 6 + Voyage 6 + Cadence 8) **= 142 route in this table.** `/metrics` is **not included in this facade account** - Prometheus endpoint is placed on a separate metrics-listener (`listen.metrics.addr`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)), not mounted in `router.go` facade. (Voyage "(6)" - five MCP-paired/RBAC-by-kind lines + sixth REST route `GET /v1/voyages/{id}/targets`, read/REST-only. Augur - 8 routes: 5 omen + 3 rite. Cloud - 10 routes: 5 provider (create/list/get/label-set/delete) + 5 profile, implemented and mounted.) **+10 since NIM-728**: one `PUT /v1/<collection>/{name}/label` per registry that carries a display caption ([ADR-0085](../adr/0085-entity-id-and-label.md)) - incarnation, service, provider, profile, push-provider, omen, herald, tiding, vigil, decree.
 
 > **Unmixed routes (TODO - sections have not yet been written).** In [`router.go`](../../keeper/internal/api/router.go) mounted, but not yet summarized in the tables above: `GET /v1/souls/stats` (Souls Overview unit, `soul.list`), `POST /v1/souls/traits` (bulk trait-assign onto HOSTS, `soul.traits-assign`; first-class per [ADR-080](../adr/0080-label-inheritance-union.md), the per-host counterpart of `PUT /v1/incarnations/{name}/traits`), `GET`/`PUT /v1/provisioning-policy` (`provisioning.read`/`provisioning.update`, [ADR-058](../adr/0058-operator-auth-ldap-oidc.md) Part B), `GET /v1/herald-types` (auth-only Herald channel type directory, [ADR-042](../adr/0042-backend-driven-ui.md)-pattern), `GET /v1/cluster` (HA-topology of the Keeper cluster, existence-gate `soul.list`). Login routes `/auth/ldap/login` + `/auth/oidc/{login,callback}` - outside `/v1` (public login before JWT, parity `/healthz`; ADR-058) and are not included in the `/v1` route account. Forms and semantics - in the derivative [`openapi.yaml`](openapi.yaml); These routes are not included in the counter above.
 
@@ -626,7 +638,7 @@ Moved to a domain file - [operator-api/push.md → Endpoint sections](operator-a
 
 ### Cloud endpoints
 
-CRUD registries Cloud-Provider / Cloud-Profile - `POST/GET/DELETE /v1/providers*` + `POST/GET/DELETE /v1/profiles*` (without `PUT`/`PATCH`: Provider/Profile are immutable, changing parameters = `delete` + `create`). Provider-body - `name`/`type`/`region`/`credentials_ref` (`credentials_ref` - line `vault:<mount>/<path>`, the API secret does not resolve or return); Profile body - `name`/`provider` (FK on Provider)/`params`/`cloud_init`. Source of truth for semantics, bodies, edge cases (`409` double-`name`, `409 provider-has-profiles` FK RESTRICT, `422` reference to a non-existent Provider) and Credentials-flow - [cloud.md → Provider and Profile](cloud.md). MCP side - [mcp-tools.md → Cloud](mcp-tools.md#cloud-8).
+CRUD registries Cloud-Provider / Cloud-Profile - `POST/GET/DELETE /v1/providers*` + `POST/GET/DELETE /v1/profiles*` (without `PUT`/`PATCH`: Provider/Profile are immutable, changing parameters = `delete` + `create`). Provider-body - `name`/`type`/`region`/`credentials_ref` (`credentials_ref` - line `vault:<mount>/<path>`, the API secret does not resolve or return); Profile body - `name`/`provider` (FK on Provider)/`params`/`cloud_init`. Source of truth for semantics, bodies, edge cases (`409` double-`name`, `409 provider-has-profiles` FK RESTRICT, `422` reference to a non-existent Provider) and Credentials-flow - [cloud.md → Provider and Profile](cloud.md). MCP side - [mcp-tools.md → Cloud](mcp-tools.md#cloud-10).
 
 ### Voyage endpoints
 

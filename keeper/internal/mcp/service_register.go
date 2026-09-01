@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -23,7 +24,10 @@ const serviceRegistryNotConfigured = "service registry is not configured"
 // ServiceEntry]: name + git/ref/refresh + audit metadata. created_by_aid /
 // updated_by_aid / refresh are optional (omitempty; nil = NULL in the DB).
 type serviceView struct {
-	Name         string  `json:"name"`
+	Name string `json:"name"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	// NOT segment 2 of a derived secret path; `name` is.
+	Label        *string `json:"label,omitempty"`
 	Git          string  `json:"git"`
 	Ref          string  `json:"ref"`
 	Refresh      *string `json:"refresh,omitempty"`
@@ -38,6 +42,7 @@ type serviceView struct {
 func toServiceView(e *serviceregistry.ServiceEntry) serviceView {
 	return serviceView{
 		Name:         e.Name,
+		Label:        e.Label,
 		Git:          e.Git,
 		Ref:          e.Ref,
 		Refresh:      e.Refresh,
@@ -48,10 +53,38 @@ func toServiceView(e *serviceregistry.ServiceEntry) serviceView {
 	}
 }
 
+// callServiceSetLabel — keeper.service.label-set, the MCP mirror of
+// PUT /v1/services/{name}/label (ADR-0085). Narrower than keeper.service.update,
+// which re-points git/ref and invalidates every artifact cache.
+func (h *Handler) callServiceSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[serviceView]{
+		tool:          "keeper.service.label-set",
+		resource:      "service",
+		configured:    h.deps.ServiceSvc != nil,
+		notConfigured: serviceRegistryNotConfigured,
+		validName:     serviceregistry.ValidName,
+		namePattern:   serviceregistry.NamePattern,
+		set: func(ctx context.Context, name string, label *string) (serviceView, error) {
+			entry, err := h.deps.ServiceSvc.SetServiceLabel(ctx, name, label)
+			if err != nil {
+				return serviceView{}, err
+			}
+			return toServiceView(entry), nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, serviceregistry.ErrNotFound) },
+		notFoundf:  func(name string) string { return "service " + name + " not found" },
+		failMsg:    "set service label failed",
+		event:      audit.EventServiceLabelChanged,
+	})
+}
+
 // serviceRegisterArgs — arguments for keeper.service.register
 // (schemaServiceRegisterInput): name + git + ref are required, refresh is optional.
 type serviceRegisterArgs struct {
-	Name    string  `json:"name"`
+	Name string `json:"name"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.service.label-set.
+	Label   *string `json:"label"`
 	Git     string  `json:"git"`
 	Ref     string  `json:"ref"`
 	Refresh *string `json:"refresh"`
@@ -93,6 +126,7 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 	callerAID := claims.Subject
 	entry, err := h.deps.ServiceSvc.CreateService(ctx, serviceregistry.CreateServiceInput{
 		Name:      a.Name,
+		Label:     a.Label,
 		Git:       a.Git,
 		Ref:       a.Ref,
 		Refresh:   a.Refresh,
@@ -114,6 +148,7 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 	// ref, created_by_aid}. The git URL isn't a secret.
 	h.writeAudit(audit.EventServiceRegistered, callerAID, map[string]any{
 		"name":           entry.Name,
+		"label":          entry.Label,
 		"git":            entry.Git,
 		"ref":            entry.Ref,
 		"created_by_aid": callerAID,

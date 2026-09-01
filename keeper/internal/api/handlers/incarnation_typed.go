@@ -61,7 +61,12 @@ type IncarnationCreateView struct {
 // fields and calls CreateTyped with this flat model. Covens/Input — nil = "not set" (parity with
 // the legacy omitempty decode).
 type IncarnationCreateRequestInput struct {
-	Name    string
+	Name string
+	// Label — optional display caption (ADR-0085): free text, changed afterwards
+	// by PUT /v1/incarnations/{name}/label. nil/blank → NULL, and the consumer
+	// shows Name. Unlike Name it is NOT composed by a `name_template`: a template
+	// composes an identifier, and a caption is not one.
+	Label   *string
 	Service string
 	Covens  []string
 	Input   map[string]any
@@ -228,6 +233,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
 		Name:               name,
+		Label:              req.Label,
 		Service:            req.Service,
 		ServiceVersion:     serviceVersion,
 		StateSchemaVersion: 1,
@@ -997,6 +1003,70 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 	// schema-aware masking of spec/state in the reply (the same detailed view as GET).
 	schema := h.secretSchemaForIncarnation(ctx, res.Incarnation)
 	return toIncarnationGetView(res.Incarnation, schema), nil
+}
+
+// --- SetLabel (SELF-AUDIT incarnation.label_changed) ------------------
+
+// SetLabelTyped — domain function PUT /v1/incarnations/{name}/label (SELF-AUDIT:
+// the handler writes incarnation.label_changed ITSELF, like the traits route
+// beside it, because the incarnation routes are mounted under a scope selector
+// rather than the NoSelector audit middleware groups the other registries use).
+//
+// Replaces the display caption and returns the same full view a GET returns.
+// Permission incarnation.label-set (route middleware, with the same
+// incarnation scope as every other incarnation mutation).
+//
+// Deliberately NARROWER than SetTraitsTyped beside it, and the difference is the
+// point of this whole field: a trait pair is a scope dimension, so stamping one
+// hands every role scoped by it sight of this incarnation, and gate (b) exists
+// to stop an operator stamping a pair they do not hold. A caption is in no
+// dimension of anything — not a scope, not a Vault path, not the CEL root — so
+// there is no second gate to apply and nothing an operator could reach through
+// it.
+//
+// No status gate either: the write touches a column no run reads, so a caption
+// can be fixed while the incarnation is `applying` or `error_locked`.
+func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Claims, name string, req LabelSetInput) (IncarnationGetView, error) {
+	var zero IncarnationGetView
+
+	if !incarnation.ValidName(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	}
+	// req.Label is NOT validated: free text with capitals, spaces and punctuation
+	// is what the field carries (ADR-0085).
+
+	if err := incarnation.UpdateLabel(ctx, h.db, name, req.Label); err != nil {
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
+		}
+		h.logger.Error("incarnation.label-set: failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "update incarnation label failed")
+	}
+
+	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	if err != nil {
+		h.logger.Error("incarnation.label-set: re-read failed",
+			slog.String("name", name), slog.Any("error", err))
+		return zero, incProblem(problem.TypeInternalError, "update incarnation label failed")
+	}
+
+	if h.auditW != nil {
+		_ = h.auditW.Write(ctx, &audit.Event{
+			EventType: audit.EventIncarnationLabelChanged,
+			Source:    apimiddleware.ScenarioInvocationSource(ctx),
+			ArchonAID: claims.Subject,
+			// Parity with handlers.LabelWriteReply.AuditPayload: the identifier
+			// addressed and the caption as it now reads (explicitly null when cleared).
+			Payload: map[string]any{
+				"name":  name,
+				"label": inc.Label,
+			},
+		})
+	}
+
+	schema := h.secretSchemaForIncarnation(ctx, inc)
+	return toIncarnationGetView(inc, schema), nil
 }
 
 // --- Get / List / History (READ, no audit) ---------------------------

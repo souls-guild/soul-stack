@@ -66,8 +66,13 @@ func (f *fakeProfilePool) QueryRow(_ context.Context, sql string, args ...any) p
 		}
 		var params map[string]any
 		_ = json.Unmarshal(args[2].([]byte), &params)
+		var label *string
+		if len(args) > 5 && args[5] != nil {
+			s := args[5].(string)
+			label = &s
+		}
 		f.entries[name] = &profile.Profile{
-			Name: name, Provider: providerName, Params: params,
+			Name: name, Label: label, Provider: providerName, Params: params,
 			CloudInit: cloudInit, CreatedByAID: createdBy, CreatedAt: now,
 		}
 		return scanRowProv{values: []any{now}}
@@ -97,7 +102,7 @@ func profileScanValues(p *profile.Profile) []any {
 	if p.Params != nil {
 		paramsBytes, _ = json.Marshal(p.Params)
 	}
-	return []any{p.Name, p.Provider, paramsBytes, p.CloudInit, p.CreatedByAID, p.CreatedAt}
+	return []any{p.Name, p.Provider, paramsBytes, p.CloudInit, p.CreatedByAID, p.CreatedAt, p.Label}
 }
 
 func newProfileHandler(t *testing.T, pool *fakeProfilePool) *ProfileHandler {

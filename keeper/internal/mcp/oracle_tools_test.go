@@ -173,22 +173,24 @@ func subjectTCols(sel subject.Selector) []any {
 	}
 }
 
-// vigilTRow — one `vigils` row in vigilColumns order (14 values).
+// vigilTRow — one `vigils` row in vigilColumns order (15 values). The trailing
+// nil is `label` (ADR-0085): the display caption, unset in these fixtures.
 func vigilTRow(name, interval, check string, sel subject.Selector) []any {
 	now := time.Now()
 	row := []any{name}
 	row = append(row, subjectTCols(sel)...)
-	return append(row, interval, check, []byte("{}"), true, now, now, nil)
+	return append(row, interval, check, []byte("{}"), true, now, now, nil, nil)
 }
 
-// decreeTRow — one `decrees` row in decreeColumns order (17 values). The subject
+// decreeTRow — one `decrees` row in decreeColumns order (18 values). The subject
 // columns sit between where_cel and incarnation_name — the rule's WHO, opposite
-// the incarnation_name that names its target.
+// the incarnation_name that names its target. The trailing nil is `label`
+// (ADR-0085): the display caption, unset in these fixtures.
 func decreeTRow(name, onBeacon, incarnation, scenario string, sel subject.Selector) []any {
 	now := time.Now()
 	row := []any{name, onBeacon, nil}
 	row = append(row, subjectTCols(sel)...)
-	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil)
+	return append(row, incarnation, scenario, []byte("{}"), "0s", true, now, now, nil, nil)
 }
 
 // --- harness ---

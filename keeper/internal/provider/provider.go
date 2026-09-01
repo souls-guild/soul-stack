@@ -52,10 +52,25 @@ func ValidFQDNSuffix(suffix string) bool { return fqdnSuffixRe.MatchString(suffi
 
 // Provider is the runtime representation of a `providers` registry row.
 type Provider struct {
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Region         string `json:"region"`
-	CredentialsRef string `json:"credentials_ref"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead. It participates in nothing derived — in
+	// particular NOT the `<entity>` segment of `secret/provider/<entity>/
+	// credentials`, which is built from Name alone (guarded by
+	// label_invariant_guard_test.go).
+	//
+	// The self-onboard FQDN prediction `<name>-<index>.<fqdn_suffix>` does not
+	// read this field either, and does not read [Provider.Name] — its `<name>` is
+	// the `core.cloud.provisioned` step's own `name` param
+	// (keeper/internal/coremod/cloud/provisioned.go); this row contributes only
+	// [Provider.FQDNSuffix].
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	Label          *string `json:"label,omitempty"`
+	Type           string  `json:"type"`
+	Region         string  `json:"region"`
+	CredentialsRef string  `json:"credentials_ref"`
 	// FQDNSuffix is the provider VM FQDN suffix (self-onboard option T,
 	// ADR-017(h)): Keeper predicts SID=FQDN as
 	// `<name>-<index>.<FQDNSuffix>`. nil means the provider has no predictable

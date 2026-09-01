@@ -139,7 +139,23 @@ func ParseProvisioningMethods(csv string) (map[string]bool, error) {
 // in the DB). CreatedByAID / UpdatedByAID — AID of the author/last editor
 // operator; nil = NULL (seed / no initiating Archon / before the first update).
 type ServiceEntry struct {
-	Name         string    `json:"name"`
+	Name string `json:"name"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetServiceLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows Name instead.
+	//
+	// It participates in nothing derived, and here that is the sharpest case in
+	// the platform: Name is segment 2 of EVERY derived secret path
+	// (`<mount>/<service>/<incarnation>/<state-field>[/<key>]`,
+	// [ADR-0083] §1), substituted verbatim, and it is the cache directory a
+	// service's snapshots live under. A caption that reached either would orphan
+	// every password already issued under the old spelling, silently. Guarded by
+	// keeper/internal/coremod/state/label_invariant_guard_test.go and
+	// keeper/internal/artifact/label_invariant_guard_test.go.
+	//
+	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
+	// [ADR-0083]: ../../../docs/adr/0083-declared-secret-state-fields.md
+	Label        *string   `json:"label,omitempty"`
 	Git          string    `json:"git"`
 	Ref          string    `json:"ref"`
 	Refresh      *string   `json:"refresh,omitempty"`

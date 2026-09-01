@@ -56,6 +56,16 @@ Permission: `herald.update`. MCP-tool: `keeper.herald.update`. **Replace** - bod
 
 **Response `200 Herald`.** Errors: `400`, `404 not-found`, `422 validation-failed`. Audit: `herald.updated`.
 
+### `PUT /v1/heralds/{name}/label` — set the display caption
+
+Permission: `herald.label-set`. MCP-tool: `keeper.herald.label-set`. OperationID: `setHeraldLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
+
+Deliberately narrower than `PUT /v1/heralds/{name}` above, which REPLACES the channel: granting a caption edit through that one would have granted a rewrite of `secret_ref`. And the caption is **not** the `<entity>` segment of `secret/herald/<entity>/<field>` — `name` is — which matters more here than anywhere else: that path is one hop from the registry row with nothing in between to notice, and `secretwrite` replaces rather than merges, so a caption there would orphan the channel's signing secret in silence.
+
+**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
+
+**Response `200 Herald`** — the channel as it now reads. Errors: `400`, `403`, `404 not-found`, `422` (invalid path-`name`). Audit: `herald.label_changed`, payload `{name, label}` (`label` explicitly `null` when cleared).
+
 ### `DELETE /v1/heralds/{name}` — delete channel
 
 Permission: `herald.delete`. MCP-tool: `keeper.herald.delete`. Cascadingly demolishes associated Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Response `204`; `404 not-found`. Audit: `herald.deleted`.

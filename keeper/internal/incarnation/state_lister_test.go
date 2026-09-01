@@ -105,6 +105,7 @@ func incToStaticRow(inc *Incarnation) staticRow {
 		[]byte("{}"), // traits
 		"create",     // created_scenario
 		nil,          // applying_apply_id
+		nil,          // label (ADR-0085): unset here, reads NULL
 	}}
 }
 
