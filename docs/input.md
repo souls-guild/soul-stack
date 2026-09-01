@@ -79,7 +79,7 @@ The fallback literal is selected by the `type` parameter (`''` / `{}` / `[]` / `
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `type` | string | — *(required)* | Value type. See table above. |
-| `required` | boolean | `false` | The parameter is required **unconditionally**. `false` - absence allowed. |
+| `required` | boolean | `false` | The parameter is required **unconditionally**. `false` - absence allowed. This boolean is the **only** form of requiredness in the dialect — there is no object-level list `required: [names]` at any level, and none in `state_schema` either ([ADR-0086](adr/0086-one-schema-dialect.md)). |
 | `required_when` | string | — | The parameter is required **conditionally** - when the CEL predicate over `input.*` is true. See ["Conditional Mandatory"](#conditional-required_when). |
 | `default` | (by `type`) | — | Default value if no parameter is passed. Must match `type` (linter checks). Implies `required: false`. |
 | `prefill_from_state` | string | — | The path `state.<path>` to `incarnation.state`, whose **current** value the UI substitutes as a pre-fill day-2 form. This is a UI tooltip, **not** part of the value resolver (NOT a default). See ["Pre-fill from state"](#pre-fill-from-state-prefill_from_state). |
@@ -169,12 +169,29 @@ types:
   AclUser:
     type: object
     additional_properties: false
-    required: [name, perms, state]
     properties:
-      name:  { type: string, pattern: "^[a-zA-Z0-9_-]+$" }
-      perms: { type: string }
-      state: { type: string, enum: [on, off] }
+      name:  { type: string, required: true, pattern: "^[a-zA-Z0-9_-]+$" }
+      perms: { type: string, required: true }
+      state: { type: string, required: true, enum: [on, off] }
 ```
+
+> **Not implemented.** The per-field `required: true` above is the decided form; the engine
+> still reads the object-level list `required: [name, perms, state]` and will refuse it as
+> `input_required_list_removed` only once **NIM-742** lands
+> ([ADR-0086](adr/0086-one-schema-dialect.md)). The list form leaves
+> the **whole** dialect — `types.yml` and nested `type: object` nodes included — not just
+> the `state_schema` root.
+
+**A shared type may declare `type: secret`.** The same type is then referenceable from both sides, and the member means one thing in each: a property with `type: secret` in a shared type is not asked for on input — the platform mints it; in `state_schema` it means a declared secret ([ADR-0083](adr/0083-declared-secret-state-fields.md), [`docs/service/manifest.md`](service/manifest.md#type-secret--a-value-that-lives-in-vault-not-in-state)).
+
+> **The input side of this is NOT worked out — tracked as NIM-751.** Only the
+> `state_schema` half of the sentence above is designed. The engine has no `secret` member
+> in the input type vocabulary and no notion of a non-writable property, so **today an
+> operator can supply such a value**, and the render seal is provenance-based on
+> `secret: true`, not on `type: secret` ([`docs/templating.md` §7.4](templating.md)). Do
+> not read "not asked for on input" as implemented behaviour: what it will take to make it
+> true — the vocabulary member, the refusal to accept the value, the diagnostic — is
+> NIM-751's, and no error code is reserved for it here.
 
 ### Link: `$type: <Name>`
 
@@ -210,9 +227,9 @@ The name `$type` is looked up **only** in `types:` of the same service:
 
 Resolution occurs at the input stage of Keeper (the same phase as merge defaults and `required`-check): `$type` is expanded into a type schema, then a regular resolve (merge → required → value-validation) occurs on the expanded schema. `$type` does not reach the render phase - this is a structural unwrapping, not a value.
 
-### DTO `/v1/scenarios` — backend-resolve + `x-type`
+### DTO `GET /v1/services/{name}/scenarios` — backend-resolve + `x-type`
 
-When projecting a script schema into the DTO of the endpoint of the backend script directory **resolves `$type` BEFORE projection**: the client receives an **already expanded** inline schema (UI builds the form using a familiar format, without knowing about `types:`) plus the forward-compat annotation **`x-type: <Name>`** on the node where it stood `$type`. The UI ignores it today; for growth, it allows a specialized widget for a named type without breaking current clients. `x-type` is a read-only DTO annotation; it is not written in the YAML source.
+The scenario-directory endpoint is **`GET /v1/services/{name}/scenarios`** ([`keeper/internal/api/huma_service_op.go`](../keeper/internal/api/huma_service_op.go), operation `listServiceScenarios`; [`docs/keeper/openapi.yaml`](keeper/openapi.yaml)) — there is no bare `/v1/scenarios` route. When projecting a scenario's schema into that DTO the backend **resolves `$type` BEFORE projection**: the client receives an **already expanded** inline schema (the UI builds the form in a familiar shape, without knowing about `types:`) plus the forward-compat annotation **`x-type: <Name>`** on the node where `$type` stood. The UI ignores it today; for growth, it allows a specialized widget for a named type without breaking current clients. `x-type` is a read-only DTO annotation; it is not written in the YAML source.
 
 ### Error classes
 
@@ -221,7 +238,14 @@ When projecting a script schema into the DTO of the endpoint of the backend scri
 | `input_type_unknown` | `$type: <Name>` refers to a type that is not present in the service's `types:`. |
 | `input_type_cycle` | Loop in type reference graph (`A→B→A`, self-reference `A→A`). |
 | `input_type_duplicate` | Duplicate name in section `types:`. |
-| `input_type_ref_conflict` | `$type` is specified **together** with an inline scheme on the same node (`type:` / `properties:` / `items:` / ...) - they are mutually exclusive: the node is either `$type` or its own scheme. |
+| `input_type_ref_conflict` | `$type` is specified **together** with the node's own shape. The checked set is closed and is exactly `{type, properties, items}` ([`shared/config/input_types.go`](../shared/config/input_types.go)) — a reference node is either `$type` or its own schema. |
+| `input_type_ref_overlay_conflict` | **`state_schema` only, and not implemented (NIM-742).** A key the reference overlays is present on **both** the reference node and the resolved type. |
+
+**The overlay boundary — `$type` + `properties:` is a `state_schema` privilege.** A reference node has always been allowed to overlay a few of its own keys onto the resolved type: `description`, the field-level `required: <bool>` and `required_when` (`applyRefOverlay`, [`shared/config/input_types.go`](../shared/config/input_types.go)). In `state_schema` that overlay widens by **exactly one key — `properties`** — so a state field can reuse a shared type and add the properties that field alone carries ([ADR-0086](adr/0086-one-schema-dialect.md)).
+
+**Inside `input:` the existing rule stands unchanged.** `$type` next to `type:`, `properties:` or `items:` in a scenario's, destiny's or module's `input:` block stays `input_type_ref_conflict`. The widening does not reach here, and nothing about it makes `type:` or `items:` legal beside `$type` on either side.
+
+The merge is **add-only shallow** and **fail-closed** — the same covenant `extends:` semantics as [ADR-009](adr/0009-scenario-dsl.md): the reference may add a property the type does not declare; a property present in both is `input_type_ref_overlay_conflict`, never last-wins and never a deep merge.
 
 ### MVP Limits
 
@@ -377,10 +401,22 @@ The schema layer validates only the **structure** of `source` (known variant, va
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `properties` | map | — *(required)* | Map `<name>` → schema. Describes the fields of an object (recursively). |
-| `required` | array of string | `[]` | List of required keys inside `properties`. |
 | `additional_properties` | bool/schema | `true` | `true` - undescribed keys are allowed (open); `false` - prohibited (closed); schema - undescribed keys must match it. |
 
+> **There is no object-level `required:` list.** Requiredness is declared on the field, as
+> the boolean `required: true` inside `properties.<name>` — the one form the dialect has
+> ([ADR-0086](adr/0086-one-schema-dialect.md)). **Not implemented:**
+> the engine still accepts `required: [a, b]` here and will refuse it as
+> `input_required_list_removed` when **NIM-742** lands.
+
 > **Hint:** For a strict structure (no extra fields) use `additional_properties: false`. Open by default for compatibility and extensions.
+
+> **`properties` is required even when `additional_properties` carries a schema.**
+> `validateObjectSchema` ([`shared/config/input_schema.go`](../shared/config/input_schema.go))
+> demands it unconditionally, with no exemption for the open-map case. This is why a
+> *map-shaped* `state_schema` field (`redis_config`, `sysctl_settings`) has no expressible
+> form — an **open question** in ADR-0086, to be resolved in NIM-742. Do not write
+> `properties: {}` to get such a field past the parser.
 
 ## Examples
 
@@ -447,20 +483,22 @@ input:
 input:
   cloud:
     type: object
-    required: true
+    required: true                 # the object itself must be supplied
+    additional_properties: false
     properties:
       provider:
         type: string
+        required: true             # …and each field carries its own requiredness
         enum: [aws, gcp, yandex]
       region:
         type: string
+        required: true
         pattern: "^[a-z0-9-]+$"
       count:
         type: integer
+        required: true
         min: 1
         max: 50
-    required: [provider, region, count]
-    additional_properties: false
 ```
 
 ### Array with uniqueness and format

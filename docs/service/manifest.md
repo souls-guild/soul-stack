@@ -72,7 +72,7 @@ The root file contains only the service metadata and the contract for the runtim
 | Field | Obligation | Type | Meaning |
 |---|---|---|---|
 | `description` | recommended | string | One or two phrases: what kind of service is this? Visible in UI Keeper, MCP directory, output `soul-lint`. |
-| `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
+| `state_schema` | yes | map `<field name>` → schema | Structure of `incarnation.state` JSONB fields in Postgres. Written in the **input DSL** ([`docs/input.md`](../input.md)) as a map of field name → schema, exactly like `input:` — no `type: object` and no `properties:` wrapper at the root ([ADR-0086](../adr/0086-one-schema-dialect.md)). See "`state_schema` Format" below. |
 | `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
 | `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <alias>.<module>, ref: <git-tag-or-branch> }`, where the alias is the registration name the artifact was allowed under (see below). Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
 | `compat` | no | object | Declared **engine-compatibility window**: which keeper versions this definition was authored and tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today — `keeper: {min, max}`. No section → unbounded (existing services keep working). Semantics and example — ["`compat` Section"](#compat-section). |
@@ -92,39 +92,103 @@ Offline tooling has no registry to ask, so it takes the name as an argument: `so
 
 ### Format `state_schema`
 
-`state_schema` is a JSON Schema document that describes the expected structure of the JSONB field `incarnation.state` in Postgres. At the root there is always `type: object` with a description of the fields.
+> **Implementation status.** The dialect described in this section is **decided and not
+> implemented** ([ADR-0086](../adr/0086-one-schema-dialect.md)). What the engine accepts **today** is the old
+> JSON Schema envelope: `validateStateSchema` ([`shared/config/service.go`](../../shared/config/service.go))
+> demands `type: object` on the root and raises `state_schema_root_not_object` without it,
+> and `validateJSONSchemaNode` below it reads the object-level list `required: [names]`.
+> When the change lands the old envelope is refused **by name** —
+> `state_schema_legacy_json_schema_form` — and the list form by
+> `input_required_list_removed`; neither is emitted by anything yet. The change is
+> **breaking, with no transition window**: no manifest parses under both forms. Engine —
+> **NIM-742**; `soul-lint list-secret-paths`, which prints the Vault paths a manifest
+> derives — **NIM-743**; the rewrite of `examples/**` and the WB redis service —
+> **NIM-744**. Until NIM-742 merges, write the old form and read this section as the
+> target.
 
-Standard JSON Schema draft-07 constructs are supported:
-
-- `type` — `object` / `array` / `string` / `integer` / `number` / `boolean`.
-- `required` - list of required keys.
-- `properties` — field map → diagram.
-- `additionalProperties` - bool or nested schema.
-- `enum`, `pattern`, `min`/`max`, `items` for arrays.
-
-Keeper validates `incarnation.state` against `state_schema` when creating an incarnation and when upgrading to a new version of schema via migration (see [`docs/migrations.md`](../migrations.md)).
-
-#### `type: secret` — a value that lives in Vault, not in state
-
-One Soul Stack extension to the JSON Schema vocabulary: a property declared `type: secret` holds a secret. The value **never** enters `incarnation.state`, and the author writes **no Vault path** — Keeper derives it from `(service, incarnation, state field, key)` ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1):
+`state_schema` describes the expected structure of the JSONB field `incarnation.state` in Postgres. It is written in the **input DSL** ([`docs/input.md`](../input.md)) — the same dialect `input:` uses — and at the root it is a **map `<field name>` → schema**, not a schema document:
 
 ```yaml
 state_schema:
-  type: object
-  properties:
-    redis_users:                       # collection: one secret per element
-      type: array
-      items:
-        type: object
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name                  # which sibling identifies the element
-            label: "Redis user password"
-    admin_token:                       # scalar: one secret per incarnation
-      type: secret
-      label: "Admin token"
+  redis_type:
+    type: string
+    required: true
+    enum: [sentinel, cluster]
+  redis_version:
+    type: string
+```
+
+Refused at the root: **`type: object`**, the **`properties:`** wrapper and the **list form `required: [names]`**. Requiredness is a per-field boolean, `required: true` on the field itself — the same key `input:` has always had.
+
+**Root-only.** The map shape is the root's alone. A **nested** object field is an ordinary input-DSL `type: object` node and still declares its fields under `properties:`:
+
+```yaml
+state_schema:
+  tls:                              # a field of state, so a key of the root map
+    type: object                    # …but nested, so an ordinary object node
+    additional_properties: false
+    properties:
+      enable: { type: boolean, required: true }
+      port:   { type: integer }
+```
+
+**The list form `required: [names]` leaves the whole dialect**, not just the root — nested `type: object` nodes and `types.yml` included. An object's children each carry their own `required: true`, as `tls.enable` does above. One spelling of requiredness, everywhere, in both `input:` and `state_schema`.
+
+**Vocabulary is snake_case throughout.** This is alignment, not a new vocabulary: the input DSL already spells these keys snake_case ([`shared/config/input_schema.go`](../../shared/config/input_schema.go), `checkKeyTypeApplicability`), and `state_schema` stops being the one place that spells them the JSON Schema way.
+
+| JSON Schema spelling (gone) | Input-DSL spelling |
+|---|---|
+| `additionalProperties` | `additional_properties` |
+| `minimum` / `maximum` | `min` / `max` |
+| `exclusiveMinimum` / `exclusiveMaximum` | `exclusive_min` / `exclusive_max` |
+| `minLength` / `maxLength` | `min_length` / `max_length` |
+| `minItems` / `maxItems` | `min_items` / `max_items` |
+| `patternProperties` | **refused** — the input DSL has no counterpart, and nothing in this tree authored one |
+
+Only the keys with an input-DSL counterpart are renamed. Do not transliterate the pattern onto a key not in the table — the counterpart of `uniqueItems`, for instance, is **`unique`**, not `unique_items` ([`shared/config/input_schema.go`](../../shared/config/input_schema.go)).
+
+**What does NOT move: genuine JSON Schema stays JSON Schema.** This dialect is what *we* author. Schemas published to a foreign contract are unaffected and must not be migrated — the CloudDriver **`profile_schema`** returned by the `Schema()` RPC (the six `examples/module/soul-cloud-*/schema.json`; [`sdk/schema/schema.go`](../../sdk/schema/schema.go), [`keeper/internal/pluginhost/clouddriver.go`](../../keeper/internal/pluginhost/clouddriver.go)), the SshProvider / soul-beacon **`params_schema`** ([`examples/module/soul-ssh-static/schema.json`](../../examples/module/soul-ssh-static/schema.json)), the MCP tool input schemas ([`docs/keeper/mcp-tools.md`](../keeper/mcp-tools.md)) and [`docs/keeper/openapi.yaml`](../keeper/openapi.yaml). A `required: [...]` in any of those is somebody else's grammar, not a leftover of ours.
+
+**`$type` may carry the node's own `properties:`** — in `state_schema` only. Inside `input:` the existing rule stands unchanged: `$type` next to any of `{type, properties, items}` is `input_type_ref_conflict` ([`shared/config/input_types.go`](../../shared/config/input_types.go)). `description`, `required` and `required_when` are already overlaid on a reference node (`applyRefOverlay` in the same file); in `state_schema` the overlay widens by exactly one key, `properties`, so a state field can reuse a named type and add the properties that field alone carries. Merge is **add-only shallow** and **fail-closed**, the `extends:` covenant of [ADR-009](../adr/0009-scenario-dsl.md): a key present in both the type and the reference is a conflict (`input_type_ref_overlay_conflict`), never last-wins and never a deep merge.
+
+Keeper validates `incarnation.state` against `state_schema` when creating an incarnation and when upgrading to a new version of schema via migration (see [`docs/migrations.md`](../migrations.md)).
+
+> **Open question — map-shaped state fields.** A state field that is a *map* with no
+> declared keys — `redis_config`, `sysctl_settings`, and inside `redis_sentinel` both
+> `master_settings` and `.settings`
+> ([`examples/service/redis/service.yml`](../../examples/service/redis/service.yml):387-394) —
+> has **no expressible form today** and
+> ADR-0086 records it as open. `validateObjectSchema`
+> ([`shared/config/input_schema.go`](../../shared/config/input_schema.go)) demands
+> `properties` on every `type: object` node unconditionally, with no exemption when
+> `additional_properties` carries a schema ([`docs/input.md` → Type `object`](../input.md)
+> agrees). Do not write `properties: {}` to make such a field parse — read the open
+> question in the ADR instead; resolving it is part of NIM-742, not of this page.
+
+#### `type: secret` — a value that lives in Vault, not in state
+
+> **Not implemented.** The declaration below is spelled in the new dialect and the engine
+> does not accept it yet (see the Implementation-status note above; engine — **NIM-742**).
+> `type: secret` itself is real and shipped ([ADR-0083](../adr/0083-declared-secret-state-fields.md)) —
+> what changes here is only the envelope it sits in and the spelling of requiredness.
+
+A property declared `type: secret` holds a secret. The value **never** enters `incarnation.state`, and the author writes **no Vault path** — Keeper derives it from `(service, incarnation, state field, key)` ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1):
+
+```yaml
+state_schema:
+  redis_users:                       # collection: one secret per element
+    type: array
+    items:
+      type: object
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name                  # which sibling identifies the element
+          label: "Redis user password"
+  admin_token:                       # scalar: one secret per incarnation
+    type: secret
+    label: "Admin token"
 ```
 
 Derived paths — `<mount>/<service>/<incarnation>/redis_users/<name>#password` and `<mount>/<service>/<incarnation>/admin_token#value`.
@@ -133,9 +197,12 @@ Reading them off the declarations is what [`soul-lint list-secret-paths`](../sou
 
 - **`key:`** names the sibling property that identifies one element of a collection, and therefore the `<key>` path segment. Required inside an array's `items`, refused on a scalar field, and it must name a sibling of type `string` — its value becomes a path segment.
 - **`label:`** is the optional UI caption in the reveal list.
-- Exactly **two** positions are legal: a top-level property, or a property of a top-level array's `items`. The derived path has one field segment and one optional key segment, so anything deeper is a load error, never a silent skip.
-- The node's grammar is closed to `type` / `key` / `label`. A `minLength:` written beside it would read as enforced and could not be — a value that never enters state never passes state validation.
+- Exactly **two** positions are legal: a top-level property (i.e. a key of the root map), or a property of a top-level array's `items`. The derived path has one field segment and one optional key segment, so anything deeper is a load error, never a silent skip.
+- The node's grammar stays **closed to `type` / `key` / `label`**, and the wider input-DSL vocabulary does not open it. Refused beside `type: secret`: `default`, `enum`, `pattern`, `min_length` / `max_length`, `secret`, `prefill_from_state`, `required_when` — each for the same reason, that a value which never enters state never passes state validation, so any of them would read as enforced and could not be. **`description` is refused too**, for a different reason: `label:` already carries the caption, and two caption keys on one node is one too many.
+- **`required: true` on a `type: secret` property is refused** (`secret_field_required`). No state instance can satisfy it: the value is not in state, so a presence check over state fails for every incarnation, always. Requiredness of the *secret* is a Vault fact, not a state fact.
 - Every path segment is validated against the [ADR-064](../adr/0064-secret-write-path.md) grammar `^[a-zA-Z0-9_-]+$` and **fails closed**: `<key>` is operator-influenced data, so a `/` or a `..` in a user's name can never become a segment.
+
+**`type: secret` is legal in `types.yml` too.** One shared type may then be referenced from both sides, and the member means one thing in each: a property with `type: secret` in a shared type is not asked for on input — the platform mints it; in `state_schema` it means a declared secret. See [`docs/input.md` → Reusable named types](../input.md#reusable-named-types-types--type) for what that does and does not mean on the input side today.
 
 The value is written by a keeper-side [`core.state.<verb>`](../keeper/modules.md#corestateverb) capture step ([ADR-0084](../adr/0084-explicit-state-capture.md)), which mints only what is missing, and read back by the operator through `POST /v1/incarnations/{name}/secrets/reveal` under the `incarnation.view-secrets` right. Inside the service, a task reads it from the `register:` of that same capture step, as a `vault:` reference rather than as plaintext.
 
@@ -240,33 +307,57 @@ certificate_rotation:
 ```yaml
 # No `state_schema_version:` — retired by NIM-735 (the version is the top of the
 # `migrations/` ladder); the linter still requires the key until NIM-736 ships.
-description: Redis (standalone/sentinel/cluster/sentinel_only)
+description: Redis (sentinel/cluster)
 
-# Structure of incarnation.state in the database
+# Structure of incarnation.state in the database — a map <field name> → schema
 state_schema:
-  type: object
-  required: [redis_type, redis_config]
-  properties:
-    redis_type: { type: string, enum: [standalone, sentinel, cluster, sentinel_only] }
-    redis_version: { type: string }
-    redis_config:
+  redis_type:                         # deployment mode; required
+    type: string
+    required: true
+    enum: [sentinel, cluster]
+  redis_version:
+    type: string
+
+  # ── TLS intent (read-model): a nested object, so `type: object` + `properties:` ──
+  tls:
+    type: object
+    additional_properties: false
+    properties:
+      enable:   { type: boolean, required: true }
+      only:     { type: boolean }
+      port:     { type: integer }
+      cert_ref: { type: string }      # a Vault PATH, never the PEM
+      key_ref:  { type: string }
+      ca_ref:   { type: string }
+
+  persistence:
+    type: string
+    enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
+  memory_mb:
+    type: integer
+    min: 64                           # was `minimum:` in the JSON Schema spelling
+  io_threads:
+    type: integer
+    min: 0
+
+  # ── Redis ACL users: an ARRAY of records (map → array, migration 005_to_006) ──
+  redis_users:
+    type: array
+    items:
       type: object
-      additionalProperties: true
-    redis_users:                      # map username → {perms, state}
-      type: object
-      additionalProperties:
-        type: object
-        required: [perms, state]
-        properties:
-          perms: { type: string }
-          state: { type: string, enum: [on, off] }
-    redis_hosts:
-      type: array
-      items:
-        type: object
-        properties:
-          sid:  { type: string }
-          role: { type: string, enum: [primary, replica, sentinel] }
+      additional_properties: false
+      properties:
+        name:  { type: string, required: true }
+        perms: { type: string, required: true }
+        state: { type: string, required: true, enum: [on, off] }
+        password:                     # value lives in Vault, never in state (ADR-0083)
+          type: secret
+          key: name
+          label: "Redis user password"
+
+  # `redis_config` — the merged redis.conf map, an OPEN map with no declared keys — is
+  # deliberately absent here: expressing a map-shaped state field is ADR-0086's
+  # open question (see "Format state_schema" above). Same for `sysctl_settings`.
 
 # Dependency artifacts - ref: git tag/branch (see ADR-007)
 destiny:
@@ -363,7 +454,7 @@ Migration is triggered by an explicit operator operation (`keeper.incarnation.up
 - **`service.yml` manifest:**
   - `name` regex `^[a-z][a-z0-9-]*$`, non-empty.
   - `description` — string (if any).
-  - `state_schema` - valid JSON Schema; `type: object` on the root.
+  - `state_schema` — a map `<field name>` → schema, each entry a valid input schema ([`docs/input.md`](../input.md)). A root `type: object` / `properties:` envelope is refused by name (`state_schema_legacy_json_schema_form`) and the object-level list `required: [names]` by `input_required_list_removed`, at every level. ⚠ **Not implemented** — today the linter enforces the opposite (root `type: object` required, `state_schema_root_not_object` without it); see ["Format `state_schema`"](#format-state_schema) and NIM-742.
   - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<alias>.<module>`, level 1 not a reserved name, and entries sharing an alias agree on `ref` (`conflicting_module_ref`). Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
   - Unknown top-level keys → `unknown_key` with hint about deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
   - `state_schema_version` → `unknown_key` with a hint about NIM-735 / ADR-019, the version being derived from the ladder (planned, NIM-736 — not implemented yet). Today the check runs the other way: the key is **required**, and a manifest without it is refused (`missing_required_field`, hint "set `state_schema_version: 1` for fresh services").

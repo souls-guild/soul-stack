@@ -16,12 +16,16 @@ The previous groundwork for reuse — **`$ref` to an external JSON Schema file i
      AclUser:
        type: object
        additional_properties: false
-       required: [name, perms, state]
        properties:
-         name:  { type: string, pattern: "^[a-zA-Z0-9_-]+$" }
-         perms: { type: string }
-         state: { type: string, enum: [on, off] }
+         name:  { type: string, required: true, pattern: "^[a-zA-Z0-9_-]+$" }
+         perms: { type: string, required: true }
+         state: { type: string, required: true, enum: [on, off] }
    ```
+
+   > ⚠ The requiredness above was originally written as an object-level `required: [name,
+   > perms, state]`. That list form leaves the whole dialect — see the [amendment of
+   > 2026-09-01](#amendment-2026-09-01-nim-741-one-schema-dialect-three-deltas-to-named-types)
+   > at the end of this ADR. **Not implemented yet** (NIM-742).
 
 2. **A reference `$type: <Name>` as a standalone field** OR **`items: {$type: <Name>}`** for an array of such elements:
 
@@ -93,3 +97,63 @@ The previous groundwork for reuse — **`$ref` to an external JSON Schema file i
 - **(c) Cross-service references.** Rejected: introduces a cross-service schema dependency (versioning another service's `types.yml`, a git resolve) — disproportionate to wave 1's goal. Resolution is strictly within one service.
 
 **Cross-ref.** [ADR-045](0045-param-dsl.md#adr-045-module-param-dsl--typed-input-fields-for-the-run-command-ui-form) (bringing modules' input DSL closer to `config.InputSchema` — named types apply to the same `InputSchema`); [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) (scenario `input:` — the main consumer of `$type`); [ADR-042](0042-backend-driven-ui.md#adr-042-backend-driven-dynamic-data-in-the-ui--the-ui-does-not-hardcode-dynamic-catalogs) (the backend expands `$type` before projection — the UI gets a familiar inline schema, doesn't hardcode knowledge of `types:`).
+
+## Amendment 2026-09-01 (NIM-741, [One schema dialect](0086-one-schema-dialect.md)): three deltas to named types
+
+`state_schema` stops being JSON Schema and is written in the **same dialect as `input:`**. This ADR
+already said the reuse mechanism lives *"in the same DSL — one vocabulary, one set of `input_*`
+errors"*, and rejected `$ref` precisely to avoid a second one; the move finishes that argument by
+removing the last schema in the tree that was written in the other dialect. A `types.yml` catalog
+is now shared by both contracts, which lands three deltas here. **All three are design only** —
+engine NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the WB redis service
+NIM-744.
+
+**(1) The list form `required: [names]` leaves `types.yml` too.** Requiredness is `required: true`
+on the property, everywhere in the dialect — not only at a `state_schema` root, but inside nested
+objects and inside a declared type, so the `AclUser` example in §1 above is rewritten. This is the
+narrower half of a wider removal: what the new dialect refuses **at the root only** is the
+`type: object` / `properties:` wrapper, and a `types.yml` entry is a schema node rather than a
+root, so `AclUser` keeps its `type: object` and its `properties:` bag. The list form has no such
+exemption — it is gone from the whole dialect. Refused as `input_required_list_removed`. There are
+28 flow-form `required: [...]` sites in the DSL corpus to migrate; the block form is authored
+nowhere.
+
+**(2) `type: secret` becomes legal in a shared type.** The rule, verbatim: *a property with
+`type: secret` in a shared type is not asked for on input — the platform mints it; in
+`state_schema` it means a declared secret.* One `AclUser` can then carry `password` once and serve
+both the `input:` of `add_user` and the `redis_users` field of `state_schema`, which is the
+duplication this ADR exists to remove, applied to the one property that could not participate
+before. ⚠ **The input half is deferred, not decided — tracked as NIM-751, and must never be
+presented as built.** Two things are missing today and neither is a detail: the engine has **no
+`secret` member in the input type vocabulary** and **no notion of a non-writable property**, so an
+operator can simply supply the value; and the render seal is provenance-based on `secret: true`,
+not on `type: secret`, so nothing seals what such a property would carry. `input_secret_type_not_writable`
+is **reserved for NIM-751 and is not introduced by this amendment**. What is decided now is the
+`state_schema` half and the legality of the declaration in the catalog.
+
+**(3) The `$type` overlay widens by exactly one key — `properties` — and only in `state_schema`.**
+Frame this as a widening of an **existing closed overlay set**, not as a carve-out. `$type`
+already coexists with some of the referring node's own keys: `applyRefOverlay`
+(`shared/config/input_types.go:391-410`) overlays `description`, the reference's field-level
+`required` and `required_when` on top of the resolved type. What is refused beside `$type` is the
+closed set `{type, properties, items}` (`input_types.go:100`, `input_type_ref_conflict`), because
+each of those three *redefines the type's shape*. In `state_schema` a `properties:` beside `$type`
+is a different act — **adding** fields a shared type does not carry, without touching the ones it
+does — so `properties` moves out of the refusal set and into the overlay set, in that pass only.
+**`type` and `items` stay refused everywhere**, including `state_schema`: those two replace a
+shape rather than extend it, and a reference that replaces the shape is not a reference.
+
+The merge is the one this platform already ratified for a shared contract — [ADR-009](0009-scenario-dsl.md)'s
+`extends:` covenant, **by reference and not by re-derivation**: an **add-only shallow merge, fail-closed**.
+A key the type already declares is not overridden and not deep-merged; it is an error, the new code
+`input_type_ref_overlay_conflict`. Deep merge and last-wins were rejected there for the reason that
+applies verbatim here — a silent override across a file boundary makes the shared definition
+unreadable from the site that uses it.
+
+**Consequence for offline checking, stated so it is not read as an omission.** The secret rules are
+deliberately **not** among the standalone checks `soul-lint` runs over `types.yml`. That file's
+checker (`soul-lint/internal/validate/type_refs.go:6-77`) is scoped to what needs the type
+**catalog** — `input_type_duplicate` / `input_type_cycle` / `input_type_unknown` — and the secret
+rules are not catalog questions: a type carrying `type: secret` is neither legal nor illegal in
+isolation, only at the point of use. Full argument and the position table —
+[ADR-0083](0083-declared-secret-state-fields.md), amendment of the same date.

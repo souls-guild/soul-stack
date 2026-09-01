@@ -63,3 +63,70 @@ Normative edits — [`docs/templating.md §2.3` (the CEL functions table), `§7.
 A new CEL function **`generate_secret({"length": 32, "charset": "alphanumeric"})`** returns an opaque **`SecretRequest`** marker rather than a string. No plaintext exists at render time, so none can leak through a register, a log line or a diff; the value is minted and written by a `core.state.<verb>` capture step ([ADR-0083](0083-declared-secret-state-fields.md) §4, [ADR-0084](0084-explicit-state-capture.md)). The argument is a **map** because CEL has no keyword arguments and no `=` token at all — `generate_secret(length=32)` does not lex. Registered as a plain function, **not** a macro — `vault()` needs one only to inject its hidden resolver argument, and a request carries nothing hidden. The seal detector deliberately does **not** key on it: a request holds no secret material, and sealing is whole-cell, so keying on it would mask a failed task's entire inventory out of its own diagnostics.
 
 `${ vault(...) }` itself survives, but **only outside the service's own namespace**: a path under `<mount>/<service>/` is refused — at load when it is written out, and on the evaluated path when it is assembled from variables — because that namespace is now derived rather than authored ([ADR-0083](0083-declared-secret-state-fields.md) §7).
+
+## Amendment 2026-09-01 (NIM-741, [One schema dialect](0086-one-schema-dialect.md)): all three key literals of the §7.4 masking walk are wrong after the move, and the failure is fail-OPEN
+
+`state_schema` stops being JSON Schema and is written in the same dialect as `input:` — a map
+`<field name>` → schema, no `type: object` / `properties:` wrapper at the root, and a snake_case
+vocabulary. That reaches the masking invariant of the 2026-06-24 amendment above, at **layer 1
+(schema)**, whose text says the read path recurses *"through `properties`/`items` and **nested**
+`properties` under `additionalProperties`"*. Against a `state_schema` in the new dialect all three
+literals are wrong at once:
+
+- **`properties` at the root is gone** — the root IS the field map, so nothing descends into it;
+- **`additionalProperties` is now spelled `additional_properties`**, so the map branch never matches;
+- **`items` survives**, but only inside a subtree the walk no longer reaches from the root.
+
+⚠ **The consequence is not an error, it is silence.** The walk is
+`keeper/internal/incarnation.CollectStateSchemaSecrets`, which hardcodes those three strings
+(`keeper/internal/incarnation/secret_schema.go:82`, `:89`, `:92`). Run unmigrated against a
+new-dialect schema it returns an **empty** `SecretPathSet` — which is byte-identical to the honest
+answer *"this service declares no secrets"*. Nothing distinguishes the two, and the read path is
+built to tolerate exactly this: `keeper/internal/api/handlers/incarnation_secret_schema.go:26-29`
+records that assembly is best-effort and a failure degrades to `audit.MaskSecrets` — vault
+provenance plus the regex last resort — with the GET deliberately not failing ("observability, not
+contract"). So a state field declared `secret: true` stops being masked on
+`GET /v1/incarnations/...` spec/state/history with **no error raised anywhere**, and what is left
+holding it is layer 2 (only if the value happens to carry a `vault:` marker) and the
+`sensitiveKeyRe` alarm fallback (only if the field's NAME happens to look sensitive). A value that
+is neither — the case layer 1 exists for — is printed in the clear.
+
+**A third reader keys on the same root `properties`, and it is worth recording that it fails the
+OTHER way.** `stateop.schemaFieldType` (`keeper/internal/stateop/ops.go:489-504`) also reads
+`schema["properties"]` at the root and returns `""` under the new dialect. Its blast radius is
+narrower than the walk's, in both directions: `collectionKind` (`:466-487`) consults the schema
+**only when the field is absent from state** — a value already present is authoritative by its Go
+type — but where it is consulted the answer is `collKindUnknown`, and `applyAddOp` then refuses the
+operation (`:428`, *"field %q is not a collection (map/list) and the type can't be inferred from
+schema"*). So the first `add` into a not-yet-materialized collection **fails closed and loudly**,
+with a message that blames the schema's content rather than its dialect. Loud is the tolerable
+half; the misleading message is not, and it is on NIM-742 either way. ⚠ **But the same reader has
+one caller that does fail OPEN, and it is `append`, not `add`.** `applyAppendOp`
+(`ops.go:343-357`) guards its `nil` branch with `if schemaFieldType(schema, op.Field) == "object"`
+(`:351`), and the function's own comment states that this is the lookup's whole purpose — it
+*"exists only to REJECT a map field — append has no meaning there, and silently coercing one would
+lose data"* (`:340-342`). Under the new dialect the guard never fires, `:354` executes
+`out[op.Field] = []any{op.Value}`, and a **list** is materialized where the schema declares a map:
+wrong shape in `incarnation.state`, no diagnostic. That is the only silent state-corruption path in
+the verb engine, and `ops.go:351` moves in the same commit as the walk. ⚠ Its declared twin is
+**not** a second live copy: `trial.collectionKind` / `trial.schemaFieldType`
+(`keeper/internal/trial/diff.go:28-58`, commented *"★ logic identical to stateop.*"*) are **dead
+code** — nothing in the `trial` package calls them. So the L0 harness neither reproduces this
+defect nor catches it; what it has is a stale duplicate that will read as coverage to the next
+person who greps for it.
+
+**Therefore the walk migrates in the same commit as the parser (NIM-742), not after it.** A
+declarative masking layer that fails open is worse than one that is absent, because
+`keeper_mask_regex_fallback_total` is the only signal and it fires only when regex *catches*
+something. The 2026-06-24 limitation carries over unchanged under the new spelling: `secret: true`
+on the `additional_properties` node **itself** is still not covered by the schema layer
+(`SecretPathSet.IsSecret` does not substitute the `.*` segment) and still degrades to vault+regex.
+The other two sources of layer 1 do **not** move — `input_schema` was already written in this
+dialect, and the manifest `InputParamDef.Secret` is a different code path (the spec half of
+`secretSchemaForIncarnation`, keyed `input.<name>`). ⚠ And the loss is **not** limited to
+`secret: true`: `isSecretNode` (`secret_schema.go:116-122`) matches `type: secret` as well, so the
+defensive entry [ADR-0083](0083-declared-secret-state-fields.md) §1 put in this walk on purpose —
+inert while nothing writes there, present so a value arriving by another route (an old snapshot, a
+migration, a bug) is masked rather than printed — is dropped by the same empty set.
+**Design only, not implemented** — NIM-742 (engine + this walk), NIM-743
+(`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis service).

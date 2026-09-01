@@ -471,3 +471,53 @@ until NIM-688. There is **no transition window** — the break lands in one rele
 Everything else in this ADR is untouched: `where:`, `serial:`, `run_once:`, `apply:` and the
 `core.state.<verb>` capture step all keep their semantics. Until NIM-749 / NIM-750 land, the text
 above describes the engine that ships.
+
+## Amendment 2026-09-01 (NIM-741, [One schema dialect](0086-one-schema-dialect.md)): `state_schema` is written in the input DSL, so the 2026-08-19 declaration changes spelling
+
+The 2026-08-19 amendment above put `type: secret` into `state_schema` while `state_schema` was
+still JSON Schema. It no longer is: `state_schema` becomes a map `<field name>` → schema in the
+**same dialect as `input:`** — no `type: object` / `properties:` wrapper at the root, no root
+`required: [names]` list (requiredness is `required: true` on the field), and a snake_case
+vocabulary. The secret declaration itself is untouched — the two supported shapes, the `key:`
+sibling, the derived path and the closed node grammar all stand — but every corpus site that
+spells it moves:
+
+```yaml
+# service.yml — state_schema in the input dialect (design; NIM-742…744)
+state_schema:
+  redis_type:
+    type: string
+    required: true
+    enum: [sentinel, cluster]
+  redis_users:
+    type: array
+    items:
+      type: object                      # a NESTED object still declares type/properties
+      additional_properties: false      # was additionalProperties
+      properties:
+        name:  { type: string, required: true }   # was a sibling `required: [name, perms, state]`
+        perms: { type: string, required: true }
+        state: { type: string, required: true, enum: [on, off] }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
+```
+
+Two boundaries worth keeping straight, because both are easy to over-read. The wrapper is refused
+**at the root only** — the element schema under `items:` above is an ordinary nested object and
+still carries `type: object` with its fields under `properties:`. The list form `required: [names]`,
+by contrast, leaves the **whole** dialect: nested objects and `types.yml` included, which is what
+makes `required: true` on a `type: secret` property newly expressible and therefore newly worth
+refusing ([ADR-0083](0083-declared-secret-state-fields.md), `secret_field_required`).
+
+The list form's removal is the **wider** of the two migrations, and it does not stop at state
+schemas: 28 flow-form `required: [...]` sites are authored across both dialects — `service.yml`
+state schemas, `types.yml` catalogs, and destiny/scenario `input:` blocks alike. The block form is
+authored nowhere in the DSL.
+
+**Breaking, no transition window.** The old envelope is refused **by name**
+(`state_schema_legacy_json_schema_form`) rather than left to parse: read as the new dialect it is
+two state fields called `type` and `properties`, which moves every real field a level down and
+loses every declared secret with no error raised. **Design only, not implemented** — engine
+NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the WB redis service NIM-744.

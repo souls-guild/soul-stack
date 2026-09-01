@@ -74,9 +74,21 @@ Not a fixed design, fixed when implementing a scenario resolution. Introduced to
 - `input_type_unknown` (`error`) - `$type: <Name>` refers to a type that is not present in the `types:` service;
 - `input_type_cycle` (`error`) - loop in the type link graph (`A→B→A`, self-link `A→A`); the resolver traverses the graph with a cycle detector and does not unroll indefinitely;
 - `input_type_duplicate` (`error`) — duplicate name in section `types:`;
-- `input_type_ref_conflict` (`error`) - `$type` is specified along with the inline diagram on the same node (`type:`/`properties:`/`items:`/...); link and inline are mutually exclusive.
+- `input_type_ref_conflict` (`error`) - `$type` is specified along with the node's own shape; the checked set is closed and is exactly `{type, properties, items}` ([`shared/config/input_types.go`](../shared/config/input_types.go)) - link and inline are mutually exclusive.
+- `input_type_ref_overlay_conflict` (`error`) - **`state_schema` only; decided, not implemented (NIM-742).** There a `$type` node may also carry its own `properties:`, overlaid onto the resolved type add-only and shallow; a property declared on **both** the reference and the type is this code. Inside `input:` the overlay does not widen and `$type` + `properties:` stays `input_type_ref_conflict` ([ADR-0086](adr/0086-one-schema-dialect.md)).
 
 **Boundaries.** Resolve strictly service-level (types of the same service) - cross-service and local-per-scenario declarations outside the MVP ([ADR-062](adr/0062-input-types.md), MVP boundaries). After a successful resolution, the expanded circuit is checked with the usual input checks (`input_*`) recursively, like any inline-`object`/`array`.
+
+> **Not implemented — the one-schema-dialect codes.** `state_schema` moves into the input
+> DSL, which gives `validate-service` two more refusals and takes the list form of
+> requiredness away from every schema the linter checks:
+> `state_schema_legacy_json_schema_form` (the old `{type: object, properties: {…}}`
+> envelope at the root, refused **by name** because it otherwise parses silently as two
+> state fields called `type` and `properties`) and `input_required_list_removed` (the
+> object-level `required: [names]`, at every level and in `types.yml` too). Neither is
+> emitted today - the linter still enforces the opposite (`state_schema_root_not_object`).
+> Engine and linter: **NIM-742**. Spec:
+> [`docs/service/manifest.md` → Format `state_schema`](service/manifest.md#format-state_schema).
 
 **Dependencies.** Format source of truth is [`docs/input.md`](input.md); name dictionary (`types:`/`$type`/`x-type`/`input_type_*`) - [`docs/naming-rules.md`](naming-rules.md).
 

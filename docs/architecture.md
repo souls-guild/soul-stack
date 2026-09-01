@@ -601,6 +601,10 @@ Moved to [`docs/adr/0085-entity-id-and-label.md`](adr/0085-entity-id-and-label.m
 
 Moved to [`docs/adr/0087-task-side-derived-from-module-address.md`](adr/0087-task-side-derived-from-module-address.md). `on:` is overloaded: for a Soul task it is a coven filter, while `keeper` is a magic scalar in the same key meaning "do not send this to hosts at all" — one key, two unrelated jobs, and the second is a routing verdict the platform already knows. **Decision: routing is derived from the module address**; `on:` returns to one meaning — a list of covens — and the scalar `keeper` on a **core** address becomes an error. The derivation is unambiguous because the two core registries are **disjoint** (seven keeper-side bases against twenty-one Soul-side ones, no name in both), and routing today is the single line `task.On.(string) == "keeper"`. The refusal matrix is a table rather than prose, because an omitted `on:` now means two different things depending on the address; `on: keeper` on a Soul-side address gets its own diagnostic, separate from redundancy, since the two are opposite mistakes with opposite fixes. ★ **A base absent from `shared/coremanifest` has no side** — every new diagnostic stays silent for it and routing falls back to the written `on:`; without that rule `on: keeper` on `core.cert.registered` would be a false error on working code. The offline answer is not a new constant set: `shared/coremanifest` already lists both sides in one table, and the side becomes a field on `sdk/schema.Module`, subsuming three ad-hoc address constants. A plugin module declares **`side: keeper | soul`, default `soul`, per module** — the absent key and `side: soul` are indistinguishable **by design, permanently**, because documents are signed and stored. ⚠ On a plugin the field is **accepted and inert** until NIM-688 lands the executor, and the failure stays loud rather than becoming a silent skip. Consequences: ★ the **Passage stratifier is the blocker, not a validator** (`onTargetsRoster` is literally `on == nil`, so dropping the key silently re-stratifies the keeper tasks standing after a `refresh_soulprint` emitter — four example trees today, but **the hazard is silence, not volume**: Passage boundaries move with no diagnostic anywhere — and turns the refresh emitter into its own consumer; it must become side-derived in the same move); the **`when:` hole is worse than "ignored"** (a dynamic `when:` on a keeper-side module that omits `on: keeper` reaches the agent, is evaluated before the module lookup, and when false on every host yields a **green run with the keeper-side effect absent**); and the break is taken **in one release with no transition window** (a warn-then-error window was offered and declined), so an unswept external service fork simply stops loading. Rejected: `runs_on:`, a `Document`-level `side`, a transition window, and folding this into ADR-009/ADR-017 as amendments. Status: **accepted, not implemented** — epic NIM-747; this ADR is NIM-748; implementation NIM-749 / NIM-750. **Amends [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read) / [ADR-020](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format) / [ADR-084](#adr-084-explicit-state-capture--corestateverb-replaces-end-of-run-state_changes).**
 
+### [ADR-086. One schema dialect — `state_schema` is written in the input DSL](adr/0086-one-schema-dialect.md)
+
+Moved to [`docs/adr/0086-one-schema-dialect.md`](adr/0086-one-schema-dialect.md) — the first ADR authored without a number and stamped at squash-merge, per the convention decided 2026-09-01 (see [docs/adr/README.md](adr/README.md)). A service author writes two schemas, `input:` and `state_schema`, and they were written in **two different dialects** — the platform's own input DSL on one side, JSON Schema on the other. [ADR-062](adr/0062-input-types.md) rejected `$ref` precisely to avoid *"a second schema DSL alongside our own input DSL (a divergence of `properties`/`required` semantics, the `type` vocabulary, `input_*` error codes)"*, and then left that divergence standing in the one place it was already shipping. **Decision: `state_schema` becomes a map `<field name>` → schema, like `input:`.** The `type: object` / `properties:` wrapper and the list `required: [names]` are refused **at the root**; requiredness is `required: true` on the field. ★ Root-only — a **nested** object field still declares `type: object` with its fields under `properties:`; what leaves the **whole** dialect, `types.yml` and nested objects included, is the list form of `required:`. The vocabulary becomes snake_case, which is **alignment rather than invention** — the input DSL already spells these that way (`shared/config/input_schema.go:631-650`): `additionalProperties` → `additional_properties`, `minimum` → `min`, `minLength`/`maxLength` → `min_length`/`max_length`, `minItems`/`maxItems` → `min_items`/`max_items`, `exclusiveMinimum` → `exclusive_min`; `patternProperties` is refused outright (no counterpart, zero authored uses). Two capabilities follow from the shared dialect. **`$type` may carry the node's own `properties:` — in `state_schema` only** — which is a **widening of an existing closed overlay set**, not a carve-out: `applyRefOverlay` already overlays `description`/`required`/`required_when` (`shared/config/input_types.go:391-410`) while `input_type_ref_conflict` refuses the closed set `{type, properties, items}` (`input_types.go:100`); `properties` moves from the second list to the first, `type` and `items` stay refused everywhere, and the merge is [ADR-009](adr/0009-scenario-dsl.md)'s `extends:` covenant **by reference** — add-only, shallow, fail-closed on a collision (`input_type_ref_overlay_conflict`). And **`type: secret` becomes legal in `types.yml`**: *a property with `type: secret` in a shared type is not asked for on input — the platform mints it; in `state_schema` it means a declared secret*. ⚠ **The input half of that is deferred, tracked as NIM-751, and is not built and not decided** — the engine has no `secret` member in the input type vocabulary and no notion of a non-writable property, so an operator can supply the value today, and the render seal keys on `secret: true` provenance rather than on `type: secret`; `input_secret_type_not_writable` is reserved for that ticket, not introduced. The secret node's grammar stays closed to `type`/`key`/`label` — the shared input keys (`default`, `enum`, `pattern`, `min_length`/`max_length`, `secret`, `prefill_from_state`, `required_when`, and `description`, that last one because `label` already carries the caption) are refused on it — and `required: true` on a `type: secret` property is refused as `secret_field_required`, since no state instance can satisfy it. **Breaking, no transition window.** The old envelope is refused **by name** (`state_schema_legacy_json_schema_form`) rather than left to parse, because read as the new dialect it is two state fields called `type` and `properties`, which moves every real field a level down and loses every declared secret with no error raised; the list form is refused as `input_required_list_removed`. ⚠ **One open question blocks the engine ticket:** `validateObjectSchema` demands `properties` on a `type: object` unconditionally, with no exemption when `additional_properties` carries a schema (`shared/config/input_schema.go:1005-1015`), so the map-shaped state fields the corpus actually has — `redis_config`, `sysctl_settings`, `redis_sentinel.master_settings` and `.settings` — have **no expressible form**; the ADR records it rather than guessing at one. Status: **design only, not implemented** — epic NIM-740, this ADR NIM-741, implementation NIM-742 (engine, including the fail-open masking walk), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis service). **Amends [ADR-003](#adr-003-destiny-format-is-yaml-with-typed-schema-cuejson-schema) / [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files) / [ADR-062](#adr-062-named-input-types---reusable-named-input-schemes-via-types--type) / [ADR-083](#adr-083-a-secret-is-a-declared-state-field--the-author-never-writes-a-vault-path).**
+
 ### General mechanism
 
 - A plugin is a separate executable file, supplied as an independent artifact (its own git repo, its own release pipeline, its own versions).
@@ -708,36 +712,60 @@ Each folder `scenario/<name>/` is a separate operation (CRUD-style) on the servi
 
 ### `service.yml` - manifest
 
+> **Implementation status.** The `state_schema` below is written in the **input DSL**, the form
+> agreed on 2026-09-01 ([ADR. One schema dialect](adr/0086-one-schema-dialect.md)) and **not built
+> yet**: today's parser refuses this form outright — it still reads the JSON Schema envelope
+> (`type: object` + `properties:` + a root `required: [names]`), and `validateStateSchema`
+> (`shared/config/service.go:500-543`) demands a root `type: object`, emitting
+> `state_schema_root_not_object` without one (`:509`, `:522`, `:534`). The misparse runs the other
+> way: it is the **old** envelope read by the **new** parser that becomes two state fields called
+> `type` and `properties`, which is why the old form will be refused by name
+> (`state_schema_legacy_json_schema_form`) rather than left to parse. Implementation is NIM-742 (engine
+> and the masking walk), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB
+> redis service — the corpus, including `examples/service/redis/service.yml`, is still in the old
+> form). The rest of the manifest is current.
+
 ```yaml
 # No `name:` — a service is named at registration, not here (NIM-726).
 # No `state_schema_version:` either — the version is the top of the `migrations/` ladder (NIM-735);
 # the linter still requires the key until NIM-736 ships.
 
-# Structure of incarnation.state in the database
+# Structure of incarnation.state in the database. A map <field name> → schema, the SAME
+# dialect as `input:` — no `type: object`/`properties:` wrapper at the root, requiredness
+# is `required: true` on the field, vocabulary is snake_case (ADR. One schema dialect).
 state_schema:
-  type: object
-  required: [redis_type, redis_config]
-  properties:
-    redis_type: { type: string, enum: [standalone, sentinel, cluster, sentinel_only] }
-    redis_version: { type: string }
-    redis_config:
+  redis_type:
+    type: string
+    required: true
+    enum: [sentinel, cluster]
+  redis_version:
+    type: string
+  # redis_config — the opaque merged redis.conf map: `type: object` whose value shape is
+  # carried by `additional_properties:` and which declares no `properties:` of its own.
+  # ⚠ That shape has NO expressible form yet — an open question the ADR records rather
+  # than answers (validateObjectSchema demands `properties:` unconditionally). Same for
+  # sysctl_settings and redis_sentinel's two setting maps. See
+  # adr/0086-one-schema-dialect.md before writing one.
+  redis_users:                        # a TYPED array since migration 005_to_006 — not a map
+    type: array
+    items:
+      type: object                    # ★ a NESTED object still declares type/properties
+      additional_properties: false    # was additionalProperties
+      properties:
+        name:  { type: string, required: true }   # was a sibling `required: [name, perms, state]`
+        perms: { type: string, required: true }
+        state: { type: string, required: true, enum: [on, off] }
+        password:                     # the value lives in Vault, never in state (ADR-0083 §1)
+          type: secret
+          key: name                   # the sibling property that addresses this element's secret
+          label: "Redis user password"
+  redis_hosts:
+    type: array
+    items:
       type: object
-      additionalProperties: true
-    redis_users:                      # map username → {perms, state}
-      type: object
-      additionalProperties:
-        type: object
-        required: [perms, state]
-        properties:
-          perms: { type: string }
-          state: { type: string, enum: [on, off] }
-    redis_hosts:
-      type: array
-      items:
-        type: object
-        properties:
-          sid:  { type: string }
-          role: { type: string, enum: [primary, replica, sentinel] }
+      properties:
+        sid:  { type: string, required: true }
+        role: { type: string, required: true, enum: [primary, replica, sentinel] }
 
 # Dependency artifacts - ref: git tag or branch (see ADR-007).
 # No semver-range - exact ref and nothing more.
@@ -772,6 +800,12 @@ Missing block = both `true` (backcompat).
 
 The complete regulatory specification of the orchestration layer (`on:`/`where:`, probe-idiom, two-level resource resolution, tests, barrier/state-commit) is [`docs/scenario/`](scenario/README.md). DSL task core (`module:`, `include:`, `block:`, `async:`, `loop:`, `register:`, requisites, `retry:`, `timeout:`, `changed_when:`/`failed_when:`) scenario inherits entirely from [`docs/destiny/tasks.md`](destiny/tasks.md) - after [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) the "scenario only `apply:`" invariant has been removed. Below is an illustration of the format.
 
+> **Implementation status.** The `input:` block's dialect is current — what is **not built** is the
+> removal of the object-level list form `required: [names]`, which leaves the whole DSL and is
+> written below as `required: true` per property ([ADR. One schema
+> dialect](adr/0086-one-schema-dialect.md), refused as `input_required_list_removed`;
+> implementation NIM-742, corpus migration NIM-744). Both forms parse today; only one will.
+
 ```yaml
 name: create
 description: Initial bootstrap of Redis HA cluster
@@ -788,9 +822,8 @@ input:
     additional_properties:
       type: object
       properties:
-        acl:   { type: string }
-        state: { type: string, enum: [on, off] }
-      required: [acl, state]
+        acl:   { type: string, required: true }   # was a sibling `required: [acl, state]`
+        state: { type: string, required: true, enum: [on, off] }
   redis_password:
     type: string
     required: true
@@ -854,14 +887,22 @@ The `input:` block validates the scenario input parameters before running (accor
 # service/<name>/types.yml
 types:
   AclUser:
-    type: object
+    type: object                      # a declared type is a schema NODE, so it keeps type/properties
     additional_properties: false
-    required: [name, perms, state]
     properties:
-      name:  { type: string, pattern: "^[a-zA-Z0-9_-]+$" }
-      perms: { type: string }
-      state: { type: string, enum: [on, off] }
+      name:  { type: string, required: true, pattern: "^[a-zA-Z0-9_-]+$" }
+      perms: { type: string, required: true }
+      state: { type: string, required: true, enum: [on, off] }
 ```
+
+> **Implementation status.** The per-property `required: true` above is the agreed form and is **not
+> built**: the object-level `required: [name, perms, state]` still parses today. The catalog is now
+> shared by both contracts — one `AclUser` can serve a scenario's `input:` and a `state_schema`
+> field at once — which is what the [one-schema-dialect ADR](adr/0086-one-schema-dialect.md) buys,
+> together with `type: secret` becoming legal in a shared type (⚠ the **input** side of that is
+> deferred to NIM-751 and is neither built nor decided) and `$type` accepting the referring node's
+> own `properties:` in `state_schema` only, merged add-only and fail-closed. Implementation
+> NIM-742; corpus migration NIM-744.
 
 ```yaml
 # scenario/add_user/main.yml

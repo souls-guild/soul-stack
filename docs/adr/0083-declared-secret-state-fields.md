@@ -635,3 +635,97 @@ service name is blameless — a comparison on the name structurally cannot see i
 **Breaking, deliberately, and cheaply**: a service already registered under one of the
 four names stops loading and must be renamed. This lands before the release, and the
 `examples/` tree names none of them.
+
+### Amendment 2026-09-01 (NIM-741, [One schema dialect](0086-one-schema-dialect.md)): the declaration is spelled in the input dialect
+
+`state_schema` stops being JSON Schema and is written in the **same dialect as `input:`** — a map
+`<field name>` → schema, no `type: object` / `properties:` wrapper at the root, `required: true`
+on the field instead of a root `required: [names]` list, and a snake_case vocabulary. §1's
+declaration is untouched in substance: the two supported shapes, the `key:` sibling, the derived
+path, the closed node grammar and the total refusal all stand. Four things change, and one of them
+changes an error code that today fires for the wrong reason. **Design only, not implemented** —
+NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis
+service).
+
+**(a) The `required:` refusal survives, but it has to be re-hung on a different key, and the naive
+move breaks it.** §1 refuses listing a secret in the element's `required:` on the ground that no
+state instance could satisfy it — the value is in Vault, so it is never present in the state the
+schema describes. That ground is unchanged, and after the move it applies to `required: true` on
+the `type: secret` property. But the check that enforces it reads the **list**:
+`shared/config/secret_field.go:365-373` iterates `stringSeq(items["required"])` and matches the
+property name. Once the list form is gone that loop iterates nothing, and `secret_field_required`
+silently stops firing. ⚠ The obvious repair — just let the node carry `required` — fires the
+**wrong code**: `checkSecretNodeGrammar` (`:383-399`) rejects any key outside `secretNodeKeys`
+(`{type, key, label}`, `:93`), so the author gets `secret_field_unknown_key` reading *"type: secret
+does not take required (want type/key/label)"*. That message is true about the grammar and useless
+about the mistake: the author does not learn that a required secret is unsatisfiable, only that a
+key was not recognised. `required` must therefore be **special-cased ahead of the grammar check**,
+keeping `secret_field_required` with its own message. The same node keeps its own reason for the
+closed grammar — see (b).
+
+**(b) The node grammar stays `type`/`key`/`label`, and the shared input keys are refused on it.**
+Sharing one dialect with `input:` makes a long list of keys syntactically available beside
+`type: secret` that were never meant for it — `default`, `enum`, `pattern`, `min_length` /
+`max_length`, `secret`, `prefill_from_state`, `required_when`. All are refused, on §1's own ground:
+*a value that never enters state never passes through state validation*, so a constraint written
+there reads as enforced and is not. ★ **`description` is refused too**, and for a different reason
+than the rest — not "unenforceable" but "already spelled": `label` is this node's caption, and two
+keys for one caption is exactly the drift this ADR exists to remove. The one addition the shared
+dialect brings is `required`, which is refused with its own code per (a) rather than as an unknown
+key. Note the direction of travel: `secret: true` remains legal *elsewhere* in `state_schema` and
+keeps its orthogonal meaning (§1, [ADR-010](0010-templating.md) §7.4) — it is refused **on a
+`type: secret` node**, where it would assert that a value living in Vault lives in state.
+
+**(c) "Exactly two legal positions" stays decidable only at the point of USE — which is why the
+secret rules are not `soul-lint`'s `types.yml` checks.** §1's two shapes are positional: a
+top-level property, or a property inside a top-level array's `items` next to `key:`. Once
+`type: secret` is legal in a shared type ([ADR-062](0062-input-types.md), amendment of the same
+date), the same catalog entry is legal or illegal depending on where it is referenced — legal under
+an array's `items`, refused one object deeper with `secret_field_unsupported_location`
+(`shared/config/secret_field.go:265-274`). A type is therefore **neither legal nor illegal in
+isolation**, and a standalone verdict over `types.yml` would have to be one or the other: refusing
+would ban a legal use, accepting would bless an illegal one. This is why the secret rules are
+deliberately **absent** from `soul-lint`'s standalone type checks
+(`soul-lint/internal/validate/type_refs.go:6-77`), which are scoped to what genuinely needs the
+catalog — `input_type_duplicate` / `input_type_cycle` / `input_type_unknown`. That is a boundary,
+not a gap: the position check runs after expansion, where the position exists.
+
+The **reserved-name fence of the 2026-08-26 amendment survives the move for the same reason, from
+the other side.** `IsReservedStateField` is evaluated on the **state field name**
+(`reservedStateFieldIssue`, `:283-292`), and a state field name is a `state_schema` key — it does
+not come from the referenced type and does not move when `$type` expands. So the fence stays static
+after expansion, exactly as the 2026-08-26 text requires: the collision is decided by the field
+name alone, because the element key that would complete the path is state DATA.
+
+**(d) The `<key>` guard is untouched, deliberately.** Nothing about the dialect reaches the one
+segment an attacker can influence. `<key>` still comes from state data — an operator-supplied user
+name — `ValidVaultPathSegment` still enforces the ADR-064 grammar `^[a-zA-Z0-9_-]+$`
+(`shared/config/secret_field.go:59-66`), and `SecretField.VaultPath` (`:153-189`) still fails
+closed on any segment that does not match, plus the reserved-namespace refusal. A schema dialect is
+an authoring surface; this is a data-path check, and the two must not be conflated because the
+migration touches one of them.
+
+**Two engine hazards the parser change must carry, and they fail in opposite directions.**
+
+- **The derivation collector fails LOUD.** `CollectSecretFields` reads
+  `schema["properties"]` at the **root** of `state_schema` (`:231`) and claims from there, while
+  `scanSecretNodes` finds every `type: secret` node structurally. Under the new dialect the root has
+  no `properties`, so nothing is claimed and every declared secret comes back as
+  `secret_field_unsupported_location` — wrong, but noisy, which is the tolerable half.
+- **The masking walk fails OPEN**, silently, and is the reason this cannot ship in two commits:
+  `keeper/internal/incarnation.CollectStateSchemaSecrets` hardcodes `properties` / `items` /
+  `additionalProperties` (`keeper/internal/incarnation/secret_schema.go:82`, `:89`, `:92`) and
+  returns an **empty** set, which is byte-identical to *"this service declares no secrets"*. Full
+  account in [ADR-010](0010-templating.md), amendment of the same date. The walk migrates in the
+  same commit as the parser.
+
+One detail of the scan is easy to get wrong and expensive to get wrong: `scanSecretNodes` carries an
+`inProps` flag saying "this map's keys are author-chosen field names", and it exists so the skip set
+`{default, const, enum, examples}` (`:453`) never applies to a field that happens to be **named**
+one of those. Today the `state_schema` root is not such a bag; under the new dialect it **is**, so
+the root call must pass `inProps: true`. Otherwise a state field named `default` takes its whole
+subtree out of the walk and a declaration inside it comes back as "no secrets here" — the single
+outcome that function's contract rules out (`:417-431`). Relatedly, `secretPropsBag` (`:456`) lists
+`patternProperties` beside `properties`; the new dialect refuses `patternProperties` outright (it
+has no counterpart in the input DSL and zero authored uses in the tree), so that entry becomes dead
+weight rather than a rule.
