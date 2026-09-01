@@ -41,6 +41,13 @@ Soul-side / Keeper-side dispatcher - scenario-key `on:`
 Soul-side core are used on hosts (`on:` omitted or coven tags), Keeper-side
 core - `on: keeper` only.
 
+The Soul-side / Keeper-side split of this catalog is exactly what the routing
+derivation of [ADR-0087](../adr/0087-task-side-derived-from-module-address.md)
+reads: the two registries below share no base name, so the module address alone
+decides the side and `on: keeper` on a core address becomes redundant. That ADR is
+accepted and **not implemented**, so the dispatcher described above is still the
+one that ships.
+
 ## Soul-side core modules
 
 Statically built into the `soul` binary. Apply the same in pull (daemon) and push

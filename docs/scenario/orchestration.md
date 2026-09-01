@@ -510,7 +510,7 @@ tasks: [ ... ]
 | Form | Semantics |
 |---|---|
 | **omitted** | entire incarnation: all **member** hosts, resolved via the membership relation `incarnation_membership` (NOT via a coven). `incarnation.name` is not a Coven — `on: ["${ incarnation.name }"]` is a **validation error** (steering to the omitted form), see [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) |
-| `on: keeper` | keeper-side: local task on the keeper itself (cloud-create, vault-resolve, http-call) |
+| `on: keeper` | keeper-side: local task on the keeper itself (cloud-create, vault-resolve, http-call). On its way out: [ADR-0087](../adr/0087-task-side-derived-from-module-address.md) derives the side from the module address and makes this form an error on a **core** address. Accepted, **not implemented** — the table describes the engine that ships. |
 | `on: [coven-a, coven-b]` | intersection (AND) of the listed **stable** covens; result **always ⊆ members** (the roster is already membership-scoped) |
 
 ```yaml
@@ -995,6 +995,11 @@ there. The offline half is what the diagnostic is really for — the L0 trial fo
 module **address**, so an unrouted one predicts `state_after` exactly as a routed one does, and the
 case goes green on a plan the run cannot execute. The check runs after `include:` is resolved, so a
 capture written in a shared file is flagged at that file's own line, not at the `- include:` node.
+
+**This rule reverses when [ADR-0087](../adr/0087-task-side-derived-from-module-address.md) lands:**
+the side becomes derived from the address, so writing `on: keeper` on a capture becomes the error
+(`on_keeper_redundant`) and `state_capture_not_on_keeper` is retired. That ADR is accepted and **not
+implemented** — the paragraph above is the engine that ships today.
 
 The **cross-host barrier is unchanged** and still unconditional:
 

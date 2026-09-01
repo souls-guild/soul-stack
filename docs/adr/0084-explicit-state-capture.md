@@ -737,3 +737,29 @@ guard needs to follow is a NIM-619 question, not a NIM-699 one.
   authors, who do not; and it makes the ordering guard undecidable statically.
 - **Capture visible to later expressions in the same run** (the F5 alternative). Order-dependent
   read-modify-write with no grammar to signal it. See above.
+
+## Amendment 2026-09-01 (NIM-748, [ADR-0087](0087-task-side-derived-from-module-address.md)): F-D's rule survives, its trigger moves off `on:`
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-749 / NIM-750.
+
+[ADR-0087](0087-task-side-derived-from-module-address.md) derives a task's side from its module
+address, so `on: keeper` on a `core.state.<verb>` capture becomes an error rather than a
+requirement. Two things follow for this ADR.
+
+**F-D stands.** A `when:` reading `register.*` / `soulprint.*` on a keeper-side task is still an
+error, with the same code (`when_on_keeper_dynamic_unsupported`) and the same reasoning; what moves
+is the **trigger**. Today `validateWhenOnKeeper` is reached only from the `present["on"]` branch, so
+it never runs when the author omits the key — which leaves a hole F-D did not close: on a keeper-side
+module written without `on: keeper`, the predicate rides to the agent and is evaluated **before** the
+module lookup, so `when` false on every host yields SKIPPED everywhere, a **green run**, and the
+keeper-side effect silently absent. Under derivation the shape is unreachable, and the validator
+relocates to the `present["module"]` branch.
+
+**`state_capture_not_on_keeper` is retired.** The diagnostic exists only to force the author to write
+a key the address already implies, and ADR-0087 makes writing it an error instead. Its **destiny
+half is not retired but generalised**: the doc comment on that validator names the destiny case, a
+destiny task is Soul-side by construction, and the replacement code `keeper_module_in_destiny` covers
+all seven keeper-side bases rather than `core.state` alone.
+
+The capture verbs, the ordering guard, the cross-host barrier and `register.hosts.<name>` are
+untouched. Until NIM-749 / NIM-750 land, `on: keeper` on a capture remains required.

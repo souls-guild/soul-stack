@@ -236,3 +236,29 @@ Turning either field into a control is a **separate ADR** with its own cost: enf
 - **No backcompat with the authored-manifest form.** There is no release yet — the old path is deleted, not branched on ([CLAUDE.md](../../CLAUDE.md)).
 - **Guard tests, e2e > integration > unit:** a stamped artifact whose schema disagrees with its code must fail `verify`; a slot whose trailer is missing or corrupt must fail closed, not fall back.
 - **Not settled by this amendment:** the authoring form for `cloud_driver` / `ssh_provider` / `soul_beacon`. The mechanism above — source-keyed registry, alias-named slot, one executable in `dist/`, no self-name — is forced on every kind, because discovery and the slot layout are shared code. The Go-side generator, however, is specified only for SoulModule bundles (`sdk/module`); what replaces the authored `spec.profile_schema` / `spec.provider_kind` / `spec.params_schema` for the other three kinds is open, and is not decided here.
+
+## Amendment 2026-09-01 (NIM-748, [ADR-0087](0087-task-side-derived-from-module-address.md)): the per-module shape grows a `side` field
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-749 / NIM-750.
+
+The schema document's **per-module** object — the one that already carries `capabilities` and
+`side_effects` for the reason given in (f)/(g) — grows one more field:
+
+**`side: keeper | soul`, default `soul`.** Per module, not per document: a bundle serves several
+modules of one subject, a document-level field would foreclose a mixed artifact, and it would land
+on the three kinds that carry no `modules[]` at all (`cloud_driver`, `ssh_provider`, `soul_beacon`),
+where "where the module runs" has no meaning.
+
+**The absent key and `side: soul` are indistinguishable by design, permanently.** Documents are
+signed and stored, so requiring the key — or later "normalising" stored documents by stamping the
+default in — would change every artifact's sha256 and invalidate every existing approval at once.
+
+⚠ **On a plugin the field is accepted and inert.** The keeper cannot execute a keeper-side plugin at
+all (NIM-688): `applyKeeperTask` resolves against a `coremod.Registry` only, so a `side: keeper`
+plugin step still fails `unknown keeper-side module` — **loudly, never as a silent skip**. This is
+stated because an unenforced declaration that reads like a control is exactly the defect the
+2026-08-06 amendment above spent three paragraphs undoing for `side_effects` /
+`required_capabilities`, and ADR-0087 must not re-ship it under a new name.
+
+Rollout is **souls first, then keeper, then re-stamp artifacts**: decoding is strict, so a document
+carrying `side:` fails to parse on an older `soul`, which reads the document at install.

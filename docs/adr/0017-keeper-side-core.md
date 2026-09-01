@@ -146,3 +146,26 @@ The module introduced by the previous amendment keeps its base name and grows th
 **The capture point moves.** The field is written to `incarnation.state` **at the step**, inside the run that produced it, instead of at the end-of-run commit `state_changes:` fed. Two consequences an author can rely on: a later task reads what an earlier one wrote, and a run that fails half-way leaves the state it had already captured rather than nothing. Every other keeper-side module is untouched — this amendment adds states to one base, it does not change the dispatcher.
 
 **One flow-control key is refused on the way in.** A `when:` reading `register.*`/`soulprint.*` on **any** `on: keeper` task is now an error (`when_on_keeper_dynamic_unsupported` at parse, `ErrUnsupportedDSL` at render — [ADR-0084](0084-explicit-state-capture.md) F-D). It is the one place this amendment does touch the dispatcher's contract rather than a single base: `when:` is a Soul-side predicate evaluated in the Soul's flow-control sandbox, and a keeper task never reaches a Soul, so the key was accepted and dropped on the floor. That was tolerable while a keeper task only called out to a registry; it is not once a keeper task is the sole writer of `incarnation.state`. A **static** `when:` is untouched — the keeper settles it at render, before the task is routed keeper-side — and the working replacement for the dynamic one is the condition inside the value (`${ cond ? a : b }`, evaluated in the keeper env where a previous keeper task's register is bound). The key-by-key answer for a keeper-side task is [docs/keeper/modules.md](../keeper/modules.md).
+
+## Amendment 2026-09-01 (NIM-748, [ADR-0087](0087-task-side-derived-from-module-address.md)): the dispatcher is the module address, not `on: keeper`
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-749 / NIM-750.
+
+This ADR introduced the keeper-side core with `on: keeper` as its dispatcher.
+[ADR-0087](0087-task-side-derived-from-module-address.md) moves the dispatch onto the **module
+address**: the keeper-side and Soul-side core registries share no base name, so the address alone
+decides the side. `on: keeper` on a keeper-side core address becomes redundant and therefore an
+error; the correct form is to omit the key.
+
+Two consequences worth naming here rather than leaving to the implementer. First, the seven
+keeper-side bases are `core.bootstrap` / `core.cert` / `core.choir` / `core.cloud` / `core.soul` /
+`core.state` / `core.vault`, and **`core.cert` is missing from `shared/coremanifest` today** even
+though the states this ADR's 2026-07-01 and 2026-07-09 amendments shipped are live — ADR-0087 rules
+that a base absent from that table has **no side** (all new diagnostics stay silent, routing falls
+back to the written `on:`), and closes the hole in the same epic. Second, the keeper registry is
+**conditional on its dependencies**, so any guard test pinning the table against the registry must
+build a full-dependency registry or it passes vacuously on `core.state`, `core.choir`, `core.cert`
+and `core.bootstrap`.
+
+Until NIM-749 / NIM-750 land, `on: keeper` remains required and everything above describes the
+engine that ships.

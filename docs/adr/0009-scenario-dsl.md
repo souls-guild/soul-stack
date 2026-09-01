@@ -452,3 +452,22 @@ Normative edits — [`docs/scenario/orchestration.md §7`](../scenario/orchestra
 (the barrier is restated without the state commit) and
 [§7.1](../scenario/orchestration.md#71-the-capture-verbs) (the capture verbs, the normative spec),
 plus the covenant section of the same file.
+
+## Amendment 2026-09-01 (NIM-748, [ADR-0087](0087-task-side-derived-from-module-address.md)): `on:` returns to one meaning — the scalar `keeper` leaves the key on core addresses
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-749 / NIM-750.
+
+The orchestration delta above lists `on:` in two roles at once — a coven filter for a Soul task, and
+the magic scalar `keeper` meaning "do not send this to hosts at all". [ADR-0087](0087-task-side-derived-from-module-address.md)
+removes the second: a task's side is **derived from its module address**, the two core registries
+being disjoint, and `on:` becomes a coven list and nothing else.
+
+What changes for an author: on a **core** address `on: keeper` becomes an error
+(`on_keeper_redundant`), a coven list on a keeper-side core address becomes an error that is never
+silently dropped (`on_covens_on_keeper_module`), and `on: keeper` on a Soul-side core address gets
+its own separate code (`on_keeper_on_soul_module`). On a **plugin** address `on: keeper` stays legal
+until NIM-688. There is **no transition window** — the break lands in one release.
+
+Everything else in this ADR is untouched: `where:`, `serial:`, `run_once:`, `apply:` and the
+`core.state.<verb>` capture step all keep their semantics. Until NIM-749 / NIM-750 land, the text
+above describes the engine that ships.
