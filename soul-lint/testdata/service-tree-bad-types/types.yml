@@ -1,0 +1,8 @@
+# Broken: a type declared with a `type:` that does not exist. Nothing in this tree
+# has a $type reference, so nothing else would ever read this file.
+types:
+  AclUser:
+    type: objct
+    properties:
+      name:
+        type: string

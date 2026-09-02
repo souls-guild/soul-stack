@@ -1,0 +1,11 @@
+# A VALID catalog, and nothing in this tree references it. It is here so the walk
+# has a type-catalog part to report on even when no `$type` resolve would have
+# read the file — the broken counterpart lives in ../service-tree-bad-types/.
+types:
+  AclUser:
+    type: object
+    properties:
+      name:
+        type: string
+      password:
+        type: secret

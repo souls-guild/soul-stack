@@ -95,6 +95,33 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	if !ok {
 		return ExitIOFatal
 	}
+
+	diags, ok := diagnose(opts, src, modules)
+	if !ok {
+		fmt.Fprintf(errOut, "soul-lint: unknown kind %d\n", opts.Kind)
+		return ExitIOFatal
+	}
+
+	printDiagnostics(opts, diags, out)
+	if diag.HasErrors(diags) {
+		return ExitHasErrors
+	}
+	return ExitOK
+}
+
+// diagnose runs the check set for one document — everything Run does between
+// reading the bytes and printing. It is split out because [RunTree] needs the
+// same per-document pipeline for every file of a service tree, and a second copy
+// of this switch is how a check starts existing in one entry point and not the
+// other.
+//
+// The bytes are passed in rather than read here: the tree walk turns a read
+// failure into a diagnostic and keeps going, where Run makes it a fatal exit, and
+// that difference belongs to the caller.
+//
+// The bool reports whether the Kind is one this function knows; false means the
+// caller was constructed wrong, not that the document is bad.
+func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) ([]diag.Diagnostic, bool) {
 	cfgOpts := config.ValidateOptions{ModuleManifests: modules}
 
 	var diags []diag.Diagnostic
@@ -205,15 +232,9 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	case KindManifest:
 		diags = schemaDocumentDiags(opts.Path, src)
 	default:
-		fmt.Fprintf(errOut, "soul-lint: unknown kind %d\n", opts.Kind)
-		return ExitIOFatal
+		return nil, false
 	}
-
-	printDiagnostics(opts, diags, out)
-	if diag.HasErrors(diags) {
-		return ExitHasErrors
-	}
-	return ExitOK
+	return diags, true
 }
 
 // schemaDocumentDiags validates one plugin schema document — the published

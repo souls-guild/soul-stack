@@ -1,0 +1,14 @@
+# The SECOND scenario, and the NIM-716 shape: its defect is not in this file but
+# in the body it includes, and that body resolves LOCALLY (capture.yml sits right
+# here, no service level needed).
+#
+# NIM-716 is the neighbouring defect where such an error, linted OUTSIDE a service
+# tree, is downgraded to a `stage_include_unresolved` hint with exit 0 — a message
+# that says the include did not resolve when it resolved and was read. A tree run
+# is inside a service tree by construction, so it must report the body's own
+# errors at the body's own coordinates.
+name: beta
+description: Broken on purpose - the error is in the locally-resolved include body
+
+tasks:
+  - include: capture.yml

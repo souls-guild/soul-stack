@@ -7,6 +7,35 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- `soul-lint validate-service-tree <dir>` — one invocation checks a WHOLE service
+  repository and reports every part of it: the manifest, `types.yml`, every
+  scenario in `scenario/` and `upgrade/` (and through each, the covenant it
+  `extends:` and every `include:` body the ENGINE would reach), plus a
+  `migrations_unchecked` hint over a ladder the linter cannot read yet
+  ([docs/soul-lint.md](docs/soul-lint.md), NIM-753). **One broken part does not hide the others** — that is the whole
+  feature. The per-file commands check one document per invocation, so a service
+  repository had to orchestrate the sequence in a `set -e` script that stopped at
+  the first non-zero exit; in the WB redis service that first exit was a one-line
+  manifest error, and eight accumulated divergences sat behind it for as long as
+  the manifest stayed red. Nothing here ends the walk: a part that cannot be read
+  contributes an `io_error`, a check that panics contributes `lint_internal_panic`,
+  and only a caller error (not a service tree, an unresolvable `--modules` binding)
+  is fatal. The report is the per-file reports concatenated in a fixed order, plus
+  the parts no per-file command covers — `types.yml` is now parsed on its own
+  account, so a catalog nobody currently `$type`-references stops passing every
+  check until the first scenario that uses it. New codes:
+  `service_tree_no_scenarios` (warning), `migrations_unchecked` (hint),
+  `lint_internal_panic` (error). An upgrade scenario's `include:` resolves out of
+  `scenario/<slug>/` and `scenario/`, not out of `upgrade/<slug>/` — the linter
+  mirrors the engine, which builds those levels from the scenario name and never
+  learns the channel, so a body written beside an upgrade scenario is reported as
+  unresolvable instead of being blessed and then failing on the run — the two levels
+  are fixed directories keyed on the scenario name
+  ([orchestration.md](docs/scenario/orchestration.md) §6), not an engine defect. That
+  resolver is shared, so **`validate-scenario` on an `upgrade/<slug>/main.yml`
+  changed with it**: it used to treat that path as a loose file, resolving a sibling
+  body the run cannot reach and downgrading an unresolvable include to a hint with
+  exit 0. The rest of the per-file `validate-*` family is unchanged.
 - `soul-lint list-secret-paths <service.yml> --service-name <name>` — the derived
   Vault address of every secret a service declares
   ([docs/soul-lint.md](docs/soul-lint.md), NIM-743). The path is derived and never
@@ -201,6 +230,20 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **`soul-lint` no longer reports a real error as "the include does not resolve"**
+  ([ADR-009](docs/adr/0009-scenario-dsl.md) amendment, NIM-716). Linting a scenario
+  OUTSIDE a service tree, every error out of an expanded `include:` was downgraded
+  to a `stage_include_unresolved` hint with **exit 0** — the condition tested only
+  "no service level" and "error level", nothing about what had failed. So a body
+  sitting beside the scenario, resolved locally, read, and checked by the same code
+  that checks it inside a service tree came back as
+  `include does not resolve offline (block_on_keeper_invalid)`: a sentence whose
+  every clause is false, over a defect the run then passed. The downgrade now covers
+  a target that was not **found** and nothing else, and the membership question is
+  asked of the producer (`config.IsIncludeResolveDiag`) instead of a second copy of
+  the code list. An unfindable target outside a service tree is still a hint with
+  exit 0 — that one really is the linter's blind spot rather than the author's
+  mistake.
 - **A renamed file in the artifact reddened nobody, so the rename was found one
   consumer at a time.** `NIM-377` replaced the plugin's hand-written
   `manifest.yaml` with a generated document, and the consumers naming that file

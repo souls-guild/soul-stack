@@ -1,0 +1,14 @@
+# A tree whose ONLY defect is in types.yml, and where nothing references a type.
+#
+# Every per-file check passes here: the manifest's state_schema carries no $type,
+# neither does the scenario's input:, and the catalog is read only as a side
+# effect of resolving one. So the broken catalog is invisible to every per-file
+# command and stays invisible until the first scenario that starts using a type —
+# by then at the keeper, not offline. The whole-service walk parses the catalog on
+# its own account, which is the one thing that makes this tree red.
+state_schema_version: 1
+description: The catalog is broken and nothing references it
+
+state_schema:
+  greeting_file:
+    type: string

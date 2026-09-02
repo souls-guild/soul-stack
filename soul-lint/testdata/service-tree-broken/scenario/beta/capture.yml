@@ -1,0 +1,9 @@
+# The included body. `block:` is not allowed on a keeper-side task, and
+# core.state.set is a keeper-side module used off the keeper — two errors of the
+# body itself, at the body's own coordinates. Copied from NIM-716's reproduction.
+- name: record the topology
+  on: keeper
+  block:
+    - name: the field
+      module: core.state.set
+      params: { field: mode, value: sentinel }

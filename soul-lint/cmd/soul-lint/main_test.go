@@ -55,22 +55,85 @@ func TestRunSubcommand_JSONFlag(t *testing.T) {
 	}
 }
 
-// TestPrintUsage_MentionsValidateManifest — usage must advertise the new
-// subcommand, or users would never learn it exists.
-func TestPrintUsage_MentionsValidateManifest(t *testing.T) {
+// Usage must advertise every subcommand, or users never learn one exists.
+//
+// The loop over commandTable cannot fail on the name — the usage list is generated
+// from that same table, so it is a tautology and is kept only for the `run == nil`
+// half, which catches a row that main would dispatch to nothing. The assertion
+// that carries weight is the spelled-out list below it: those names are written
+// here and nowhere else, so dropping or renaming a command is a deliberate edit in
+// two places rather than a silent one in a table.
+func TestPrintUsage_ListsEveryCommand(t *testing.T) {
 	var buf bytes.Buffer
-	// printUsage takes a *os.File; spinning up a temp file is overkill, so
-	// this stays a `_ = buf` no-op instead of wiring a captureUsage helper.
-	// It'd be simpler to strings.Contains a buffer copy, but printUsage
-	// writes straight to *os.File — for this test it's enough to know
-	// "validate-manifest" shows up via runSubcommand's own usage table
-	// below. If printUsage regresses, the CLI binary still catches it.
-	_ = buf
-	// A subprocess check would be excessive for a unit test; we settle for
-	// checking runSubcommand --help below.
+	printUsage(&buf)
+	usage := buf.String()
+	if len(commandTable) == 0 {
+		t.Fatal("commandTable is empty")
+	}
+	for _, c := range commandTable {
+		if !strings.Contains(usage, c.name) {
+			t.Errorf("usage does not mention %q:\n%s", c.name, usage)
+		}
+		if c.run == nil {
+			t.Errorf("%q is listed with no run function", c.name)
+		}
+	}
+	// Spelled out rather than derived, so a rename of the whole-service mode has
+	// to be a deliberate edit here too (NIM-753).
+	for _, want := range []string{"validate-manifest", "validate-service-tree"} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("usage does not mention %q:\n%s", want, usage)
+		}
+	}
+}
+
+// TestPrintUsage_MentionsValidateManifest — the per-command --help still returns
+// 0 rather than falling into the "no path" IO-fatal branch.
+func TestPrintUsage_MentionsValidateManifest(t *testing.T) {
 	code := runSubcommand("validate-manifest", "validate-manifest <path> [--json]", validate.KindManifest, []string{"--help"})
 	if code != validate.ExitOK {
 		t.Fatalf("--help must return ExitOK, got %d", code)
+	}
+}
+
+// The whole-service mode's CLI surface (NIM-753). The walk itself is tested in
+// internal/validate; these pin that the command is reachable, that its positional
+// is a DIRECTORY, and that it takes the same flags as the per-file family.
+func TestRunValidateServiceTree_CLI(t *testing.T) {
+	var cmd command
+	for _, c := range commandTable {
+		if c.name == "validate-service-tree" {
+			cmd = c
+		}
+	}
+	if cmd.run == nil {
+		t.Fatal("validate-service-tree is not in commandTable")
+	}
+
+	tree := filepath.Join("..", "..", "testdata", "service-tree-broken")
+	if code := cmd.run(cmd, []string{tree, "--service-name", "broken"}); code != validate.ExitHasErrors {
+		t.Errorf("the broken tree → %d, want %d", code, validate.ExitHasErrors)
+	}
+	// The manifest path addresses the same tree — the convenience spelling for
+	// someone who has just run validate-service on that exact path.
+	if code := cmd.run(cmd, []string{filepath.Join(tree, "service.yml"), "--json"}); code != validate.ExitHasErrors {
+		t.Errorf("the <dir>/service.yml spelling → %d, want %d", code, validate.ExitHasErrors)
+	}
+	for _, args := range [][]string{
+		nil,                      // no positional
+		{"--unknown", tree},      // unknown flag
+		{tree, "--modules"},      // a binding was asked for and not given
+		{tree, tree},             // two positionals
+		{tree, "--service-name"}, // the name was asked for and not given
+	} {
+		if code := cmd.run(cmd, args); code != validate.ExitIOFatal {
+			t.Errorf("%v → %d, want %d", args, code, validate.ExitIOFatal)
+		}
+	}
+	for _, f := range []string{"-h", "--help"} {
+		if code := cmd.run(cmd, []string{f}); code != validate.ExitOK {
+			t.Errorf("%s → %d, want %d", f, code, validate.ExitOK)
+		}
 	}
 }
 
@@ -84,10 +147,6 @@ func TestRunSubcommand_HelpFlag(t *testing.T) {
 		}
 	}
 }
-
-// Sanity tracker: catches main's usage string dropping the mention of
-// validate-manifest (e.g. after a refactor).
-var _ = strings.Contains
 
 // `--modules` is repeatable and takes `<alias>=<path>` (NIM-377). The alias is on the
 // flag because the artifact carries no name of its own, so these cases pin the parsing

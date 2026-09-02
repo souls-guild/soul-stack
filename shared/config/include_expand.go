@@ -387,7 +387,7 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 
 	data, display, err := e.resolve(name)
 	if err != nil {
-		e.addError("include_resolve_failed", fmt.Sprintf("include %q: %v", name, err), "")
+		e.addError(CodeIncludeResolveFailed, fmt.Sprintf("include %q: %v", name, err), "")
 		return nil, false
 	}
 
@@ -476,6 +476,39 @@ func includeModifierReason(task Task) string {
 		return "run_once:"
 	}
 	return ""
+}
+
+// CodeIncludeResolveFailed is raised when an include's TARGET cannot be found —
+// the one expansion failure that depends on which levels the caller can see. It
+// is named here, beside the call that raises it, because a consumer that has to
+// tell "the target was not found" from "the target was found and its body is
+// wrong" must ask the producer rather than keep its own copy of the list.
+const CodeIncludeResolveFailed = "include_resolve_failed"
+
+// IsIncludeResolveDiag reports whether a diagnostic code out of [ExpandIncludes]
+// is about RESOLVING an include target, as opposed to a defect of the include
+// node itself or of a body that resolved and was read.
+//
+// The distinction has exactly one consumer and one purpose: an offline linter
+// standing outside a service tree cannot perform the service-level half of the
+// resolve, so a target it fails to find may be perfectly findable at the keeper —
+// that failure, and only that one, is a deferral rather than a defect. Every other
+// expansion error is judged by code that does not care where the file sits:
+//
+//   - include_modifier_unsupported and include_when_dynamic_unsupported are
+//     properties of the include NODE, true wherever it is read;
+//   - include_cycle and include_depth_exceeded are properties of files that DID
+//     resolve, and outside a service tree strictly FEWER files resolve — so a
+//     cycle or an overlong chain found there is a subset of the real one, never
+//     an artefact of the missing level;
+//   - anything else in the slice came out of parsing a body that was read, at
+//     that body's own coordinates.
+//
+// Treating those as deferrals is [NIM-716]: a real error reported as "does not
+// resolve offline" — text that is false, since the include resolved and the file
+// was read — with exit 0 behind it.
+func IsIncludeResolveDiag(code string) bool {
+	return code == CodeIncludeResolveFailed
 }
 
 // addError records a semantic expansion diagnostic (cycle/depth/modifier/

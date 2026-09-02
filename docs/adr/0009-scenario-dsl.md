@@ -388,6 +388,15 @@ gave their common tasks one flat namespace to live in.
   second tier genuinely does not exist offline, and the hint is kept. Deferring to the keeper was
   tolerable while a service had a handful of flat includes; with a family directory per scenario
   group it would have left the majority of references unchecked at authoring time.
+  **The kept hint covers a target that was not FOUND, and nothing else** (amendment 2026-09-02 /
+  NIM-716). It used to cover every error out of an expansion, tested by level and severity alone,
+  so a body that resolved **locally** and was read — the same bytes, checked by the same code as
+  inside a service tree — came back as `include does not resolve offline (<its real code>)` with
+  exit 0: a sentence whose every clause is false, over a real defect. The membership question is
+  asked of the producer (`config.IsIncludeResolveDiag`) rather than answered from a second copy of
+  the list. A cycle or an overlong chain is not downgraded either: outside a service tree strictly
+  *fewer* includes resolve, so such a finding is a subset of the real one, never an artefact of the
+  missing tier.
 
 **Backward compatibility is total.** The grammar is a strict superset and the discovery skip keys
 on a prefix no existing directory carries, so a service in the flat layout — `examples/service/redis`

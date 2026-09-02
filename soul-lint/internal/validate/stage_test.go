@@ -268,6 +268,220 @@ func TestStageDiagnostics_LooseFileKeepsHint(t *testing.T) {
 	}
 }
 
+// NIM-716. Outside a service tree, an error out of a body that DID resolve is
+// the body's own error and is reported as one — at the body's coordinates and
+// with exit 1. Only a target that was not FOUND is a deferral to the keeper.
+//
+// The defect this pins: the downgrade used to test nothing but "no service level"
+// and "error", so a file sitting right beside the scenario, resolved locally, read,
+// and checked by the same code that checks it inside a service tree, came back as
+// `include does not resolve offline (block_on_keeper_invalid)` — a sentence whose
+// every clause is false — with exit 0 behind it. The author reads that and goes
+// looking for a resolution problem that does not exist.
+func TestStageDiagnostics_LooseFileReportsIncludeBodyErrors(t *testing.T) {
+	root := t.TempDir() // deliberately WITHOUT service.yml: a loose scenario
+	body := filepath.Join(root, "capture.yml")
+	stageWrite(t, body, "- name: record the topology\n"+
+		"  on: keeper\n"+
+		"  block:\n"+
+		"    - name: the field\n"+
+		"      module: core.state.set\n"+
+		"      params: { field: mode, value: sentinel }\n")
+	main := filepath.Join(root, "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n  - include: capture.yml\n")
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	if !diag.HasErrors(diags) {
+		t.Fatalf("the include body's own errors were downgraded to hints: %+v", diags)
+	}
+	if hasDiagCode(diags, "stage_include_unresolved") {
+		t.Fatalf("the include resolved and was read - reporting it as unresolved is the lie NIM-716 removes: %+v", diags)
+	}
+	d := diagWithCode(diags, "block_on_keeper_invalid")
+	if d == nil {
+		t.Fatalf("want block_on_keeper_invalid from the body, got %+v", diags)
+	}
+	// The coordinates must be the BODY's, not the scenario's: an error attributed
+	// to main.yml sends the author to a file with nothing wrong in it.
+	if filepath.Base(d.File) != "capture.yml" {
+		t.Errorf("diagnostic file = %q, want the included body capture.yml", d.File)
+	}
+	if d.Line == 0 {
+		t.Errorf("diagnostic carries no line: %+v", *d)
+	}
+}
+
+// The other half of the same rule, and the reason the downgrade exists at all: a
+// target that genuinely cannot be found outside a service tree stays a HINT with
+// exit 0, because the missing service level is the linter's blind spot and not
+// the author's mistake. Sits beside TestStageDiagnostics_LooseFileKeepsHint,
+// which pins the same thing for the plain case; this one pins that narrowing the
+// condition to resolve-only did not narrow it to nothing.
+func TestStageDiagnostics_LooseFileStillDefersAnUnfoundTarget(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n  - include: install.yml\n"+stageLocalTask)
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	if diag.HasErrors(diags) {
+		t.Fatalf("an unfindable target outside a service tree must stay a hint: %+v", diags)
+	}
+	if !hasDiagCode(diags, "stage_include_unresolved") {
+		t.Fatalf("want the stage_include_unresolved hint, got %+v", diags)
+	}
+}
+
+// A dynamic `when:` on an include is a property of the include NODE, so it is an
+// error wherever the scenario is linted from. It used to be exempted from the
+// downgrade by name; after NIM-716 narrowed the downgrade to resolve failures the
+// exemption is unnecessary — and this pins that removing it did not put the code
+// back under the sweep.
+func TestStageDiagnostics_LooseFileKeepsDynamicIncludeWhen(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "install.yml"), stageSharedBody)
+	main := filepath.Join(root, "main.yml")
+	stageWrite(t, main, "name: create\ntasks:\n"+
+		"  - include: install.yml\n"+
+		"    when: soulprint.self.os.family == 'debian'\n"+stageLocalTask)
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	if !hasDiagCode(diags, "include_when_dynamic_unsupported") {
+		t.Fatalf("a dynamic include-when must be reported outside a service tree too: %+v", diags)
+	}
+	if !diag.HasErrors(diags) {
+		t.Fatalf("it must stay an ERROR: %+v", diags)
+	}
+}
+
+// An upgrade scenario's `include:` resolves out of `scenario/`, NOT out of the
+// directory the scenario is sitting in — because that is what the keeper does, and
+// the linter's verdict is worth nothing if it disagrees with the engine.
+//
+// The keeper loads the entry point channel-aware (`upgrade/<slug>/main.yml`,
+// scenario.go:57) and then builds the include levels from the scenario NAME alone:
+// `path.Join("scenario", scenarioName)` and `"scenario"`
+// (keeper/internal/scenario/include.go:26-27, reached from run.go / preflight.go /
+// render_host.go with spec.ScenarioName). It never learns which channel the entry
+// point came from. So a body next to an upgrade scenario is unreachable at run
+// time, and the linter must say so rather than resolve it and bless the definition
+// — resolving it is the false green this whole class of defect is made of.
+func TestStageDiagnostics_UpgradeIncludeMirrorsTheKeeper(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	// The body an author would naturally write: right beside the upgrade scenario.
+	// The keeper will not find it there, so neither may the linter.
+	stageWrite(t, filepath.Join(root, "upgrade", "to_v2", "install.yml"), stageSharedBody)
+	main := filepath.Join(root, "upgrade", "to_v2", "main.yml")
+	stageWrite(t, main, "name: to_v2\nfrom: ['1']\ntasks:\n  - include: install.yml\n"+stageLocalTask)
+
+	diags := stageDiagnostics(main, stageParse(t, main))
+	if !diag.HasErrors(diags) {
+		t.Fatalf("a body the keeper cannot reach was resolved and blessed: %+v", diags)
+	}
+	if !hasDiagCode(diags, config.CodeIncludeResolveFailed) {
+		t.Fatalf("want %s, got %+v", config.CodeIncludeResolveFailed, diags)
+	}
+	if hasDiagCode(diags, "stage_include_unresolved") {
+		t.Fatalf("an upgrade scenario inside a real service tree was treated as a loose file: %+v", diags)
+	}
+	// The message names both levels it tried, so the author can see WHERE the
+	// engine will look rather than guess from "not found".
+	d := diagWithCode(diags, config.CodeIncludeResolveFailed)
+	for _, want := range []string{filepath.Join("scenario", "to_v2"), "scenario"} {
+		if !strings.Contains(d.Message, want) {
+			t.Errorf("the message does not name the level %q the keeper uses: %q", want, d.Message)
+		}
+	}
+}
+
+// The other side of that rule: a body where the keeper DOES look resolves, from
+// both levels, for an upgrade scenario exactly as for a regular one.
+func TestStageDiagnostics_UpgradeIncludeResolvesWhereTheKeeperLooks(t *testing.T) {
+	for _, tc := range []struct{ name, rel string }{
+		{"service level", filepath.Join("scenario", "install.yml")},
+		{"local level, keyed on the scenario name", filepath.Join("scenario", "to_v2", "install.yml")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+			stageWrite(t, filepath.Join(root, tc.rel), stageSharedBody)
+			main := filepath.Join(root, "upgrade", "to_v2", "main.yml")
+			stageWrite(t, main, "name: to_v2\nfrom: ['1']\ntasks:\n  - include: install.yml\n"+stageLocalTask)
+
+			diags := stageDiagnostics(main, stageParse(t, main))
+			if diag.HasErrors(diags) {
+				t.Fatalf("a body at %s must resolve: %+v", tc.rel, diags)
+			}
+			if hasDiagCode(diags, "stage_include_unresolved") {
+				t.Fatalf("an upgrade scenario inside a real service tree was treated as a loose file: %+v", diags)
+			}
+		})
+	}
+}
+
+// The same file must lint to the same verdict however the operator addressed it —
+// for the upgrade channel too, where the levels are derived rather than taken from
+// the file's own directory and so have one more chance to go wrong.
+//
+// The sibling case above covers `scenario/`; this one exists because the new
+// derivation reads the scenario name off `Dir(Dir(abs))` and joins it onto a
+// `pathLike`-rendered service level, and both halves are spelling-sensitive:
+// `main.yml` addressed from inside its own directory decomposes to "." lexically,
+// which would address the channel root instead of the scenario.
+func TestStageDiagnostics_UpgradeVerdictIndependentOfPathForm(t *testing.T) {
+	root := t.TempDir()
+	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	// At the level the engine uses, so every spelling must RESOLVE it...
+	stageWrite(t, filepath.Join(root, "scenario", "to_v2", "install.yml"), stageSharedBody)
+	// ...and one beside the scenario, which no spelling may resolve.
+	stageWrite(t, filepath.Join(root, "upgrade", "to_v2", "decoy.yml"), stageSharedBody)
+	stageWrite(t, filepath.Join(root, "upgrade", "to_v2", "main.yml"),
+		"name: to_v2\nfrom: ['1']\ntasks:\n  - include: install.yml\n")
+	stageWrite(t, filepath.Join(root, "upgrade", "decoyed", "decoy.yml"), stageSharedBody)
+	stageWrite(t, filepath.Join(root, "upgrade", "decoyed", "main.yml"),
+		"name: decoyed\nfrom: ['1']\ntasks:\n  - include: decoy.yml\n")
+
+	for _, tc := range []struct{ name, cwd, arg string }{
+		{"absolute", root, filepath.Join(root, "upgrade", "to_v2", "main.yml")},
+		{"from service root", root, filepath.Join("upgrade", "to_v2", "main.yml")},
+		{"from the channel dir", filepath.Join(root, "upgrade"), filepath.Join("to_v2", "main.yml")},
+		{"from the scenario's own dir", filepath.Join(root, "upgrade", "to_v2"), "main.yml"},
+		{"across channels", filepath.Join(root, "scenario"), filepath.Join("..", "upgrade", "to_v2", "main.yml")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(tc.cwd)
+
+			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg))
+			if diag.HasErrors(diags) {
+				t.Fatalf("the engine's own level did not resolve from %q (cwd %q): %+v", tc.arg, tc.cwd, diags)
+			}
+			if hasDiagCode(diags, "stage_include_unresolved") {
+				t.Fatalf("a real service tree was read as a loose file from %q: %+v", tc.arg, diags)
+			}
+			plan := diagWithCode(diags, "passage_plan")
+			if plan == nil || !strings.Contains(plan.Message, "(2 tasks") {
+				t.Fatalf("the included body did not reach the stage graph from %q: %+v", tc.arg, diags)
+			}
+		})
+	}
+
+	// And the decoy beside main.yml stays unreachable from every spelling — the
+	// half a wrong local level would silently turn green.
+	for _, tc := range []struct{ name, cwd, arg string }{
+		{"absolute", root, filepath.Join(root, "upgrade", "decoyed", "main.yml")},
+		{"from the scenario's own dir", filepath.Join(root, "upgrade", "decoyed"), "main.yml"},
+	} {
+		t.Run("decoy/"+tc.name, func(t *testing.T) {
+			t.Chdir(tc.cwd)
+
+			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg))
+			if !hasDiagCode(diags, config.CodeIncludeResolveFailed) {
+				t.Fatalf("a body beside the upgrade scenario resolved from %q: %+v", tc.arg, diags)
+			}
+		})
+	}
+}
+
 // TestStageDiagnostics_NoServiceManifestNoServiceLevel — the second level is
 // claimed only for a REAL service tree (`scenario/` under a root carrying
 // service.yml). Without the manifest the directory above is just a neighbour:

@@ -104,6 +104,177 @@ Cross-passage flow-control gating detector is connected ([ADR-056](adr/0056-stag
 
 For `on:`-literals: format (`kebab-case` / `${ ... }`-CEL / `keeper`) - implemented (codes `enum_invalid`, `name_invalid_format`, `type_mismatch`); The hook `CovenLabelValidator` (interface in `shared/config`, no-op by default) is attached to every non-CEL-wrapped coven literal via `SetCovenLabelValidator`. The real covens directory (Q1b ADR-008-amend) will replace no-op without changing the public API; Until then, the linter does not flag the "existence" of coven (this is runtime).
 
+## Whole-service mode: `validate-service-tree <dir>`
+
+Implemented, NIM-753. One invocation checks a whole service repository and reports
+**every** part of it:
+
+```sh
+soul-lint validate-service-tree . --service-name redis
+```
+
+```
+OK: service.yml
+OK: types.yml
+scenario/create/main.yml:124:11: warning: [form_field_uncovered] input.provision is not placed in any form section
+OK: scenario/create/main.yml
+OK: scenario/update_users/main.yml
+migrations: hint: [migrations_unchecked] migrations/ is populated and was NOT checked: …
+```
+
+The positional is the service **directory**, or the `service.yml` inside it — both
+spellings address the same tree and produce the same report. A directory with no
+manifest is refused (exit 2) rather than walked: it is not a service tree, and
+reporting a service's worth of absences would bury the one fact that matters. The
+three flags are the per-file family's, and mean the same things
+([`--modules`](#plugin-module-params---modules-aliaspath),
+[`--service-name`](#service-identity---service-name-name-validate-scenario)); an
+unresolvable `--modules` binding is fatal for the whole run, and fatal **once**.
+
+### The rule it moves into the tool
+
+**One broken part does not hide the others.** That is the whole point, and it is
+not a convenience.
+
+The per-file commands check one document per invocation, so a service repository
+had to orchestrate the sequence itself — and the orchestrator, an ordinary `set -e`
+script, stopped at the first non-zero exit. In the WB redis service that first exit
+was a one-line manifest error, and behind it sat **eight** accumulated divergences
+that nobody saw for as long as the manifest stayed red: a dead `state_changes:`
+block (thirteen state fields silently not written, NIM-739), the renamed capture
+params (`key`/`set` for `field`/`value`), the changed L0 case form
+(`assert.state_changes` → `assert.state_after`), a `required: true` next to a
+`default:`. None of them were new. The service had been drifting behind the engine,
+and the silence lasted exactly as long as the manifest was red.
+
+So no failure in this mode ends the walk. A part that cannot even be **read**
+contributes an `io_error`; a check that *crashes* on one contributes
+`lint_internal_panic`, because a panic is the one route by which a single part
+could still take the whole report down. Only a caller error — this is not a service
+tree, that binding does not resolve — is fatal, because then there is no run to
+speak of rather than a partly broken one.
+
+### What it walks
+
+| Part | What it is |
+|---|---|
+| `service.yml` | the manifest, checked exactly as `validate-service` checks it |
+| `types.yml` | the type catalog, **parsed on its own account** |
+| `scenario/<name>/main.yml` | every scenario, checked as `validate-scenario` checks it — and with it the covenant it `extends:` and every `include:` body reached from the entry point |
+| `upgrade/<slug>/main.yml` | the same, for the second scenario auto-discovery channel ([ADR-0068](adr/0068-service-upgrade-v2.md) §3) |
+| `migrations/` | discovered and reported as **not checked** (see below) |
+
+What is **not** in that table is as much the point as what is. A scenario's
+`tests/<case>/case.yml` fixtures are **not read** — L0 cases belong to `soul-trial`,
+which renders them, and `soul-lint` is static by [ADR-004](adr/0004-binaries.md)
+(see [What is NOT soul-lint](#what-is-not-soul-lint)). Neither is `vars/` walked
+here beyond what `validate-service` already does with it.
+
+Three of the rows are worth their own paragraph.
+
+**`types.yml` is the part that adds a check rather than moving one.** A catalog is
+otherwise parsed only as a side effect of resolving a `$type` — from the manifest's
+`state_schema:` and from each scenario's `input:`. A service whose catalog is
+broken and whose current schemas happen to reference nothing from it therefore
+passes **every** per-file command, and meets the breakage later, at the keeper, on
+the first scenario that starts using a type. Here the catalog is a part like any
+other, referenced or not.
+
+**Covenants have no row of their own on purpose.** A covenant is a fragment; what
+it means is decided only once merged into a scenario, so it is checked through
+each scenario that extends it (`ResolveScenarioCovenant`) rather than in isolation.
+
+**`upgrade/` is walked because it is a scenario channel, not a variation on one.**
+The keeper discovers scenarios from `scenario/` and `upgrade/` alike
+(`artifact.ListScenarios` beside `artifact.ListUpgrades`); the two differ in what
+is done with the result, not in the file, so they are checked by identical rules.
+A walk that covered only the first would print a clean tree having never opened
+the other half of it.
+
+**One thing about an upgrade scenario surprises people, and the linter mirrors it
+rather than correcting it.** Its `include:` resolves out of `scenario/<slug>/` and
+`scenario/` — *not* out of `upgrade/<slug>/`, the directory the file is sitting in.
+
+That is not an accident and not an engine defect: the two levels are **fixed
+directories**, keyed on the scenario NAME, "whichever file the `include:` was
+written in" ([orchestration.md §6](scenario/orchestration.md)) — the rule that
+keeps a body's meaning independent of which file spliced it. The keeper's resolver
+is handed the name and never the channel, and `scenarioTemplatePrefix` is
+name-keyed for the same reason, so `templates/` and `include:` agree. A body
+written next to an upgrade scenario is therefore unreachable at run time, and the
+lint reports it as `include_resolve_failed` naming both levels the engine will try,
+with a hint saying which directories to move it to. Resolving it instead — being
+right about the file while disagreeing with the engine — would be a green lint over
+a definition that fails on the run, which is the failure class this page is about.
+
+A directory in either channel whose name begins with `_` or `.` is **not** a
+scenario — it holds shared `include:` bodies. The rule is asked of its owner
+(`config.IsSharedDirName`), the same function the keeper's listing uses, rather
+than re-derived here. A directory that does not begin with one and has no
+`main.yml` is an **error**: `<channel>/<name>/` is how a scenario is addressed, so
+a name that answers to nothing runnable is a defect, not something to pass over.
+
+### Three codes it raises that no per-file command can
+
+Two of them are about the walk rather than about a document; the third is about a
+document, and exists only because the walk has more to lose than a single-file run.
+
+| Code | Level | What it says |
+|---|---|---|
+| `service_tree_no_scenarios` | WARNING | the tree declares no scenario in **either** channel — the service parses, registers, and can never be run. A warning, not an error: it does not fail a lint, but a walk that reported one part and looked complete would be the silence this mode removes. |
+| `lint_internal_panic` | ERROR | a check crashed on this file. A panic is the ultimate early exit — it would abort the process over a half-written report and leave every part after it unchecked — so each part runs behind a recover, and the crash comes back as a finding naming the file that provoked it. It accuses the linter, not the author; the rest of the tree is still reported and the run is red. |
+| `migrations_unchecked` | HINT | `migrations/` is populated and the linter has no reading of the ladder yet (NIM-736). A **hint**, because nothing is wrong with the service — something is missing from the tool. Same reasoning as `plugin_params_unchecked`: "checked and clean" must not look identical to "never looked", and it would be a worse conflation here, where the reader has just been told the tree was checked. An **empty** `migrations/` says nothing at all: an empty ladder is a complete statement (the service is at state-schema version 1). |
+
+### Output
+
+Human mode prints each part's diagnostics followed by `OK: <path>` when that part
+came out clean — which is what makes the report say **which** parts ran. A tree
+whose scenarios were never reached would otherwise look exactly like a tree whose
+scenarios are fine. A part that was only *discovered* prints no `OK:` line: saying
+"OK" about something nobody looked at is the same failure, spelled optimistically.
+
+`--json` is the same JSON-Lines stream the per-file commands produce — one object
+per diagnostic, in walk order, and nothing else — so a consumer written against
+one mode reads the other unchanged. **It carries no part boundaries**, which is a
+real loss against human mode: there is no `OK:` record, so a machine consumer sees
+"no diagnostics from the scenarios" and cannot tell that from "the scenarios were
+never reached". Use the exit code for the verdict and human mode when the question
+is which parts ran.
+
+Output is **byte-identical run to run**: parts are visited in a fixed order —
+manifest, catalog, `scenario/`, `upgrade/`, migrations, each directory sorted by
+name.
+
+**Nothing is de-duplicated**, and that is a decision. One file is read by several
+parts — a broken `types.yml` is reported by the manifest's `$type` resolve, by
+each scenario's, and by its own part — so an identical sentence can appear more
+than once. Collapsing them costs more than it buys: a part's verdict is computed
+from its own diagnostics, so a part whose every finding had already been printed
+elsewhere would come out looking clean and take an `OK:` line — a green line on a
+red part, which is precisely the failure this mode exists to abolish. Keeping every
+part whole buys a contract worth stating instead: **the report is the per-file
+reports concatenated in a fixed order, plus the parts no per-file command covers.**
+A repeated sentence also carries information — it says which parts this one broken
+file is breaking.
+
+Exit codes are the per-file family's: `0` no errors anywhere, `1` an error
+somewhere, `2` the caller is wrong.
+
+### The per-file commands stay
+
+They are what an editor calls on the buffer being typed in, and what an author
+reaches for to re-check one file after fixing it.
+
+**One of them did change behaviour**, and it is worth stating rather than filing
+under "unchanged": `validate-scenario` shares the include resolver with the walk,
+so `soul-lint validate-scenario <svc>/upgrade/<slug>/main.yml` now resolves from
+`scenario/<slug>/` and `scenario/` like the engine does, where before it treated
+that path as a loose file — resolving a sibling body the run cannot reach, and
+downgrading a genuinely unresolvable include to a hint with exit 0. An upgrade
+scenario that keeps its bodies at either level is unaffected; one that keeps them
+beside `main.yml` goes from silently green to `include_resolve_failed`, which is
+the point. Nothing else about the per-file family changed.
+
 ## Plugin module params: `--modules <alias>=<path>`
 
 A task's `params:` are checked against the module's declared schema — unknown key,

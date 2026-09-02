@@ -9,6 +9,11 @@
 //	validate-service  <path> [--json]  validate service.yml (the service
 //	                                    root manifest).
 //	validate-scenario <path> [--json]  validate scenario/<name>/main.yml.
+//	validate-service-tree <dir> [--json]  validate a WHOLE service — the
+//	                                    manifest, types.yml, the covenant each
+//	                                    scenario extends, and every scenario —
+//	                                    reporting all of them rather than
+//	                                    stopping at the first broken part.
 //	validate-manifest <path> [--json]  validate a plugin's schema document
 //	                                    (dist/schema.json, or a stamped
 //	                                    artifact).
@@ -16,6 +21,17 @@
 //	                                    plugin (ADR-016 amendment 2026-05-27).
 //	list-secret-paths <path> --service-name NAME  print the Vault address of
 //	                                    every secret declared in a service.yml.
+//
+// `validate-service-tree` is the whole-service mode (NIM-753). Its positional is
+// the service DIRECTORY (or the service.yml inside it); it takes the same flags as
+// the per-file family and applies them to every part it walks. Its one rule is
+// that a broken part does not suppress the diagnostics of the rest — the rule a
+// service repository's own `set -e` script cannot hold, and where eight
+// divergences accumulated behind one red manifest line before this existed. The
+// per-file commands stay, for an editor and for re-checking one file — with one
+// behaviour change among them: `validate-scenario` shares the include resolver, so
+// on an `upgrade/<slug>/main.yml` it now resolves from `scenario/<slug>/` and
+// `scenario/` as the engine does, instead of treating that path as a loose file.
 //
 // The validate-destiny / validate-service / validate-scenario subcommands also
 // take `--modules <alias>=<path>`, repeatable (NIM-228, reshaped by NIM-377).
@@ -52,6 +68,65 @@ import (
 	"github.com/souls-guild/soul-stack/soul-lint/internal/validate"
 )
 
+// command is one entry of the subcommand table. The table is the single place a
+// subcommand is declared: main dispatches from it and printUsage prints from it,
+// so a command cannot exist in one and be missing from the other — which is what
+// a switch beside a hand-written usage block eventually produces. Adding one
+// (NIM-737's `schema stamp` is next) is one row and its run function.
+type command struct {
+	name string
+	// args is the argument shape after the name, for the usage line.
+	args string
+	// summary is the one line printed by printUsage.
+	summary string
+	// run receives its own table entry, so it can build its usage line from the
+	// name and shape rather than repeating them as a literal.
+	run func(c command, args []string) int
+}
+
+func (c command) usageLine() string { return "Usage: soul-lint " + c.name + " " + c.args }
+
+// validateCommand builds a table entry for one of the validate-* family — the
+// commands that share [runSubcommand]'s flag shape and differ only in Kind.
+func validateCommand(name, args, summary string, kind validate.Kind) command {
+	return command{name: name, args: args, summary: summary, run: func(c command, a []string) int {
+		return runSubcommand(c.name, c.name+" "+c.args, kind, a)
+	}}
+}
+
+var commandTable = []command{
+	validateCommand("validate-config", "<path> [--json]",
+		"validate keeper.yml or soul.yml", validate.KindConfig),
+	validateCommand("validate-destiny", "<path> [--json] [--modules ALIAS=PATH]...",
+		"validate destiny.yml manifest", validate.KindDestiny),
+	validateCommand("validate-service", "<path> [--json] [--modules ALIAS=PATH]...",
+		"validate service.yml manifest", validate.KindService),
+	validateCommand("validate-scenario", "<path> [--json] [--service-name NAME] [--modules ALIAS=PATH]...",
+		"validate scenario/<name>/main.yml", validate.KindScenario),
+	{
+		name:    "validate-service-tree",
+		args:    "<dir> [--json] [--service-name NAME] [--modules ALIAS=PATH]...",
+		summary: "validate a WHOLE service: manifest, types.yml, every scenario",
+		run: func(c command, a []string) int {
+			return runValidateServiceTree(c, a)
+		},
+	},
+	validateCommand("validate-manifest", "<path> [--json]",
+		"validate a plugin schema document", validate.KindManifest),
+	{
+		name:    "plugin-init",
+		args:    "<namespace>/<name> [flags]",
+		summary: "scaffold a new SoulModule plugin",
+		run:     func(_ command, a []string) int { return runPluginInit(a) },
+	},
+	{
+		name:    "list-secret-paths",
+		args:    "<path> --service-name NAME",
+		summary: "print the derived Vault address of every declared secret",
+		run:     func(_ command, a []string) int { return runListSecretPaths(a) },
+	},
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage(os.Stderr)
@@ -59,66 +134,63 @@ func main() {
 	}
 	sub := os.Args[1]
 	switch sub {
-	case "validate-config":
-		os.Exit(runSubcommand(sub, "validate-config <path> [--json]", validate.KindConfig, os.Args[2:]))
-	case "validate-destiny":
-		os.Exit(runSubcommand(sub, "validate-destiny <path> [--json] [--modules ALIAS=PATH]...", validate.KindDestiny, os.Args[2:]))
-	case "validate-service":
-		os.Exit(runSubcommand(sub, "validate-service <path> [--json] [--modules ALIAS=PATH]...", validate.KindService, os.Args[2:]))
-	case "validate-scenario":
-		os.Exit(runSubcommand(sub, "validate-scenario <path> [--json] [--service-name NAME] [--modules ALIAS=PATH]...", validate.KindScenario, os.Args[2:]))
-	case "validate-manifest":
-		os.Exit(runSubcommand(sub, "validate-manifest <path> [--json]", validate.KindManifest, os.Args[2:]))
-	case "plugin-init":
-		os.Exit(runPluginInit(os.Args[2:]))
-	case "list-secret-paths":
-		os.Exit(runListSecretPaths(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		os.Exit(0)
-	default:
-		fmt.Fprintf(os.Stderr, "soul-lint: unknown subcommand %q\n\n", sub)
-		printUsage(os.Stderr)
-		os.Exit(2)
 	}
+	for _, c := range commandTable {
+		if c.name == sub {
+			os.Exit(c.run(c, os.Args[2:]))
+		}
+	}
+	fmt.Fprintf(os.Stderr, "soul-lint: unknown subcommand %q\n\n", sub)
+	printUsage(os.Stderr)
+	os.Exit(2)
 }
 
-// runSubcommand parses flags and the positional <path>. Same shape across
-// all validate-* subcommands (spec M1.2.a, symmetric with M0).
-func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
-	usageLine := "Usage: soul-lint " + usage
+// commonFlags is what every validate-* command parses: one positional and the
+// three flags. Held apart from the commands themselves so that the tree command,
+// whose positional is a DIRECTORY rather than a file, still parses `--json`,
+// `--modules` and `--service-name` by the same rules — a second parser is how a
+// flag starts meaning one thing in one command and another elsewhere.
+type commonFlags struct {
+	jsonOut     bool
+	path        string
+	modules     []string
+	serviceName string
+}
+
+// parseCommonFlags returns the parsed flags; `done` true means the caller must
+// return `code` immediately (a help request, or a usage error already reported).
+func parseCommonFlags(sub, usageLine string, args []string) (f commonFlags, code int, done bool) {
 	var (
-		jsonOut     bool
-		path        string
-		modules     []string
-		serviceName string
 		wantModule  bool // the previous arg was `--modules`, so this one is its value
 		wantService bool // likewise for `--service-name`
 	)
 	for _, a := range args {
 		if wantModule {
-			modules = append(modules, a)
+			f.modules = append(f.modules, a)
 			wantModule = false
 			continue
 		}
 		if wantService {
-			serviceName = a
+			f.serviceName = a
 			wantService = false
 			continue
 		}
 		switch {
 		case a == "--json" || a == "-json":
-			jsonOut = true
+			f.jsonOut = true
 		case a == "-h" || a == "--help":
 			fmt.Fprintln(os.Stdout, usageLine)
-			return 0
+			return f, 0, true
 		case a == "--service-name" || a == "-service-name":
 			wantService = true
 		case strings.HasPrefix(a, "--service-name=") || strings.HasPrefix(a, "-service-name="):
 			// Not repeatable: a service has one name. A second occurrence overwrites,
 			// rather than being refused, for the same reason every other flag here does.
 			_, value, _ := strings.Cut(a, "=")
-			serviceName = value
+			f.serviceName = value
 		case a == "--modules" || a == "-modules":
 			wantModule = true
 		case strings.HasPrefix(a, "--modules=") || strings.HasPrefix(a, "-modules="):
@@ -128,36 +200,67 @@ func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
 			// `--modules=` would mean "check nothing", which is the failure mode
 			// this flag exists to remove.
 			_, value, _ := strings.Cut(a, "=")
-			modules = append(modules, value)
+			f.modules = append(f.modules, value)
 		case strings.HasPrefix(a, "-"):
 			fmt.Fprintf(os.Stderr, "soul-lint %s: unknown flag %q\n", sub, a)
-			return 2
+			return f, 2, true
 		default:
-			if path != "" {
+			if f.path != "" {
 				fmt.Fprintln(os.Stderr, usageLine)
-				return 2
+				return f, 2, true
 			}
-			path = a
+			f.path = a
 		}
 	}
 	if wantModule {
 		fmt.Fprintf(os.Stderr, "soul-lint %s: --modules needs an <alias>=<path> binding\n", sub)
-		return 2
+		return f, 2, true
 	}
 	if wantService {
 		fmt.Fprintf(os.Stderr, "soul-lint %s: --service-name needs a <name>\n", sub)
-		return 2
+		return f, 2, true
 	}
-	if path == "" {
+	if f.path == "" {
 		fmt.Fprintln(os.Stderr, usageLine)
-		return 2
+		return f, 2, true
+	}
+	return f, 0, false
+}
+
+// runSubcommand parses flags and the positional <path>. Same shape across
+// all validate-* subcommands (spec M1.2.a, symmetric with M0).
+func runSubcommand(sub, usage string, kind validate.Kind, args []string) int {
+	f, code, done := parseCommonFlags(sub, "Usage: soul-lint "+usage, args)
+	if done {
+		return code
 	}
 	return validate.Run(validate.Options{
-		Path:        path,
-		JSON:        jsonOut,
+		Path:        f.path,
+		JSON:        f.jsonOut,
 		Kind:        kind,
-		Modules:     modules,
-		ServiceName: serviceName,
+		Modules:     f.modules,
+		ServiceName: f.serviceName,
+	}, os.Stdout, os.Stderr)
+}
+
+// runValidateServiceTree is the whole-service mode (NIM-753): one invocation for
+// the manifest, the type catalog and every scenario, with every part reported
+// rather than the run ending at the first broken one.
+//
+// It takes the same three flags as the per-file family and for the same reasons,
+// which is why it shares their parser. Its positional differs — a service
+// DIRECTORY (or the service.yml inside it, both accepted) — and that difference
+// is resolved by validate.RunTree, not here.
+func runValidateServiceTree(c command, args []string) int {
+	f, code, done := parseCommonFlags(c.name, c.usageLine(), args)
+	if done {
+		return code
+	}
+	return validate.RunTree(validate.TreeOptions{
+		Root:        f.path,
+		JSON:        f.jsonOut,
+		Modules:     f.modules,
+		ServiceName: f.serviceName,
 	}, os.Stdout, os.Stderr)
 }
 
@@ -310,18 +413,32 @@ func runPluginInit(args []string) int {
 	}, os.Stdout, os.Stderr)
 }
 
-func printUsage(w *os.File) {
+// printUsage prints the command list from [commandTable] and the flag notes
+// below it. The list is generated rather than written out: a hand-kept copy is
+// how `validate-manifest` could have shipped undiscoverable, and how the next
+// command would.
+func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: soul-lint <command> [args]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  validate-config   <path> [--json]              validate keeper.yml or soul.yml")
-	fmt.Fprintln(w, "  validate-destiny  <path> [--json] [--modules A=P]...  validate destiny.yml manifest")
-	fmt.Fprintln(w, "  validate-service  <path> [--json] [--modules A=P]...  validate service.yml manifest")
-	fmt.Fprintln(w, "  validate-scenario <path> [--json] [--service-name N] [--modules A=P]...  validate scenario/<name>/main.yml")
-	fmt.Fprintln(w, "  validate-manifest <path> [--json]              validate a plugin schema document")
-	fmt.Fprintln(w, "  plugin-init       <namespace>/<name> [flags]      scaffold a new SoulModule plugin")
-	fmt.Fprintln(w, "  list-secret-paths <path> --service-name N       print the derived Vault address of")
-	fmt.Fprintln(w, "                 every secret declared in a service.yml")
+	width := 0
+	for _, c := range commandTable {
+		if n := len(c.name); n > width {
+			width = n
+		}
+	}
+	for _, c := range commandTable {
+		// Name column padded to the widest name, then the argument shape and the
+		// summary on the continuation line: the shapes differ too much in length
+		// for a second aligned column to stay readable as commands are added.
+		fmt.Fprintf(w, "  %-*s %s\n", width, c.name, c.args)
+		fmt.Fprintf(w, "  %-*s   %s\n", width, "", c.summary)
+	}
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  validate-service-tree is the whole-service mode: it checks the manifest, types.yml,")
+	fmt.Fprintln(w, "                 the covenant each scenario extends, and EVERY scenario, and reports all")
+	fmt.Fprintln(w, "                 of them - a broken part does not suppress the diagnostics of the rest.")
+	fmt.Fprintln(w, "                 The per-file commands above stay, for checking one file at a time.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "  --modules <alias>=<path>  bind a plugin's schema document to the alias a task")
 	fmt.Fprintln(w, "                 addresses it by (redis=./dist/schema.json). Repeatable. <path> is a")

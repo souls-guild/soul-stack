@@ -48,9 +48,12 @@ import (
 // ([scenarioServiceLevelDir]) — so the stage graph offline is built over the
 // same task list as at apply time, and an include that resolves at NEITHER level
 // is a plain ERROR. For a loose scenario file outside a service tree the service
-// level does not exist offline, so resolution stays local-only and an unresolved
-// include is downgraded to the stage_include_unresolved HINT: the keeper will
-// resolve it against the real snapshot.
+// level does not exist offline, so resolution stays local-only and an include
+// whose TARGET is not found is downgraded to the stage_include_unresolved HINT:
+// the keeper will resolve it against the real snapshot. Only that one failure is
+// downgraded — an error out of a body that DID resolve is the body's own, and is
+// reported at the body's own coordinates wherever the scenario was linted from
+// (NIM-716).
 //
 // m==nil (parse failed with errors) → no point stratifying (the graph is
 // unreliable) → nil.
@@ -59,10 +62,11 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 		return nil
 	}
 
-	dir := filepath.Dir(scenarioPath)
 	// serviceDir == "" — the second resolve level is unavailable (a loose file);
 	// it also switches the diagnostics below back to the HINT downgrade.
 	serviceDir := scenarioServiceLevelDir(scenarioPath)
+	dir := scenarioLocalLevelDir(scenarioPath, serviceDir)
+	inUpgradeChannel := serviceDir != "" && scenarioChannel(scenarioPath) == upgradeChannelDir
 	// The securejoin root for BOTH levels, and only inside a service tree: it is
 	// the root, not the level, that decides which file an escaping symlink lands
 	// on, so it has to be the same root the keeper uses (the snapshot root).
@@ -76,48 +80,51 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	// In a service tree include resolution offline is COMPLETE (both levels are on
 	// disk), so expand's diagnostics are passed through at their own level: an
 	// unresolvable include, a cycle or a cross-file duplicate address is a real
-	// defect the linter must fail on, not a deferral to the keeper. Outside one
-	// the failure may be nothing but the missing service level — downgraded to a
-	// HINT, as before NIM-694.
+	// defect the linter must fail on, not a deferral to the keeper.
 	//
-	// include_when_dynamic_unsupported is the ONE code exempt from that downgrade.
-	// A dynamic `when:` on an include is a property of the include node itself —
-	// the predicate — not of target resolution, so it is a real error whether or
-	// not a service level exists to resolve against. Sweeping it into the
-	// loose-file downgrade would report a genuine defect as "could not resolve".
+	// Outside one, exactly ONE class of failure may be nothing but the missing
+	// service level — a target that was not FOUND ([config.IsIncludeResolveDiag],
+	// asked of the producer rather than re-listed here). That one is downgraded to
+	// a HINT, as before NIM-694, because the keeper will resolve it against the
+	// real snapshot.
 	//
-	// This used to be reported by a pre-pass over m.Tasks instead, and the code
-	// was filtered out of the pass-through to avoid printing it twice. That
-	// pre-pass walked m.Tasks and recursed through block:, but never into the
-	// includes' own includes, while expandOne raises the code at ANY expansion
-	// depth — so the filter silently ate the nested case and the linter went
-	// quiet on a real defect. The expander is strictly the more complete
-	// producer: it checks the predicate BEFORE resolving the target
-	// (include_expand.go), so it still reports a top-level offender whose target
-	// is missing, which is the only thing the pre-pass could do that resolution
-	// order might otherwise have cost. Hence: one producer, every depth.
+	// Everything else passes through as itself, at its own File/Line/YAMLPath.
+	// This is NIM-716: the condition used to be `serviceDir == "" && error`, which
+	// looked at nothing but the level and the severity, so an error out of a body
+	// that resolved LOCALLY and was READ — the same bytes, checked by the same code
+	// as inside a service tree — came out as `include does not resolve offline`
+	// with exit 0. Two failures in one: the text was false, and a real defect was
+	// reported as a deferral.
+	//
+	// include_when_dynamic_unsupported used to need an explicit exemption from that
+	// sweep, and no longer does: it is a property of the include NODE rather than
+	// of resolution, so the narrowed condition never reaches it. (It is also the
+	// expander's alone to report — a second producer, a pre-pass over m.Tasks, was
+	// removed because it never recursed into an include's own includes, so the
+	// filter that kept the two from printing twice silently ate the nested case.)
 	for _, d := range expandDiags {
-		switch {
-		case d.Code == "include_when_dynamic_unsupported":
-			if d.File == "" {
-				d.File = scenarioPath
-			}
-			out = append(out, d)
-		case serviceDir == "" && d.Level == diag.LevelError:
+		if serviceDir == "" && d.Level == diag.LevelError && config.IsIncludeResolveDiag(d.Code) {
 			out = append(out, diag.Diagnostic{
 				Level:   diag.LevelHint,
 				Phase:   diag.PhaseSemanticValidate,
 				File:    scenarioPath,
 				Code:    "stage_include_unresolved",
-				Message: fmt.Sprintf("include does not resolve offline (%s): %s -- the stage graph is checked only against locally available tasks", d.Code, d.Message),
+				Message: fmt.Sprintf("include target does not resolve offline: %s -- outside a service tree only the scenario-local level exists, so the stage graph is checked against locally available tasks", d.Message),
 				Hint:    "lint the scenario inside its service tree (<service>/scenario/<name>/main.yml) to resolve service-level includes, or rely on full validation at the keeper",
 			})
-		default:
-			if d.File == "" {
-				d.File = scenarioPath
-			}
-			out = append(out, d)
+			continue
 		}
+		if d.File == "" {
+			d.File = scenarioPath
+		}
+		// An upgrade scenario's author needs one sentence the producer cannot write:
+		// the message names the two levels tried, and for them BOTH are directories
+		// they are not in. Without it "not found locally (scenario/<slug>/x.yml)"
+		// reads as a linter mistake — they are looking straight at their file.
+		if d.Hint == "" && inUpgradeChannel && config.IsIncludeResolveDiag(d.Code) {
+			d.Hint = "an upgrade scenario resolves include: from scenario/<slug>/ and scenario/, NOT from upgrade/<slug>/ -- the two levels are fixed directories keyed on the scenario NAME (docs/scenario/orchestration.md §6), so a body beside this file is unreachable at run time; move it to one of the two levels named above"
+		}
+		out = append(out, d)
 	}
 	// A failed expansion leaves a TRUNCATED task list (the broken branch is
 	// dropped): stratifying it would report register/passage errors about a plan
@@ -277,6 +284,15 @@ func passagePlanSummary(plan config.Passage) string {
 	return fmt.Sprintf("staged run: %d Passage by register dependency, tasks in each %v (register consumer executes strictly after the probe)", plan.Count, counts)
 }
 
+// The two scenario auto-discovery channels ([ADR-0068] §3). Both hold
+// `<channel>/<name>/main.yml` in the same form; they differ in what the keeper
+// does with the result, and — see [scenarioLocalLevelDir] — not at all in how an
+// `include:` inside them resolves.
+const (
+	scenarioChannelDir = "scenario"
+	upgradeChannelDir  = "upgrade"
+)
+
 // scenarioServiceLevelDir returns the service-level include directory for a
 // linted scenario — `<service>/scenario`, the second level of the ADR-009
 // resolve — or "" when the file is not part of a service tree.
@@ -287,10 +303,27 @@ func passagePlanSummary(plan config.Passage) string {
 // "one directory up" there would let an unrelated neighbouring file answer an
 // include, which is worse than not resolving it at all.
 //
-// `upgrade/<slug>/main.yml` deliberately returns "" as well: the keeper expands
-// an upgrade's includes against `scenario/` (the resolver takes the scenario
-// name, not the channel), so treating `upgrade/` as the service level here would
-// green-light an include the keeper cannot resolve.
+// `upgrade/<slug>/main.yml` — the second auto-discovery channel ([ADR-0068] §3) —
+// is a service tree too, and its service level is `scenario/`, not `upgrade/`.
+//
+// This REPLACES the rule NIM-694 wrote here, which returned "" for that path. Its
+// reasoning was sound as far as it went — the keeper expands an upgrade's includes
+// against `scenario/`, so answering with `upgrade/` would green-light an include
+// the run cannot resolve — but "" does not avoid that outcome, it only moves it.
+// With no service level the file is handled as a LOOSE one, whose single level is
+// its own directory: `include: install.yml` then reads `upgrade/<slug>/install.yml`,
+// splices it, checks it and says nothing. That is the same false green, arrived at
+// from the other side, plus a second cost — inside a real service tree an
+// unresolvable include came back as a hint with exit 0.
+//
+// Naming `scenario/` avoids both, because it is what the engine actually does and
+// what the spec actually says: the two levels are FIXED directories, `scenario/<name>/`
+// then `scenario/`, "whichever file the `include:` was written in"
+// ([docs/scenario/orchestration.md] §6). The keeper is conforming to that, not
+// misbehaving — `scenarioIncludeResolver` is handed the scenario NAME and never the
+// channel, and `scenarioTemplatePrefix` is name-keyed for the same reason, so
+// `templates/` and `include:` agree. A body written beside an upgrade scenario is
+// therefore unreachable at run time, and saying so is this function's whole job.
 func scenarioServiceLevelDir(scenarioPath string) string {
 	// Detection and the returned directory both come off the ABSOLUTE path: the
 	// lexical form decides nothing. `create/main.yml` decomposes to "." (base ".",
@@ -302,14 +335,68 @@ func scenarioServiceLevelDir(scenarioPath string) string {
 	if err != nil {
 		return ""
 	}
-	serviceDir := filepath.Dir(filepath.Dir(abs))
-	if filepath.Base(serviceDir) != "scenario" {
+	channelDir := filepath.Dir(filepath.Dir(abs))
+	switch filepath.Base(channelDir) {
+	case scenarioChannelDir, upgradeChannelDir:
+	default:
 		return ""
 	}
 	if _, err := os.Stat(filepath.Join(scenarioServiceRoot(scenarioPath), "service.yml")); err != nil {
 		return ""
 	}
-	return pathLike(scenarioPath, serviceDir)
+	// `scenario/` for BOTH channels, because that is what the keeper does: its
+	// resolver hardcodes `serviceDir = "scenario"` and is handed the scenario NAME,
+	// never the channel it was loaded from (keeper/internal/scenario/include.go,
+	// called from run.go/preflight.go/render_host.go with spec.ScenarioName). An
+	// upgrade scenario therefore falls back to `scenario/<file>` at the service
+	// level, and a linter that fell back to `upgrade/<file>` instead would bless a
+	// body the run cannot find.
+	return pathLike(scenarioPath, filepath.Join(filepath.Dir(channelDir), scenarioChannelDir))
+}
+
+// scenarioChannel names the auto-discovery channel a scenario entry point was
+// found in — the directory two levels above main.yml. Off the ABSOLUTE path, for
+// the same reason every other decision here is.
+func scenarioChannel(scenarioPath string) string {
+	abs, err := filepath.Abs(scenarioPath)
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(filepath.Dir(filepath.Dir(abs)))
+}
+
+// scenarioLocalLevelDir is the FIRST resolve level — the directory an `include:`
+// is looked for in before the service level.
+//
+// Inside a service tree it is `scenario/<name>/` for both channels, and the second
+// half of that sentence is the surprising one: an `upgrade/<slug>/main.yml` has its
+// includes resolved out of `scenario/<slug>/`, not out of the directory it is
+// sitting in. That is not a choice made here. The keeper builds the level as
+// `path.Join("scenario", scenarioName)` from the scenario's NAME
+// (keeper/internal/scenario/include.go:26) and never learns which channel the entry
+// point came from, even though loading that entry point is channel-aware
+// (`upgrade/%s/main.yml`, scenario.go:57). So a body next to an upgrade scenario is
+// unreachable AT RUN TIME, and the linter's job is to say so rather than to resolve
+// it and call the definition good. Being right about the file while disagreeing
+// with the engine is the false green this whole ticket is about — and here the
+// engine is not even wrong: [docs/scenario/orchestration.md] §6 fixes the two
+// levels as directories rather than "relative to the including file", precisely so
+// a body's meaning does not depend on which file spliced it.
+//
+// Outside a service tree there is no keeper counterpart, so the level is the
+// scenario's own directory — where a loose file's neighbours actually are.
+func scenarioLocalLevelDir(scenarioPath, serviceDir string) string {
+	if serviceDir == "" {
+		return filepath.Dir(scenarioPath)
+	}
+	abs, err := filepath.Abs(scenarioPath)
+	if err != nil {
+		return filepath.Dir(scenarioPath)
+	}
+	// The name off the ABSOLUTE path: `main.yml` linted from inside the scenario's
+	// own directory decomposes to "." lexically, which would address the channel
+	// root instead of the scenario.
+	return filepath.Join(serviceDir, filepath.Base(filepath.Dir(abs)))
 }
 
 // pathLike renders target the way the operator addressed the scenario: absolute
