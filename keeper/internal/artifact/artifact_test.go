@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // TestMain enables SOUL_STACK_ALLOW_FILE_REPOS for the whole package run:
@@ -22,8 +25,7 @@ func TestMain(m *testing.M) {
 }
 
 // validManifest is the minimal valid service.yml for test repositories.
-const validManifest = `state_schema_version: 1
-state_schema:
+const validManifest = `state_schema:
   replicas:
     type: integer
 `
@@ -132,8 +134,12 @@ func TestLoad_DefaultHEAD(t *testing.T) {
 	if art.SHA1 != want {
 		t.Fatalf("SHA1 = %s, want HEAD %s", art.SHA1, want)
 	}
-	if art.Manifest == nil || art.Manifest.StateSchemaVersion == 0 {
+	if art.Manifest == nil || art.Manifest.StateSchema == nil {
 		t.Fatalf("manifest was not parsed correctly: %+v", art.Manifest)
+	}
+	// No migrations/ in the fixture repo → the derived version is the floor.
+	if art.StateSchemaVersion != config.BaseStateSchemaVersion {
+		t.Fatalf("StateSchemaVersion = %d, want %d", art.StateSchemaVersion, config.BaseStateSchemaVersion)
 	}
 	if _, err := os.Stat(filepath.Join(art.LocalDir, "service.yml")); err != nil {
 		t.Fatalf("snapshot does not contain service.yml: %v", err)
@@ -141,6 +147,59 @@ func TestLoad_DefaultHEAD(t *testing.T) {
 	// Snapshot is a clean tree without .git.
 	if _, err := os.Stat(filepath.Join(art.LocalDir, ".git")); !os.IsNotExist(err) {
 		t.Fatalf(".git should not land in snapshot, stat err = %v", err)
+	}
+}
+
+// TestLoad_StateSchemaVersionIsTheTopOfTheLadder — the version a snapshot resolves
+// to comes from its `migrations/` directory and nowhere else.
+//
+// This is the whole of NIM-735 as the engine sees it. The manifest here states
+// nothing about a version — there is no key left to state it with — so a loader that
+// stopped reading the ladder would answer 1 for a service that is on 3, and the
+// upgrade path would then read every real target as a downgrade.
+func TestLoad_StateSchemaVersionIsTheTopOfTheLadder(t *testing.T) {
+	tr := newTestRepo(t)
+	// Two rungs, arbitrary slugs: the number is the engine's, the slug is the
+	// author's, and the version is a count of rungs rather than anything written.
+	tr.writeFile("migrations/002_widen_users/main.yml", "transform: []\n")
+	tr.writeFile("migrations/003_drop_install/main.yml", "transform: []\n")
+	tr.commit("add a ladder")
+
+	loader := newLoader(t)
+	art, err := loader.Load(context.Background(), ServiceRef{Name: "web-app", Git: tr.fileURL()})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if art.StateSchemaVersion != 3 {
+		t.Fatalf("StateSchemaVersion = %d, want 3 (top of the ladder)", art.StateSchemaVersion)
+	}
+}
+
+// TestLoad_BrokenLadderStillResolvesAVersion — a snapshot whose ladder has a gap
+// still LOADS, and answers with the top of what is actually on disk.
+//
+// Deliberate, and the opposite of what the linter does with the same tree. The
+// preview endpoint documents a broken chain as data (`reachable: false`, ADR-0068
+// §6), which it can only report if the artifact loaded in the first place; refusing
+// here would turn that answer into a 502 and tell the operator nothing about why.
+func TestLoad_BrokenLadderStillResolvesAVersion(t *testing.T) {
+	tr := newTestRepo(t)
+	tr.writeFile("migrations/002_widen_users/main.yml", "transform: []\n")
+	// Nothing leads to 3: the ladder is missing its middle rung.
+	tr.writeFile("migrations/004_drop_install/main.yml", "transform: []\n")
+	tr.commit("add a ladder with a hole in it")
+
+	loader := newLoader(t)
+	art, err := loader.Load(context.Background(), ServiceRef{Name: "web-app", Git: tr.fileURL()})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if art.StateSchemaVersion != 4 {
+		t.Fatalf("StateSchemaVersion = %d, want 4 (the top, gap and all)", art.StateSchemaVersion)
+	}
+	// And the chain across the gap is still the refusal it was before.
+	if _, cerr := loader.LoadMigrationChain(art, 1, 4); !errors.Is(cerr, ErrMigrationChainBroken) {
+		t.Fatalf("LoadMigrationChain = %v, want ErrMigrationChainBroken", cerr)
 	}
 }
 
@@ -249,7 +308,7 @@ func TestReadFile_PathTraversalBlocked(t *testing.T) {
 
 func TestLoad_InvalidManifestRejected(t *testing.T) {
 	tr := newTestRepo(t)
-	tr.writeFile("service.yml", "description: no schema\n") // no state_schema_version/state_schema
+	tr.writeFile("service.yml", "description: no schema\n") // no state_schema
 	tr.commit("break manifest")
 
 	loader := newLoader(t)

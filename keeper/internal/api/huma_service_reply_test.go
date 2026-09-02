@@ -70,8 +70,8 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 
 	// --- StateSchemaMigration (nested) ---
 	goldenServiceWire(t, "StateSchemaMigration",
-		StateSchemaMigration{From: 1, Path: "migrations/001_to_002.yml", To: 2},
-		`{"from":1,"path":"migrations/001_to_002.yml","to":2}`)
+		StateSchemaMigration{From: 1, Path: "migrations/002_widen_users/main.yml", To: 2},
+		`{"from":1,"path":"migrations/002_widen_users/main.yml","to":2}`)
 
 	// --- ServiceStateSchemaReply: schema omitempty (both branches) + migrations nil/non-empty ---
 	goldenServiceWire(t, "ServiceStateSchemaReply/full",

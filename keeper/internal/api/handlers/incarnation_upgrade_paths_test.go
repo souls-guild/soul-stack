@@ -116,7 +116,7 @@ func TestUpgradePaths_Cheap_LsRemoteFail_502(t *testing.T) {
 // TestUpgradePaths_Target_Found — ?to=v2 with an upgrade scenario (from ⊇ pin) →
 // mode=found + slug, direction=forward, the applied migration chain.
 func TestUpgradePaths_Target_Found(t *testing.T) {
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}
@@ -154,8 +154,9 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 		t.Fatalf("StateMigrations len = %d, want 1", len(tgt.StateMigrations))
 	}
 	got := tgt.StateMigrations[0]
-	if got.From != 1 || got.To != 2 || got.Path != "migrations/001_to_002.yml" {
-		t.Errorf("migration step = %+v, want {1 2 migrations/001_to_002.yml}", got)
+	// Path comes off the step itself, slug and all — it is not rebuilt from 1→2.
+	if got.From != 1 || got.To != 2 || got.Path != "migrations/002_set_foo/main.yml" {
+		t.Errorf("migration step = %+v, want {1 2 migrations/002_set_foo/main.yml}", got)
 	}
 	if !tgt.Reachable || tgt.UnreachableReason != "" {
 		t.Errorf("reachable/reason = %v/%q, want true/empty (chain assembled)", tgt.Reachable, tgt.UnreachableReason)
@@ -165,7 +166,7 @@ func TestUpgradePaths_Target_Found(t *testing.T) {
 // TestUpgradePaths_Target_Legacy — ?to=v2 with no matching upgrade scenario →
 // mode=legacy; direction=forward; migrations still apply (forward).
 func TestUpgradePaths_Target_Legacy(t *testing.T) {
-	mig, _ := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, _ := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	loader := &fakeLoader{targetSchema: 2, chain: statemigrate.Chain{mig}} // upgrades nil → legacy
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
 
@@ -305,10 +306,10 @@ func TestUpgradePaths_Target_BrokenChain_Unreachable_200(t *testing.T) {
 }
 
 // TestUpgradePaths_Target_ChainError_500 — a non-broken LoadMigrationChain error (parsing a
-// malformed migrations/NNN_to_MMM.yml of an already-materialized snapshot = keeper-internal
+// malformed migrations/<NNN>_<slug>/main.yml of an already-materialized snapshot = keeper-internal
 // defect) → 500, NOT 502 (502 is only for loader.Load, where the external git is at fault).
 func TestUpgradePaths_Target_ChainError_500(t *testing.T) {
-	loader := &fakeLoader{targetSchema: 2, chainErr: errors.New("parse migrations/001_to_002.yml: bad yaml")}
+	loader := &fakeLoader{targetSchema: 2, chainErr: errors.New("parse migrations/002_set_foo/main.yml: bad yaml")}
 	h := newUpPathsHandler(upPathsDB(), loader, nil)
 	_, err := h.UpgradePathsTyped(context.Background(), "redis-prod", "v2", alwaysInScope)
 	wantUpPathsProblem(t, err, http.StatusInternalServerError, problem.TypeInternalError)

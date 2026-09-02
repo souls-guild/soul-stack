@@ -777,7 +777,7 @@ disagreed until now, and this one was the wrong one.
 **field**, and an empty list or map is non-nil, so `present` yields to it; a collection with no
 elements then offers no declared-secret position to resolve, and the step neither mints nor refuses.
 The live example of a re-pointed derived path is
-[`examples/service/redis/migrations/014_to_015.yml`](../../examples/service/redis/migrations/014_to_015.yml)
+[`examples/service/redis/migrations/015_system_acl_users/main.yml`](../../examples/service/redis/migrations/015_system_acl_users/main.yml)
 — v14 minted under `secret/redis/<inc>/users/<name>`, v15 derives
 `secret/redis/<inc>/system_acl_users/<name>` — and it is exactly this shape: the step defaults the new
 field to `[]`, so a v14 incarnation's next day-2 run (`core.state.set` over

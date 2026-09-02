@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   FC-4 L3b: prove that failed_when:false = ignore_errors on a REAL module failure
   during real-apply. core.exec.run of a nonexistent binary REALLY fails on
@@ -12,6 +11,6 @@ description: >-
   The L3a-stub doesn't compute failed_when -> best-effort semantics on a real failure
   and mapping the real stderr/exit-code into ignored_error are not proven there.
 
-# state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
+# No migrations/ folder -> state-schema version 1 (ADR-019, NIM-735).
 # Focus is the flow-control outcome of the run and register, not mutation of incarnation.state.
 state_schema: {}

@@ -6,9 +6,15 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// rawMigration — an intermediate form of the migration file before operation discrimination.
-// transform is stored as []map[string]any: the operation discriminator (exactly one
-// key from the set) is checked manually in toOps (the config/destiny_tasks.go pattern).
+// rawMigration — an intermediate form of the step document before operation
+// discrimination. transform is stored as []map[string]any: the operation
+// discriminator (exactly one key from the set) is checked manually in toOps (the
+// config/destiny_tasks.go pattern).
+//
+// FromVersion / ToVersion are decoded only to be REFUSED. They left the file with
+// NIM-735 — a step states what it does, and where it stands is stated once, by the
+// directory holding it — and decoding them is how a step still carrying one is
+// caught instead of silently ignored.
 type rawMigration struct {
 	FromVersion *int             `yaml:"from_version"`
 	ToVersion   *int             `yaml:"to_version"`
@@ -16,10 +22,21 @@ type rawMigration struct {
 	Transform   []map[string]any `yaml:"transform"`
 }
 
-// Parse parses the contents of a single `NNN_to_MMM.yml` into a *Migration. Returns
-// a ParseError on invalid YAML / missing versions / a violated operation
-// discriminator. A pure function: I/O (reading the file) is the caller's responsibility.
-func Parse(data []byte) (*Migration, error) {
+// Parse parses the contents of a single step document `migrations/<NNN>_<slug>/main.yml`
+// into a *Migration.
+//
+// toVersion is the version the step leads to, taken from the <NNN> of its own
+// directory; the source version is toVersion-1, because the ladder is forward-only
+// and goes by one. path is the document's location, carried onto the Migration for
+// consumers that report the chain. Neither is read from the file: a step that
+// carries `from_version:`/`to_version:` is refused ([CodeVersionKey]) rather than
+// checked against the directory, because two records of one integer is the defect
+// the layout removed.
+//
+// Returns a ParseError on invalid YAML / a retired version header / a violated
+// operation discriminator. A pure function: I/O (reading the file) is the caller's
+// responsibility.
+func Parse(data []byte, toVersion int, path string) (*Migration, error) {
 	if len(data) == 0 {
 		return nil, &ParseError{Code: CodeEmptyDocument, Msg: "empty migration file"}
 	}
@@ -29,11 +46,10 @@ func Parse(data []byte) (*Migration, error) {
 		return nil, &ParseError{Code: CodeYAMLParse, Msg: err.Error()}
 	}
 
-	if rm.FromVersion == nil || rm.ToVersion == nil {
-		return nil, &ParseError{Code: CodeVersionMissing, Msg: "from_version and to_version are required"}
-	}
-	if *rm.ToVersion != *rm.FromVersion+1 {
-		return nil, &ParseError{Code: CodeVersionInvalid, Msg: fmt.Sprintf("to_version (%d) must be from_version+1 (%d)", *rm.ToVersion, *rm.FromVersion+1)}
+	if rm.FromVersion != nil || rm.ToVersion != nil {
+		return nil, &ParseError{Code: CodeVersionKey, Msg: fmt.Sprintf(
+			"a step does not state its own place: drop from_version/to_version — the version this step leads to is the <NNN> of its directory, and %s says %d",
+			path, toVersion)}
 	}
 
 	ops, err := toOps(rm.Transform)
@@ -42,8 +58,9 @@ func Parse(data []byte) (*Migration, error) {
 	}
 
 	return &Migration{
-		FromVersion: *rm.FromVersion,
-		ToVersion:   *rm.ToVersion,
+		FromVersion: toVersion - 1,
+		ToVersion:   toVersion,
+		Path:        path,
 		Description: rm.Description,
 		Transform:   ops,
 	}, nil

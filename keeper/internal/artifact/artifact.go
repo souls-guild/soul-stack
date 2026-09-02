@@ -42,4 +42,10 @@ type ServiceArtifact struct {
 	SHA1     string
 	LocalDir string
 	Manifest *config.ServiceManifest
+	// StateSchemaVersion is the version of `incarnation.state` this snapshot
+	// expects. It is DERIVED at load time from the migration ladder — the top of
+	// `migrations/<NNN>_<slug>/`, [config.BaseStateSchemaVersion] when that
+	// directory is empty (NIM-735) — and is deliberately NOT on the Manifest: the
+	// snapshot states it, the manifest does not.
+	StateSchemaVersion int
 }

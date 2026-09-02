@@ -74,8 +74,7 @@ func stateServiceRepo(t *testing.T, scenarioMain string) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: noop service with a capturable field
+	write("service.yml", `description: noop service with a capturable field
 state_schema:
   endpoint:
     type: string

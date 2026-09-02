@@ -8,7 +8,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
@@ -164,7 +163,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 	if art == nil || art.Manifest == nil {
 		return nil, incProblem(problem.TypeInternalError, "target snapshot "+toRef+" has no manifest")
 	}
-	target := art.Manifest.StateSchemaVersion
+	target := art.StateSchemaVersion
 	current := inc.StateSchemaVersion
 
 	tgt := &UpgradePathTargetView{
@@ -232,16 +231,17 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 }
 
 // upgradeMigrationSteps projects the applied chain into the {from,to,path} shape
-// ([artifact.Migration]). Path — the canonical migration file name (docs/migrations.md,
-// migrations/<NNN>_to_<MMM>.yml) from the step's own versions (a display path, not a
-// duplication of LoadMigrationChain logic).
+// ([artifact.Migration]). Path is carried BY the step rather than rebuilt from its
+// versions: since NIM-735 the directory name holds an author's slug
+// (`migrations/<NNN>_<slug>/main.yml`), so a reconstructed path would name a file
+// that does not exist.
 func upgradeMigrationSteps(chain statemigrate.Chain) []artifact.Migration {
 	steps := make([]artifact.Migration, 0, len(chain))
 	for _, m := range chain {
 		steps = append(steps, artifact.Migration{
 			From: m.FromVersion,
 			To:   m.ToVersion,
-			Path: fmt.Sprintf("migrations/%03d_to_%03d.yml", m.FromVersion, m.ToVersion),
+			Path: m.Path,
 		})
 	}
 	return steps

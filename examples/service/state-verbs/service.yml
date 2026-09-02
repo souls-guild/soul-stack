@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   Corpus exercise for the whole `core.state.<verb>` family ([ADR-0084]). Every
   other example writes state with `set` alone, so `present`/`add`/`append`/
@@ -6,7 +5,7 @@ description: >-
   no soul-lint pass, no L0 fold, no example an author can copy. This service is
   that exercise and nothing else - it deploys no software.
 
-# state_schema_version = 1 -> the migrations/ directory is optional (ADR-019).
+# No migrations/ directory -> state-schema version 1 (ADR-019, NIM-735).
 #
 # The field kinds are load-bearing here, not decoration: `add` picks the identity
 # spelling from the field's kind, `key:` for an object and `match:` for an array,

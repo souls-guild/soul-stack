@@ -125,7 +125,7 @@ func discoverCases(target string) ([]string, error) {
 
 // isMigrationTestFile — structural marker of L1 case file: `*.yml` (except
 // `case.yml`), located in `tests/` directory whose grandparent is `migrations/`
-// (`.../migrations/<NNN>_to_<MMM>/tests/<case>.yml`). Exact layout
+// (`.../migrations/<NNN>_<slug>/tests/<case>.yml`). Exact layout
 // (docs/migrations.md §Tests), not «any yml in tests/»: otherwise stand tests of
 // service (`<service>/tests/smoke.yml`) not related to migrations would match.
 // Final level classification — by form at run time.
@@ -137,6 +137,6 @@ func isMigrationTestFile(path string) bool {
 	if filepath.Base(testsDir) != "tests" {
 		return false
 	}
-	stepDir := filepath.Dir(testsDir) // <NNN>_to_<MMM>
+	stepDir := filepath.Dir(testsDir) // <NNN>_<slug>
 	return filepath.Base(filepath.Dir(stepDir)) == "migrations"
 }

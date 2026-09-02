@@ -718,7 +718,7 @@ type ServiceStateSchema struct {
 // service's state_schema metadata for the UI Schema explorer: the current version
 // (`state_schema_version`), an optional state structure declaration (if
 // the service declared one in `service.yml::state_schema`), and a flat list of
-// migrations `<NNN>_to_<MMM>.yml` (metadata-only, no content).
+// migration steps `<NNN>_<slug>/main.yml` (metadata-only, no content).
 // Permission — service.list (the same Service-entry projection as /refs /
 // /scenarios).
 //

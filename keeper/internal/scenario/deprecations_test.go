@@ -17,7 +17,7 @@ func writeServiceTree(t *testing.T, scenarios map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "service.yml"),
-		[]byte("name: demo\nstate_schema_version: 1\n"), 0o600); err != nil {
+		[]byte("name: demo\n"), 0o600); err != nil {
 		t.Fatalf("write service.yml: %v", err)
 	}
 	for name, body := range scenarios {

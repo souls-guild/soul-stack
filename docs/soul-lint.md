@@ -119,7 +119,7 @@ OK: types.yml
 scenario/create/main.yml:124:11: warning: [form_field_uncovered] input.provision is not placed in any form section
 OK: scenario/create/main.yml
 OK: scenario/update_users/main.yml
-migrations: hint: [migrations_unchecked] migrations/ is populated and was NOT checked: …
+OK: migrations
 ```
 
 The positional is the service **directory**, or the `service.yml` inside it — both
@@ -223,7 +223,6 @@ document, and exists only because the walk has more to lose than a single-file r
 |---|---|---|
 | `service_tree_no_scenarios` | WARNING | the tree declares no scenario in **either** channel — the service parses, registers, and can never be run. A warning, not an error: it does not fail a lint, but a walk that reported one part and looked complete would be the silence this mode removes. |
 | `lint_internal_panic` | ERROR | a check crashed on this file. A panic is the ultimate early exit — it would abort the process over a half-written report and leave every part after it unchecked — so each part runs behind a recover, and the crash comes back as a finding naming the file that provoked it. It accuses the linter, not the author; the rest of the tree is still reported and the run is red. |
-| `migrations_unchecked` | HINT | `migrations/` is populated and the linter has no reading of the ladder yet (NIM-736). A **hint**, because nothing is wrong with the service — something is missing from the tool. Same reasoning as `plugin_params_unchecked`: "checked and clean" must not look identical to "never looked", and it would be a worse conflation here, where the reader has just been told the tree was checked. An **empty** `migrations/` says nothing at all: an empty ladder is a complete statement (the service is at state-schema version 1). |
 
 ### Output
 

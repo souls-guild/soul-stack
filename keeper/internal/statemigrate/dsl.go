@@ -1,11 +1,19 @@
 package statemigrate
 
-// Migration — a single state_schema migration step (`migrations/<NNN>_to_<MMM>.yml`),
+// Migration — a single state_schema migration step (`migrations/<NNN>_<slug>/main.yml`),
 // transforming incarnation.state from FromVersion to ToVersion. A pure
 // function state_v<N> → state_v<M> ([ADR-019], [docs/migrations.md]).
 type Migration struct {
+	// FromVersion / ToVersion are the step's place in the ladder. They are NOT read
+	// from the file — the file states only what the step does — but stamped by
+	// whoever read the directory the file sits in ([Parse]).
 	FromVersion int
 	ToVersion   int
+	// Path is the step document that produced this migration, relative to the
+	// service root (`migrations/<NNN>_<slug>/main.yml`). Carried so a consumer
+	// reporting the chain can name the step: under a slug the path is no longer
+	// reconstructible from the version numbers.
+	Path        string
 	Description string
 	Transform   []Op
 }

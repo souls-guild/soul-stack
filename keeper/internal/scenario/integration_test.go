@@ -215,8 +215,7 @@ func noopServiceRepo(t *testing.T) string {
 		}
 	}
 
-	write("service.yml", `state_schema_version: 1
-description: noop service for scenario-runner integration test
+	write("service.yml", `description: noop service for scenario-runner integration test
 state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
@@ -824,8 +823,7 @@ func registerServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: register-in-sets service
+	write("service.yml", `description: register-in-sets service
 state_schema:
   leader:
     type: string
@@ -959,8 +957,7 @@ func applyDestinyServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: apply:destiny integration service
+	write("service.yml", `description: apply:destiny integration service
 state_schema: {}
 destiny:
   - { name: pilot-flat, ref: master }
@@ -1144,8 +1141,7 @@ func inputDefaultsServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: scenario input-defaults service
+	write("service.yml", `description: scenario input-defaults service
 state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
@@ -1427,8 +1423,7 @@ func serialServiceRepo(t *testing.T, serial string) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: serial rolling service
+	write("service.yml", `description: serial rolling service
 state_schema:
   rolled:
     type: string
@@ -1642,8 +1637,7 @@ func serialMultiTaskRepo(t *testing.T, serialA, serialB string) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: serial multi-task service
+	write("service.yml", `description: serial multi-task service
 state_schema:
   rolled:
     type: string
@@ -1974,8 +1968,7 @@ func runOnceServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: run_once service
+	write("service.yml", `description: run_once service
 state_schema: {}
 `)
 	write("scenario/once/main.yml", `name: once
@@ -2081,8 +2074,7 @@ func writeServiceRepo(t *testing.T, scenarioMain string) string {
 	// can run scenarios but cannot capture anything, and a fixture that captures
 	// would fail on the declaration rather than on what it was written to test.
 	// These are the fields this package's scenarios record.
-	write("service.yml", `state_schema_version: 1
-description: noop service
+	write("service.yml", `description: noop service
 state_schema:
   captured:
     type: string

@@ -67,10 +67,9 @@ The manifesto is short in design: only service metadata and **contract for the r
 [`examples/service/hello-world/service.yml`](../../examples/service/hello-world/service.yml):
 
 ```yaml
-state_schema_version: 1
 description: Minimal service with a real state change for E2E (writes a file + commits to incarnation.state)
 
-# state_schema_version = 1 → the migrations/ directory is not required (ADR-019).
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
 # Unlike noop, incarnation.state here is non-empty: scenario/create
 # writes the created file's path into the greeting_file field.
 state_schema:
@@ -81,12 +80,10 @@ state_schema:
 # which are not listed in destiny[]/modules[] (ADR-009).
 ```
 
-> That first line is the file as it stands on disk today: `state_schema_version:` is retired by NIM-735 — the version is the top of the `migrations/` ladder — but the linter still requires the key until NIM-736 ships, and the bundled examples drop it with NIM-738. The excerpt is what you run against now; the bullet below is the target.
-
 Parsing fields:
 
 - **There is no `name`.** The manifest states no identity: you name the service when you register it (`POST /v1/services`), and that is the name Keeper resolves an incarnation against. Writing `name:` here is an error — a second copy nobody compared against the first is how a service ends up fencing the wrong Vault namespace (NIM-726).
-- **There is no state-schema version either** (the target model — see the note above the block for why the excerpt still shows one). The **structure** version of `incarnation.state` (not the service version — that is the git-ref) is not written in the manifest: it is the top of the `migrations/` ladder. An empty `migrations/` means version 1, which is where we are, so there is no ladder directory here at all. A breaking change to the state structure is a new ladder step, and the step's number is the new version.
+- **There is no state-schema version either.** The **structure** version of `incarnation.state` (not the service version — that is the git-ref) is not written in the manifest: it is the top of the `migrations/` ladder. An empty `migrations/` means version 1, which is where we are, so there is no ladder directory here at all. A breaking change to the state structure is a new ladder step, and the step's number is the new version.
 - **`description`** - one or two phrases; visible in the Keeper UI, MCP directory and `soul-lint` output.
 - **`state_schema`** - the structure of the JSONB field `incarnation.state` in Postgres, written in the **input DSL** ([docs/input.md](../input.md)) as a map `<field name>` → schema — the same shape an `input:` block has. There is no root `type: object` and no `properties:` wrapper; a **nested** object field still declares `type: object` with its own `properties:`. Here we declare a single field `greeting_file` of type string. Keeper validates state against this schema when creating an incarnation and when upgrading a schema version.
 

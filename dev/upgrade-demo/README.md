@@ -20,7 +20,7 @@ The `upgrade-demo` service with three tags (built by the script into the git rep
 |---|---|---|---|
 | `v1.0.0` | 1 | none | starting pin of a bare incarnation |
 | `v2.0.0` | 2 | `upgrade/to_v2/` (`from: ["v1.0.0"]`) | target of **found** mode |
-| `v2.0.1` | 2 | none | target of **legacy** mode (same migration `001_to_002`) |
+| `v2.0.1` | 2 | none | target of **legacy** mode (same migration `002_schema_v2_marker`) |
 
 The incarnation is created **bare** (the service has no create scenario -> no
 hosts, goes straight to `ready` at pin `v1.0.0`, `state_schema_version=1`).
@@ -30,7 +30,7 @@ hosts, goes straight to `ready` at pin `v1.0.0`, `state_schema_version=1`).
 - **cheap** — `GET .../upgrade-paths` without `?to=`: list of registry tags
   (`v1.0.0`/`v2.0.0`/`v2.0.1`/`main`) + `is_current=true` for `v1.0.0`.
 - **found** — `?to=v2.0.0`: `direction=forward`, `mode=found`, `slug=to_v2`,
-  `reachable=true`, `state_migrations=[{from:1,to:2,path:migrations/001_to_002.yml}]`
+  `reachable=true`, `state_migrations=[{from:1,to:2,path:migrations/002_schema_v2_marker/main.yml}]`
   (the scanner found `upgrade/to_v2/main.yml`, whose `from:` contains the current pin).
 - **legacy** — `?to=v2.0.1`: `mode=legacy` (no `upgrade/` scenario, `slug` omitted),
   `reachable=true`, the same migration chain.
@@ -125,6 +125,6 @@ dev/upgrade-demo/
   README.md                  # this file
   tree/
     v1.0.0/service.yml + vars/00-base.yaml
-    v2.0.0/… + migrations/001_to_002.yml + upgrade/to_v2/main.yml   (found)
-    v2.0.1/… + migrations/001_to_002.yml                            (legacy)
+    v2.0.0/… + migrations/002_schema_v2_marker/main.yml + upgrade/to_v2/main.yml   (found)
+    v2.0.1/… + migrations/002_schema_v2_marker/main.yml                            (legacy)
 ```

@@ -42,8 +42,9 @@ func (f *fakePrepLoader) Load(_ context.Context, ref artifact.ServiceRef) (*arti
 		return nil, f.loadErr
 	}
 	return &artifact.ServiceArtifact{
-		Ref:      ref,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema},
+		Ref:                ref,
+		Manifest:           &config.ServiceManifest{},
+		StateSchemaVersion: f.targetSchema,
 	}, nil
 }
 
@@ -67,7 +68,7 @@ func prepInc(serviceVersion string, schema int) *Incarnation {
 }
 
 func TestPrepareUpgrade_Happy(t *testing.T) {
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}

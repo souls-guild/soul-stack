@@ -85,7 +85,7 @@ func diagWithCode(diags []diag.Diagnostic, code string) *diag.Diagnostic {
 // with the include unexpanded it would be 1, not 3.
 func TestStageDiagnostics_SharedDirIncludeResolves(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "provision.yml"), stageSharedBody)
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n"+stageLocalTask)
@@ -112,7 +112,7 @@ func TestStageDiagnostics_SharedDirIncludeResolves(t *testing.T) {
 // decoy two.
 func TestStageDiagnostics_LocalIncludeShadowsServiceLevel(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "provision.yml"), stageSharedBody)
 	stageWrite(t, filepath.Join(root, "scenario", "create", "_create", "provision.yml"),
 		"- name: local body\n  module: core.service.restarted\n  params:\n    name: redis-server\n")
@@ -134,7 +134,7 @@ func TestStageDiagnostics_LocalIncludeShadowsServiceLevel(t *testing.T) {
 // lint, not the stage_include_unresolved hint that used to let it exit OK.
 func TestStageDiagnostics_UnresolvedIncludeIsError(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/missing.yml\n"+stageLocalTask)
 
@@ -163,7 +163,7 @@ func TestStageDiagnostics_UnresolvedIncludeIsError(t *testing.T) {
 // count must still be exactly one — a reintroduced pre-pass would double it.
 func TestStageDiagnostics_DynamicIncludeWhenReportedOnce(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "provision.yml"), stageSharedBody)
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n"+
@@ -196,7 +196,7 @@ func TestStageDiagnostics_SymlinkEscapeRefused(t *testing.T) {
 	stageWrite(t, body, stageSharedBody)
 
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	link := filepath.Join(root, "scenario", "_create", "body.yml")
 	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
@@ -231,7 +231,7 @@ func TestStageDiagnostics_SymlinkEscapeRefused(t *testing.T) {
 // that happens to be open.
 func TestStageDiagnostics_DynamicIncludeWhenNestedReported(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	// probe.yml is pulled in by provision.yml under a dynamic predicate; main.yml
 	// itself carries no when: at all.
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "probe.yml"), stageSharedBody)
@@ -515,7 +515,7 @@ func TestStageDiagnostics_NoServiceManifestNoServiceLevel(t *testing.T) {
 // i.e. always absolute and always deep, so none of them can catch this class.
 func TestStageDiagnostics_VerdictIndependentOfPathForm(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	// The shared body carries an include that resolves NOWHERE, so a correctly
 	// detected service tree must report an error rather than the hint.
 	stageWrite(t, filepath.Join(root, "scenario", "_shared", "a.yml"),
@@ -578,7 +578,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		// keeper resolves it today. Clamping at the scenario directory turns it
 		// into a hard error on a tree production runs fine.
 		root := t.TempDir()
-		stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+		stageWrite(t, filepath.Join(root, "service.yml"), "")
 		stageWrite(t, filepath.Join(root, "shared_bodies", "deploy.yml"), stageSharedBody)
 		stageSymlink(t, filepath.Join(root, "scenario", "create", "deploy.yml"),
 			filepath.Join("..", "..", "shared_bodies", "deploy.yml"))
@@ -593,7 +593,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 
 	t.Run("absolute symlink re-roots at the service root", func(t *testing.T) {
 		root := t.TempDir()
-		stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+		stageWrite(t, filepath.Join(root, "service.yml"), "")
 		// What the keeper runs: `/decoy` re-rooted at the SERVICE root.
 		stageWrite(t, filepath.Join(root, "decoy", "body.yml"),
 			stageSharedBody+"\n- include: nowhere.yml\n")
@@ -618,7 +618,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		// exists for can come back on the tier the ticket was written for: the
 		// shared bodies of a scenario family live at the service level.
 		root := t.TempDir()
-		stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+		stageWrite(t, filepath.Join(root, "service.yml"), "")
 		// The keeper's file: `/decoy` re-rooted at the SERVICE root.
 		stageWrite(t, filepath.Join(root, "decoy", "body.yml"),
 			stageSharedBody+"\n- include: nowhere.yml\n")
@@ -642,7 +642,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		outside := t.TempDir()
 		stageWrite(t, filepath.Join(outside, "body.yml"), stageSharedBody)
 		root := t.TempDir()
-		stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+		stageWrite(t, filepath.Join(root, "service.yml"), "")
 		stageSymlink(t, filepath.Join(root, "scenario", "create", "body.yml"),
 			filepath.Join(outside, "body.yml"))
 		scn := filepath.Join(root, "scenario", "create", "main.yml")
@@ -695,7 +695,7 @@ const storeAfterUseCapture = `  - name: capture the admin password
 
 func TestStageDiagnostics_StoreAfterUseAcrossInclude(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "configure.yml"), storeAfterUseConsumer)
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+
@@ -721,7 +721,7 @@ func TestStageDiagnostics_StoreAfterUseAcrossInclude(t *testing.T) {
 // to enforce.
 func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "configure.yml"), storeAfterUseConsumer)
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+storeAfterUseCapture+
@@ -742,7 +742,7 @@ func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
 // still renders the pre-capture value.
 func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "announce.yml"),
 		`- name: point the replicas at the endpoint
   module: core.exec.run
@@ -782,7 +782,7 @@ func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
 // body, where the per-file task rules never see it.
 func TestStageDiagnostics_WideMatchAcrossInclude(t *testing.T) {
 	root := t.TempDir()
-	stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_update", "purge.yml"),
 		`- name: drop the user
   module: core.state.remove
@@ -834,7 +834,7 @@ func TestStageDiagnostics_WideMatchConstTrueAndNarrow(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			stageWrite(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\n")
+			stageWrite(t, filepath.Join(root, "service.yml"), "")
 			main := filepath.Join(root, "scenario", "update", "main.yml")
 			stageWrite(t, main, "name: update\ntasks:\n"+capture(tc.match))
 

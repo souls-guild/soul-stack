@@ -515,7 +515,7 @@ tasks:
   # read-model). Versions/ports - from vars.node_exporter_*/redis_exporter_* (the same values
   # that go into apply.input of the two destinies in create/main.yml). The password/user of the ACL
   # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
-  # duplicate the service vars / migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
+  # duplicate the service vars / migration 013_monitoring_read_model (ports :9100/:9121 are conventional; versions - from the service vars substrate).
   - name: Record the deployed exporters
     module: core.state.set
     params:
@@ -532,7 +532,7 @@ tasks:
   # monitoring). Version/sink_type/endpoint/log_sources - from vars.vector_* (the same values
   # that go into the destiny vector apply.input in create/main.yml). ★ vector_sink_auth_ref is NOT
   # written HERE - it's a secret (Vault ref/token), it doesn't land in state (security, like tls.*_ref and the
-  # monitoring password). The defaults duplicate the service vars / migration 013_to_014 (console - a safe default with no
+  # monitoring password). The defaults duplicate the service vars / migration 014_logging_read_model (console - a safe default with no
   # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
   - name: Record the deployed log shipping
     module: core.state.set

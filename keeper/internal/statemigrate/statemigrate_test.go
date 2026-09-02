@@ -6,16 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // fixtureDir is the path to real consolidated Redis fixtures (authoritative
-// over docs examples). Migration 001_to_002 is a DSL grammar demo (rename + set +
+// over docs examples). The first step is a DSL grammar demo (rename + set +
 // foreach + delete), moving an invariant from the previous redis-cluster.
 const fixtureDir = "../../../examples/service/redis/migrations"
+
+// firstStepDir is the bottom rung of that ladder — the step leading to version 2.
+const firstStepDir = "002_acl_users_list_to_map"
 
 func mustEvaluator(t *testing.T) Evaluator {
 	t.Helper()
@@ -26,17 +32,32 @@ func mustEvaluator(t *testing.T) Evaluator {
 	return ev
 }
 
-func mustParseFile(t *testing.T, path string) *Migration {
+// mustParseStep reads one step of the fixture ladder by its directory name,
+// `<NNN>_<slug>`, and takes the version it leads to from that <NNN> — the same
+// derivation the loader makes, so a fixture that breaks the naming rule fails here
+// rather than parsing as version 0.
+func mustParseStep(t *testing.T, stepDir string) *Migration {
 	t.Helper()
+	path := filepath.Join(fixtureDir, stepDir, config.MigrationStepFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	m, err := Parse(data)
+	m, err := Parse(data, stepVersion(t, stepDir), path)
 	if err != nil {
 		t.Fatalf("Parse %s: %v", path, err)
 	}
 	return m
+}
+
+// stepVersion pulls the version off a `<NNN>_<slug>` directory name.
+func stepVersion(t *testing.T, stepDir string) int {
+	t.Helper()
+	n, err := strconv.Atoi(strings.SplitN(stepDir, "_", 2)[0])
+	if err != nil {
+		t.Fatalf("step directory %q does not start with <NNN>: %v", stepDir, err)
+	}
+	return n
 }
 
 // migrationTestCase is the format of tests/<case>.yml (state_before → migration →
@@ -48,28 +69,29 @@ type migrationTestCase struct {
 }
 
 // TestApply_AllFixtures runs generic traversal of all Redis service migration fixtures.
-// For each pair of "migration file <N>_to_<M>.yml + directory <N>_to_<M>/tests/*.yml"
-// it executes ONE step <N>→<M> on state_before and compares with state_after.
-// This gates against silent regression: any existing fixture (incl. 4 of 005_to_006)
+// For each step directory "<NNN>_<slug>/ holding main.yml + tests/*.yml" it executes
+// that ONE step (<NNN>-1 → <NNN>) on state_before and compares with state_after.
+// This gates against silent regression: any existing fixture (incl. 4 of 006_acl_users_map_to_array)
 // runs without manual path hardcoding. Authoritative over docs examples.
 //
-// Each test directory is tied to a one-step migration (directory name = filename
-// without .yml), and step versions come from the file itself (Parse). Therefore
-// a one-step Chain suffices — multi-step chains are covered by step-snapshot tests below.
+// Each case lives inside the step it exercises (`<NNN>_<slug>/tests/<case>.yml`), and
+// the step's version comes from that directory's <NNN> — never from the document.
+// Therefore a one-step Chain suffices — multi-step chains are covered by step-snapshot
+// tests below.
 func TestApply_AllFixtures(t *testing.T) {
 	ev := mustEvaluator(t)
 
-	migFiles, err := filepath.Glob(filepath.Join(fixtureDir, "*_to_*.yml"))
+	stepDocs, err := filepath.Glob(filepath.Join(fixtureDir, "*", config.MigrationStepFile))
 	if err != nil {
 		t.Fatalf("glob migrations: %v", err)
 	}
-	if len(migFiles) == 0 {
-		t.Fatalf("no migration files found in %s", fixtureDir)
+	if len(stepDocs) == 0 {
+		t.Fatalf("no migration steps found in %s", fixtureDir)
 	}
 
 	var totalCases int
-	for _, migFile := range migFiles {
-		stepName := strings.TrimSuffix(filepath.Base(migFile), ".yml") // e.g. 005_to_006
+	for _, stepDoc := range stepDocs {
+		stepName := filepath.Base(filepath.Dir(stepDoc)) // e.g. 006_acl_users_map_to_array
 		caseFiles, err := filepath.Glob(filepath.Join(fixtureDir, stepName, "tests", "*.yml"))
 		if err != nil {
 			t.Fatalf("glob cases %s: %v", stepName, err)
@@ -81,7 +103,7 @@ func TestApply_AllFixtures(t *testing.T) {
 			continue
 		}
 
-		mig := mustParseFile(t, migFile)
+		mig := mustParseStep(t, stepName)
 		for _, caseFile := range caseFiles {
 			caseName := stepName + "/" + strings.TrimSuffix(filepath.Base(caseFile), ".yml")
 			t.Run(caseName, func(t *testing.T) {
@@ -104,15 +126,15 @@ func TestApply_AllFixtures(t *testing.T) {
 		}
 	}
 
-	t.Logf("migrations run: %d, test cases: %d", len(migFiles), totalCases)
+	t.Logf("migrations run: %d, test cases: %d", len(stepDocs), totalCases)
 }
 
 // TestApply_RealFixture_EmptyUsers: empty user list yields empty map.
-// Migration 001_to_002 explicitly materializes the target key with `set state.redis_users {}`
+// The first step explicitly materializes the target key with `set state.redis_users {}`
 // before foreach (intent "list became map"), so foreach over [] (no-op) leaves
 // redis_users: {} rather than key absence.
 func TestApply_RealFixture_EmptyUsers(t *testing.T) {
-	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
+	mig := mustParseStep(t, firstStepDir)
 	ev := mustEvaluator(t)
 
 	in := map[string]any{"redis_users": []any{}, "redis_type": "cluster"}
@@ -149,7 +171,7 @@ func TestApply_EmptyForeachNoMaterialize(t *testing.T) {
 
 // TestApply_DoesNotMutateInput: caller's input state is not mutated.
 func TestApply_DoesNotMutateInput(t *testing.T) {
-	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
+	mig := mustParseStep(t, firstStepDir)
 	ev := mustEvaluator(t)
 
 	in := map[string]any{"redis_users": []any{"app"}, "redis_type": "standalone"}

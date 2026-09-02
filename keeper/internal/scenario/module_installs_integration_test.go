@@ -47,8 +47,7 @@ func moduleServiceRepo(t *testing.T, mainTasks string, extraFiles map[string]str
 		}
 	}
 
-	write("service.yml", `state_schema_version: 1
-description: service with modules[] for install-synthesis integration test
+	write("service.yml", `description: service with modules[] for install-synthesis integration test
 state_schema: {}
 modules:
   - { name: community.echo, ref: v1.2.0 }

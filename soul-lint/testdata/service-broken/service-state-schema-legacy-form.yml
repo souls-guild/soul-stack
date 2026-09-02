@@ -2,7 +2,6 @@
 # `type: object` on the root, a `required:` list and a `properties:` wrapper.
 # All three are refused by name and address — read as field names they would
 # describe a schema different from the one written here.
-state_schema_version: 1
 state_schema:
   type: object
   required: [namespace]

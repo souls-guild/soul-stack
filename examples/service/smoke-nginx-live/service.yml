@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   L3b real-soul-in-container flagship-smoke (ADR-039): the same scenario as
   examples/service/smoke-nginx (L3a), but going through a REAL apt install of
@@ -8,7 +7,7 @@ description: >-
   tests/e2e-live/smoke_nginx_live_test.go to cover the flow
   Keeper render -> apply gRPC -> Soul Apply -> RunResult -> apply_runs success.
 
-# state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
+# No migrations/ folder -> state-schema version 1 (ADR-019, NIM-735).
 # The scenario's core.state.set steps fix what it has deployed, so the contract
 # test can validate incarnation.state after a successful apply.
 state_schema:

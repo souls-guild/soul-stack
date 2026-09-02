@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   NIM-32 S2 live gate for SoulModule plugin delivery (ADR-065 S5, live guarantee
   for NIM-8). The service DECLARES community.redis in modules[] and does NOT
@@ -9,7 +8,7 @@ description: >-
   declaration BEFORE the consumer, and Soul in ONE run does
   fetch→verify→atomic-rename→hot-register and immediately executes the consumer.
 
-# state_schema_version=1 → the migrations/ directory is not required (ADR-019).
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
 state_schema: {}
 # modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
 # keeper synthesizes core.module.installed {name: community, ref} before the first

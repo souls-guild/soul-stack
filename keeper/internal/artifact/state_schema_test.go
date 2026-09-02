@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // writeServiceManifest is a helper: puts `service.yml` into the test
@@ -16,22 +18,34 @@ func writeServiceManifest(t *testing.T, root, body string) {
 	}
 }
 
-// writeMigration is a helper: puts `migrations/<NNN>_to_<MMM>.yml` with an
-// empty body (content is not parsed; listing works from metadata).
-func writeMigration(t *testing.T, root, name, body string) {
+// writeMigrationStep is a helper: puts `migrations/<dir>/main.yml` with an empty
+// body (content is not parsed; the listing works from the directory names alone).
+func writeMigrationStep(t *testing.T, root, dir, body string) {
 	t.Helper()
-	dir := filepath.Join(root, migrationsDir)
+	stepDir := filepath.Join(root, config.MigrationsDirName, dir)
+	if err := os.MkdirAll(stepDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll %s: %v", stepDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(stepDir, config.MigrationStepFile), []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile %s: %v", dir, err)
+	}
+}
+
+// writeMigrationFile is a helper: puts a plain file directly under `migrations/`.
+func writeMigrationFile(t *testing.T, root, name, body string) {
+	t.Helper()
+	dir := filepath.Join(root, config.MigrationsDirName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("MkdirAll migrations: %v", err)
 	}
-	p := filepath.Join(dir, name)
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 		t.Fatalf("WriteFile %s: %v", name, err)
 	}
 }
 
-const validManifestV2 = `state_schema_version: 2
-state_schema:
+// stateSchemaManifest is the manifest these tests project from. It states no
+// version — since NIM-735 there is no such key; the version comes from the ladder.
+const stateSchemaManifest = `state_schema:
   master_host:
     required: true
     type: string
@@ -40,20 +54,22 @@ state_schema:
     type: integer
 `
 
-// TestListStateSchema_ReadsManifest is the happy path: version + structure +
-// migrations are present, response contains everything, sorted by `to` ASC.
+// TestListStateSchema_ReadsManifest is the happy path: the derived version +
+// structure + migrations are present, response contains everything, sorted by `to`
+// ASC.
 func TestListStateSchema_ReadsManifest(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, validManifestV2)
-	writeMigration(t, root, "001_to_002.yml", "ops: []\n")
-	writeMigration(t, root, "002_to_003.yml", "ops: []\n")
+	writeServiceManifest(t, root, stateSchemaManifest)
+	writeMigrationStep(t, root, "002_widen_users", "transform: []\n")
+	writeMigrationStep(t, root, "003_drop_install", "transform: []\n")
 
 	info, err := ListStateSchema(root, discardLogger())
 	if err != nil {
 		t.Fatalf("ListStateSchema: %v", err)
 	}
-	if info.Version != 2 {
-		t.Errorf("Version = %d, want 2", info.Version)
+	// The manifest states no version: 3 is the top of the ladder written above.
+	if info.Version != 3 {
+		t.Errorf("Version = %d, want 3 (top of the ladder)", info.Version)
 	}
 	if info.Schema == nil {
 		t.Fatal("Schema=nil, want state_schema declaration")
@@ -76,7 +92,7 @@ func TestListStateSchema_ReadsManifest(t *testing.T) {
 	if info.Migrations[1].From != 2 || info.Migrations[1].To != 3 {
 		t.Errorf("Migrations[1] = %+v", info.Migrations[1])
 	}
-	if info.Migrations[0].Path != "migrations/001_to_002.yml" {
+	if info.Migrations[0].Path != "migrations/002_widen_users/main.yml" {
 		t.Errorf("Migrations[0].Path = %q", info.Migrations[0].Path)
 	}
 }
@@ -86,7 +102,7 @@ func TestListStateSchema_ReadsManifest(t *testing.T) {
 // scenario/).
 func TestListStateSchema_NoMigrationsDir(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, validManifestV2)
+	writeServiceManifest(t, root, stateSchemaManifest)
 
 	info, err := ListStateSchema(root, discardLogger())
 	if err != nil {
@@ -98,17 +114,21 @@ func TestListStateSchema_NoMigrationsDir(t *testing.T) {
 	if len(info.Migrations) != 0 {
 		t.Errorf("want empty list, got %+v", info.Migrations)
 	}
+	// An empty ladder IS version 1 — the floor, not a missing answer.
+	if info.Version != config.BaseStateSchemaVersion {
+		t.Errorf("Version = %d, want %d", info.Version, config.BaseStateSchemaVersion)
+	}
 }
 
 // TestListStateSchema_SortByToAsc returns migrations sorted by `to` (the chain
 // graph grows), regardless of os.ReadDir order.
 func TestListStateSchema_SortByToAsc(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, validManifestV2)
-	// Put files in reverse name order to verify that sorting actually works.
-	writeMigration(t, root, "003_to_004.yml", "")
-	writeMigration(t, root, "001_to_002.yml", "")
-	writeMigration(t, root, "002_to_003.yml", "")
+	writeServiceManifest(t, root, stateSchemaManifest)
+	// Put directories in reverse name order to verify that sorting actually works.
+	writeMigrationStep(t, root, "004_c", "")
+	writeMigrationStep(t, root, "002_a", "")
+	writeMigrationStep(t, root, "003_b", "")
 
 	info, err := ListStateSchema(root, discardLogger())
 	if err != nil {
@@ -125,21 +145,20 @@ func TestListStateSchema_SortByToAsc(t *testing.T) {
 	}
 }
 
-// TestListStateSchema_IgnoresNonCanonicalFiles verifies that files in
-// `migrations/` outside `<NNN>_to_<MMM>.yml` are ignored (README, test subdir,
-// invalid pattern).
-func TestListStateSchema_IgnoresNonCanonicalFiles(t *testing.T) {
+// TestListStateSchema_IgnoresNonStepEntries verifies that entries in `migrations/`
+// which are not step directories are left out of the listing: a plain file (README,
+// and later `schema.lock`) and a directory whose name is not `<NNN>_<slug>`.
+//
+// The listing is the permissive read — the engine reports what is there rather than
+// refusing; `soul-lint validate-service` is what calls the unrecognised directory a
+// defect (`migration_step_name_invalid`).
+func TestListStateSchema_IgnoresNonStepEntries(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, validManifestV2)
-	writeMigration(t, root, "001_to_002.yml", "")
-	writeMigration(t, root, "README.md", "docs")
-	writeMigration(t, root, "1_to_2.yml", "no leading zeros")
-	writeMigration(t, root, "001_to_002.yaml", "wrong ext")
-	// Test migration subdir (docs/migrations.md: tests/<case>.yml inside
-	// `migrations/<NNN_to_MMM>/`).
-	if err := os.MkdirAll(filepath.Join(root, migrationsDir, "001_to_002", "tests"), 0o755); err != nil {
-		t.Fatalf("MkdirAll tests: %v", err)
-	}
+	writeServiceManifest(t, root, stateSchemaManifest)
+	writeMigrationStep(t, root, "002_widen_users", "")
+	writeMigrationFile(t, root, "README.md", "docs")
+	writeMigrationFile(t, root, "schema.lock", "version: 2\n")
+	writeMigrationStep(t, root, "2_widen_users", "no leading zeros")
 
 	info, err := ListStateSchema(root, discardLogger())
 	if err != nil {
@@ -179,8 +198,7 @@ func TestListStateSchema_BrokenManifest(t *testing.T) {
 // the normative schema.
 func TestListStateSchema_NoStateSchemaField(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, `state_schema_version: 1
-`)
+	writeServiceManifest(t, root, "description: no state_schema here\n")
 	_, err := ListStateSchema(root, discardLogger())
 	if err == nil {
 		t.Fatalf("want validation error (state_schema required)")

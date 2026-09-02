@@ -294,10 +294,7 @@ func TestListStateSchema_KeepsDeclaredSecret(t *testing.T) {
       name:
         type: string
 `)
-	// `state_schema_version:` is still required by the loader on this branch — the
-	// ladder-derived version is documented but not built (NIM-736/737).
-	writeServiceManifest(t, root, `state_schema_version: 1
-state_schema:
+	writeServiceManifest(t, root, `state_schema:
   redis_users:
     type: array
     items:

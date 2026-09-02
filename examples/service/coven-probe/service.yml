@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   Probe service for validating coven-targeting of the on:/coven resolver (Phase-2 TEST A).
   Each scenario installs redis and writes a coven marker file to the targeted

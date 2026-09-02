@@ -22,7 +22,7 @@ operator passthrough directives, SHALLOW last-wins ([templating.md §2.3](../../
 > [`redis`](../../destiny/redis/) destiny brick** (`deploy_redis` / `sentinel_enabled`
 > flags) for reuse by other services - e.g. DragonFly - but not as a mode of this
 > service. Narrowing the `redis_type` enum to `[sentinel, cluster]` - bump
-> `state_schema_version` 3→4 + migration [`003_to_004`](migrations/003_to_004.yml)
+> state-schema 3→4 + migration [`004_narrow_redis_type_enum`](migrations/004_narrow_redis_type_enum/main.yml)
 > (forward-only remap of the old modes, see [state_schema](#state_schema)).
 >
 > Day-2 cluster operations are implemented - node join/eviction/resharding via
@@ -68,43 +68,43 @@ Division of responsibilities (architect B-hybrid, ADR-009):
 
 ## state_schema
 
-[`service.yml → state_schema`](service.yml), `state_schema_version: 11`. Forward-only
+[`service.yml → state_schema`](service.yml); state-schema version 15 — the top of the ladder. Forward-only
 migration chain (ADR-019):
 
-- [`001_to_002.yml`](migrations/001_to_002.yml) - `redis_users` from a list of names into
+- [`002_acl_users_list_to_map`](migrations/002_acl_users_list_to_map/main.yml) - `redis_users` from a list of names into
   a map `name → {perms, state}`;
-- [`002_to_003.yml`](migrations/002_to_003.yml) - "richer state": the opaque
+- [`003_named_intent_fields`](migrations/003_named_intent_fields/main.yml) - "richer state": the opaque
   `redis_config` is supplemented with named intent fields (day-2 read-model:
   `tls`/`install`/`persistence`/`memory_mb`/`maxmemory_policy`/`modules` + topology
   `shards`/`replicas`/`sentinel_quorum`);
-- [`003_to_004.yml`](migrations/003_to_004.yml) - **narrowing the `redis_type` enum to
+- [`004_narrow_redis_type_enum`](migrations/004_narrow_redis_type_enum/main.yml) - **narrowing the `redis_type` enum to
   `[sentinel, cluster]`**: forward-only remap of the old modes `standalone → sentinel`
   and `sentinel_only → sentinel`, so state stays schema-valid after these modes were
   removed from the service. The migration file itself carries the `needs_architect`
   flag (★★): the remap changes the live meaning of the incarnation (standalone had no
   sentinel daemon; `sentinel_only` had no data plane) - correctness of the target mode
   for live standalone/`sentinel_only` incarnations must be confirmed before production;
-- [`004_to_005.yml`](migrations/004_to_005.yml) - sentinel failover timings:
+- [`005_sentinel_failover_timings`](migrations/005_sentinel_failover_timings/main.yml) - sentinel failover timings:
   `redis_sentinel` is supplemented with `down_after_ms`/`failover_timeout_ms` (day-2
   read-model, default `5000`/`60000`); only for sentinel incarnations, no-op for cluster
   (`redis_sentinel {}`);
-- [`005_to_006.yml`](migrations/005_to_006.yml) - `redis_users` from a map
+- [`006_acl_users_map_to_array`](migrations/006_acl_users_map_to_array/main.yml) - `redis_users` from a map
   `name→{perms,state}` into a **typed array `[{name, perms, state}]`** (ADR-062 `AclUser`):
   the map key (name) moves into the `name` field;
-- [`006_to_007.yml`](migrations/006_to_007.yml) - **cloud-provision read-model**
+- [`007_cloud_provision_read_model`](migrations/007_cloud_provision_read_model/main.yml) - **cloud-provision read-model**
   ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Option A):
   state gets two independent fields, `provisioned_vm_ids` (array string) and
   `provisioned_provider` (string). Existing incarnations (deployed **without** provision)
   get a conservative default `[]` / `''` (hosts are a declared roster, not provisioned by
   the service); two flat `set`s with a `has()` guard (back-compat + idempotency on rerun);
-- [`007_to_008.yml`](migrations/007_to_008.yml) - **cascade-destroy read-model**
+- [`008_provisioned_sids`](migrations/008_provisioned_sids/main.yml) - **cascade-destroy read-model**
   (addition to v7): state gets `provisioned_sids` (array string) - Keeper-side SID/FQDN
   of VMs raised by our run. Day-2 teardown reads them to cascade-clean the
   `souls`/`soul_seeds`/`bootstrap_tokens` registries (the Reaper does not remove
   pending-VM-souls itself). Pairs with `provisioned_vm_ids`: `vm_ids` - provider id (for
   `core.cloud.destroyed`), `sids` - Keeper Soul id (for cascade) - different subsystems.
   One flat `set`, default `[]` for existing incarnations (`has()` guard);
-- [`008_to_009.yml`](migrations/008_to_009.yml) - **seed-source read-model** (pilot
+- [`009_seeded_from`](migrations/009_seeded_from/main.yml) - **seed-source read-model** (pilot
   `migrate_cluster`): state gets a nested object `seeded_from` - **where** the data was
   seeded from during migration from an external cluster: `source_endpoints` (array
   string) and `detached` (bool - `false` after migrate, `true` after day-2
@@ -112,7 +112,7 @@ migration chain (ADR-019):
   forbidden in migration-CEL) - it's taken from `state_history`. For a plain `create`
   (not a migration), a conservative default `{source_endpoints: [], detached: false}`;
   a single `set` with a `has()` guard on the **whole object**;
-- [`009_to_010.yml`](migrations/009_to_010.yml) - `seeded_from` gets **references** to
+- [`010_seeded_from_credential_refs`](migrations/010_seeded_from_credential_refs/main.yml) - `seeded_from` gets **references** to
   the external source's credentials: `source_password_ref` (Vault **path** to the
   password) + `source_tls_ca_ref` (Vault path to the CA), both strings. Production
   blocker fix: `detach_source` performs a final offset-gate against the **external**
@@ -122,9 +122,9 @@ migration chain (ADR-019):
   (not secrets - Vault paths), `detach` reads them via `vault()` keeper-side. For
   existing v9 incarnations (and plain `create`) - empty refs (source without AUTH/TLS).
   A **leaf guard** (`has()` on each new field inside the already-existing
-  `seeded_from`), not an object guard like `008_to_009` - otherwise it would have
+  `seeded_from`), not an object guard like `009_seeded_from` - otherwise it would have
   overwritten `source_endpoints`/`detached`;
-- [`010_to_011.yml`](migrations/010_to_011.yml) - **redesign of the `create` input
+- [`011_connection_mode_contract`](migrations/011_connection_mode_contract/main.yml) - **redesign of the `create` input
   contract** (`connection_mode` + `io_threads` + extended `persistence` + restructured
   sentinel timings). Four independent state transformations (best-effort - a migration
   is a pure function of the old state, ADR-019: `service vars`/`input`/`vault` are forbidden
@@ -137,7 +137,7 @@ migration chain (ADR-019):
   `enable && !only → tls_plain`;
   (3) **`io_threads`** (new, int) - best-effort default `0` (the original I/O thread
   count wasn't held in namedfields - unrecoverable from `redis_config`, like
-  `memory_mb` in `002_to_003`);
+  `memory_mb` in `003_named_intent_fields`);
   (4) **`redis_sentinel` RESTRUCT** (sentinel incarnations only): the named
   `down_after_ms`/`failover_timeout_ms` are folded into `master_settings`
   (`map<string,string>` of effective per-master directives - mirroring
@@ -155,7 +155,7 @@ installation, and so a repeated apply stays idempotent:
 | `connection_mode` | enum `tls`/`tls_plain`/`plain` | **(v11)** network channel mode: `plain` - plain port only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain closed, `port 0`). Day-2 read-model (replaced the boolean `tls_enabled`/`tls_keep_plain`) |
 | `io_threads` | integer | **(v11)** number of Redis I/O threads (`io-threads` directive). `0` - single-threaded I/O (directive not written) |
 | `redis_config` | object | **the translation result** - merged `redis.conf` config (default → preset → computed → passthrough; for `cluster` - plus `cluster-*` directives) |
-| `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** Redis ACL users (operator-created only). Element is a typed `AclUser` (`name` + `perms` required, `state` defaults to `on`) from [`types.yml`](types.yml), reusable via `$type: AclUser` in scenario `input:` (ADR-062). Prior to state_schema v6 this was a map `username → {perms, state}` - migration [`005_to_006.yml`](migrations/005_to_006.yml) folded map→array (name key → `name` field). `perms` is the full ACL string (passwords are NOT in state - keeper-side Vault). **System** service users (`replica`/`monitoring`/`sentinel`/`haproxy`, etc.) are **NOT** written here - they're merged into `users.acl` from `vars.system_acl_users` on every render (see [System ACL users](#system-acl-users)) |
+| `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** Redis ACL users (operator-created only). Element is a typed `AclUser` (`name` + `perms` required, `state` defaults to `on`) from [`types.yml`](types.yml), reusable via `$type: AclUser` in scenario `input:` (ADR-062). Prior to state_schema v6 this was a map `username → {perms, state}` - migration [`006_acl_users_map_to_array`](migrations/006_acl_users_map_to_array/main.yml) folded map→array (name key → `name` field). `perms` is the full ACL string (passwords are NOT in state - keeper-side Vault). **System** service users (`replica`/`monitoring`/`sentinel`/`haproxy`, etc.) are **NOT** written here - they're merged into `users.acl` from `vars.system_acl_users` on every render (see [System ACL users](#system-acl-users)) |
 | `redis_hosts` | array `{sid, role}` | topology hosts (written as `[]`; the exact `primary`/`replica`/`sentinel` roles for cluster/sentinel are laid out on the apply side - not recorded in state) |
 | `redis_sentinel` | object `{master_name, quorum, master_settings, settings}` | sentinel-mode facts: monitored master name (from `vars.sentinel_master_name`, default `master`) + quorum + `master_settings` (effective per-master sentinel directive dict = `vars.sentinel_master_defaults` overridden by `input.sentinel_master_settings`, `map<string,string>`; defaults `down-after-milliseconds`=`5000`/`failover-timeout`=`60000`) + `settings` (global passthrough `sentinel.conf` directives from `input.sentinel_settings`). `quorum` is always `0` (the auto `size/2+1` is computed in apply, not materialized in state). **(v11 restruct)**: the former named `down_after_ms`/`failover_timeout_ms` (v5) are folded into `master_settings`. Outside `sentinel` mode - an empty object |
 | `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider vm-ids of VMs raised **by this** create run via `core.cloud.created` (from `register.provision.vm_ids`). Day-2 teardown reads them for `core.cloud.destroyed`. Without provision (`input.provision` omitted/`enabled:false`) - `[]` (hosts are a declared roster, not provisioned by the service). See [Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1) |

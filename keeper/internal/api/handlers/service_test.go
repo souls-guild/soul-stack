@@ -682,7 +682,7 @@ func sampleSchemaInfo() *artifact.StateSchemaInfo {
 			},
 		},
 		Migrations: []artifact.Migration{
-			{From: 1, To: 2, Path: "migrations/001_to_002.yml"},
+			{From: 1, To: 2, Path: "migrations/002_widen_users/main.yml"},
 		},
 	}
 }

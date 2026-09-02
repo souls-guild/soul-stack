@@ -58,8 +58,7 @@ func serialStagedServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: serial+staged 2D proof service
+	write("service.yml", `description: serial+staged 2D proof service
 state_schema: {}
 `)
 	write("scenario/restart/main.yml", `name: restart

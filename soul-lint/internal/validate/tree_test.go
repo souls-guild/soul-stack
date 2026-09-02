@@ -222,19 +222,45 @@ func TestRunTree_JSONIsOneObjectPerDiagnostic(t *testing.T) {
 	}
 }
 
-// A populated migrations/ is reported as NOT CHECKED rather than walked past. The
-// linter has no reading of the ladder yet (NIM-736), and a tree that printed a
-// clean result while never opening the directory would be the same silence this
-// mode removes — worse here, because the reader has been told the tree was
-// checked.
-func TestRunTree_MigrationsAreReportedUnchecked(t *testing.T) {
+// A populated migrations/ is CHECKED, not reported as unreadable. NIM-736 gave the
+// linter a reading of the ladder, so the `migrations_unchecked` hint this test used
+// to assert is retired along with the gap it named.
+//
+// The broken fixture carries the pre-NIM-735 flat step (`001_to_002.yml`), so the
+// walk has to name that layout rather than shrug at the directory — which is the
+// stronger claim: the part is not merely opened, it is understood.
+func TestRunTree_MigrationsAreChecked(t *testing.T) {
 	_, out, _ := runTree(t, TreeOptions{Root: brokenTree, ServiceName: "broken"})
-	if !strings.Contains(out, CodeMigrationsUnchecked) {
-		t.Errorf("a populated migrations/ was passed over in silence:\n%s", out)
+	if !strings.Contains(out, "migration_layout_retired") {
+		t.Errorf("the retired flat ladder was not named:\n%s", out)
 	}
-	// And it never prints `OK:` for itself: nobody looked.
+	if strings.Contains(out, "migrations_unchecked") {
+		t.Errorf("the retired unchecked-hint is still raised:\n%s", out)
+	}
+	// A part with an error never prints `OK:` for itself.
 	if strings.Contains(out, "OK: "+filepath.Join(brokenTree, "migrations")) {
-		t.Errorf("an unchecked part printed OK:\n%s", out)
+		t.Errorf("a part with an error printed OK:\n%s", out)
+	}
+}
+
+// A ladder with nothing wrong with it IS reported clean — the counterweight to the
+// case above. Without it, a check that errored on every populated migrations/ would
+// pass that test.
+func TestRunTree_CleanLadderIsClean(t *testing.T) {
+	root := writeMinimalTree(t)
+	step := filepath.Join(root, "migrations", "002_widen_users")
+	if err := os.MkdirAll(step, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(step, "main.yml"), []byte("transform: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := runTree(t, TreeOptions{Root: root, ServiceName: "minimal"})
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d:\n%s", code, ExitOK, out)
+	}
+	if !strings.Contains(out, "OK: "+filepath.Join(root, "migrations")) {
+		t.Errorf("a clean ladder did not report itself checked:\n%s", out)
 	}
 }
 
@@ -249,8 +275,8 @@ func TestRunTree_EmptyMigrationsIsSilent(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d:\n%s", code, ExitOK, out)
 	}
-	if strings.Contains(out, CodeMigrationsUnchecked) {
-		t.Errorf("an empty ladder was reported as unchecked:\n%s", out)
+	if strings.Contains(out, "migrations") {
+		t.Errorf("an empty ladder produced a part at all:\n%s", out)
 	}
 }
 
@@ -287,11 +313,8 @@ func TestRunTree_OKLinesNameExactlyTheCheckedParts(t *testing.T) {
 	writeFile(t, filepath.Join(root, "upgrade", "to_v2", "main.yml"),
 		"name: to_v2\nfrom: ['1']\ndescription: Fine\n\ntasks:\n  - name: Write it\n"+
 			"    module: core.file.present\n    params:\n      path: /tmp/x\n      content: hello\n")
-	if err := os.Mkdir(filepath.Join(root, "migrations"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(root, "migrations", "001_to_002.yml"),
-		"from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: x\n      value: y\n")
+	writeFile(t, filepath.Join(root, "migrations", "002_widen_users", "main.yml"),
+		"transform:\n  - set:\n      path: x\n      value: y\n")
 
 	code, out, _ := runTree(t, TreeOptions{Root: root, ServiceName: "minimal"})
 	if code != ExitOK {
@@ -308,6 +331,10 @@ func TestRunTree_OKLinesNameExactlyTheCheckedParts(t *testing.T) {
 		"types.yml",
 		filepath.Join("scenario", "create", "main.yml"),
 		filepath.Join("upgrade", "to_v2", "main.yml"),
+		// migrations/ joined this list with NIM-736: the ladder is a checked part
+		// now, so it earns an `OK:` of its own instead of a "discovered" hint. It
+		// sits last because the walk reports it last.
+		"migrations",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("OK: lines = %v, want %v", got, want)
@@ -316,11 +343,6 @@ func TestRunTree_OKLinesNameExactlyTheCheckedParts(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("OK: line %d = %q, want %q (full set %v)", i, got[i], want[i], got)
 		}
-	}
-	// migrations/ is populated, reported, and NOT among them — it was discovered,
-	// not checked.
-	if !strings.Contains(out, CodeMigrationsUnchecked) {
-		t.Errorf("the ladder was not reported at all:\n%s", out)
 	}
 }
 
@@ -407,7 +429,7 @@ func TestRunTree_ABrokenPartNeverPrintsOK(t *testing.T) {
 	// The manifest reaches the catalog through a $type, so the catalog is read
 	// twice over: once resolving state_schema, once as a part of its own.
 	writeFile(t, filepath.Join(root, "service.yml"),
-		"state_schema_version: 1\ndescription: Minimal\n\nstate_schema:\n  acl_users:\n    type: array\n    items:\n      $type: AclUser\n")
+		"description: Minimal\n\nstate_schema:\n  acl_users:\n    type: array\n    items:\n      $type: AclUser\n")
 	writeFile(t, filepath.Join(root, "types.yml"),
 		"types:\n  AclUser:\n    type: objct\n    properties:\n      name:\n        type: string\n")
 
@@ -568,7 +590,7 @@ func writeMinimalTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "service.yml"),
-		"state_schema_version: 1\ndescription: Minimal\n\nstate_schema:\n  greeting_file:\n    type: string\n")
+		"description: Minimal\n\nstate_schema:\n  greeting_file:\n    type: string\n")
 	writeFile(t, filepath.Join(root, "scenario", "create", "main.yml"),
 		"name: create\ndescription: Minimal\n\ntasks:\n  - name: Write it\n    module: core.file.present\n    params:\n      path: /tmp/x\n      content: hello\n")
 	return root

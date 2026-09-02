@@ -30,21 +30,21 @@ Division of responsibilities (ADR-009):
 
 ## state_schema
 
-[`service.yml → state_schema`](service.yml), `state_schema_version: 6`. Forward-only migration
+[`service.yml → state_schema`](service.yml); state-schema version 7 — the top of the ladder. Forward-only migration
 chain (ADR-019):
 
-- [`001_to_002`](migrations/001_to_002.yml) - `install` + host layout (`conf_dir`/`data_dir`)
+- [`002_install_layout_to_vars`](migrations/002_install_layout_to_vars/main.yml) - `install` + host layout (`conf_dir`/`data_dir`)
   moved out of state into `service vars` (a read-model with no readers / day-2 operations read service vars
   directly). DragonFly has **no** `modules_base_url` (redis modules don't apply to DF) - three
   fields are dropped, not four;
-- [`002_to_003`](migrations/002_to_003.yml) - cloud-provision read-model: `provisioned_vm_ids`
+- [`003_cloud_provision_read_model`](migrations/003_cloud_provision_read_model/main.yml) - cloud-provision read-model: `provisioned_vm_ids`
   (provider IDs of created VMs) + `provisioned_provider`;
-- [`003_to_004`](migrations/003_to_004.yml) - cascade-destroy read-model: `provisioned_sids`
+- [`004_provisioned_sids`](migrations/004_provisioned_sids/main.yml) - cascade-destroy read-model: `provisioned_sids`
   (Keeper-side SID/FQDN of created VMs for teardown);
-- [`004_to_005`](migrations/004_to_005.yml) - **mandatory monitoring** of the data plane
+- [`005_monitoring_read_model`](migrations/005_monitoring_read_model/main.yml) - **mandatory monitoring** of the data plane
   (Slice II, [ADR-024](../../../docs/adr/0024-observability.md)): read-model `monitoring`
   (version/listen node_exporter). Existing v4 records get a conservative default (version `''`, port `:9100`);
-- [`005_to_006`](migrations/005_to_006.yml) - **mandatory log shipping** of the data plane
+- [`006_logging_read_model`](migrations/006_logging_read_model/main.yml) - **mandatory log shipping** of the data plane
   (Slice V-I, [ADR-067](../../../docs/adr/0067-vector-log-shipping.md)): read-model `logging`
   (version/sink/vector sources). `sink_auth_ref` is **not** written here (secret stays in Vault).
   Existing v5 records get a default (version `''`, sink `console`).

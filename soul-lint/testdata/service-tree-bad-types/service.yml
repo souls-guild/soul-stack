@@ -6,7 +6,6 @@
 # command and stays invisible until the first scenario that starts using a type —
 # by then at the keeper, not offline. The whole-service walk parses the catalog on
 # its own account, which is the one thing that makes this tree red.
-state_schema_version: 1
 description: The catalog is broken and nothing references it
 
 state_schema:

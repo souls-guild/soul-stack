@@ -85,7 +85,7 @@ Offline tooling has no registry to ask, so it takes the name as an argument: `so
 ### What is NOT in `service.yml`
 
 - **`version`** — service version = git tag under which the file is committed ([ADR-007](../adr/0007-versioning-git-ref.md)). Any appearance of `version:` in `service.yml` is a validation error with a hint about ADR-007.
-- **`state_schema_version`** — the state-schema version is not stored anywhere — it is the top of the ladder. An empty `migrations/` means version 1. The number a step leads to is written once, in that step's directory name, and `schema.lock` records the stamped pair ([ADR-019](../adr/0019-state-migration-dsl.md), NIM-735). Any appearance of `state_schema_version:` in `service.yml` is a validation error with a hint about ADR-019 (planned, NIM-736 — not implemented yet). Until NIM-736 ships the linter still does the opposite: the key is **required**, and a manifest without it is refused (`missing_required_field`). The identically named **`incarnation.state_schema_version` column** in Postgres is a different thing and is untouched: it records where one incarnation's state currently sits.
+- **`state_schema_version`** — the state-schema version is not stored anywhere — it is the top of the ladder. An empty `migrations/` means version 1. The number a step leads to is written once, in that step's directory name, and `schema.lock` records the stamped pair ([ADR-019](../adr/0019-state-migration-dsl.md), NIM-735). Any appearance of `state_schema_version:` in `service.yml` is a validation error with a hint about ADR-019. The identically named **`incarnation.state_schema_version` column** in Postgres is a different thing and is untouched: it records where one incarnation's state currently sits.
 - **`tasks:` / `steps:`** is a destiny/scenario level. `service.yml` does not list tasks.
 - **`input:`** is the scenario level (`scenario/<name>/main.yml`). There is no `service.yml` `input:`.
 - **`scenarios[]`** - auto-discover scripts are located in the directory. There is no need to list them in the manifest.
@@ -311,7 +311,7 @@ certificate_rotation:
 
 ```yaml
 # No `state_schema_version:` — retired by NIM-735 (the version is the top of the
-# `migrations/` ladder); the linter still requires the key until NIM-736 ships.
+# `migrations/` ladder).
 description: Redis (sentinel/cluster)
 
 # Structure of incarnation.state in the database — a map <field name> → schema
@@ -345,7 +345,7 @@ state_schema:
     type: integer
     min: 0
 
-  # ── Redis ACL users: an ARRAY of records (map → array, migration 005_to_006) ──
+  # ── Redis ACL users: an ARRAY of records (map → array, migration 006_acl_users_map_to_array) ──
   redis_users:
     type: array
     items:
@@ -448,8 +448,6 @@ Agreements:
 
 The layout and the lock are documented ahead of the code: neither `make schema-stamp` nor the `soul-lint` lock check is built yet (NIM-737).
 
-The bundled services under `examples/` still carry the pre-NIM-735 flat form (`<NNN>_to_<MMM>.yml` beside `<NNN>_to_<MMM>/tests/`); they are relocated by NIM-738.
-
 Migration is triggered by an explicit operator operation (`keeper.incarnation.upgrade to_version=N`), not automatically by the apply script.
 
 ## Validation `soul-lint validate-service`
@@ -462,11 +460,16 @@ Migration is triggered by an explicit operator operation (`keeper.incarnation.up
   - `state_schema` — a map `<field name>` → schema, each entry a valid input schema ([`docs/input.md`](../input.md)). A root `type: object` / `properties:` envelope is refused by name (`state_schema_legacy_json_schema_form`) and the object-level list `required: [names]` by `input_required_list_removed`, at every level. ⚠ **Not implemented** — today the linter enforces the opposite (root `type: object` required, `state_schema_root_not_object` without it); see ["Format `state_schema`"](#format-state_schema) and NIM-742.
   - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<alias>.<module>`, level 1 not a reserved name, and entries sharing an alias agree on `ref` (`conflicting_module_ref`). Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
   - Unknown top-level keys → `unknown_key` with hint about deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
-  - `state_schema_version` → `unknown_key` with a hint about NIM-735 / ADR-019, the version being derived from the ladder (planned, NIM-736 — not implemented yet). Today the check runs the other way: the key is **required**, and a manifest without it is refused (`missing_required_field`, hint "set `state_schema_version: 1` for fresh services").
+  - `state_schema_version` → `unknown_key` with a hint about NIM-735 / ADR-019, the version being derived from the ladder.
+
+- **The `migrations/` ladder** (read from the directory beside `service.yml`):
+  - `migrations/` absent or empty - version 1, and nothing to check.
+  - A step is a DIRECTORY named `<NNN>_<slug>`. Two shapes are refused as `migration_step_name_invalid`, because each is a step that silently does not exist: a directory whose name does not match, and an entry named `<NNN>_…` that is not a directory (a flat `<NNN>_<slug>.yml` is the shape an author half-applying the layout writes). The retired flat form (`<NNN>_to_<MMM>.yml` beside `<NNN>_to_<MMM>/`) is named as such: `migration_layout_retired`. Anything else directly under `migrations/` — `schema.lock`, a `README.md` — is not a step and is passed over in silence.
+  - `migrations/` itself must be listable: committed as a regular file, or unreadable, it is `migration_ladder_unreadable` rather than a silent version 1.
+  - The numbers must run `2`, `3`, …, `N` without gaps (`migration_chain_broken`, one diagnostic per missing version) and without repeats (`migration_step_duplicate`). `001_<slug>` is refused (`migration_step_number_invalid`): version 1 is the empty ladder, so no step leads to it.
+  - Each step directory must hold a `main.yml` (`migration_step_main_missing`), and that document must not state its own place: `from_version:`/`to_version:` are `migration_version_key`, addressed at the line they are written on.
 
 - **`schema.lock` against the ladder and the schema** (planned, NIM-737 — not implemented yet):
-  - `migrations/` absent or empty - version 1, and a service that never edited its schema needs no lock.
-  - The ladder's directory numbers must run `2`, `3`, …, `N` without gaps; each `migrations/<NNN>_<slug>/main.yml` is validated separately (migration format is [`docs/migrations.md`](../migrations.md)).
   - `schema.lock`'s `fingerprint` must equal the hash of the current parsed `state_schema`, and its `version` the current top of the ladder. A stale lock is an **error**: the schema was edited without a matching step, or a step was added without re-stamping. Fix by adding the missing step and running `make schema-stamp`.
 
 Extended checks (cross-file refs: every `apply: destiny: <name>` in scripts references an entry in `service.yml → destiny:`; every `module: <ns>.<mod>.<state>` exists in `modules:` or core modules; etc.) - deferred in M1.5 ([`docs/soul-lint.md`](../soul-lint.md)).

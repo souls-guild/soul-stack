@@ -1,4 +1,3 @@
-state_schema_version: 2
 description: >-
   MongoDB following a unified-service concept (PILOT, standalone). The operator sets SIMPLE
   typed concepts (version, memory, WiredTiger cache, users), and the create scenario
@@ -15,13 +14,14 @@ description: >-
   add_user/remove_user scenarios (users are only provisioned by the plugin-state user from create).
   TLS — pilot=plain (mongo TLS on port 27017 via net.tls.mode — a separate slice).
 
-# state_schema_version = 2: forward-only migration chain (ADR-019).
-#   - 001_to_002 (migrations/001_to_002.yml): the service's OWN accounts become a declared
+# state-schema version 2 — the top of the forward-only ladder below (ADR-019;
+# NIM-735: the version is derived from migrations/, never written down).
+#   - 002_system_users: the service's OWN accounts become a declared
 #     state field (NIM-698, [ADR-0083]). Adds system_users — an array of {name} recording
 #     WHICH accounts the service provisioned for itself (default_admin); their roles stay in
 #     service vars (policy), the password is declared `type: secret` so its value lives in
 #     Vault at a DERIVED path. Default [] — migration-CEL cannot read vars (ADR-019 sandbox).
-#     Mirrors redis 014_to_015 / dragonfly 006_to_007.
+#     Mirrors redis 015_system_acl_users / dragonfly 007_system_acl_users.
 # incarnation.state records what has been deployed, so the operator sees the installation and
 # repeated apply is idempotent. Standalone mini-schema (without replica-set/sharding/keyfile
 # — out of PILOT scope).

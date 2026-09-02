@@ -20,8 +20,7 @@ import (
 // pinning a shape the run never produces. The twin would have diverged in the one
 // direction that matters, silently.
 
-const typedUsersService = `state_schema_version: 1
-state_schema:
+const typedUsersService = `state_schema:
   redis_users:
     type: array
     items:
@@ -115,8 +114,7 @@ func TestLoadServiceStateSchema_BrokenCatalogIsNotFatal(t *testing.T) {
 
 // A service with no `$type` never reads the catalog and behaves exactly as before.
 func TestLoadServiceStateSchema_NoTypeRefIsUnchanged(t *testing.T) {
-	schema, err := loadServiceStateSchema(writeTypedServiceTree(t, `state_schema_version: 1
-state_schema:
+	schema, err := loadServiceStateSchema(writeTypedServiceTree(t, `state_schema:
   redis_users:
     type: array
     items:

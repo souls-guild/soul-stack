@@ -2208,9 +2208,10 @@ func (f *fakeLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact
 		return nil, f.loadErr
 	}
 	return &artifact.ServiceArtifact{
-		Ref:      ref,
-		LocalDir: f.localDir,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema, Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
+		Ref:                ref,
+		LocalDir:           f.localDir,
+		Manifest:           &config.ServiceManifest{Lifecycle: f.lifecycle, StateSchema: f.stateSchema},
+		StateSchemaVersion: f.targetSchema,
 	}, nil
 }
 
@@ -2278,7 +2279,7 @@ func newUpgradeHandler(db *fakeIncDB, loader *fakeLoader) *IncarnationHandler {
 func TestIncarnation_Upgrade_202(t *testing.T) {
 	// A real upgrade v1→v2, schema 1→2: a chain with one migration. Happy path
 	// (status ready) → 202 + apply_id.
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}
@@ -2314,7 +2315,7 @@ func TestIncarnation_Upgrade_202(t *testing.T) {
 // got RunSpec{FromUpgrade:true, FromLocked:true, ApplyID:R, ScenarioName:slug,
 // ServiceRef.Ref:to_version}.
 func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}
@@ -2380,7 +2381,7 @@ func TestIncarnation_Upgrade_FoundAutostart_202(t *testing.T) {
 // but the runner is not configured → 500 BEFORE reserving applying (anti-zombie, ADR-0068
 // §5: the incarnation must not hang in applying without a Runner run).
 func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}
@@ -2417,7 +2418,7 @@ func TestIncarnation_Upgrade_FoundNilRunner_500(t *testing.T) {
 // TestIncarnation_Upgrade_LegacyNoRun_202 — legacy (no upgrade scenario found):
 // 202 WITHOUT run_apply_id, the Runner is NOT called (drift + WARN, host rollout is manual).
 func TestIncarnation_Upgrade_LegacyNoRun_202(t *testing.T) {
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}

@@ -75,7 +75,7 @@ instead of a tarball, or a TCP connection to Redis instead of a socket) — adju
 
 ```
 monitoring/
-├── service.yml                              # manifest: state_schema_version=1,
+├── service.yml                              # manifest:
 │                                            #   destiny[] (node-exporter),
 │                                            #   state_schema {node/redis versions, redis_socket}
 ├── vars/
@@ -94,7 +94,7 @@ monitoring/
 `node_exporter.service.tmpl` was removed: node-exporter is rendered by its own destiny.
 `redis_exporter.service.tmpl` remains — used by the inline redis_exporter block.
 
-There is no `migrations/` directory: `state_schema_version = 1` ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
+There is no `migrations/` directory, so the state-schema version is 1 ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
 ## What the `create` scenario does
 
@@ -209,7 +209,7 @@ in render-defaults the guard stays on (`allow_private: false`).
 
 ## Deliberately not present here
 
-- `migrations/` — `state_schema_version = 1`.
+- `migrations/` — absent, so the state-schema version is 1.
 - `node_exporter.service.tmpl` — no: node-exporter is rendered by its own destiny
   (`redis_exporter.service.tmpl` remains for the inline block).
 - `on:` / `where:` — an omitted `on:` means "the entire incarnation"

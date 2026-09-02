@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// writeMigrationTree creates temporary tree migrations/<NNN>_to_<MMM>/
-// {<NNN>_to_<MMM>.yml, tests/<case>.yml} and returns (path to case file,
-// tree root for recursive run).
+// writeMigrationTree creates the temporary tree migrations/<NNN>_<slug>/
+// {main.yml, tests/<case>.yml} and returns (path to case file, tree root for a
+// recursive run).
 func writeMigrationTree(t *testing.T, step, migrationYML, caseName, caseYML string) (caseFile, root string) {
 	t.Helper()
 	root = t.TempDir()
@@ -21,7 +23,7 @@ func writeMigrationTree(t *testing.T, step, migrationYML, caseName, caseYML stri
 		t.Fatalf("mkdir: %v", err)
 	}
 	if migrationYML != "" {
-		if err := os.WriteFile(filepath.Join(migrationsDir, step+".yml"), []byte(migrationYML), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(stepDir, config.MigrationStepFile), []byte(migrationYML), 0o644); err != nil {
 			t.Fatalf("write migration: %v", err)
 		}
 	}
@@ -32,9 +34,7 @@ func writeMigrationTree(t *testing.T, step, migrationYML, caseName, caseYML stri
 	return caseFile, root
 }
 
-const renameMigration = `from_version: 1
-to_version: 2
-transform:
+const renameMigration = `transform:
   - rename:
       from: state.old
       to:   state.new
@@ -43,7 +43,7 @@ transform:
 // TestRunMigrationCase_Happy — state_before applied by adjacent migration and
 // matches state_after.
 func TestRunMigrationCase_Happy(t *testing.T) {
-	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "rename-ok", `name: rename-ok
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", renameMigration, "rename-ok", `name: rename-ok
 state_before:
   old: hello
 state_after:
@@ -65,7 +65,7 @@ state_after:
 // TestRunMigrationCase_Mismatch — state_after mismatch gives clear fail
 // (not run error), with indication of diverging field.
 func TestRunMigrationCase_Mismatch(t *testing.T) {
-	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "rename-bad", `name: rename-bad
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", renameMigration, "rename-bad", `name: rename-bad
 state_before:
   old: hello
 state_after:
@@ -90,7 +90,7 @@ state_after:
 // TestRunMigrationCase_ExtraField — extra key in migration result (absent in
 // state_after) — mismatch (L1 checks state fully, not partially).
 func TestRunMigrationCase_ExtraField(t *testing.T) {
-	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "extra", `name: extra
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", renameMigration, "extra", `name: extra
 state_before:
   old: hello
   keep: 1
@@ -117,7 +117,7 @@ state_after:
 // migration file → run error (not fail-Result).
 func TestRunMigrationCase_MissingMigrationFile(t *testing.T) {
 	// migrationYML="" → migration file not created.
-	caseFile, _ := writeMigrationTree(t, "001_to_002", "", "no-mig", `name: no-mig
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", "", "no-mig", `name: no-mig
 state_before:
   old: hello
 state_after:
@@ -139,7 +139,7 @@ state_after:
 // TestLoadMigrationCase_MissingSection — strict validation: case without state_after
 // rejected with explicit error.
 func TestLoadMigrationCase_MissingSection(t *testing.T) {
-	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "incomplete", `name: incomplete
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", renameMigration, "incomplete", `name: incomplete
 state_before:
   old: hello
 `)
@@ -150,7 +150,7 @@ state_before:
 
 // TestLoadMigrationCase_UnknownKey — strict decode rejects foreign key.
 func TestLoadMigrationCase_UnknownKey(t *testing.T) {
-	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "junk", `name: junk
+	caseFile, _ := writeMigrationTree(t, "002_rename_old_to_new", renameMigration, "junk", `name: junk
 state_before:
   old: hello
 state_after:
@@ -168,10 +168,10 @@ unexpected: 1
 func TestRouting_L0L1L2_NotConfused(t *testing.T) {
 	root := t.TempDir()
 
-	// L1: migrations/001_to_002/{001_to_002.yml, tests/m1.yml}
-	migStepDir := filepath.Join(root, "migrations", "001_to_002")
+	// L1: migrations/002_rename_old_to_new/{main.yml, tests/m1.yml}
+	migStepDir := filepath.Join(root, "migrations", "002_rename_old_to_new")
 	mustMkdir(t, filepath.Join(migStepDir, "tests"))
-	mustWrite(t, filepath.Join(root, "migrations", "001_to_002.yml"), renameMigration)
+	mustWrite(t, filepath.Join(migStepDir, config.MigrationStepFile), renameMigration)
 	mustWrite(t, filepath.Join(migStepDir, "tests", "m1.yml"), `name: m1
 state_before:
   old: x
@@ -255,9 +255,9 @@ tasks:
     module: core.exec.run
 `)
 	// to keep tree non-empty — add valid L1 case.
-	migStepDir := filepath.Join(root, "migrations", "001_to_002")
+	migStepDir := filepath.Join(root, "migrations", "002_rename_old_to_new")
 	mustMkdir(t, filepath.Join(migStepDir, "tests"))
-	mustWrite(t, filepath.Join(root, "migrations", "001_to_002.yml"), renameMigration)
+	mustWrite(t, filepath.Join(migStepDir, config.MigrationStepFile), renameMigration)
 	mustWrite(t, filepath.Join(migStepDir, "tests", "m1.yml"), `name: m1
 state_before:
   old: x

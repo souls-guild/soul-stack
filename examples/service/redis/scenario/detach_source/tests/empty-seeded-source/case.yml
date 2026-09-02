@@ -1,5 +1,5 @@
 # L0 fail case for detach_source: the incarnation has NOT gone through migrate_cluster.
-# seeded_from exists (migration 008_to_009 gives it to every v9 incarnation), but
+# seeded_from exists (migration 009_seeded_from gives it to every v9 incarnation), but
 # source_endpoints is EMPTY: nothing to detach. detach is a routine operational scenario
 # (no runnable:false), an operator can run it on a freshly created incarnation; this case
 # pins down that such a run ABORTS with a CLEAR assert failure BEFORE the probe, not an
@@ -22,7 +22,7 @@ fixtures:
     os: { arch: amd64 }
 
   # incarnation.state v9 for a sentinel incarnation that has NEVER gone through
-  # migrate_cluster: seeded_from exists (the shape from migration 008_to_009), but
+  # migrate_cluster: seeded_from exists (the shape from migration 009_seeded_from), but
   # source_endpoints is EMPTY. host-layout (conf_dir/data_dir/modules_base_url) was
   # moved into service vars (v11→v12); detach_source does NOT read it (no deploy body) →
   # these keys are absent from state v12.

@@ -63,8 +63,7 @@ func crossPassageServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: cross-passage onchanges service
+	write("service.yml", `description: cross-passage onchanges service
 state_schema: {}
 `)
 	write("scenario/crosspassage/main.yml", `name: crosspassage

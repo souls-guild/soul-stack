@@ -59,8 +59,7 @@ func varsAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: a service var read from a pre-flight assert
+	write("service.yml", `description: a service var read from a pre-flight assert
 state_schema: {}
 `)
 	write("vars/00-base.yaml", `base_marker: default

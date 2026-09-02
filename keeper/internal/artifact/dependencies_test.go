@@ -2,8 +2,7 @@ package artifact
 
 import "testing"
 
-const manifestWithDeps = `state_schema_version: 2
-state_schema:
+const manifestWithDeps = `state_schema:
   master_host:
     type: string
 destiny:
@@ -46,7 +45,7 @@ func TestListDependencies_ReadsManifest(t *testing.T) {
 // slices are non-nil (empty), not nil (JSON `[]`, not null).
 func TestListDependencies_NoBlocks(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, validManifestV2)
+	writeServiceManifest(t, root, stateSchemaManifest)
 
 	deps, err := ListDependencies(root, discardLogger())
 	if err != nil {
@@ -72,7 +71,7 @@ func TestListDependencies_MissingManifest(t *testing.T) {
 // (broken service.yml in the repo; caller returns 502).
 func TestListDependencies_BrokenManifest(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, "state_schema_version: oops\n")
+	writeServiceManifest(t, root, "state_schema: [not, a, mapping]\n")
 	if _, err := ListDependencies(root, discardLogger()); err == nil {
 		t.Fatalf("want error for invalid service.yml")
 	}

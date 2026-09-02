@@ -15,7 +15,6 @@ func writeSecretCollectionService(t *testing.T, mainYAML string, extra map[strin
 	t.Helper()
 	root := t.TempDir()
 	const svc = `name: redis
-state_schema_version: 1
 state_schema:
   redis_users:
     type: array

@@ -89,8 +89,7 @@ func writeServiceRepoScenario(t *testing.T, scenarioName, scenarioMain string) s
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: noop service
+	write("service.yml", `description: noop service
 state_schema:
   b:
     type: string

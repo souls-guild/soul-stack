@@ -2,8 +2,9 @@ package statemigrate
 
 import "fmt"
 
-// ParseError — a migration file parse error (`NNN_to_MMM.yml`): YAML
-// syntax, missing/conflicting operation discriminator, invalid field shape.
+// ParseError — a step document parse error (`migrations/<NNN>_<slug>/main.yml`):
+// YAML syntax, a retired version header, missing/conflicting operation
+// discriminator, invalid field shape.
 // Code — a snake_case class identifier (stable for tests/diagnostics),
 // symmetric with the config layer's error codes ([destiny_tasks.go]).
 type ParseError struct {
@@ -15,10 +16,15 @@ func (e *ParseError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Msg
 
 // ParseError codes. All prefixed with migration_ (the migration DSL domain).
 const (
-	CodeYAMLParse        = "migration_yaml_parse_error"   // invalid YAML
-	CodeEmptyDocument    = "migration_empty_document"     // empty file
-	CodeVersionMissing   = "migration_version_missing"    // missing from_version/to_version
-	CodeVersionInvalid   = "migration_version_invalid"    // to_version != from_version+1, etc.
+	CodeYAMLParse     = "migration_yaml_parse_error" // invalid YAML
+	CodeEmptyDocument = "migration_empty_document"   // empty file
+	// CodeVersionKey — the step states its own place. It replaces the retired
+	// migration_version_missing / migration_version_invalid pair (NIM-735): there
+	// is no header left to be missing, and the "goes by one" invariant those two
+	// defended is now structural — the source version is derived from the target,
+	// so the two cannot disagree. Shares its name with the `soul-lint` diagnostic
+	// ([config.ValidateMigrationStepFile]) that catches it offline first.
+	CodeVersionKey       = "migration_version_key"
 	CodeOpDiscriminator  = "migration_op_discriminator"   // not exactly one operation key
 	CodeOpFieldMissing   = "migration_op_field_missing"   // operation is missing a required field
 	CodeForeachMissingAs = "migration_foreach_missing_as" // foreach without as:

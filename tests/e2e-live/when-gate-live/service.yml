@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   FC-5 L3b when-gating capstone: a real soul fleet runs a probe
   (core.cmd.shell `redis-cli role`) → keeper collects the per-host register → a task
@@ -8,6 +7,6 @@ description: >-
   proven via a DIFFERENT path: where = Keeper-side targeting (no_match at the
   apply_runs level), when = Soul-side per-task gating (SKIPPED event before Apply).
 
-# state_schema_version=1 → the migrations/ directory is not required (ADR-019).
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
 # Focus is Soul-side when-gating, not mutating incarnation.state: no capture step.
 state_schema: {}

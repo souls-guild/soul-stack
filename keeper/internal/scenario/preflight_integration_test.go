@@ -64,8 +64,7 @@ func clusterAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: cluster topology pre-flight assert test service
+	write("service.yml", `description: cluster topology pre-flight assert test service
 state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
@@ -213,8 +212,7 @@ func dispatcherAssertServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: dispatcher-with-include pre-flight assert test service
+	write("service.yml", `description: dispatcher-with-include pre-flight assert test service
 state_schema: {}
 `)
 	// main.yml is the DISPATCHER: top-level = mode-guard + branch include. No assert here.
@@ -395,8 +393,7 @@ func createGuardServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: ungated topology size-guard on the create path
+	write("service.yml", `description: ungated topology size-guard on the create path
 state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create

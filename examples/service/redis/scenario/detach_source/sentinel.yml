@@ -10,7 +10,7 @@
 #      (seeded_from.source_endpoints is non-empty). detach is a regular operational
 #      scenario (no runnable:false), the operator can run it on a create'd
 #      incarnation that never migrated — for that one source_endpoints is EMPTY
-#      (migration 008_to_009 gives every v9 an empty seeded_from). assert REJECTS
+#      (migration 009_seeded_from gives every v9 an empty seeded_from). assert REJECTS
 #      it with a CLEAR failure BEFORE probe (render-phase fail-closed, symmetric to
 #      the cluster.yml stub), instead of an opaque compute `index out of bounds`
 #      error. Runs FIRST — before any connection to Redis.

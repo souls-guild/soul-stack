@@ -28,7 +28,6 @@ func run(t *testing.T, src, serviceName string) (stdout, stderr string, code int
 // is a separate, manual step, and a unit test that reads a neighbouring checkout would
 // pass or fail on whether the checkout is there.
 const wbRedisShape = `
-state_schema_version: 2
 state_schema:
   namespace: { type: string }
   redis_users:
@@ -74,7 +73,6 @@ func TestRun_CollectionShape(t *testing.T) {
 // constant field name rather than under a property name it does not have.
 func TestRun_ScalarShape(t *testing.T) {
 	src := `
-state_schema_version: 1
 state_schema:
   admin_password: { type: secret }
 `
@@ -93,7 +91,6 @@ state_schema:
 // and the arrow column is aligned on the longest path.
 func TestRun_BothShapesAlign(t *testing.T) {
 	src := `
-state_schema_version: 1
 state_schema:
   admin_password: { type: secret }
   redis_users:
@@ -120,7 +117,6 @@ state_schema:
 // data the linter cannot have.
 func TestRun_KeyPlaceholderIsTheKeyName(t *testing.T) {
 	src := `
-state_schema_version: 1
 state_schema:
   accounts:
     type: array
@@ -145,12 +141,10 @@ state_schema:
 func TestRun_NoDeclaredSecrets(t *testing.T) {
 	for name, src := range map[string]string{
 		"schema without secrets": `
-state_schema_version: 1
 state_schema:
   namespace: { type: string }
 `,
 		"empty properties": `
-state_schema_version: 1
 state_schema: {}
 `,
 	} {
@@ -174,7 +168,6 @@ state_schema: {}
 // their secret is fine; the command has to say the list is short.
 func TestRun_RefusedDeclarationIsNotSilent(t *testing.T) {
 	src := `
-state_schema_version: 1
 state_schema:
   nested:
     type: object
@@ -257,7 +250,6 @@ func TestRun_MissingServiceName(t *testing.T) {
 func TestRun_NoStateSchemaIsRefusedNotAnsweredEmpty(t *testing.T) {
 	for name, src := range map[string]string{
 		"no state_schema key": `
-state_schema_version: 1
 description: a service that states no schema
 `,
 		"not the manifest at all": `
@@ -266,15 +258,12 @@ AclUser:
     name: { type: string, required: true }
 `,
 		"state_schema is a scalar": `
-state_schema_version: 1
 state_schema: not-a-map
 `,
 		"state_schema is a list": `
-state_schema_version: 1
 state_schema: [a, b]
 `,
 		"state_schema is null": `
-state_schema_version: 1
 state_schema:
 `,
 	} {
@@ -327,7 +316,7 @@ func TestRun_MissingFile(t *testing.T) {
 // that all but certain to show, where a single run would pass by luck.
 func TestRun_Deterministic(t *testing.T) {
 	var b strings.Builder
-	b.WriteString("state_schema_version: 1\nstate_schema:\n")
+	b.WriteString("state_schema:\n")
 	// Written in an order that is NOT the sorted one, so a traversal that echoed the
 	// document order would also be caught.
 	for _, n := range []string{"users_h", "users_c", "users_a", "users_g", "users_d", "users_b", "users_f", "users_e"} {
@@ -395,7 +384,6 @@ func TestRun_UnsafeKeyNameFailsClosed(t *testing.T) {
 	for _, key := range []string{"a/b", "a#b", "a b"} {
 		t.Run(key, func(t *testing.T) {
 			src := fmt.Sprintf(`
-state_schema_version: 1
 state_schema:
   users:
     type: array
@@ -431,7 +419,6 @@ func TestRun_NonASCIIRefusedOnEveryAxis(t *testing.T) {
 	const wide = "名前" // two full-width runes: 2 runes, 4 display columns
 	collection := func(state, prop, key string) string {
 		return fmt.Sprintf(`
-state_schema_version: 1
 state_schema:
   %q:
     type: array
@@ -496,8 +483,7 @@ func runIn(t *testing.T, src, catalog, serviceName string) (stdout, stderr strin
 	return out.String(), errOut.String(), code
 }
 
-const typedUsersManifest = `state_schema_version: 1
-state_schema:
+const typedUsersManifest = `state_schema:
   redis_users:
     type: array
     items:

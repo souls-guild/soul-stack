@@ -304,8 +304,7 @@ nested:
 // at the declaration in the file, not at the top of the manifest. A diagnostic without a
 // position is a diagnostic the author has to hunt for.
 func TestServiceManifest_SecretFieldDiagnosticIsPositional(t *testing.T) {
-	src := `state_schema_version: 1
-state_schema:
+	src := `state_schema:
   redis_users:
     type: array
     items:
@@ -338,8 +337,7 @@ state_schema:
 // TestServiceManifest_ValidSecretFieldLoadsClean — the shape wb-service-redis migrates
 // to must load without a diagnostic; a guard that rejects everything guards nothing.
 func TestServiceManifest_ValidSecretFieldLoadsClean(t *testing.T) {
-	src := `state_schema_version: 1
-state_schema:
+	src := `state_schema:
   redis_users:
     type: array
     items:

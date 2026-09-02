@@ -417,18 +417,19 @@ func scenarioDirParts(dir string, opts TreeOptions, modules config.ModuleManifes
 	return parts
 }
 
-// migrationsPart reports the migration ladder as DISCOVERED AND NOT CHECKED.
+// migrationsPart reports the migration ladder, checked.
 //
-// The linter has no reading of the ladder yet: parsing a step and checking that
-// the ladder is continuous is NIM-736's, which moves both out of the service
-// repository's own shell script and into the tool. Until it lands, the honest
-// answer is this hint — silently walking past a directory full of files while
-// printing a clean result for the tree is precisely the failure this mode was
-// built to stop, and it would be a worse one here because the reader has been
-// told the tree was checked.
+// It used to report the ladder as discovered-and-NOT-checked, because parsing a
+// step and checking continuity lived in each service repository's own shell
+// script. NIM-736 moved both into the engine, so this part now runs
+// [config.ValidateMigrationLadder] — the SAME scan the keeper derives the
+// state-schema version from, which is what keeps the linter and the engine from
+// disagreeing about what a ladder says.
 //
-// A hint, never a warning: nothing is wrong with the service, something is
-// missing from the linter. Same reasoning as `plugin_params_unchecked`.
+// An absent `migrations/` is not a part at all; an EMPTY one is a complete
+// statement (the service is at state-schema version 1) and equally has nothing to
+// report. Both are skipped rather than reported clean, which is how this walk
+// treats every part that does not exist.
 func migrationsPart(root string) (treePart, bool) {
 	dir := filepath.Join(root, migrationsDir)
 	entries, err := os.ReadDir(dir)
@@ -436,31 +437,16 @@ func migrationsPart(root string) (treePart, bool) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return treePart{}, false
 		}
-		return treePart{path: dir, validated: true, diags: []diag.Diagnostic{{
-			Level:   diag.LevelError,
-			Phase:   diag.PhaseParse,
-			File:    dir,
-			Code:    "io_error",
-			Message: err.Error(),
-			Hint:    "migrations/ is present but could not be listed",
-		}}}, true
+		// Not io_error any more: an unlistable `migrations/` has its own code now,
+		// and it is raised by the scan below rather than guessed at here — the
+		// version is read through that scan, so it is the scan that has to say the
+		// ladder went missing.
+		return treePart{path: dir, validated: true, diags: config.ValidateMigrationLadder(root)}, true
 	}
 	if len(entries) == 0 {
-		// An empty ladder is a complete statement — the service is at state-schema
-		// version 1 — and there is nothing unchecked to report.
 		return treePart{}, false
 	}
-	// No count of what is in there: the directory holds a step file and a tests/
-	// directory per step, so any number printed here is read as a number of steps
-	// and is not one. An unchecked part is unchecked whatever its size.
-	return treePart{path: dir, validated: false, diags: []diag.Diagnostic{{
-		Level:   diag.LevelHint,
-		Phase:   diag.PhaseSemanticValidate,
-		File:    dir,
-		Code:    CodeMigrationsUnchecked,
-		Message: "migrations/ is populated and was NOT checked: the linter does not read the migration ladder yet",
-		Hint:    "the ladder (step form, continuity, the version it derives) is checked by the service repository's own script until soul-lint learns to read it",
-	}}}, true
+	return treePart{path: dir, validated: true, diags: config.ValidateMigrationLadder(root)}, true
 }
 
 // printTree writes the report.
@@ -496,13 +482,14 @@ func printTree(opts TreeOptions, parts []treePart, w io.Writer) {
 // Codes introduced by the whole-service mode. Both are about the WALK rather than
 // about a document, which is why neither has a per-file command that could raise
 // it.
+//
+// `migrations_unchecked` was a third, and it is RETIRED (NIM-736): the ladder is
+// read now, so there is no unchecked part left for it to name. It was a hint
+// about a gap in the tool, and the gap is closed.
 const (
 	// CodeServiceTreeNoScenarios — the tree holds no scenario/<name>/main.yml. A
 	// warning: the service parses, registers and is inert.
 	CodeServiceTreeNoScenarios = "service_tree_no_scenarios"
-	// CodeMigrationsUnchecked — migrations/ is populated and the linter has no
-	// reading of it (NIM-736). A hint: a gap in the tool, not in the service.
-	CodeMigrationsUnchecked = "migrations_unchecked"
 	// CodeLintInternalPanic — a check crashed on this file. An error, so the run
 	// is red and nothing downstream treats the tree as clean, but it accuses the
 	// linter rather than the author.

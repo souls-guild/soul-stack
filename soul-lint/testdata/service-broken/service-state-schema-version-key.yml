@@ -1,0 +1,3 @@
+state_schema_version: 1
+state_schema:
+  foo: { type: string }

@@ -66,7 +66,7 @@ func TestRename_SourceMissingNoOp(t *testing.T) {
 func TestMove_AliasOfRename(t *testing.T) {
 	// move parses into Op.Rename — verify via parse that the move discriminator
 	// produces the same type.
-	mig, err := Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - move: { from: state.a, to: state.b }\n"))
+	mig, err := Parse([]byte("transform:\n  - move: { from: state.a, to: state.b }\n"), 2, stepPath)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

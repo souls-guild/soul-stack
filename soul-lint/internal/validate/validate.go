@@ -170,6 +170,14 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// in a subdirectory the resolver never enters, or the retired directory
 		// still in place (ADR-0082).
 		diags = append(diags, serviceVarsDiags(opts.Path)...)
+		// migrations/ is the same shape of blind spot, and since NIM-735 it is
+		// load-bearing: the ladder no longer describes the service's state-schema
+		// version, it IS that version. A gap, a duplicate number, a directory the
+		// engine does not recognise as a step — each of those moves or breaks the
+		// version with nothing in the manifest left to contradict it. Checked HERE
+		// rather than by a script in each service repository, and through the same
+		// scanner the keeper reads the ladder with, so the two cannot disagree.
+		diags = append(diags, config.ValidateMigrationLadder(filepath.Dir(opts.Path))...)
 	case KindScenario:
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document

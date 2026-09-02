@@ -17,7 +17,7 @@ import (
 func writeFencedService(t *testing.T, mainYAML string, extra map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte("state_schema_version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte(""), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	scnDir := filepath.Join(root, "scenario", "deploy")

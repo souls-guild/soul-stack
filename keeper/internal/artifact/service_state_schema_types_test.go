@@ -23,8 +23,7 @@ const aclUserTypes = `types:
       perms: { type: string, required: true }
 `
 
-const usersViaTypeManifest = `state_schema_version: 1
-state_schema:
+const usersViaTypeManifest = `state_schema:
   redis_users:
     type: array
     items:
@@ -102,8 +101,7 @@ func TestParseManifest_UnknownStateSchemaTypeFailsTheLoad(t *testing.T) {
 // after the resolve, and it has to still run.
 func TestParseManifest_SecretKeyIsCheckedAgainstTheResolvedType(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, `state_schema_version: 1
-state_schema:
+	writeServiceManifest(t, root, `state_schema:
   redis_users:
     type: array
     items:
@@ -126,8 +124,7 @@ state_schema:
 // without one — the resolve must not become a dependency on a file types are optional in.
 func TestParseManifest_NoTypeRefNeedsNoCatalog(t *testing.T) {
 	root := t.TempDir()
-	writeServiceManifest(t, root, `state_schema_version: 1
-state_schema:
+	writeServiceManifest(t, root, `state_schema:
   redis_users:
     type: array
     items:

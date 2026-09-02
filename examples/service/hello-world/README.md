@@ -14,7 +14,7 @@ host -> cross-host barrier -> commit state to Postgres.
 
 ```
 hello-world/
-├── service.yml                       # manifest: state_schema_version=1, state_schema with the greeting_file field
+├── service.yml                       # manifest: state_schema with the greeting_file field
 ├── vars/
 │   └── 00-base.yaml                 # baseline service vars: greeting (fallback)
 └── scenario/
@@ -22,7 +22,7 @@ hello-world/
         └── main.yml                  # input.greeting -> core.file.present -> core.state.set greeting_file
 ```
 
-No `migrations/` directory: `state_schema_version = 1`, no migrations needed
+No `migrations/` directory: state-schema version 1, no migrations needed
 ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
 ## Purpose
@@ -56,7 +56,7 @@ Both should give exit 0 and `OK: <path>`.
 
 ## What's deliberately not here
 
-- `migrations/` — `state_schema_version = 1`, no migrations needed.
+- `migrations/` — absent, so the state-schema version is 1; no migrations needed.
 - `destiny[]` / `modules[]` in `service.yml` — only core modules are used.
 - `templates/` — `content` is passed inline via `${ input.greeting }`, no `.tmpl` file.
 - `on:` / `where:` — deliberately absent: an omitted `on:` means "the whole

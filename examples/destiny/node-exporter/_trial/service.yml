@@ -6,7 +6,6 @@
 # + URL from default_destiny_source (case.yml). So even the wrapper needs a
 # service.yml with a declared dependency — otherwise apply:destiny would
 # reject it as undeclared.
-state_schema_version: 1
 description: >-
   L0-harness for destiny node-exporter (ADR-023). Not a service — a
   scenario-wrapper for render-only Trial. state_schema here is nominal

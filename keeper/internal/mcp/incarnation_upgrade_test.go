@@ -34,7 +34,7 @@ func incAtVersion(serviceVer string, schema int, status incarnation.Status) func
 
 func oneStepChain(t *testing.T) statemigrate.Chain {
 	t.Helper()
-	mig, err := statemigrate.Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - set:\n      path: state.foo\n      value: bar\n"))
+	mig, err := statemigrate.Parse([]byte("transform:\n  - set:\n      path: state.foo\n      value: bar\n"), 2, "migrations/002_set_foo/main.yml")
 	if err != nil {
 		t.Fatalf("parse migration: %v", err)
 	}

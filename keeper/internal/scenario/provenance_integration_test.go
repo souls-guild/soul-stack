@@ -88,8 +88,7 @@ func compatServiceRepo(t *testing.T, compatBlock string) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: noop service for the engine-provenance integration test
+	write("service.yml", `description: noop service for the engine-provenance integration test
 `+compatBlock+`state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create

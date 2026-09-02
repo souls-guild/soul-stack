@@ -45,9 +45,9 @@ type ServiceResolver interface {
 	Resolve(service string) (artifact.ServiceRef, bool)
 }
 
-// ServiceSnapshotLoader materializes a snapshot of the target service ref (to
-// read `state_schema_version` from service.yml) and assembles the chain of
-// state_schema migrations current→target. A narrow subset of
+// ServiceSnapshotLoader materializes a snapshot of the target service ref (whose
+// state-schema version is the top of its `migrations/` ladder, NOT a manifest key)
+// and assembles the chain of state_schema migrations current→target. A narrow subset of
 // [artifact.ServiceLoader]; the real loader satisfies it structurally.
 type ServiceSnapshotLoader interface {
 	Load(ctx context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error)
@@ -65,7 +65,8 @@ type ServiceSnapshotLoader interface {
 //
 // Steps (order matches REST-handler IncarnationHandler.Upgrade):
 //  1. Resolve(inc.Service) → git coordinates; .Ref is overridden to toVersion.
-//  2. Load(targetRef) → snapshot; Manifest.StateSchemaVersion = target.
+//  2. Load(targetRef) → snapshot; art.StateSchemaVersion (the top of its
+//     migration ladder) = target.
 //  3. No-op detection: same ref AND same schema → [ErrUpgradeNoop].
 //  4. Downgrade guard: target < current → [ErrDowngradeViaRef] (forward-only).
 //  5. LoadMigrationChain(art, current, target) → chain (empty = ref-bump).
@@ -99,7 +100,7 @@ func PrepareUpgrade(
 	if art == nil || art.Manifest == nil {
 		return UpgradeInput{}, ErrTargetSnapshotInvalid
 	}
-	target := art.Manifest.StateSchemaVersion
+	target := art.StateSchemaVersion
 	current := inc.StateSchemaVersion
 
 	// No-op: the exact same ref AND the same schema — nothing to upgrade. Changing

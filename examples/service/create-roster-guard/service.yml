@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   E2E foundation for the create-path topology guard (ADR-009 amendment
   2026-06-23 / NIM-235). The `create` scenario binds a roster of
@@ -8,7 +7,7 @@ description: >-
   create run, not an input to it — and it proves that a create scenario
   carrying a topology `assert:` is reachable through POST /v1/incarnations.
 
-# state_schema_version = 1 → no migrations/ directory required (ADR-019).
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
 # The service writes nothing to incarnation.state: the run only binds membership
 # and echoes on the bound hosts.
 state_schema: {}

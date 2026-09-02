@@ -1,4 +1,3 @@
-state_schema_version: 15
 description: >-
   Redis following a unified-service concept: ONE service for deployment modes
   (redis_type ∈ sentinel/cluster). Per-host install + rendering redis.conf is done by
@@ -20,46 +19,47 @@ description: >-
   a binary distribution (Step B parked)
   (redis consolidation .pm/tasks/2026-06-22-redis-consolidation).
 
-# state_schema_version = 8: forward-only migration chain (ADR-019).
-#   - 001_to_002 (migrations/001_to_002.yml): redis_users from a list of names into a map
+# state-schema version 15 — the top of the forward-only ladder below (ADR-019;
+# NIM-735: the version is derived from migrations/, never written down).
+#   - 002_acl_users_list_to_map: redis_users from a list of names into a map
 #     name → {perms, state} (a demo of the DSL grammar — rename + set + foreach + delete).
-#   - 002_to_003 (migrations/002_to_003.yml): "richer state" — opaque redis_config
+#   - 003_named_intent_fields: "richer state" — opaque redis_config
 #     is AUGMENTED WITH NAMED intent fields (day-2 read-model): tls/install/
 #     persistence/memory_mb/maxmemory_policy/modules/sysctl_settings + topology
 #     (shards/replicas/sentinel_quorum). Best-effort: extractable — from redis_config/
 #     redis_sentinel, non-extractable — a conservative default (see migration description).
-#   - 003_to_004 (migrations/003_to_004.yml): NARROWING the redis_type enum to
+#   - 004_narrow_redis_type_enum: NARROWING the redis_type enum to
 #     [sentinel, cluster]. Forward-only remap of old modes: standalone → sentinel,
 #     sentinel_only → sentinel (so state stays schema-valid). ★ the SEMANTICS
 #     of the remap require architectural confirmation (see migration description).
-#   - 004_to_005 (migrations/004_to_005.yml): sentinel failover timings (#7) —
+#   - 005_sentinel_failover_timings: sentinel failover timings (#7) —
 #     redis_sentinel is AUGMENTED WITH down_after_ms/failover_timeout_ms (day-2 read-model).
 #     Only for sentinel incarnations (redis_sentinel non-empty); for cluster (redis_sentinel
 #     {}) — no-op. Best-effort default = role defaults 5000/60000 (the exact value
-#     is restored on the next create-override). Mirrors 002_to_003 namedfields.
-#   - 005_to_006 (migrations/005_to_006.yml): redis_users from a map name→{perms,state} to a
+#     is restored on the next create-override). Mirrors 003_named_intent_fields namedfields.
+#   - 006_acl_users_map_to_array: redis_users from a map name→{perms,state} to a
 #     TYPED array [{name, perms, state}] (types-epic wave 1b, ADR-062 AclUser).
 #     The map key (name) moves into the element's name field. Expressible with ONE set with a CEL fold
 #     state.redis_users.map(n, {name: n, ...}) — the native .map() over a MAP iterates
-#     KEYS (mirror of 001_to_002 list→map, inverted); keys() in migration-CEL is NOT
+#     KEYS (mirror of 002_acl_users_list_to_map list→map, inverted); keys() in migration-CEL is NOT
 #     registered and NOT needed. Array order in state is NOT deterministic (.map()
 #     over a Go map doesn't sort) — determinism of the final ACL comes from a sorted range over the MAP in
 #     users.acl.tmpl, NOT the order of elements in state. Empty/missing map → empty array.
-#   - 006_to_007 (migrations/006_to_007.yml): cloud-provision read-model (ADR-061,
+#   - 007_cloud_provision_read_model: cloud-provision read-model (ADR-061,
 #     Option A: create raises the VM in the same run). state is AUGMENTED WITH fields
 #     provisioned_vm_ids (array string — provider-vm-id of created VMs, day-2 teardown
 #     reads them for destroy) and provisioned_provider (string — the cloud-Provider name).
 #     For existing incarnations (deployed WITHOUT provision) — a conservative default:
 #     provisioned_vm_ids=[] and provisioned_provider='' (not provisioned by our service).
 #     TWO flat sets (fields are independent) — has()-guard back-compat for incarnations without them.
-#   - 007_to_008 (migrations/007_to_008.yml): cascade-destroy read-model (addition to
+#   - 008_provisioned_sids: cascade-destroy read-model (addition to
 #     v7). state is AUGMENTED WITH provisioned_sids (array string — SID/FQDN of VMs created by our
 #     run). day-2 teardown reads them for cascade destroy of the souls/seeds/
 #     tokens registries (Reaper does NOT tear down pending-VM-souls itself → without sids orphaned records
 #     would remain, anti-replay violated). Alongside provisioned_vm_ids: vm_ids — provider-id
 #     (for core.cloud.destroyed), sids — Keeper-id of the Soul (for cascade destroy) — different
-#     subsystems. ONE flat set; default [] for existing (has()-guard). Mirrors 006_to_007.
-#   - 008_to_009 (migrations/008_to_009.yml): seed-source read-model (S1 pilot
+#     subsystems. ONE flat set; default [] for existing (has()-guard). Mirrors 007_cloud_provision_read_model.
+#   - 009_seeded_from: seed-source read-model (S1 pilot
 #     migrate_cluster). state is AUGMENTED WITH a nested object seeded_from — WHERE
 #     data was seeded from when migrating from an external cluster: source_endpoints (array string)
 #     and detached (bool — false after migrate, true after day-2 detach_source). The time is
@@ -67,9 +67,9 @@ description: >-
 #     it's taken from state_history (a snapshot per-change). For existing incarnations (a regular
 #     create, not a migration) — a conservative default {source_endpoints: [], detached: false}.
 #     ONE flat set with a has()-guard on the WHOLE object (CEL map-literal default): seeded_from
-#     already present → kept as is, otherwise the default is set. Mirrors 006_to_007/007_to_008
+#     already present → kept as is, otherwise the default is set. Mirrors 007_cloud_provision_read_model/008_provisioned_sids
 #     (guard on the object, not on leaves). The rest of state is untouched.
-#   - 009_to_010 (migrations/009_to_010.yml): seeded_from is AUGMENTED WITH REFERENCES to the
+#   - 010_seeded_from_credential_refs: seeded_from is AUGMENTED WITH REFERENCES to the
 #     external source's credentials — source_password_ref (Vault PATH to the password) + source_tls_ca_ref
 #     (Vault PATH to the CA), both string. Production fix for a detach blocker under an AUTH source: day-2
 #     detach_source does a final offset-gate to the EXTERNAL source, but previously the source's
@@ -78,31 +78,31 @@ description: >-
 #     PERSISTS the REFERENCES (NOT secrets — Vault paths), detach reads them via vault() keeper-side.
 #     For existing v9 incarnations (and a regular create) — a conservative default: empty
 #     refs (source without AUTH/TLS, as before). ★ LEAF-guard (has() on EACH new field
-#     inside the already-existing seeded_from), NOT an object-guard like 008_to_009: v9's seeded_from
-#     already EXISTS (008_to_009 guaranteed it), here FIELDS are added into it —
+#     inside the already-existing seeded_from), NOT an object-guard like 009_seeded_from: v9's seeded_from
+#     already EXISTS (009_seeded_from guaranteed it), here FIELDS are added into it —
 #     overwriting the whole object would erase source_endpoints/detached. Mirrors the
-#     leaf pattern from 006_to_007 (has() on each new field). The rest of state is untouched.
-#   - 010_to_011 (migrations/010_to_011.yml): redesign of the input contract (connection_mode
+#     leaf pattern from 007_cloud_provision_read_model (has() on each new field). The rest of state is untouched.
+#   - 011_connection_mode_contract: redesign of the input contract (connection_mode
 #     enum + io-threads + persistence expansion + restructured sentinel timings). state:
 #     (1) persistence remaps old values aof→aof_1sec / rdb_aof→rdb_aof_1sec (off/rdb
 #     and new aof_always/rdb_aof_always — identity); (2) NEW connection_mode (enum
 #     tls/tls_plain/plain) — derived from the existing tls.enable/only (reverse fold,
-#     best-effort like 002_to_003 namedfields); (3) NEW io_threads — best-effort default
-#     0 (the original value wasn't stored in state — symmetric to memory_mb in 002_to_003); (4)
+#     best-effort like 003_named_intent_fields namedfields); (3) NEW io_threads — best-effort default
+#     0 (the original value wasn't stored in state — symmetric to memory_mb in 003_named_intent_fields); (4)
 #     redis_sentinel RESTRUCTURE (only for sentinel incarnations, has-guard): the named
 #     down_after_ms/failover_timeout_ms are FOLDED into master_settings (map<string,string>
 #     of effective per-master sentinel directives down-after-milliseconds/failover-timeout) +
 #     settings={} (global sentinel) — mirrors input.sentinel_master_settings; the old
 #     leaves are removed (delete). cluster (redis_sentinel {}) — sentinel branch no-op.
 #     Forward-only (no down:; recovery — state_history).
-#   - 011_to_012 (migrations/011_to_012.yml): moving install + host-layout (conf_dir/
+#   - 012_install_layout_to_vars: moving install + host-layout (conf_dir/
 #     data_dir/modules_base_url) out of state into service vars (Option A) — four deletes (no-op on
 #     incarnations without the fields).
-#   - 012_to_013 (migrations/012_to_013.yml): mandatory data-plane monitoring
+#   - 013_monitoring_read_model: mandatory data-plane monitoring
 #     (Slice I). state is AUGMENTED WITH the monitoring read-model (versions/listen of node_exporter+
 #     redis_exporter; symmetric to install/tls). For existing v12 — a conservative default
 #     (versions '', ports :9100/:9121). ONE flat set with a has()-guard on the object (mirrors
-#     008_to_009's seeded_from). The monitoring ACL user's password/username are NOT stored in state (security).
+#     009_seeded_from's seeded_from). The monitoring ACL user's password/username are NOT stored in state (security).
 # incarnation.state records what's deployed so the operator sees the installation and
 # repeated apply is idempotent.
 #
@@ -121,7 +121,7 @@ state_schema:
   # Deployment mode (role concept). Produces derived flags
   # (deploy_redis/deploy_sentinel/cluster_enabled), fed into destiny via
   # apply: input: in the corresponding scenario. Service modes: sentinel/cluster
-  # (standalone/sentinel_only removed 2026-06-25, see 003_to_004 migration).
+  # (standalone/sentinel_only removed 2026-06-25, see 004_narrow_redis_type_enum migration).
   redis_type:
     type: string
     required: true
@@ -158,21 +158,21 @@ state_schema:
   # (input.connection_mode): plain — plain port only; tls_plain — TLS+plain;
   # tls — TLS only. The tls namedfield above carries the DERIVED enable/only/port
   # (compute.tls_on/tls_only_on), connection_mode duplicates the ORIGINAL enum choice.
-  # For v≤10 incarnations it's derived from tls.enable/only via a reverse fold (010_to_011).
+  # For v≤10 incarnations it's derived from tls.enable/only via a reverse fold (011_connection_mode_contract).
   connection_mode:
     type: string
     enum: [tls, tls_plain, plain]
   # Number of Redis I/O threads (io-threads directive, read-model v11). From
   # input.io_threads (default 0 = single-threaded I/O). 0 → the io-threads directive in
   # redis_config is NOT written (compute has-guard >0). For v≤10 — best-effort 0
-  # (the original value wasn't stored in state; 010_to_011, symmetric to memory_mb).
+  # (the original value wasn't stored in state; 011_connection_mode_contract, symmetric to memory_mb).
   io_threads:
     type: integer
     min: 0
   # Persistence mode (role concept). From input.persistence (default rdb).
   # ★ v11: the enum was EXPANDED to 6 values (aof/rdb_aof split into _1sec/_always by
   # AOF fsync frequency; off/rdb unchanged). Old aof/rdb_aof are remapped to
-  # _1sec by the 010_to_011 migration (back-compat fsync everysec).
+  # _1sec by the 011_connection_mode_contract migration (back-compat fsync everysec).
   persistence:
     type: string
     enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
@@ -208,7 +208,7 @@ state_schema:
   # a repeated apply is idempotent. The monitoring ACL user's password/username are NOT written HERE —
   # they're in Vault (secret/redis/<inc>/users/monitoring), like tls.*_ref (security). For
   # v≤12 incarnations (monitoring not yet deployed) — a conservative default: versions ''
-  # (best-effort like memory_mb/io_threads), ports :9100/:9121 (012_to_013).
+  # (best-effort like memory_mb/io_threads), ports :9100/:9121 (013_monitoring_read_model).
   monitoring:
     type: object
     additional_properties: false
@@ -226,7 +226,7 @@ state_schema:
   # (like tls.*_ref and the monitoring password). Symmetric to the monitoring read-model: the operator
   # sees what's deployed. For v≤13 incarnations (log-shipping not yet deployed) —
   # a conservative default: version '' (not deployed, best-effort like monitoring),
-  # sink_type console (safe, no infra needed), endpoint '', log_sources [] (013_to_014).
+  # sink_type console (safe, no infra needed), endpoint '', log_sources [] (014_logging_read_model).
   logging:
     type: object
     additional_properties: false
@@ -309,7 +309,7 @@ state_schema:
   sentinel_quorum: { type: integer }
 
   # Redis ACL users: a TYPED array [{name, perms, state, password}] (types-epic
-  # wave 1b, ADR-062 AclUser; map→array conversion, migration 005_to_006). name —
+  # wave 1b, ADR-062 AclUser; map→array conversion, migration 006_acl_users_map_to_array). name —
   # the user name (previously the map key); perms — the full ACL string (Redis ACL
   # directives verbatim). Populated by create from input.users (also an AclUser array).
   # password is declared `type: secret` (ADR-0083 §1): the value lives in Vault at a
@@ -365,13 +365,13 @@ state_schema:
   # sentinel directives). Populated by create when redis_type=sentinel; empty for cluster.
   # create does NOT write master_ip (the master is chosen from the roster, host-variable) —
   # the field remains in the schema only for back-compat with legacy state (sentinel_only remap,
-  # 003_to_004); current modes don't materialize it.
+  # 004_narrow_redis_type_enum); current modes don't materialize it.
   # ★ v11: the named down_after_ms/failover_timeout_ms are REPLACED by generalized maps
   # (input redesign — input.sentinel_master_settings/sentinel_settings):
   #   - master_settings — effective PER-MASTER sentinel directives (key→value, strings;
   #     option name for SENTINEL SET without the prefix/master-name, e.g. down-after-milliseconds/
   #     failover-timeout/parallel-syncs). Replaces the 2 named fields (their values
-  #     move into down-after-milliseconds/failover-timeout of this map, 010_to_011);
+  #     move into down-after-milliseconds/failover-timeout of this map, 011_connection_mode_contract);
   #   - settings — global (NOT per-master) sentinel.conf directives (key→value, strings).
   redis_sentinel:
     type: object

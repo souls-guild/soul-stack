@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path"
 	"path/filepath"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
@@ -20,12 +19,9 @@ import (
 // serviceManifestFile is the root service manifest filename in the repository.
 const serviceManifestFile = "service.yml"
 
-// migrationsDir is the directory for state_schema migration chain in Service repo
-// (docs/migrations.md §Layout: `migrations/<NNN>_to_<MMM>.yml`).
-const migrationsDir = "migrations"
-
 // ErrMigrationChainBroken is returned when an expected migration step is missing
-// (`migrations/<NNN>_to_<MMM>.yml`): upgrade requires it but file does not exist.
+// (no `migrations/<NNN>_<slug>/` leads to the version the chain needs): upgrade
+// requires it but the ladder has a gap there.
 // Symmetric with statemigrate codes: snake_case marker for diagnostics.
 var ErrMigrationChainBroken = errors.New("artifact: migration_chain_broken")
 
@@ -55,6 +51,16 @@ func (l *ServiceLoader) Load(ctx context.Context, ref ServiceRef) (*ServiceArtif
 		return nil, err
 	}
 	art.Manifest = manifest
+	// The state-schema version is DERIVED, not declared (NIM-735): the top of the
+	// ladder, 1 when `migrations/` is empty. The scan's diagnostics are deliberately
+	// dropped here — a snapshot whose ladder is malformed still has to answer "what
+	// version is this", and the honest answer is the top of what is actually on
+	// disk. Refusing to load instead would turn the documented preview answer for a
+	// broken chain (ADR-0068 §6: `reachable: false`, as data) into a 502, and the
+	// strict reading has its own home offline: `soul-lint validate-service` runs
+	// [config.ValidateMigrationLadder] before the repository is ever pushed.
+	ladder, _ := config.ScanMigrationLadder(art.LocalDir)
+	art.StateSchemaVersion = ladder.Version()
 	return art, nil
 }
 
@@ -141,15 +147,17 @@ func (l *ServiceLoader) ReadFile(art *ServiceArtifact, file string) ([]byte, err
 	return readSnapshotFile(art.LocalDir, file)
 }
 
-// LoadMigrationChain collects state_schema migration chain from→to from service
-// snapshot (docs/migrations.md): for each version v∈[from, to) reads
-// `migrations/<NNN>_to_<MMM>.yml` (NNN = "%03d" v, MMM = "%03d" v+1) and parses
-// via [statemigrate.Parse]. Forward-only (ADR-019): from > to → error (downgrade
-// unsupported), from == to → empty Chain (no-op ref-bump).
+// LoadMigrationChain collects the state_schema migration chain from→to from a
+// service snapshot (docs/migrations.md): for each version v∈(from, to] it finds the
+// step directory that LEADS TO v — `migrations/<NNN>_<slug>/` with NNN = "%03d" v —
+// and parses its `main.yml` via [statemigrate.Parse]. Forward-only (ADR-019): from >
+// to → error (downgrade unsupported), from == to → empty Chain (no-op ref-bump).
 //
-// Missing migration file → [ErrMigrationChainBroken] (upgrade requires it but
-// file does not exist). Pattern is [DestinyLoader.parseTasks]/[ReadFile]: read via
-// securejoin, parse via pure function [statemigrate.Parse].
+// The step is found by scanning rather than by constructing a filename: the slug is
+// the author's and only the number is the engine's, which is the whole point of the
+// layout. No step leading to v → [ErrMigrationChainBroken] (upgrade requires it but
+// the ladder has a gap there). Pattern is [DestinyLoader.parseTasks]/[ReadFile]:
+// read via securejoin, parse via a pure function.
 func (l *ServiceLoader) LoadMigrationChain(art *ServiceArtifact, from, to int) (statemigrate.Chain, error) {
 	if from > to {
 		// Downgrade guard at loader level (duplicates caller-side guard in
@@ -160,19 +168,24 @@ func (l *ServiceLoader) LoadMigrationChain(art *ServiceArtifact, from, to int) (
 		return statemigrate.Chain{}, nil
 	}
 
+	ladder, _ := config.ScanMigrationLadder(art.LocalDir)
 	chain := make(statemigrate.Chain, 0, to-from)
-	for v := from; v < to; v++ {
-		rel := path.Join(migrationsDir, fmt.Sprintf("%03d_to_%03d.yml", v, v+1))
-		data, err := readSnapshotFile(art.LocalDir, rel)
+	for v := from + 1; v <= to; v++ {
+		step, ok := ladder.Step(v)
+		if !ok {
+			return nil, fmt.Errorf("%w: %s/%03d_*/%s service %q is missing",
+				ErrMigrationChainBroken, config.MigrationsDirName, v, config.MigrationStepFile, art.Ref.Name)
+		}
+		data, err := readSnapshotFile(art.LocalDir, step.Path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return nil, fmt.Errorf("%w: %s service %q is missing", ErrMigrationChainBroken, rel, art.Ref.Name)
+				return nil, fmt.Errorf("%w: %s service %q is missing", ErrMigrationChainBroken, step.Path, art.Ref.Name)
 			}
-			return nil, fmt.Errorf("artifact: reading %s service %q: %w", rel, art.Ref.Name, err)
+			return nil, fmt.Errorf("artifact: reading %s service %q: %w", step.Path, art.Ref.Name, err)
 		}
-		m, err := statemigrate.Parse(data)
+		m, err := statemigrate.Parse(data, v, step.Path)
 		if err != nil {
-			return nil, fmt.Errorf("artifact: parsing %s service %q: %w", rel, art.Ref.Name, err)
+			return nil, fmt.Errorf("artifact: parsing %s service %q: %w", step.Path, art.Ref.Name, err)
 		}
 		chain = append(chain, m)
 	}

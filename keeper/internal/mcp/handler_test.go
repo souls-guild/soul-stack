@@ -819,9 +819,10 @@ func (f *mcpLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.
 		return nil, f.loadErr
 	}
 	return &artifact.ServiceArtifact{
-		Ref:      ref,
-		LocalDir: f.localDir,
-		Manifest: &config.ServiceManifest{StateSchemaVersion: f.targetSchema},
+		Ref:                ref,
+		LocalDir:           f.localDir,
+		Manifest:           &config.ServiceManifest{},
+		StateSchemaVersion: f.targetSchema,
 	}, nil
 }
 

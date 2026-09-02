@@ -17,7 +17,7 @@ import (
 
 // serviceWith wraps a state_schema body into a minimal manifest.
 func serviceWith(body string) string {
-	return "state_schema_version: 1\nstate_schema:\n" + body
+	return "state_schema:\n" + body
 }
 
 // diagAtPath returns the diagnostic with the given code at the given YAML path, or nil.
@@ -48,7 +48,7 @@ func TestStateSchema_JSONSchemaRootFormIsRefusedWithAnAddress(t *testing.T) {
 `)
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 
-	for key, line := range map[string]int{"type": 3, "required": 4, "properties": 5} {
+	for key, line := range map[string]int{"type": 2, "required": 3, "properties": 4} {
 		d := diagAtPath(diags, StateSchemaLegacyFormCode, "$.state_schema."+key)
 		if d == nil {
 			dump(t, diags)

@@ -29,10 +29,12 @@ import (
 type ServiceManifest struct {
 	Description string `yaml:"description,omitempty"`
 
-	// StateSchemaVersion — version of the `incarnation.state` structure. Bumped
-	// explicitly on breaking schema changes; the migration chain lives in
-	// `migrations/` (chain validation is out of scope for MVP, M1.5).
-	StateSchemaVersion int `yaml:"state_schema_version"`
+	// The manifest carries NO state-schema version either (NIM-735). It is the top
+	// of the migration ladder `migrations/<NNN>_<slug>/`, read by
+	// [ScanMigrationLadder]; an empty `migrations/` means
+	// [BaseStateSchemaVersion]. A hand-written integer beside a ladder that
+	// already states the same number is the failure ADR-007 exists to prevent, and
+	// `state_schema_version:` was the one exception that ADR carved for itself.
 
 	// StateSchema is the contract for `incarnation.state`, written in the SAME
 	// dialect as a scenario's `input:` — hence the same Go type ([NIM-740]).
@@ -223,7 +225,10 @@ var deprecatedServiceKeys = map[string]string{
 		"Vault path and RBAC scope is built from. The manifest copy was never compared against it, so a typo here " +
 		"fenced the wrong namespace in silence. Offline tools take the name as an argument instead " +
 		"(`soul-lint validate-scenario --service-name <name>`)",
-	"version":   "version is a git ref under which service is committed, not a manifest field; see ADR-007",
+	"version": "version is a git ref under which service is committed, not a manifest field; see ADR-007",
+	"state_schema_version": "state_schema_version: removed (NIM-735); the state-schema version is the top of the migration ladder " +
+		"`migrations/<NNN>_<slug>/` — an empty migrations/ means version 1, and adding a step is what bumps it. " +
+		"The runtime column and the API field of that name are unchanged; only the manifest key is gone (ADR-007 amendment 2026-09-01)",
 	"tasks":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
 	"steps":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
 	"input":     "input lives in scenario/<name>/main.yml (input:-block per docs/input.md), not service.yml",
@@ -267,40 +272,12 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	// rather than moved: it can only judge a name, and the manifest no longer
 	// states one.
 
-	// 3) state_schema_version — required + integer ≥ 1.
-	// Also catch a float (`1.5`): goccy silently truncates when decoding into
-	// `int`, so we check the AST explicitly — otherwise the operator thinks they
-	// wrote "1.5" while Keeper stores "1" (silent truncation).
-	if !topKeys["state_schema_version"] {
-		out = append(out, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "missing_required_field",
-			Message:  "state_schema_version is required at top-level",
-			Hint:     "set state_schema_version: 1 for fresh services; bump on breaking state schema changes (ADR-019)",
-			YAMLPath: "$.state_schema_version",
-		})
-	} else if vn := findScalarValue(root, "state_schema_version"); vn != nil {
-		if _, isFloat := vn.(*ast.FloatNode); isFloat {
-			tok := vn.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "type_mismatch",
-				Message:  fmt.Sprintf("state_schema_version must be an integer, got float %q", tok.Value),
-				Hint:     "use integer like 1, 2, 3 — version is monotonic, not a semver fraction",
-				YAMLPath: "$.state_schema_version",
-			}))
-		} else if _, isInt := vn.(*ast.IntegerNode); !isInt {
-			// Non-integer non-float (string/bool/sequence/mapping/null): decode
-			// already raised `type_mismatch`; an extra `value_out_of_range "got 0"`
-			// from the zero-value `m.StateSchemaVersion` would be misleading.
-		} else if m.StateSchemaVersion < 1 {
-			out = append(out, atPath(root, "$.state_schema_version", diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:    "value_out_of_range",
-				Message: fmt.Sprintf("state_schema_version must be >= 1, got %d", m.StateSchemaVersion),
-			}))
-		}
-	}
+	// 3) state_schema_version — gone (NIM-735). Nothing to check here: the key is
+	// refused above, through deprecatedServiceKeys. What it used to guard — an
+	// integer ≥ 1, and not the float goccy would silently truncate — has no subject
+	// left, because the number is no longer written by hand at all. It is the top
+	// of the ladder in `migrations/`, which is a count of directories and cannot be
+	// a float, be zero, or disagree with the steps it counts.
 
 	// 4) state_schema — required + structural validation.
 	if !topKeys["state_schema"] {
@@ -643,18 +620,11 @@ func findKV(m *ast.MappingNode, name string) *ast.MappingValueNode {
 	return nil
 }
 
-// findScalarValue — the value node under key `name` at one level (no recursion).
-func findScalarValue(m *ast.MappingNode, name string) ast.Node {
-	kv := findKV(m, name)
-	if kv == nil {
-		return nil
-	}
-	return kv.Value
-}
-
-// semanticValidateService — at M1.2.b there are no separate semantic invariants
-// (cross-file refs and migration chain are out of scope, M1.5). Kept for
-// signature symmetry with destiny.go.
+// semanticValidateService — no semantic invariant is checked over the manifest
+// BYTES. Cross-file refs remain out of scope; the migration chain no longer is, but
+// it is not checkable from here — the ladder is a directory beside this file, so it
+// belongs to a validator that may touch the filesystem ([ValidateMigrationLadder],
+// run by `soul-lint validate-service`). Kept for signature symmetry with destiny.go.
 func semanticValidateService(_ *ServiceManifest, _ *ast.MappingNode) []diag.Diagnostic {
 	return nil
 }

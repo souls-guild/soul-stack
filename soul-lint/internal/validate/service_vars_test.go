@@ -15,7 +15,7 @@ func writeServiceTree(t *testing.T, files map[string]string, dirs ...string) str
 	t.Helper()
 	root := t.TempDir()
 
-	base := "name: redis\nstate_schema_version: 1\nstate_schema: {}\n"
+	base := "name: redis\nstate_schema: {}\n"
 	if _, given := files["service.yml"]; !given {
 		files["service.yml"] = base
 	}

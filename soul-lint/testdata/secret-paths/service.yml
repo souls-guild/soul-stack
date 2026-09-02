@@ -8,7 +8,6 @@
 # No Vault path is written here, and none may be: the platform derives it from
 # (service, incarnation, state field, key) and an authored copy would be a second
 # source of truth (ADR-0083 §1). This file is the input the command derives FROM.
-state_schema_version: 1
 description: A service declaring secrets in both supported shapes.
 
 state_schema:

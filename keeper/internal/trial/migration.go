@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 
 	yaml "github.com/goccy/go-yaml"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // migrationEvaluator — lazy holder of shared migration-CEL evaluator for
@@ -29,9 +32,9 @@ func (m *migrationEvaluator) get() (statemigrate.Evaluator, error) {
 }
 
 // MigrationCase — one L1 case of state_schema migration test (ADR-019,
-// docs/migrations.md §Tests). Layout: `migrations/<NNN>_to_<MMM>/tests/
+// docs/migrations.md §Tests). Layout: `migrations/<NNN>_<slug>/tests/
 // <case>.yml`, form differs fundamentally from L0 (separate type, not
-// extension of Case): state_before is applied by neighboring migration and
+// extension of Case): state_before is applied by the step it sits under and
 // compared deep-equal with state_after.
 //
 // Strict decode: unknown key at top level — error, not silent-skip
@@ -74,22 +77,22 @@ func (mc *MigrationCase) validate() error {
 	return nil
 }
 
-// RunMigrationCase runs one L1 case hermetically: parses neighboring migration
-// (`migrations/<NNN>_to_<MMM>.yml`), applies it to state_before through pure
-// statemigrate core and compares result deep-equal with state_after.
+// RunMigrationCase runs one L1 case hermetically: parses the step it sits under
+// (`migrations/<NNN>_<slug>/main.yml`), applies it to state_before through the pure
+// statemigrate core and compares the result deep-equal with state_after.
 //
-// caseFile — path to case file itself (from discoverCases). One migration file =
+// caseFile — path to case file itself (from discoverCases). One step document =
 // one Chain step (per-step tests, docs/migrations.md §Tests). ev — shared
 // migration-CEL evaluator (compile-cache; if nil runner assembles its own).
 func RunMigrationCase(ctx context.Context, mc *MigrationCase, caseFile string, ev statemigrate.Evaluator) (Result, error) {
 	res := Result{Case: mc.Name}
 
-	migPath := migrationPathFor(caseFile)
+	migPath, toVersion := migrationPathFor(caseFile)
 	data, err := os.ReadFile(migPath)
 	if err != nil {
 		return res, fmt.Errorf("trial: read migration %s: %w", migPath, err)
 	}
-	mig, err := statemigrate.Parse(data)
+	mig, err := statemigrate.Parse(data, toVersion, migPath)
 	if err != nil {
 		return res, fmt.Errorf("trial: parse migration %s: %w", migPath, err)
 	}
@@ -111,16 +114,31 @@ func RunMigrationCase(ctx context.Context, mc *MigrationCase, caseFile string, e
 	return res, nil
 }
 
-// migrationPathFor derives migration file path from L1 case file path. Layout
-// (docs/migrations.md §Tests): `migrations/<NNN>_to_<MMM>/tests/<case>.yml` →
-// `migrations/<NNN>_to_<MMM>.yml`. Directory name `<NNN>_to_<MMM>` matches
-// migration file basename.
-func migrationPathFor(caseFile string) string {
-	testsDir := filepath.Dir(caseFile)     // .../migrations/<NNN>_to_<MMM>/tests
-	stepDir := filepath.Dir(testsDir)      // .../migrations/<NNN>_to_<MMM>
-	migrationsDir := filepath.Dir(stepDir) // .../migrations
-	return filepath.Join(migrationsDir, filepath.Base(stepDir)+".yml")
+// migrationPathFor derives the step document and the version it leads to from an L1
+// case file path. Layout (docs/migrations.md §Tests):
+// `migrations/<NNN>_<slug>/tests/<case>.yml` → `migrations/<NNN>_<slug>/main.yml`,
+// leading to version <NNN>.
+//
+// The case now sits INSIDE the step it exercises rather than beside it, so the
+// document is a sibling of its own tests/ directory and no name has to be rebuilt.
+// A step directory whose name states no version yields 0 — the test still runs, and
+// what it asserts (state_before → state_after) never depended on the number; only
+// the diagnostics on a failure lose it.
+func migrationPathFor(caseFile string) (string, int) {
+	testsDir := filepath.Dir(caseFile) // .../migrations/<NNN>_<slug>/tests
+	stepDir := filepath.Dir(testsDir)  // .../migrations/<NNN>_<slug>
+	version := 0
+	if m := reStepDirVersion.FindStringSubmatch(filepath.Base(stepDir)); m != nil {
+		version, _ = strconv.Atoi(m[1])
+	}
+	return filepath.Join(stepDir, config.MigrationStepFile), version
 }
+
+// reStepDirVersion pulls the leading <NNN> off a step directory name. Deliberately
+// looser than the linter's rule ([config.ScanMigrationLadder]): the trial runner
+// judges migrations, not layouts, and a slug it dislikes must not stop a case from
+// running.
+var reStepDirVersion = regexp.MustCompile(`^(\d{3})_`)
 
 // compareState compares expected state_after with the final migration state
 // through the common by-key mechanism ([compareFieldsByKey]) and then requires

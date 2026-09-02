@@ -93,7 +93,7 @@ func TestScenarioCompatFloorDiags_ReadsServiceWindow(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "scenario", "create"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	service := "name: redis\nstate_schema_version: 1\ncompat:\n  keeper: {min: \"0.1.0\", max: \"0.3.0\"}\n"
+	service := "name: redis\ncompat:\n  keeper: {min: \"0.1.0\", max: \"0.3.0\"}\n"
 	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte(service), 0o600); err != nil {
 		t.Fatal(err)
 	}

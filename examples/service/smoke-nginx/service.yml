@@ -1,10 +1,9 @@
-state_schema_version: 1
 description: >-
   Minimal service for the L3a E2E pilot (ADR-039): one scenario "create",
   two core tasks (install package + start service). Used by the
   tests/e2e/ harness for the apply_runs lifecycle + audit + metrics contract test.
 
-# state_schema_version=1 → the migrations/ directory isn't required (ADR-019).
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
 # the scenario's state-changes record the installed package and the active service in
 # incarnation.state for post-apply asserts.
 state_schema:

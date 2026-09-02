@@ -10,7 +10,7 @@ or custom modules.
 
 ```
 noop/
-├── service.yml                       # manifest: state_schema_version=1, empty state_schema
+├── service.yml                       # manifest: empty state_schema
 ├── vars/
 │   └── 00-base.yaml                 # baseline service vars: one demo field `greeting`
 └── scenario/
@@ -18,7 +18,7 @@ noop/
         └── main.yml                  # task: core.exec.run "echo hello"
 ```
 
-No `migrations/` directory: `state_schema_version = 1`, no migrations needed
+No `migrations/` directory: state-schema version 1, no migrations needed
 ([ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
 ## Purpose
@@ -45,7 +45,7 @@ Both should return exit 0 and `OK: <path>`.
 
 ## What's deliberately not here
 
-- `migrations/` — `state_schema_version = 1`, no migrations needed.
+- `migrations/` — absent, so the state-schema version is 1; no migrations needed.
 - `destiny[]` / `modules[]` in `service.yml` — only core modules are used.
 - `input:` in `scenario/create/main.yml` — the scenario takes no inputs.
 - `templates/` / `vars.yml` / `tests/` — not required for a smoke fixture.

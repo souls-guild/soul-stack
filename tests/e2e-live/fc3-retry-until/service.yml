@@ -1,4 +1,3 @@
-state_schema_version: 1
 description: >-
   FC-3 L3b: prove the retry:+until: health-gate on REAL timing (real-apply).
   The L3a stub returns the final RunResult immediately - the retry loop isn't
@@ -8,7 +7,7 @@ description: >-
   1st attempt (the ready epoch is written into the future by the prepare
   task), so until MUST take >=2 attempts before it matches.
 
-# state_schema_version=1 -> the migrations/ catalog isn't required (ADR-019).
+# No migrations/ catalog -> state-schema version 1 (ADR-019, NIM-735).
 # The focus scenario doesn't mutate incarnation.state (commit state is a
 # separate invariant, covered by other L3a/L3b tests).
 state_schema: {}

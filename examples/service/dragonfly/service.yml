@@ -1,4 +1,3 @@
-state_schema_version: 7
 description: >-
   DragonFly follows a unified-service concept (PILOT, sentinel-only). The operator sets SIMPLE
   typed concepts (memory, ACL users, replicas, TLS), and the create scenario translates
@@ -15,41 +14,42 @@ description: >-
   rotate_tls/destroy/update_config) - NEXT slice AFTER review. No mode dispatcher
   (single mode), no migrations (v1).
 
-# state_schema_version = 7: forward-only migration chain (ADR-019).
-#   - 001_to_002 (migrations/001_to_002.yml): moves install + host-layout
+# state-schema version 7 — the top of the forward-only ladder below (ADR-019;
+# NIM-735: the version is derived from migrations/, never written down).
+#   - 002_install_layout_to_vars: moves install + host-layout
 #     (conf_dir/data_dir) from state into service vars - install is a read-model with no readers,
 #     layout is read directly by day-2 from service vars (default(vars.<x>, '<default>')). Mirrors
-#     redis 011_to_012 (Option A). DragonFly has NO modules_base_url (redis modules don't
+#     redis 012_install_layout_to_vars (Option A). DragonFly has NO modules_base_url (redis modules don't
 #     apply to DF) -> three fields are cut, not four. sysctl_settings STAYS (read-model).
-#   - 002_to_003 (migrations/002_to_003.yml): cloud-provision read-model (ADR-061,
+#   - 003_cloud_provision_read_model: cloud-provision read-model (ADR-061,
 #     Option A - create raises the VM in the same run; user decision 2026-07-01,
 #     DragonFly cloud-provision modeled on redis). Adds provisioned_vm_ids (array
 #     string - provider-vm-id of created VMs, day-2 teardown reads them for core.cloud.destroyed)
-#     and provisioned_provider (string - the cloud-Provider name). Mirrors redis 006_to_007. Default
+#     and provisioned_provider (string - the cloud-Provider name). Mirrors redis 007_cloud_provision_read_model. Default
 #     for incarnations without provision (deploy on existing hosts): provisioned_vm_ids=[] and
 #     provisioned_provider='' (not provisioned by our service).
-#   - 003_to_004 (migrations/003_to_004.yml): cascade-destroy read-model (addition to v3).
+#   - 004_provisioned_sids: cascade-destroy read-model (addition to v3).
 #     Adds provisioned_sids (array string - SID/FQDN of VMs created by our run; day-2
 #     cascade-teardown finishes off orphaned souls/seeds/tokens - the Reaper does NOT tear down pending-VM-
 #     souls itself, without sids they would remain orphaned, anti-replay violated). Alongside provisioned_vm_ids: vm_ids -
 #     provider-id (for core.cloud.destroyed), sids - the Keeper-side Soul identity (for cascade).
-#     Mirrors redis 007_to_008.
-#   - 004_to_005 (migrations/004_to_005.yml): mandatory data-plane monitoring
+#     Mirrors redis 008_provisioned_sids.
+#   - 005_monitoring_read_model: mandatory data-plane monitoring
 #     (Slice II, ADR-024). state is AUGMENTED WITH the monitoring read-model (node_exporter version/listen).
 #     ★ node-exporter-ONLY: DragonFly exposes metrics natively -> no data-plane exporter needed
 #     (unlike redis, which has redis_exporter). For existing v4 - a conservative default
-#     (version '', port :9100). ONE flat set with a has()-guard on the object (mirrors redis 012_to_013).
-#   - 005_to_006 (migrations/005_to_006.yml): mandatory data-plane log-shipping
+#     (version '', port :9100). ONE flat set with a has()-guard on the object (mirrors redis 013_monitoring_read_model).
+#   - 006_logging_read_model: mandatory data-plane log-shipping
 #     (Slice V-I, ADR-067). state is AUGMENTED WITH the logging read-model (vector agent
 #     version/sink/sources). ★ sink_auth_ref (the collector token) is NOT written here - the secret lives in Vault (like tls.*_ref).
 #     For existing v5 - a conservative default (version '', sink console, endpoint '', sources []).
-#     ONE flat set with a has()-guard on the object (mirrors redis 013_to_014).
-#   - 006_to_007 (migrations/006_to_007.yml): the service's OWN ACL accounts become a declared
+#     ONE flat set with a has()-guard on the object (mirrors redis 014_logging_read_model).
+#   - 007_system_acl_users: the service's OWN ACL accounts become a declared
 #     state field (NIM-698, [ADR-0083]). Adds system_acl_users - an array of {name} recording
 #     WHICH accounts the service provisioned for itself (default_admin/replica/monitoring/
 #     sentinel/haproxy); perms stay in service vars (policy), the password is declared
 #     `type: secret` so its value lives in Vault at a DERIVED path. Default [] - migration-CEL
-#     cannot read vars (ADR-019 sandbox). Mirrors redis 014_to_015.
+#     cannot read vars (ADR-019 sandbox). Mirrors redis 015_system_acl_users.
 # incarnation.state records what's deployed so the operator sees the installation and
 # repeated apply stays idempotent. Mini-schema (no cluster/modules/seeded_from - out of
 # PILOT scope; provision-read-model added v2->v4, observability v4->v6 modeled on redis).
@@ -89,7 +89,7 @@ state_schema:
   # ★ install + host-layout (conf_dir/data_dir) MOVED into service vars (v1->v2, Option A):
   # install - a read-model with no readers, layout - day-2 reads service vars directly
   # (default(vars.conf_dir, '/etc/dragonfly') / data_dir). state no longer has these fields -
-  # set would write a key outside the schema -> state validation would fail (see migration 001_to_002).
+  # set would write a key outside the schema -> state validation would fail (see migration 002_install_layout_to_vars).
   # Memory budget for DragonFly, MB. From input.memory_mb; not set -> 0.
   memory_mb:
     type: integer
@@ -107,7 +107,7 @@ state_schema:
   # redis, where redis_exporter is mandatory). Version/listen - from service vars (node_exporter_*,
   # the same values that went into apply.input for destiny node-exporter). Symmetric to the install/tls
   # read-model. For v<=4 (monitoring not yet deployed) - a conservative default (version '',
-  # port :9100; 004_to_005).
+  # port :9100; 005_monitoring_read_model).
   monitoring:
     type: object
     additional_properties: false
@@ -121,7 +121,7 @@ state_schema:
   # vars.vector_* (the same values that went into apply.input for destiny vector). ★ sink_auth_ref
   # (the collector token) is NOT written here - the secret lives in Vault (like tls.*_ref). For v<=5 (log-shipping
   # not yet deployed) - a conservative default: version '', sink console (safe, no infra needed),
-  # endpoint '', log_sources [] (005_to_006).
+  # endpoint '', log_sources [] (006_logging_read_model).
   logging:
     type: object
     additional_properties: false

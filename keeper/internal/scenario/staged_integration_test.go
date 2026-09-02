@@ -52,8 +52,7 @@ func stagedServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: staged-render proof service
+	write("service.yml", `description: staged-render proof service
 state_schema: {}
 `)
 	write("scenario/failover/main.yml", `name: failover
@@ -306,8 +305,7 @@ func stagedExpandingServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: staged-render expanding-passage proof service
+	write("service.yml", `description: staged-render expanding-passage proof service
 state_schema: {}
 `)
 	write("scenario/expand/main.yml", `name: expand
@@ -679,8 +677,7 @@ func staged3PassageServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: staged-render 3-passage proof service
+	write("service.yml", `description: staged-render 3-passage proof service
 state_schema: {}
 `)
 	write("scenario/restart/main.yml", `name: restart
@@ -994,8 +991,7 @@ func TestIntegration_RunOnceStaged(t *testing.T) {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: run_once+staged service
+	write("service.yml", `description: run_once+staged service
 state_schema: {}
 `)
 	write("scenario/runoncestaged/main.yml", `name: runoncestaged
@@ -1197,8 +1193,7 @@ func multiTaskPassage0ServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: multi-task passage-0 proof service
+	write("service.yml", `description: multi-task passage-0 proof service
 state_schema: {}
 `)
 	write("scenario/failover/main.yml", `name: failover
@@ -1394,8 +1389,7 @@ func perHostWhereServiceRepo(t *testing.T) string {
 			t.Fatalf("WriteFile: %v", err)
 		}
 	}
-	write("service.yml", `state_schema_version: 1
-description: per-host where in same passage proof service
+	write("service.yml", `description: per-host where in same passage proof service
 state_schema: {}
 `)
 	// Passage 0 carries #0 (host-A-only prep, where on the STABLE fact
