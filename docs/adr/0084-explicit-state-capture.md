@@ -763,3 +763,28 @@ all seven keeper-side bases rather than `core.state` alone.
 
 The capture verbs, the ordering guard, the cross-host barrier and `register.hosts.<name>` are
 untouched. Until NIM-749 / NIM-750 land, `on: keeper` on a capture remains required.
+
+## Amendment 2026-09-02 (NIM-746, [ADR-0083](0083-declared-secret-state-fields.md)): half of "resolve the same way" is wrong — a missing value is **not** minted on its own
+
+§ *Secret resolution is orthogonal to the verb* says every verb resolves a declared secret *"an
+existing Vault value is kept, a missing one is minted from the step's `generate_secret()` request"*
+(`:107-111`). Keeping is verb-independent and stands. **Minting is not**, and the second clause of
+that sentence already says why without following through: it is the *request* that mints, not the
+absence of a value. Where no `generate_secret({…})` marker reaches the resolve, a missing value is a
+**refusal**, not a mint
+([`keeper/internal/coremod/state/state.go:682`](../../keeper/internal/coremod/state/state.go)).
+
+The two-question table below it is therefore right in shape and wrong in one cell. *"What happens to
+a property declared `type: secret`? — **always** resolve, never rotate — whichever verb wrote it"*
+holds; what does not is reading "resolve" as "mint if absent". And the row above it is not quite
+verb-only either: `present` yielding to an existing value also decides what the **secret** resolve
+sees, because it swaps in the stored element — from which
+[`config.StripDeclaredSecrets`](../../shared/config/secret_field.go) has already removed the marker
+— and sets `noMint`. That is the single case where `present` over a populated field fails closed
+(`state.go:679-681`) rather than keeping quiet, and the paragraph at `:123-126` describing that case
+is complete only if "nothing is minted" is read as "and the step refuses", which is what it does.
+
+The full three-outcome account, the cites and the consequence for a re-pointed secret path live in
+[ADR-0083](0083-declared-secret-state-fields.md), amendment of the same date. Nothing here changes
+in the code or in the verb grammar: rotation stays inexpressible under every verb, which is what
+this section was written to say.

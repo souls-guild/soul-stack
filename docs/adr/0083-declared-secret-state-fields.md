@@ -729,3 +729,67 @@ outcome that function's contract rules out (`:417-431`). Relatedly, `secretProps
 `patternProperties` beside `properties`; the new dialect refuses `patternProperties` outright (it
 has no counterpart in the input DSL and zero authored uses in the tree), so that entry becomes dead
 weight rather than a rule.
+
+### Amendment 2026-09-02 (NIM-746): `present` over a populated field **fails closed** — the verb is not what decides a mint
+
+The 2026-08-25 amendment above states the secret rule as *"Every verb resolves a `type: secret`
+property the same way: an existing Vault value is kept, a missing one is minted"* (`:551-556`). The
+first half holds under every verb. **The second half does not**: nothing in the module mints on the
+strength of a value being missing. A mint needs a `generate_secret({…})` marker in the value the
+step proposes, and `core.state.present` deliberately arranges that a populated field never has one.
+
+**The deciding pair is the state of the field and the presence of the marker, not the verb.**
+`present` alone pre-reads state before any Vault work
+([`keeper/internal/coremod/state/state.go:207-216`](../../keeper/internal/coremod/state/state.go)):
+a field that already holds a non-nil value discards the incoming proposal, resolves the **stored**
+value instead, and carries `noMint` into the resolve. Every other verb resolves what the author
+proposed. The reasoning is recorded at that call site (`state.go:201-206`) and it is right — minting
+for a write that is then thrown away leaves a live credential nothing in state points at.
+
+So a derived path that holds no value has **three** outcomes, and only one of them mints:
+
+| the field | the value being resolved | outcome |
+|---|---|---|
+| absent / nil | carries `generate_secret({…})` | **mints** at the derived path (`state.go:684-689`) |
+| absent / nil | no marker | **fails closed** — *"has no value yet and none was requested -- set it to generate_secret({…})"* (`state.go:682`) |
+| populated — `present` only | the **stored** value, re-resolved | **fails closed** — *"is stored but was never minted in Vault -- core.state.present keeps the stored value and cannot mint one for it"* (`state.go:679-681`) |
+
+The first two rows are also what a verb **other than** `present` gets over a *populated* field: it
+resolves the proposal, so the marker decides and the field's contents do not. Only `present` reaches
+the third row, and only because it substituted the stored value for the proposed one.
+
+The third row is **forced rather than incidental**. `config.StripDeclaredSecrets`
+([`shared/config/secret_field.go:533-547`](../../shared/config/secret_field.go)) deletes every
+declared secret property on the way into state, so a stored element structurally cannot carry a
+marker; `requestedSecret` then returns `intent{mint: false}` (`state.go:597-600`), and under `noMint`
+even a stray marker that did arrive is refused rather than honoured (`state.go:590-594`).
+
+**What this changes for a reader** is the case of a schema change that re-points the path a secret is
+derived under. Taken at its word, *"a missing one is minted"* says such a change self-heals on the
+next run. It does not, and the two routes fail in **opposite** directions: a day-2 step re-resolving
+an already-stored record breaks **loudly**, while a create-class step carrying `generate_secret({…})`
+mints **silently** at the new path, leaving the incarnation holding a credential the running service
+does not know. That consequence is already recorded — from the code rather than from this ADR — in
+[ADR-019](0019-state-migration-dsl.md)'s amendment of 2026-09-01 (NIM-735), §7; the two texts
+disagreed until now, and this one was the wrong one.
+
+**A fourth shape fails in neither direction: an empty collection is a value.** The pre-read tests the
+**field**, and an empty list or map is non-nil, so `present` yields to it; a collection with no
+elements then offers no declared-secret position to resolve, and the step neither mints nor refuses.
+The live example of a re-pointed derived path is
+[`examples/service/redis/migrations/014_to_015.yml`](../../examples/service/redis/migrations/014_to_015.yml)
+— v14 minted under `secret/redis/<inc>/users/<name>`, v15 derives
+`secret/redis/<inc>/system_acl_users/<name>` — and it is exactly this shape: the step defaults the new
+field to `[]`, so a v14 incarnation's next day-2 run (`core.state.set` over
+`${ default(incarnation.state.system_acl_users, []) }`, e.g.
+[`scenario/restart/main.yml`](../../examples/service/redis/scenario/restart/main.yml) `:62-69`)
+writes an empty list and reports success. **Cite it for the path shape only** — its own description
+comment claims that run fails closed on the missing secret, and NIM-738 corrects it.
+
+**No code change.** The module does what this ADR wants: an incidental re-render must not rotate a
+live credential, and a mint whose value nothing can reach is worse than a refusal. What was
+imprecise is the sentence describing it — here, and in the three places that quoted it:
+[ADR-0084](0084-explicit-state-capture.md#secret-resolution-is-orthogonal-to-the-verb),
+[docs/keeper/modules.md](../keeper/modules.md) (`core.state.<verb>`) and
+[docs/scenario/orchestration.md](../scenario/orchestration.md) (§7.1, both halves), all corrected in
+the same commit. Rotation stays inexpressible, for the reason §4 gives.

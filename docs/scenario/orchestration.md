@@ -1136,6 +1136,14 @@ value instead — including for a field declared `type: secret`, where nothing i
 that was thrown away (a minted-then-discarded credential would be a live secret in Vault that
 nothing in state points at).
 
+That yielding is also what makes `present` the one verb that can **fail closed** on a secret. The
+stored element carries no `generate_secret({…})` request — declared secrets are stripped on the way
+into state — so if the derived Vault path is empty, the step has nothing to keep and nothing it is
+allowed to mint, and it refuses ("is stored but was never minted in Vault"). Under every other verb
+the same empty path refuses too, unless the proposed value carries a request. **A missing value is
+never minted on its own**; see [ADR-0083](../adr/0083-declared-secret-state-fields.md), amendment
+2026-09-02, for the three outcomes and the cites.
+
 #### `add` / `append` — growing a collection
 
 ```yaml
@@ -1368,10 +1376,13 @@ plaintext off the audit surfaces is the render-time seal, and reading such a reg
 
 What protects state instead is that the value is never in it. A field declared `type: secret` in
 `state_schema` lives in Vault and the capture writes a `vault:` reference rather than plaintext —
-and resolution is **orthogonal to the verb**: every verb that writes a field resolves that field's
-declared secrets the same way (keep an existing Vault value, mint a missing one), and none of them
-rotates a live credential ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4,
-[ADR-0084](../adr/0084-explicit-state-capture.md)). Output masking on the external GET channels
+and resolution is **orthogonal to the verb**: every verb that writes a field keeps that field's
+existing Vault values, and none of them rotates a live credential
+([ADR-0083](../adr/0083-declared-secret-state-fields.md) §4,
+[ADR-0084](../adr/0084-explicit-state-capture.md)). Minting is *not* the verb's either, and it is
+not automatic: a value is minted only where the step's own value carries `generate_secret({…})`,
+so an empty derived path resolved without one is a refusal rather than a fresh credential
+([ADR-0083](../adr/0083-declared-secret-state-fields.md), amendment 2026-09-02). Output masking on the external GET channels
 (`GET /incarnations`, `/history`) remains the independent second layer (see
 [keeper/operator-api.md → Secret masking](../keeper/operator-api.md)).
 
