@@ -251,6 +251,16 @@ func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[stri
 		if s == nil {
 			continue
 		}
+		// A field the form does not offer ([InputSchema.NotAskedOfOperator]) takes no
+		// default: the value is minted by
+		// the platform, so materializing one here would put a literal into the
+		// effective input and then have [validateInputValues] refuse the schema's own
+		// doing. `default` is outside the `type: secret` grammar ([ADR-0086] §6), but
+		// that refusal is reached through `state_schema` only — a type used from
+		// `input:` alone never passes it (see input_secret_type.go).
+		if s.NotAskedOfOperator() {
+			continue
+		}
 		raw, passed := out[name]
 		if passed && isAbsentValue(raw, s) {
 			passed = false
@@ -278,11 +288,27 @@ func mergeInputDefaults(schema InputSchemaMap, provided map[string]any) map[stri
 // has no default" form as the unconditional required — downstream detection
 // catches both with one match.
 func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
-	for name, s := range schema {
+	// Sorted for the reason [validateObjectFields] is: the first error aborts
+	// resolution, so map order would decide which of several missing fields the
+	// operator is told about.
+	for _, name := range sortedMapKeys(schema) {
+		s := schema[name]
 		if s == nil {
 			continue
 		}
 		if _, present := merged[name]; present {
+			continue
+		}
+		// A field the form does not offer is never required OF THE OPERATOR
+		// ([ADR-0086] §5) — neither by `required:` nor by `required_when:`, both of
+		// which sit below this line. The value is minted by the platform and the
+		// field is absent from the form by construction, so requiring it would demand
+		// something no caller can supply. [InputSchema.NotAskedOfOperator] rather than
+		// [InputSchema.isDeclaredSecret] because the form drops any field the strip
+		// leaves with nothing to fill, and the two must not disagree about one field. See
+		// input_secret_type.go for why the state-side refusal of `required:` does not
+		// cover a type reached from `input:`.
+		if s.NotAskedOfOperator() {
 			continue
 		}
 		// One spelling since [ADR-0086] §2: requiredness is the field's own bool,
@@ -310,7 +336,10 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 // simplifies the phase model. Value-expressions (`${…}`/`{{…}}`) are exempt from
 // enum/pattern at their level (see validateValueAt).
 func validateInputValues(schema InputSchemaMap, merged map[string]any) error {
-	for name, s := range schema {
+	// Sorted, as in [requireInputValues]: one offending value must be named first on
+	// every run, not whichever the map handed over.
+	for _, name := range sortedMapKeys(schema) {
+		s := schema[name]
 		if s == nil {
 			continue
 		}
@@ -382,6 +411,17 @@ func literalFor(s *InputSchema, v any) string {
 func validateValueAt(path string, s *InputSchema, v any) error {
 	if s == nil || s.Type == "" {
 		return nil
+	}
+
+	// A declared secret is not writable from input ([ADR-0086] §5, NIM-751). This
+	// runs FIRST, ahead of the absent-value and type checks: `type: secret` is in no
+	// value's type enum, so without it the caller would be told the password they
+	// sent "does not match type \"secret\"" — a message that names a vocabulary
+	// problem where the truth is that the property is not theirs to fill, and one
+	// that prints the literal unmasked ([literalFor] keys off `secret: true`, which
+	// a declared secret does not carry).
+	if s.isDeclaredSecret() {
+		return secretTypeNotWritable(path)
 	}
 
 	// An empty string for a string field without allow_empty is "not passed"
@@ -511,7 +551,10 @@ func validateObjectFields(path string, s *InputSchema, v any) error {
 	// field decides the error and map order would otherwise make it vary run to run.
 	for _, name := range sortedMapKeys(s.Properties) {
 		prop := s.Properties[name]
-		if prop == nil || !prop.Required {
+		// [InputSchema.NotAskedOfOperator]: the same rule as the top level
+		// ([requireInputValues]) — a property the form does not offer is never
+		// required of the operator, however the shared type spells it.
+		if prop == nil || !prop.Required || prop.NotAskedOfOperator() {
 			continue
 		}
 		fv, present := obj[name]
@@ -520,12 +563,32 @@ func validateObjectFields(path string, s *InputSchema, v any) error {
 		}
 	}
 
-	for k, fv := range obj {
+	// Sorted, for the same reason the requiredness loop above is: the FIRST error
+	// aborts resolution, so map order would decide which of several offending keys
+	// the operator is told about.
+	for _, k := range sortedMapKeys(obj) {
 		prop := s.Properties[k]
 		if prop == nil || prop.Type == "" {
+			// No usable schema from `properties:`. Either the key is undescribed —
+			// governed by `additional_properties`, which the MVP does not check in
+			// depth — or its own node is a `$type` the caller never resolved. One
+			// rule still has to reach here: a declared secret is refused wherever it
+			// is reachable, and `additional_properties: { $type: AclUser }` is a
+			// reachable position the form strip already covers ([ADR-0086] §5).
+			//
+			// A DESCRIBED key is judged by its own node even when that node carries
+			// no type. Handing it the additional-properties schema instead would
+			// refuse a legitimate value under a schema that was never written for it.
+			sub := prop
+			if sub == nil {
+				sub = s.additionalPropertiesSchema()
+			}
+			if err := refuseDeclaredSecretValues(path+"."+k, sub, obj[k]); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := validateValueAt(path+"."+k, prop, fv); err != nil {
+		if err := validateValueAt(path+"."+k, prop, obj[k]); err != nil {
 			return err
 		}
 	}

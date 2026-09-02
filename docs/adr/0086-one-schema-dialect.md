@@ -1,6 +1,6 @@
 ## ADR-0086. One schema dialect — `state_schema` is written in the input DSL
 
-**Status:** accepted, design-only — not implemented.
+**Status:** accepted, implemented — NIM-742 (engine), NIM-743 (`list-secret-paths`), NIM-751 (the input side of §5). NIM-744 (`examples/**` + the WB redis mirror) is outstanding.
 **Amends:** [ADR-003](0003-destiny-format.md) (the manifest's typed schema stops being JSON Schema and becomes the platform's own input DSL), [ADR-009](0009-scenario-dsl.md) (`state_schema` joins the `input:`/`output:` grammar instead of sitting beside it), [ADR-010](0010-templating.md) (`secret: true` and `type: secret` now live in one dialect and must be told apart by the reader, not by the file they are in), [ADR-062](0062-input-types.md) (`$type` becomes readable from `state_schema`, and its closed conflict set gains exactly one key there), [ADR-0083](0083-declared-secret-state-fields.md) (§1's declaration is re-spelled in the new dialect; §7's refusal of `required:` on a secret keeps its ground and changes its mechanism)
 **Implemented by:** NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (rewrite `examples/**` + the `wb-service-redis` mirror). Recorded by NIM-741, epic NIM-740.
 
@@ -42,7 +42,7 @@ there is no comparison because the two texts are not in the same language.
 The divergence is a symptom. The cause is that **`state_schema` is JSON Schema and
 everything else an author writes is not.** The input DSL has spent this repository's whole
 history acquiring a vocabulary — `additional_properties`, `min`, `min_length`, `min_items`,
-`exclusive_min` (`shared/config/input_schema.go:631-650`) — a field-level `required: true`,
+`exclusive_min` (`shared/config/input_schema.go:322-342`) — a field-level `required: true`,
 named types, `required_when`, `prefill_from_state`, `vault_scope`. `state_schema` has none
 of it. It has `additionalProperties`, `minimum`, and a `required: [names]` list, validated
 by a structural checker that deliberately declines to interpret most of what it reads:
@@ -156,7 +156,7 @@ settles that the question is now *askable*.
 
 Decided with the user 2026-09-01. This is **alignment onto an existing spelling**, not a
 new vocabulary: every target below is already the input DSL's word today
-(`shared/config/input_schema.go:631-650`, `docs/input.md`).
+(`shared/config/input_schema.go:322-342`, `docs/input.md`).
 
 | JSON Schema in `state_schema` | the input DSL word | authored sites |
 |---|---|---|
@@ -226,33 +226,121 @@ The rule, verbatim:
 > A property with `type: secret` in a shared type is not asked for on input — the platform
 > mints it; in `state_schema` it means a declared secret.
 
-##### Open question, deferred by the user 2026-09-01 — tracked as NIM-751
+##### Resolved 2026-09-02 by NIM-751 — candidate 1, in three places
 
-The sentence above is a **statement of intent that the engine does not yet enforce**, and
-it must not be read as one that does. Five things say so, each checkable:
+Deferred by the user 2026-09-01, decided 2026-09-02: the sentence above is now enforced
+by the engine. It was, when this ADR was written, a **statement of intent the engine did
+not enforce**, and five things said so:
 
-1. The input `type` vocabulary has no `secret` member, and there is no notion of a
+1. The input `type` vocabulary has no `secret` member, and there was no notion of a
    non-writable property anywhere in `shared/config/input_value.go`. A `type: secret`
-   property reached through `$type` from an `input:` block is a type the input validator
-   does not know.
+   property reached through `$type` from an `input:` block was a type the input validator
+   did not know.
 2. The property is **declared**, so `additional_properties: false` does not reject an
    operator-supplied value for it — a closed object rejects *undescribed* keys, and this
-   key is described.
-3. Such a value flows into `params.value` of the `core.state.set` step like any other
+   key is described. (Nor is `additional_properties` enforced on values at all:
+   `validateObjectFields` skips a field with no schema, `shared/config/input_value.go`.)
+3. Such a value flowed into `params.value` of the `core.state.set` step like any other
    input.
 4. The per-cell seal ([ADR-010](0010-templating.md) §7.4) is provenance-based on
-   `secret: true`, **not** on `type: secret`. The cell is therefore not sealed, and the
-   value is not masked on the render surfaces the seal covers.
-5. `StripDeclaredSecrets` (`shared/config/secret_field.go:506`) strips on the way into
+   `secret: true`, **not** on `type: secret`.
+5. `StripDeclaredSecrets` (`shared/config/secret_field.go:533`) strips on the way into
    Postgres — after transit through `apply_task_register`.
 
-So until NIM-751 is decided, "not asked for on input" rests on the author's good faith
-rather than on the engine, and `type: secret` in `types.yml` is meaningful **only from the
-state side**. Two candidate resolutions exist and **neither is chosen here**: refuse an
-operator-supplied value for such a property — candidate code
-`input_secret_type_not_writable`, reserved and deliberately **not** introduced by this ADR
-— and extend the seal to `type: secret`; or refuse an `input:` reference to a type that
-carries a secret at all.
+**The decision is candidate 1: refuse an operator-supplied value.** Silently dropping it
+was the alternative and was rejected by the user for the case that matters — a client that
+sends a password would be told the request was accepted, and the operator would believe
+the value they typed is in force while the platform mints a different one. Candidate 2 —
+refusing an `input:` reference to a type that carries a secret at all — stays rejected:
+§5's premise is that **one** type is shared between the form and the state, and refusing
+the reference forbids exactly the sharing this section grants.
+
+It lands in **three** places, because "not asked for" has three spellings here and closing
+any two of them leaves the rule resting on the author:
+
+1. **It is not on the form.** `stripFormSecrets`
+   (`keeper/internal/artifact/scenario_types.go:203-321`), called at
+   `keeper/internal/artifact/scenarios.go:304`. The operator form travels as a raw
+   `map[string]any` re-emitted from YAML on a path that never builds an `InputSchema`, so
+   the strip lives there rather than in the typed walk — two walks, one marker
+   (`config.SecretTypeName`). It runs **after** `$type` substitution (before it there is
+   nothing to strip) and **only** on the `input:` path: `rawStateSchema` projects through
+   the same resolver and must keep its declared secrets, which is §8's whole point.
+
+   ★ **The survival rule is emptiness, not contagion**, and the three positions differ.
+   `items:` is an array's whole content, so a minted element takes the array with it.
+   `additional_properties:` is one of the two ways an object describes content (§14): a
+   minted one loses that KEY and the object survives on its `properties:` — dropping the
+   object outright took its fillable properties with it, which is over-reach, not
+   enforcement. ⚠ Losing the key is a FORM fact, not a gate fact: undescribed keys were
+   never checked in depth (point 2 above) and still are not, so what the gate refuses
+   under a dropped open map is the minted VALUE, not the arbitrary key. `properties:` is stripped member by member, and an object left with none
+   goes, because a widget with no inputs is not a form field. A `properties: {}` the
+   author wrote was not emptied by the strip, so it does not itself trigger the rule —
+   which is not a promise the node survives: an object whose only other content is a
+   minted open map still has nothing to fill, and goes. The
+   `form:` layout beside the schema is filtered by the same pass
+   (`dropStrippedFormFields`), because a section naming a field whose schema just went
+   away would ship a labelled input with nothing behind it: "not on the form" has to be
+   true of both halves of the reply. Only names THIS strip removed are dropped — a
+   `form:` naming a parameter that never existed stays, because that is an author error
+   `form_field_unknown` exists to report.
+2. **It is never required of the operator.** §7's refusal of `required:` on a secret runs
+   off `state_schema` through `CollectSecretFields`, so a type reached **only** from
+   `input:` never passes it. Requiredness therefore fails closed in the value path
+   instead — `requireInputValues` and `validateObjectFields` skip it, and
+   `mergeInputDefaults` materializes no `default:` for one (same gap, same reason).
+   `required_when:` is skipped by the same line and is therefore inert on such a
+   property too, deliberately: a conditional demand for a value no caller can produce is
+   the unconditional one with an extra step. ★ The predicate is `NotAskedOfOperator`,
+   **not** `isDeclaredSecret`: it applies the same emptiness rule the strip does, through
+   `items`, `additional_properties` AND `properties`. The form drops a field with nothing
+   left to fill, so requiredness must drop the same field,
+   or the operator is told a field they were never offered is required. The two walks
+   are separate code over two representations and have already disagreed twice, so they
+   are pinned against each other by a differential test rather than by this paragraph
+   (`TestStripFormSecrets_AgreesWithTypedPredicate`); `NotAskedOfOperator` is exported
+   for no other reason.
+3. **A value supplied anyway is refused.** `input_secret_type_not_writable` — the code
+   reserved above, now spent — as the sentinel `config.ErrSecretTypeNotWritable`
+   (`shared/config/input_secret_type.go`), wrapped by `scenario.ErrInputInvalid` into a
+   422. ★ The refusal runs **ahead of the type check** in `validateValueAt`: `secret` is
+   in no value's type enum, so without that ordering the caller is told the password
+   "does not match type `secret`" — a vocabulary complaint where the truth is that the
+   property is not theirs to fill, and one printed with the literal **unmasked**, since
+   `literalFor` keys off `secret: true`, which a declared secret does not carry. The
+   refusal names the path (`$.users[0].password`) and never the value: it lands in
+   `incarnation.StatusDetails` and in audit.
+
+   ★ **It reaches `additional_properties` too, and that is a separate mechanism.**
+   `validateObjectFields` skips a key the object's `properties:` does not describe —
+   point 2 above — so the ordinary walk has no reach there at all, while the form strip
+   does. Left alone that is the worst pair available: the property is off the form and
+   the value is accepted anyway. `refuseDeclaredSecretValues`
+   (`shared/config/input_secret_type.go`) closes it by walking the
+   additional-properties schema for **declared secrets only** — no type match, no enum,
+   no pattern. Widening that walk into real validation of undescribed values is a
+   different decision with its own compatibility cost and is **not** taken here.
+
+**The seal is deliberately not extended.** Candidate 1 as written above paired the refusal
+with widening the per-cell seal from `secret: true` to `type: secret`. With the value
+refused at the input gate it never reaches a cell, so a seal over it would mask nothing —
+and a masking rule that cannot fire is the kind of guard that reads as enforced and is
+not, which is §6's own argument. Point 4 above therefore stands as a fact about the seal,
+not as a gap.
+
+Writing `type: secret` **directly** in an `input:` block was never the open half: it is
+refused at load as `input_type_invalid`, positionally, with a hint naming `secret: true`
+instead. Only the `$type` route was open.
+
+⚠ **Offline (L0) it is two places, not three.** `keeper/internal/trial` does not resolve
+`$type` at all, so a trial fixture sees `{$type: T}` with an empty `Type` and
+`validateValueAt` returns before the refusal. A `tests/<case>/case.yml` supplying the
+password therefore passes L0 and 422s in production. This is the pre-existing absence of
+the whole `$type` resolve from the trial harness, not something NIM-751 introduced — and
+it costs more than this rule: type, `enum`, `pattern` and nested `required` are all
+unchecked in L0 for a `$type` field. It is exactly the L0↔prod drift the shared input
+gate exists to prevent, and it is **NIM-754**; remove this paragraph when that lands.
 
 #### 6. The `type: secret` node grammar stays closed to `type` / `key` / `label`
 
@@ -484,7 +572,15 @@ from a minified bundle** — if it is not, nested and array-item required childr
 lose their marker in the form. `soul-stack-web` must confirm from source. This is a
 correction to an earlier reading of this file, which recorded the branch as top-level only.
 
-#### 14. ★ OPEN QUESTION, blocking NIM-742 — recorded, not resolved
+#### 14. ★ RESOLVED by NIM-742 — recorded here as it was written
+
+> **Resolved 2026-09-01 with the user as candidate 1 below**, and implemented in the
+> same ticket: an object describes its contents through `properties` OR
+> `additional_properties`, and the bare `false` counts as neither because it forbids
+> keys rather than describing them (`shared/config/input_schema.go:1155-1172`). The
+> section is left in its original wording — rewriting it is NIM-741's, the ticket that
+> owns this file — but it must not be read as an open question, because the ADR's
+> Status line says the ADR is implemented and this heading used to say the opposite.
 
 **Map-shaped state fields cannot be expressed in the input dialect as it stands.**
 

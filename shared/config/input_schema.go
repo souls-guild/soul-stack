@@ -57,10 +57,12 @@ const (
 	// the deep merge ADR-062 refused; the exception is granted to the use site, where
 	// the added property's Vault address is readable, not to the catalog.
 	//
-	// ★ What this does NOT do: make a `type: secret` property safe to reach from an
-	// `input:` block. ADR-0086 §5 states the rule — such a property is not asked for on
-	// input — and then records, at length, that the engine does not yet enforce it
-	// (deferred as NIM-751). Until that lands, the guarantee rests on the author.
+	// ★ What this does NOT do: settle what happens when such a property is reached
+	// from an `input:` block. That is [ADR-0086] §5's rule — not asked for on input,
+	// the platform mints it — and it is enforced OUTSIDE the dialect, because by the
+	// time a shared type has been substituted into a form there is no dialect left to
+	// read: the node is an ordinary resolved property. See input_secret_type.go
+	// (NIM-751) for the three places that carry it.
 	dialectTypes
 )
 

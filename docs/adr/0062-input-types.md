@@ -123,13 +123,12 @@ nowhere.
 `state_schema` it means a declared secret.* One `AclUser` can then carry `password` once and serve
 both the `input:` of `add_user` and the `redis_users` field of `state_schema`, which is the
 duplication this ADR exists to remove, applied to the one property that could not participate
-before. ⚠ **The input half is deferred, not decided — tracked as NIM-751, and must never be
-presented as built.** Two things are missing today and neither is a detail: the engine has **no
-`secret` member in the input type vocabulary** and **no notion of a non-writable property**, so an
-operator can simply supply the value; and the render seal is provenance-based on `secret: true`,
-not on `type: secret`, so nothing seals what such a property would carry. `input_secret_type_not_writable`
-is **reserved for NIM-751 and is not introduced by this amendment**. What is decided now is the
-`state_schema` half and the legality of the declaration in the catalog.
+before. The input half was deferred when this amendment was written and is **decided and built
+since 2026-09-02 (NIM-751, [ADR-0086](0086-one-schema-dialect.md) §5)**: such a property is
+**stripped from the projected operator form**, is **never required and takes no default**, and a
+value supplied anyway is **refused** — `input_secret_type_not_writable`, reserved by this amendment
+and spent by that one. The render seal stays provenance-based on `secret: true` deliberately: a
+value refused at the input gate reaches no cell to mask.
 
 **(3) The `$type` overlay widens by exactly one key — `properties` — and only in `state_schema`.**
 Frame this as a widening of an **existing closed overlay set**, not as a carve-out. `$type`

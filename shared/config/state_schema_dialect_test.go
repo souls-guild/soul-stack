@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -496,10 +497,12 @@ func TestTypesYML_MayDeclareASecret(t *testing.T) {
 		t.Fatalf("password = %+v, want the declared secret keyed by name", pw)
 	}
 
-	// ★ The rule ADR-0086 §5 states — such a property is not asked for on input — is a
-	// statement of INTENT the engine does not enforce yet (deferred as NIM-751). This
-	// asserts what is true today so the gap is visible in a test rather than only in
-	// prose: the type is referencable from `input:` and nothing refuses it.
+	// ★ The rule ADR-0086 §5 states — such a property is not asked for on input — is
+	// enforced since NIM-751, and enforced OUTSIDE this parse: referencing the type
+	// from `input:` stays legal, which is the point of §5 (one type, both contracts).
+	// What the reference no longer buys is a form field, a requirement, or the right
+	// to supply a value — see input_secret_type_test.go. This asserts the half that
+	// belongs here: the reference itself is not refused.
 	scn := `name: create
 input:
   user: { $type: AclUser }
@@ -733,17 +736,15 @@ func TestStateSchema_RequiredFalseOnASecretIsRefusedTruthfully(t *testing.T) {
 	}
 }
 
-// ★ What actually happens when an operator supplies a value for a `type: secret`
-// property reached through `$type` from an `input:` block.
+// ★ What happens when an operator supplies a value for a `type: secret` property
+// reached through `$type` from an `input:` block.
 //
-// ADR-0086 §5 records the input side as deferred (NIM-751) and describes the value as
-// flowing through "like any other input". It does not: `secret` is not in the input type
-// vocabulary, so `valueMatchesType` returns false and the value is REFUSED — with a
-// type-vocabulary message rather than the reserved `input_secret_type_not_writable`.
-//
-// Fail-closed, which is the right direction, but neither documented nor pinned. This
-// pins it so NIM-751 starts from the behaviour rather than from the ADR's account of it,
-// and so the day someone makes `secret` a known input type this test says what changed.
+// When this test was written the value was refused only by accident — `secret` is in no
+// value's type enum, so `valueMatchesType` returned false and the message named a
+// vocabulary problem while printing the literal unmasked. NIM-751 made it a rule:
+// [ErrSecretTypeNotWritable], ahead of the type check, naming the path and never the
+// value. The assertion below pins the SENTINEL rather than the word "secret", which the
+// accidental message contained too — matching prose could not tell the two apart.
 func TestInput_SecretPropertyThroughTypeRefIsRefusedAtValueTime(t *testing.T) {
 	cat, _ := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
@@ -769,7 +770,10 @@ tasks: []
 	if err == nil {
 		t.Fatal("an operator-supplied value for a type: secret property was ACCEPTED — that is the NIM-751 hole opening")
 	}
-	if !strings.Contains(err.Error(), "secret") {
-		t.Errorf("the refusal does not name the type: %v", err)
+	if !errors.Is(err, ErrSecretTypeNotWritable) {
+		t.Errorf("refused under the wrong rule (the accidental type-vocabulary refusal?): %v", err)
+	}
+	if strings.Contains(err.Error(), "operator-supplied") {
+		t.Errorf("the refusal echoes the value the caller sent: %v", err)
 	}
 }

@@ -296,7 +296,17 @@ func listFromDir(serviceRoot, dir string, logger *slog.Logger) ([]Scenario, erro
 		if !ok {
 			continue
 		}
-		sc.InputSchema = resolveScenarioTypeRefs(sc.InputSchema, catalog)
+		// Resolve, then strip: a declared secret reaches an operator form only
+		// through `$type`, so it exists to be stripped only after the substitution
+		// ([ADR-0086] §5, NIM-751 — see stripFormSecrets for why this is not inside
+		// the resolver, which state_schema shares).
+		resolvedSchema := resolveScenarioTypeRefs(sc.InputSchema, catalog)
+		sc.InputSchema = stripFormSecrets(resolvedSchema)
+		// `form:` is the presentation half of the same reply, and it names input
+		// fields by name. A name whose schema just went away would ship to the UI as
+		// a labelled field with nothing behind it — "not on the form" has to be true
+		// of both halves or it is not true.
+		sc.Form = dropStrippedFormFields(sc.Form, resolvedSchema, sc.InputSchema)
 		out = append(out, sc)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

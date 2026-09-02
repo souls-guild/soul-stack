@@ -184,14 +184,42 @@ types:
 
 **A shared type may declare `type: secret`.** The same type is then referenceable from both sides, and the member means one thing in each: a property with `type: secret` in a shared type is not asked for on input — the platform mints it; in `state_schema` it means a declared secret ([ADR-0083](adr/0083-declared-secret-state-fields.md), [`docs/service/manifest.md`](service/manifest.md#type-secret--a-value-that-lives-in-vault-not-in-state)).
 
-> **The input side of this is NOT worked out — tracked as NIM-751.** Only the
-> `state_schema` half of the sentence above is designed. The engine has no `secret` member
-> in the input type vocabulary and no notion of a non-writable property, so **today an
-> operator can supply such a value**, and the render seal is provenance-based on
-> `secret: true`, not on `type: secret` ([`docs/templating.md` §7.4](templating.md)). Do
-> not read "not asked for on input" as implemented behaviour: what it will take to make it
-> true — the vocabulary member, the refusal to accept the value, the diagnostic — is
-> NIM-751's, and no error code is reserved for it here.
+**What "not asked for on input" means, concretely** (NIM-751,
+[ADR-0086 §5](adr/0086-one-schema-dialect.md)) — three separate guarantees, because the
+form, requiredness and the submitted value are three different surfaces:
+
+- **The property is not on the form.** `GET /v1/services/{name}/scenarios` strips it from
+  the projected `input_schema` after resolving `$type`, so a UI has no field to render. A
+  field is dropped when the strip leaves it with nothing to fill: an array of minted
+  values, an object whose every property is minted, an object whose only content is a
+  minted open map. A field that keeps ordinary properties BESIDE a minted open map
+  stays and loses only the open half. The `form:` layout in the same reply is
+  filtered to match, so a section cannot label a field whose schema has gone; a `form:`
+  naming a parameter that never existed is left alone, because that is the author error
+  `form_field_unknown` reports. The `state_schema` projection is untouched: there a
+  declared secret is the point.
+- **It is never required, and takes no default.** `required: true` (and `required_when:`)
+  written on such a property inside a shared type is ignored on the input side — it is
+  refused outright when the type is reached from `state_schema` — and a `default:` on one
+  is never merged into the effective input. Neither can make an operator produce a value
+  only the platform can. The same holds one level up: a container the form drops whole (an
+  array or open map whose values are all minted) is not required either.
+- **A value supplied anyway is refused** — `input_secret_type_not_writable`, HTTP 422. The
+  message names the offending path (`$.users[0].password`) and never the value. This is a
+  refusal rather than a silent drop on purpose: a caller told "accepted" would believe the
+  password it sent is in force while the platform mints a different one. The refusal
+  reaches values under `additional_properties` as well, even though ordinary value
+  validation does not descend there — that position is checked for declared secrets and
+  for nothing else.
+
+> **Not to be confused with `secret: true`.** On a form a secret is the *modifier*
+> `secret: true` on an ordinary field — the operator types the value, it is masked, and a
+> `vault:` reference is allowed within the field's `vault_scope`. `type: secret` says the
+> opposite: the platform issues the value and it never enters state. Writing `type: secret`
+> directly in an `input:` block is refused at load (`input_type_invalid`, with the position
+> of the offending `type:` and a hint naming `secret: true`). The per-cell render seal
+> ([`docs/templating.md` §7.4](templating.md)) stays provenance-based on `secret: true`: a
+> declared secret has no cell to seal, because its value is refused at the input gate.
 
 ### Link: `$type: <Name>`
 
@@ -231,6 +259,13 @@ Resolution occurs at the input stage of Keeper (the same phase as merge defaults
 
 The scenario-directory endpoint is **`GET /v1/services/{name}/scenarios`** ([`keeper/internal/api/huma_service_op.go`](../keeper/internal/api/huma_service_op.go), operation `listServiceScenarios`; [`docs/keeper/openapi.yaml`](keeper/openapi.yaml)) — there is no bare `/v1/scenarios` route. When projecting a scenario's schema into that DTO the backend **resolves `$type` BEFORE projection**: the client receives an **already expanded** inline schema (the UI builds the form in a familiar shape, without knowing about `types:`) plus the forward-compat annotation **`x-type: <Name>`** on the node where `$type` stood. The UI ignores it today; for growth, it allows a specialized widget for a named type without breaking current clients. `x-type` is a read-only DTO annotation; it is not written in the YAML source.
 
+**After the resolve, before the projection, declared secrets are stripped** — a property a
+shared type declares as `type: secret` is not in the returned `input_schema` at all (see
+"A shared type may declare `type: secret`" above). The order is what makes that possible:
+the secret only ever arrives through `$type`, so there is nothing to strip until the
+substitution has happened. The sibling endpoint `GET /v1/services/{name}/state-schema`
+resolves through the same code and **keeps** its declared secrets.
+
 ### Error classes
 
 | Code | When |
@@ -240,6 +275,7 @@ The scenario-directory endpoint is **`GET /v1/services/{name}/scenarios`** ([`ke
 | `input_type_duplicate` | Duplicate name in section `types:`. |
 | `input_type_ref_conflict` | `$type` is specified **together** with the node's own shape. The checked set is closed and is exactly `{type, properties, items}` ([`shared/config/input_types.go`](../shared/config/input_types.go)) — a reference node is either `$type` or its own schema. |
 | `input_type_ref_overlay_conflict` | **`state_schema` only.** A key the reference overlays is present on **both** the reference node and the resolved type. |
+| `input_secret_type_not_writable` | A value was submitted for a property a shared type declares as `type: secret`. Not a schema diagnostic and **not a machine-readable wire code**: it is a runtime refusal at the input gate, and the name travels as text inside the 422 `input_invalid` detail (inside `shared/config` the sentinel `config.ErrSecretTypeNotWritable` is what Go callers match on; the keeper re-wraps it into `ErrInputInvalid` with `%v`, so above that layer only the text survives). Names the path, never the value. |
 
 **The overlay boundary — `$type` + `properties:` is a `state_schema` privilege.** A reference node has always been allowed to overlay a few of its own keys onto the resolved type: `description`, the field-level `required: <bool>` and `required_when` (`applyRefOverlay`, [`shared/config/input_types.go`](../shared/config/input_types.go)). In `state_schema` that overlay widens by **exactly one key — `properties`** — so a state field can reuse a shared type and add the properties that field alone carries ([ADR-0086](adr/0086-one-schema-dialect.md)).
 

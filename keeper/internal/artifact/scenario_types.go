@@ -6,6 +6,8 @@ import (
 	"log/slog"
 
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // typesCatalogFile — catalog of reusable named types at the root of the
@@ -194,6 +196,171 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 		default:
 			out[k] = v
 		}
+	}
+	return out
+}
+
+// stripFormSecrets removes every declared secret (`type: secret`) from a
+// scenario's resolved input schema before it is projected as the operator FORM
+// ([ADR-0086] §5, NIM-751). The platform mints such a value; asking a human for it
+// is the one thing the declaration means it must never do.
+//
+// It runs AFTER [resolveScenarioTypeRefs] and only on the `input:` path, and both
+// halves of that are load-bearing:
+//
+//   - after, because the secret arrives THROUGH `$type` — a shared type carrying
+//     one is legal ([ADR-0086] §5) and a `type: secret` written directly in
+//     `input:` is refused at load (`input_type_invalid`). Before the substitution
+//     there is nothing to strip;
+//   - only on `input:`, because `rawStateSchema` (state_schema.go) projects through
+//     the SAME resolver and must keep its declared secrets — that projection is the
+//     state contract, where a declared secret is the point.
+//
+// This is the raw-map twin of the typed rule in shared/config/input_secret_type.go
+// ([config.InputSchema.NotAskedOfOperator]). Two walks, because the form travels as
+// `map[string]any` re-emitted from YAML on a code path that never builds a
+// [config.InputSchema] — the split predates this and is why the strip cannot live in
+// one place. They have already drifted apart twice, so they are pinned against each
+// other by TestStripFormSecrets_AgreesWithTypedPredicate rather than by this comment.
+//
+// What survives is decided by EMPTINESS, not by contagion: see [stripFormSecretNode],
+// which is where that rule and its three positions are written out.
+func stripFormSecrets(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	out := make(map[string]any, len(schema))
+	for name, node := range schema {
+		if kept, keep := stripFormSecretNode(node); keep {
+			out[name] = kept
+		}
+	}
+	return out
+}
+
+// stripFormSecretNode returns the node without its declared secrets, and whether
+// the node survives at all. A non-map node (a malformed schema the best-effort
+// projection tolerates) is returned untouched — this walk removes, it does not
+// judge.
+//
+// **The survival rule is emptiness, not contagion.** A container goes only when the
+// strip left it with nothing an operator could fill AND it described something
+// before: an object carrying one minted secret among ordinary properties keeps its
+// place and loses that property, while an object whose every property is minted is a
+// widget with no inputs and goes. The three positions differ, and each for its own
+// reason:
+//
+//   - `items:` is an array's WHOLE content. A minted element schema leaves no
+//     element to author, so the array goes with it.
+//   - `additional_properties:` is one of two ways an object describes content
+//     ([ADR-0086] §14). A minted one loses the KEY, so the form stops offering the
+//     open half, and the object survives on its `properties:` if it has any. Dropping
+//     the object outright took its fillable properties with it, which is the
+//     over-reach this rule replaced. ⚠ Losing the key is a FORM fact: the value gate
+//     never checked undescribed keys in depth and still does not — what it refuses
+//     under a dropped open map is the minted VALUE, not the arbitrary key.
+//   - `properties:` is stripped member by member.
+//
+// A `properties: {}` the author wrote is not "emptied by the strip" and does not
+// trigger the rule — hence `hadContent`, which counts only content that was there to
+// lose. `additional_properties: false` is not content either: it forbids keys rather
+// than describing them, and rides through untouched.
+func stripFormSecretNode(node any) (any, bool) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return node, true
+	}
+	if t, isStr := stringValue(m["type"]); isStr && t == config.SecretTypeName {
+		return nil, false
+	}
+
+	out := make(map[string]any, len(m))
+	var hadContent, hasContent bool
+	for k, v := range m {
+		switch k {
+		case "items":
+			kept, keep := stripFormSecretNode(v)
+			if !keep {
+				return nil, false
+			}
+			out[k] = kept
+		case "additional_properties":
+			sub, isMap := v.(map[string]any)
+			if !isMap {
+				out[k] = v
+				continue
+			}
+			hadContent = true
+			kept, keep := stripFormSecretNode(sub)
+			if !keep {
+				continue
+			}
+			out[k] = kept
+			hasContent = true
+		case "properties":
+			pm, isMap := v.(map[string]any)
+			if !isMap {
+				out[k] = v
+				continue
+			}
+			if len(pm) > 0 {
+				hadContent = true
+			}
+			kept := stripFormSecrets(pm)
+			out[k] = kept
+			if len(kept) > 0 {
+				hasContent = true
+			}
+		default:
+			out[k] = v
+		}
+	}
+	if hadContent && !hasContent {
+		return nil, false
+	}
+	return out, true
+}
+
+// dropStrippedFormFields removes from the `form:` projection every field naming an
+// input parameter [stripFormSecrets] just took away, and every section that had
+// fields and has none left ([ADR-0086] §5, NIM-751).
+//
+// It compares the two schemas rather than filtering against the surviving one,
+// deliberately. A `form:` field naming a parameter that never existed is an AUTHOR
+// error, reported by soul-lint as `form_field_unknown`
+// (shared/config/form_layout.go); silently hiding it here would take that error's
+// only visible symptom away. Only names this strip removed are dropped.
+//
+// A section emptied by the drop goes with it: a heading with no fields under it is
+// a hole in the form where the UI expects a group. A section that was already empty
+// is left exactly as authored — this function removes, it does not tidy.
+func dropStrippedFormFields(form *ScenarioForm, before, after map[string]any) *ScenarioForm {
+	if form == nil || len(form.Sections) == 0 {
+		return form
+	}
+	stripped := make(map[string]bool)
+	for name := range before {
+		if _, kept := after[name]; !kept {
+			stripped[name] = true
+		}
+	}
+	if len(stripped) == 0 {
+		return form
+	}
+
+	out := &ScenarioForm{Sections: make([]ScenarioFormSection, 0, len(form.Sections))}
+	for _, sec := range form.Sections {
+		kept := make([]ScenarioFormField, 0, len(sec.Fields))
+		for _, f := range sec.Fields {
+			if !stripped[f.Name] {
+				kept = append(kept, f)
+			}
+		}
+		if len(sec.Fields) > 0 && len(kept) == 0 {
+			continue
+		}
+		sec.Fields = kept
+		out.Sections = append(out.Sections, sec)
 	}
 	return out
 }
