@@ -359,7 +359,6 @@ tasks:
       path: /tmp/noop
       content: x
   - name: record the version
-    on: keeper
     module: core.state.set
     params:
       field: redis_version
@@ -403,7 +402,6 @@ tasks:
       path: /tmp/noop
       content: x
   - name: record the version
-    on: keeper
     module: core.state.set
     params:
       field: redis_version
@@ -475,7 +473,6 @@ tasks:
     params:
       name: "${ input.name }"
   - name: record the user
-    on: keeper
     module: core.state.set
     params:
       field: last_user
@@ -1459,19 +1456,16 @@ tasks:
     params:
       name: "${ input.name }"
   - name: record the last user
-    on: keeper
     module: core.state.set
     params:
       field: last_user
       value: "${ input.name }"
   - name: keep the owner as first written
-    on: keeper
     module: core.state.present
     params:
       field: owner
       value: "${ input.name }"
   - name: drop the migration flag
-    on: keeper
     module: core.state.unset
     params:
       field: migrating
@@ -1528,7 +1522,6 @@ tasks:
     params:
       name: alice
   - name: record the owner
-    on: keeper
     module: core.state.set
     when: "input.action == 'create'"
     params:

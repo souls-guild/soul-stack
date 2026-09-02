@@ -11,7 +11,6 @@ CloudDriver. Input:
 
 ```yaml
 - name: Issue ready-made VM tokens
-  on: keeper
   module: core.bootstrap.issued
   register: bootstrap
   params:

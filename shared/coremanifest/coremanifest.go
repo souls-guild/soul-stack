@@ -114,6 +114,14 @@ func mustBuild() *Registry {
 		if _, dup := mods[addr]; dup {
 			panic(fmt.Sprintf("coremanifest: duplicate core module %q", addr))
 		}
+		// Side is STAMPED from [keeperSideCore] rather than written on each
+		// declaration (NIM-749). A plugin states its own side in its schema
+		// document, so the field has to exist on [schema.Module] — and the moment
+		// it does, a core declaration that left it empty would answer "soul" for
+		// `core.state` while the catalog three files away answers "keeper". One
+		// value, derived where it is already decided, is the only version of this
+		// that cannot drift.
+		m.Side = SideOf(addr)
 		mods[addr] = m
 	}
 	return &Registry{mods: mods}

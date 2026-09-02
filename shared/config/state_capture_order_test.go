@@ -44,7 +44,6 @@ tasks:
       cmd: "redis-cli config set requirepass ${ register.gen.stdout }"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -98,7 +97,6 @@ tasks:
       cmd: "test ${ register.probe.rc } -eq 0"
   - name: Capture the admin password once the service is ready
     module: core.state.set
-    on: keeper
     vars:
       settled: "${ register.ready.rc }"
     params:
@@ -155,7 +153,6 @@ tasks:
           cmd: "redis-cli config set requirepass ${ register.gen.stdout }"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -192,7 +189,6 @@ tasks:
       cmd: "openssl rand -hex 16"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -217,13 +213,11 @@ tasks:
       cmd: "openssl rand -hex 16"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
   - name: Mirror it into the rotation field
     module: core.state.set
-    on: keeper
     params:
       field: admin_password_previous
       value: "${ register.gen.stdout }"
@@ -243,7 +237,6 @@ tasks:
       cmd: "openssl rand -hex 16"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -281,7 +274,6 @@ tasks:
       cmd: "echo ${ register.port.stdout }"
   - name: Capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -330,7 +322,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"
@@ -366,7 +357,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"
@@ -407,7 +397,6 @@ tasks:
       cmd: "echo ${ incarnation.state.endpoint }"
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"
@@ -421,7 +410,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     register: captured
     params:
       field: endpoint
@@ -443,7 +431,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"
@@ -462,7 +449,6 @@ name: create
 tasks:
   - name: Capture a computed field
     module: core.state.set
-    on: keeper
     vars:
       target: endpoint
     params:
@@ -509,7 +495,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"

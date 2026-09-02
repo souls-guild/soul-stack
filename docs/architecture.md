@@ -310,7 +310,7 @@ This section applies to both **pull** and **push** transports. This is a single 
 - **Core modules** - statically built into the `soul` binary. Cover the vast majority of Destiny: the exact list is fixed [ADR-015](#adr-015-core-mvp-modules-exact-list) – 18 Soul-side (`pkg`/`file`/`directory`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`; `directory` split from `file` per Amendment 2026-07-17, `service` also gains `disabled`/`masked`) + 3 Keeper-sides (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
 - **Custom modules** - executable artifacts under `/var/lib/soul-stack/modules/<alias>/`, one executable per slot. The `soul` binary runs one as a sub-process over the stdio protocol (see below), naming the module it wants as a **subcommand**; one artifact serves several modules. By addressing they live under their registration alias (`redis`, `acme`, `community`, …).
 
-> **Soul-side vs Keeper-side core modules.** The vast majority of core modules (`pkg`, `file`, `service`, `user`, `exec`, `template`, …) are **Soul-side**: executed on the host `soul`-binary. Some of the core modules are **Keeper-side**: they operate on the keeper's registries (Postgres souls+coven, Redis cache, logs) and are executed on the keeper itself. The first Keeper-side core is `core.soul.registered` (SID binding to coven tags of the souls registry; full specification is [`docs/keeper/modules.md`](keeper/modules.md)). Dispatcher - scenario key `on:` ([`docs/scenario/orchestration.md §3`](scenario/orchestration.md)): for Soul-side core `on:` is omitted or contains coven tags; for Keeper-side core `on: keeper`. The addressing (`<namespace>.<module>.<state>`) and the SoulModule contract are the same for both parties. **The side is in fact decided by the address** — the two core registries are disjoint — and [ADR-0087](adr/0087-task-side-derived-from-module-address.md) makes the routing derive from it, retiring `on: keeper` on a core address; accepted, **not implemented**, so everything above still describes the engine that ships today.
+> **Soul-side vs Keeper-side core modules.** The vast majority of core modules (`pkg`, `file`, `service`, `user`, `exec`, `template`, …) are **Soul-side**: executed on the host `soul`-binary. Some of the core modules are **Keeper-side**: they operate on the keeper's registries (Postgres souls+coven, Redis cache, logs) and are executed on the keeper itself. The first Keeper-side core is `core.soul.registered` (SID binding to coven tags of the souls registry; full specification is [`docs/keeper/modules.md`](keeper/modules.md)). **The side is decided by the ADDRESS** — the two core registries are disjoint — and [ADR-0087](adr/0087-task-side-derived-from-module-address.md) makes the routing derive from it, retiring `on: keeper` on a core address; implemented in NIM-749, so `on:` now means only "which covens" ([`docs/scenario/orchestration.md §3`](scenario/orchestration.md)). The addressing (`<namespace>.<module>.<state>`) and the SoulModule contract are the same for both parties.
 
 When applying Destiny step `soul`:
 1. parses the module name according to the scheme `<namespace>.<module>.<state>` (see "Addressing modules");
@@ -836,12 +836,11 @@ input:
       profile:  { type: string }
       count:    { type: integer, min: 3, max: 6 }
 
-# Steps - everyone knows where to execute (on: keeper / on: [coven,...] / on: omitted)
+# Steps - the module address decides the side; on: selects covens ([coven,...] / omitted)
 tasks:
   - name: provision
-    on: keeper                        # on the keeper itself, via CloudDriver
     when: input.spawn != null
-    module: core.cloud.provisioned    # keeper-side core (ADR-017)
+    module: core.cloud.provisioned    # keeper-side core (ADR-017) — the address routes it
     state: created
     params:
       provider: "${ input.spawn.provider }"
@@ -863,14 +862,12 @@ tasks:
   # set/present/add/append/modify/remove/unset (the ADR-057 verb set).
   # scenario/orchestration.md §7.1.
   - name: record what we deployed
-    on: keeper
     module: core.state.set
     params:
       field: redis_version
       value: "${ input.redis_version }"
 
   - name: record the configured users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users
@@ -879,7 +876,7 @@ tasks:
 
 The `on:` key decides where the step is executed: `keeper` - locally on the keeper, `[coven, …]` - intersection of covens (⊆ incarnation), omitted - the entire incarnation. Volatile per-host filter based on `register:` of the previous probe - key `where:` ([ADR-008](adr/0008-coven-stable-tags.md)). One scenario mixes keeper and host steps in a linear flow, in the same task language ([ADR-009](adr/0009-scenario-dsl.md)). It is one linear task language for both keeper and host steps. Normative semantics - [`docs/scenario/orchestration.md`](scenario/orchestration.md).
 
-The `input:` block validates the scenario input parameters before running (according to the [docs/input.md](input.md) standard). A write to `incarnation.state` is a **step**, not a section: `module: core.state.<verb>` + `on: keeper`, where the state suffix is the verb — `set`/`present`/`add`/`append`/`modify`/`remove`/`unset` ([ADR-0084](#adr-084-explicit-state-capture--corestateverb-replaces-end-of-run-state_changes), the [ADR-057](#adr-057-state_changes---ordered-list-of-crud-verbs) verb set). It declares **what** field is written and **from where** the value comes (CEL `${ … }` in `params:`), it stands where the value becomes known, and it lands **at that step** rather than at an end-of-run commit; plurality — through a `match:` predicate. Normative — [scenario/orchestration.md §7.1](scenario/orchestration.md#71-the-capture-verbs).
+The `input:` block validates the scenario input parameters before running (according to the [docs/input.md](input.md) standard). A write to `incarnation.state` is a **step**, not a section: `module: core.state.<verb>` (keeper-side by its address, no `on:` key), where the state suffix is the verb — `set`/`present`/`add`/`append`/`modify`/`remove`/`unset` ([ADR-0084](#adr-084-explicit-state-capture--corestateverb-replaces-end-of-run-state_changes), the [ADR-057](#adr-057-state_changes---ordered-list-of-crud-verbs) verb set). It declares **what** field is written and **from where** the value comes (CEL `${ … }` in `params:`), it stands where the value becomes known, and it lands **at that step** rather than at an end-of-run commit; plurality — through a `match:` predicate. Normative — [scenario/orchestration.md §7.1](scenario/orchestration.md#71-the-capture-verbs).
 
 **Reusable named types** - for composite schemas found in multiple service scenarios ([ADR-062](adr/0062-input-types.md)). The type is declared in the service-level file `service/<name>/types.yml` (section `types:`, same input-DSL), and the scenario refers to it with the directive `$type`:
 
@@ -1086,7 +1083,6 @@ Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
 
 # Local task on the keeper itself (cloud-create, vault-resolve, http-call)
 - name: Provision VMs
-  on: keeper
   module: core.cloud.provisioned
   state: created
   params: { ... }

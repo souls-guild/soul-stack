@@ -307,13 +307,14 @@ func TestExpandIncludes_BlockOnKeeperInsideAnIncludedFile(t *testing.T) {
 `,
 		},
 		{
+			// The child carries no `on:` — since NIM-749 its keeper-side MODULE
+			// is what makes it illegal here, so the path names `module:`.
 			name:     "on a block child",
-			yamlPath: "$[0].block[0].on",
+			yamlPath: "$[0].block[0].module",
 			body: `
 - name: record the topology
   block:
     - name: the field
-      on: keeper
       module: core.state.set
       params: { field: mode, value: sentinel }
 `,
@@ -346,4 +347,121 @@ func TestExpandIncludes_BlockOnKeeperInsideAnIncludedFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExpandIncludesInDestiny_KeeperModuleArrivesViaInclude — the rule has to
+// survive the include boundary (NIM-749).
+//
+// A destiny's `tasks/main.yml` is checked at load, but its `include:`d bodies are
+// loaded by the expander afterwards, in their own scope. Until the flag was
+// threaded down, a keeper-side capture one include deep was linted clean, folded
+// by L0 exactly as a routed one, and died at dispatch — the false-green the check
+// exists to close, reached by the one route that skipped it. The retired
+// `state_capture_not_on_keeper` caught this only because it was unconditional.
+func TestExpandIncludesInDestiny_KeeperModuleArrivesViaInclude(t *testing.T) {
+	body := `
+- name: capture the endpoint
+  module: core.state.set
+  params: { field: endpoint, value: "10.0.0.1" }
+`
+	root := []Task{{Include: &IncludeTask{Include: "capture.yml"}}}
+
+	t.Run("refused inside a destiny", func(t *testing.T) {
+		_, diags := ExpandIncludesInDestiny(root, mapResolver(map[string]string{"capture.yml": body}))
+		if !hasCode(diags, "keeper_module_in_destiny") {
+			dump(t, diags)
+			t.Fatalf("expected keeper_module_in_destiny for a keeper-side module arriving via include:")
+		}
+		for _, d := range diags {
+			if d.Code == "keeper_module_in_destiny" && d.File != "capture.yml" {
+				t.Errorf("File = %q, want the included file the author has to edit", d.File)
+			}
+		}
+	})
+
+	// The negative half, and the reason the entry point is separate: a SCENARIO's
+	// included body is the ordinary home of a capture.
+	t.Run("accepted inside a scenario include", func(t *testing.T) {
+		_, diags := ExpandIncludes(root, mapResolver(map[string]string{"capture.yml": body}))
+		if hasCode(diags, "keeper_module_in_destiny") {
+			dump(t, diags)
+			t.Fatalf("a scenario's included body must keep keeper-side addresses")
+		}
+	})
+}
+
+// TestExpandIncludes_KeeperSideArrivesIntoABlockViaInclude — ★ the route that
+// escapes every per-file check (NIM-749).
+//
+// An `include:` written as a block CHILD is a block child to the expander and a
+// TOP-LEVEL task to the included file's own validation, so a capture arriving
+// that way is judged by neither pass. Render then fans it out over the roster
+// (IsKeeperTask is consulted on top-level tasks only) and dispatches
+// `core.state.set` to hosts that have no such module — while the L0 trial, which
+// folds a capture by its module ADDRESS, predicts `state_after` exactly as a
+// routed one does and passes the case.
+//
+// The retired `state_capture_not_on_keeper` closed this by being unconditional on
+// every task node; the replacement has to close it on the flattened plan.
+func TestExpandIncludes_KeeperSideArrivesIntoABlockViaInclude(t *testing.T) {
+	files := map[string]string{
+		"capture.yml": `
+- name: record the owner
+  module: core.state.set
+  params: { field: owner, value: alice }
+`,
+	}
+
+	t.Run("refused when spliced into a block", func(t *testing.T) {
+		root := []Task{{Name: "grp", Block: &BlockTask{Block: []Task{
+			{Include: &IncludeTask{Include: "capture.yml"}},
+		}}}}
+		_, diags := ExpandIncludes(root, mapResolver(files))
+		if !hasCode(diags, "block_on_keeper_invalid") {
+			dump(t, diags)
+			t.Fatalf("a keeper-side module reaching a block through include: must be refused")
+		}
+	})
+
+	// Nested one level deeper — the walk must recurse, since a block inside a
+	// block reaches a host by the same route.
+	t.Run("refused when nested deeper", func(t *testing.T) {
+		root := []Task{{Name: "outer", Block: &BlockTask{Block: []Task{
+			{Name: "inner", Block: &BlockTask{Block: []Task{
+				{Include: &IncludeTask{Include: "capture.yml"}},
+			}}},
+		}}}}
+		_, diags := ExpandIncludes(root, mapResolver(files))
+		if !hasCode(diags, "block_on_keeper_invalid") {
+			dump(t, diags)
+			t.Fatalf("nested blocks reach a host the same way")
+		}
+	})
+
+	// The negative half: the SAME included body spliced at the top level is the
+	// ordinary, correct way to write a capture.
+	t.Run("accepted at the top level", func(t *testing.T) {
+		root := []Task{{Include: &IncludeTask{Include: "capture.yml"}}}
+		out, diags := ExpandIncludes(root, mapResolver(files))
+		if diag.HasErrors(diags) {
+			dump(t, diags)
+			t.Fatalf("a top-level capture arriving via include: is correct")
+		}
+		if len(out) != 1 || out[0].Module == nil || out[0].Module.Module != "core.state.set" {
+			t.Fatalf("expansion result = %v, want the capture spliced flat", taskNames(out))
+		}
+	})
+
+	// And a Soul-side module in a block is what a block is FOR.
+	t.Run("a Soul-side child is untouched", func(t *testing.T) {
+		soul := map[string]string{"restart.yml": "- name: restart\n  module: core.service.restarted\n  params: { name: redis }\n"}
+		root := []Task{{Name: "grp", Block: &BlockTask{Block: []Task{
+			{Include: &IncludeTask{Include: "restart.yml"}},
+		}}}}
+		_, diags := ExpandIncludes(root, mapResolver(soul))
+		if hasCode(diags, "block_on_keeper_invalid") {
+			dump(t, diags)
+			t.Fatalf("a Soul-side module belongs in a block")
+		}
+	})
 }

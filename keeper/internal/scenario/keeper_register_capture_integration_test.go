@@ -48,7 +48,6 @@ tasks:
       args: ["role"]
   - name: record the address
     module: core.state.set
-    on: keeper
     params:
       field: provisioned_ip
       value: "${ register.provision.ip }"

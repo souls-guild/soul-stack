@@ -71,7 +71,6 @@ tasks:
   # A single step with both options: the module itself picks the path based on self_onboard (userdata/
   # generate_userdata mutually-exclusive with self_onboard — validate catches it).
   - name: Provision VMs (cloud-init bootstrap)
-    on: keeper
     module: core.cloud.created
     register: provision
     params:
@@ -86,7 +85,6 @@ tasks:
   # ADR-063). Skipped when self_onboard=true (the VM already onboarded from cloud-init).
   # when — STATIC (pure input) -> pre-flight placeholder-skips the step when self_onboard.
   - name: Deliver per-VM bootstrap token over SSH
-    on: keeper
     module: core.bootstrap.delivered
     when: "!(has(input.self_onboard) && input.self_onboard)"
     params:
@@ -99,7 +97,6 @@ tasks:
   # ADR-061). Shared by both modes: in self_onboard the VM onboards from cloud-init, in
   # B-flat — after deliver; in both cases await_online waits for presence of the created Souls.
   - name: Register provisioned VMs and await their onboarding
-    on: keeper
     module: core.soul.registered
     register: onboarded
     require:

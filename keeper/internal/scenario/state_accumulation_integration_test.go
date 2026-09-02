@@ -43,7 +43,6 @@ name: create
 tasks:
   - name: Capture the endpoint
     module: core.state.set
-    on: keeper
     register: cap
     params:
       field: endpoint

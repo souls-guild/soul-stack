@@ -176,12 +176,12 @@ func TestModuleParams_UserNewParamsValid(t *testing.T) {
 // shared/coremanifest/mod_soul.go. The valid form (sid+coven) passes, an unknown
 // param is caught.
 func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
-	valid := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    mode: append\n"
+	valid := "- name: t\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    mode: append\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(valid), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		t.Fatalf("valid core.soul.registered produced errors: %v", diags)
 	}
-	bad := "- name: t\n  on: keeper\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    covenn: oops\n"
+	bad := "- name: t\n  module: core.soul.registered\n  params:\n    sid: host.example.com\n    coven: [prod]\n    covenn: oops\n"
 	_, diags, _ = LoadDestinyTasksFromBytes("tasks/main.yml", []byte(bad), ValidateOptions{})
 	if !hasCodeP(diags, "unknown_param") {
 		t.Errorf("expected unknown_param for covenn:, got %v", diagCodesP(diags))
@@ -193,10 +193,10 @@ func TestModuleParams_KeeperSoulRegistered(t *testing.T) {
 // sid list via a CEL expression from a previous step's register is not rejected
 // by the type check (a CEL value is not statically typed, ADR-010).
 func TestModuleParams_KeeperSoulRegistered_AwaitFields(t *testing.T) {
-	valid := "- name: provision\n  on: keeper\n  module: core.exec.run\n  register: provision\n" +
+	valid := "- name: provision\n  module: core.exec.run\n  register: provision\n" +
 		"  changed_when: \"false\"\n" +
 		"  params:\n    cmd: echo\n    args: [ok]\n" +
-		"- name: t\n  on: keeper\n  module: core.soul.registered\n  register: r\n" +
+		"- name: t\n  module: core.soul.registered\n  register: r\n" +
 		"  params:\n" +
 		"    sid: \"${ register.provision.stdout }\"\n" +
 		"    coven: [redis, prod]\n" +
@@ -225,7 +225,6 @@ func TestCheckParamType_CELInBlockScalar(t *testing.T) {
 	sources := map[string]string{
 		"inline": `
 - name: mint
-  on: keeper
   module: core.state.set
   register: users
   params:
@@ -234,7 +233,6 @@ func TestCheckParamType_CELInBlockScalar(t *testing.T) {
 `,
 		"folded": `
 - name: mint
-  on: keeper
   module: core.state.set
   register: users
   params:
@@ -246,7 +244,6 @@ func TestCheckParamType_CELInBlockScalar(t *testing.T) {
 `,
 		"literal": `
 - name: mint
-  on: keeper
   module: core.state.set
   register: users
   params:

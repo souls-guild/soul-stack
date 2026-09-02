@@ -21,7 +21,6 @@ name: create
 tasks:
   - name: Register and await created hosts
     module: core.soul.registered
-    on: keeper
     register: roster
     params:
       refresh_soulprint: true
@@ -45,7 +44,6 @@ name: create
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
@@ -65,7 +63,6 @@ name: create
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
@@ -86,7 +83,6 @@ name: create
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
@@ -166,7 +162,6 @@ name: create
 tasks:
   - name: Register hosts WITHOUT refresh
     module: core.soul.registered
-    on: keeper
     params:
       sid: "host-new.example.com"
   - name: Apply role to incarnation hosts
@@ -197,7 +192,6 @@ name: create
 tasks:
   - name: Register hosts with refresh disabled
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: false
       sid: "host-new.example.com"
@@ -228,7 +222,6 @@ tasks:
       cmd: "initial"
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
@@ -259,7 +252,6 @@ name: create
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"
@@ -300,7 +292,6 @@ name: create
 tasks:
   - name: Register a fixed host and refresh roster
     module: core.soul.registered
-    on: keeper
     register: roster
     params:
       refresh_soulprint: true
@@ -376,7 +367,6 @@ name: create
 tasks:
   - name: Provision and refresh
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "${ register.provision.hosts }"
@@ -391,7 +381,6 @@ name: create
 tasks:
   - name: Register without refresh
     module: core.soul.registered
-    on: keeper
     params:
       sid: "host-a.example.com"
 `
@@ -400,7 +389,6 @@ name: create
 tasks:
   - name: Register with refresh disabled
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: false
       sid: "host-a.example.com"
@@ -412,7 +400,6 @@ name: create
 tasks:
   - name: Cloud provision
     module: core.cloud.created
-    on: keeper
     params:
       refresh_soulprint: true
       profile: prod
@@ -434,7 +421,6 @@ tasks:
     block:
       - name: Register and refresh
         module: core.soul.registered
-        on: keeper
         params:
           refresh_soulprint: true
           sid: "host-a.example.com"
@@ -566,5 +552,84 @@ func TestAssertReadsRoster(t *testing.T) {
 	}
 	if AssertReadsRoster(nil) {
 		t.Error("AssertReadsRoster(nil) = true, want false")
+	}
+}
+
+// TestStratify_KeeperSideTaskIsNotARosterConsumer — ★ REGRESSION guard for the
+// invariant [taskReadsRoster] documents: a keeper-side task does NOT read the run
+// roster, so it is never forced past a refresh boundary.
+//
+// It held for free while a keeper task was spelled `on: keeper` — a non-nil `On`
+// that [onTargetsRoster] rejected. Since NIM-749 the side comes from the module
+// ADDRESS and such a task carries no `on:` at all, so `On == nil` — which is the
+// spelling that means "the whole incarnation roster" on a HOST task. Read
+// literally, every capture in the tree became a refresh consumer and every one
+// after a `refresh_soulprint: true` step silently moved into a later Passage.
+//
+// Nothing else in the suite can see this: it changes execution ORDER, not
+// validity, and the L0 harness does not model Passages. Hence a direct guard.
+func TestStratify_KeeperSideTaskIsNotARosterConsumer(t *testing.T) {
+	// The emitter is itself keeper-side, which is why the invariant has to hold:
+	// classified as a consumer it would depend on its own boundary.
+	const src = `
+name: create
+tasks:
+  - name: Register created hosts and refresh the roster
+    module: core.soul.registered
+    register: roster
+    params:
+      refresh_soulprint: true
+      sid: "host-new.example.com"
+  - name: Record the tier
+    module: core.state.set
+    params:
+      field: tier
+      value: "fresh"
+  - name: Record the namespace
+    module: core.state.set
+    params:
+      field: namespace
+      value: "${ input.namespace }"
+`
+	p := stratify(t, src)
+	if p.Count != 1 {
+		t.Fatalf("Count = %d, want 1 — a keeper-side task has no run hosts, so an omitted on: says nothing about the roster and nothing is forced past the refresh boundary", p.Count)
+	}
+	for i, pass := range p.TaskPassage {
+		if pass != 0 {
+			t.Errorf("task #%d passage = %d, want 0 (keeper-side tasks are not roster consumers)", i, pass)
+		}
+	}
+}
+
+// TestStratify_KeeperSideDoesNotSuppressARealConsumer — the negative half. Excluding
+// keeper-side tasks must not blunt the boundary for the HOST task that follows: that
+// is the silent-wrong-target the whole mechanism exists to prevent (ADR-056 §risks).
+func TestStratify_KeeperSideDoesNotSuppressARealConsumer(t *testing.T) {
+	const src = `
+name: create
+tasks:
+  - name: Register created hosts and refresh the roster
+    module: core.soul.registered
+    params:
+      refresh_soulprint: true
+      sid: "host-new.example.com"
+  - name: Record the tier
+    module: core.state.set
+    params:
+      field: tier
+      value: "fresh"
+  - name: Apply the role to the grown roster
+    module: core.exec.run
+    changed_when: false
+    params:
+      cmd: "echo hi"
+`
+	p := stratify(t, src)
+	if p.Count != 2 {
+		t.Fatalf("Count = %d, want 2 — the HOST task's omitted on: is still the whole grown roster and must land after the refresh", p.Count)
+	}
+	if p.TaskPassage[2] != 1 {
+		t.Fatalf("host task passage = %d, want 1 (strictly after the refresh emitter); passages = %v", p.TaskPassage[2], p.TaskPassage)
 	}
 }

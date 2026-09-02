@@ -77,17 +77,29 @@ func sortBySID(hosts []*topology.HostFacts) {
 // keeperOnLiteral is the scalar form of `on:` marking a keeper-side task
 // (docs/keeper/modules.md). Matches [KeeperTargetSID] by design: the literal
 // `on: keeper` and the keeper instance's synthetic target SID denote the same concept.
+//
+// Since NIM-747 it is no longer how a CORE task says so — the module's address
+// is (see [IsKeeperTask]) — and the linter refuses it there as redundant. It
+// remains the only spelling a keeper-side PLUGIN address has.
 const keeperOnLiteral = "keeper"
 
-// IsKeeperTask reports whether a task is declared keeper-side (`on: keeper`,
-// docs/keeper/modules.md). A keeper-side task renders in the keeper context
-// (no per-host roster, see renderKeeperTask) and executes locally on the
-// keeper instance via the scenario-runner. Other forms of `on:` (omitted /
-// coven list) are Soul-side. The config validator guarantees the scalar form
-// of `on:` is only "keeper".
+// IsKeeperTask reports whether a task executes on the keeper. A keeper-side task
+// renders in the keeper context (no per-host roster, see renderKeeperTask) and
+// executes locally on the keeper instance via the scenario-runner.
+//
+// The side follows from the MODULE, not from the task (NIM-747): the core module
+// sets are disjoint — `core.state`/`core.cloud`/`core.soul`/`core.vault`/
+// `core.choir`/`core.bootstrap`/`core.cert` on this side, the other twenty-one on
+// the Soul side — so the address alone decides, and an author restating it in
+// `on:` was telling the engine what it already knew. `on:` is back to its one
+// meaning, "which covens".
+//
+// Delegates to [config.IsKeeperSideTask] so this routing and soul-lint's offline
+// judgement come out of one rule and one catalog. The legacy `on: keeper`
+// literal still routes a PLUGIN address here, which is the half NIM-688 has to
+// close before it can go.
 func IsKeeperTask(task config.Task) bool {
-	s, ok := task.On.(string)
-	return ok && s == keeperOnLiteral
+	return config.IsKeeperSideTask(task)
 }
 
 // IsAssertTask reports whether a task is an assert check (ADR-009 amendment
@@ -105,10 +117,15 @@ func IsAssertTask(task config.Task) bool {
 // equal to the incarnation name is rejected by [resolveCovenList]
 // (`incarnation.name` is not a Coven, ADR-008 amendment 2026-07-17/NIM-124).
 //
-// `on: keeper` never reaches here — keeper-side tasks are diverted by the
-// pipeline into renderKeeperTask before roster resolution (see
-// [IsKeeperTask]); this branch is defense-in-depth (a routing bug → an
-// explicit error, not silent misbehavior).
+// `on: keeper` does not reach here from a TOP-LEVEL task: [IsKeeperTask] returns
+// true for the literal whatever the address, so the pipeline has already diverted
+// such a task into renderKeeperTask before roster resolution.
+//
+// It is still reachable from a block CHILD, which renderBlockTask fans out
+// through this same resolve — which is exactly why the config validator refuses a
+// keeper-side task inside a block at both levels (`block_on_keeper_invalid`,
+// including the one that arrives through an `include:`). So this branch is the
+// backstop for a file that got past that check, and is deliberately not deleted.
 func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 	switch v := on.(type) {
 	case nil:

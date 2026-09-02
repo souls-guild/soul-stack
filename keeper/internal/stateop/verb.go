@@ -7,6 +7,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
 
 // The author form of a capture step ([ADR-0084]): its address, its states and
@@ -18,7 +19,11 @@ import (
 
 // ModuleName is the base module name without the state suffix (Registry key).
 // The author form of the task address is `core.state.<verb>`.
-const ModuleName = "core.state"
+//
+// Taken from the shared catalog (NIM-749), which is also what routes the step
+// keeper-side: this module's dispatch key and the address the engine reads the
+// side off cannot be allowed to drift apart.
+const ModuleName = coremanifest.StateModuleAddr
 
 // Param names.
 const (

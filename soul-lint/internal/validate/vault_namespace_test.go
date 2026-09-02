@@ -63,7 +63,6 @@ tasks:
 		"kv-read path": `name: deploy
 tasks:
   - name: Read it back
-    on: keeper
     register: pw
     module: core.vault.kv-read
     params:
@@ -72,7 +71,6 @@ tasks:
 		"kv-present targets": `name: deploy
 tasks:
   - name: Mint it
-    on: keeper
     module: core.vault.kv-present
     params:
       targets: "${ input.users.map(u, {'path': 'secret/redis/' + incarnation.name + '/users/' + u.name, 'field': 'password'}) }"

@@ -9,6 +9,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -655,7 +656,6 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	// 3) Discriminator-specific validation.
 	if kv, ok := present["module"]; ok {
 		out = append(out, validateModuleField(kv, pathPrefix)...)
-		out = append(out, validateStateVerbOnKeeper(kv, present, pathPrefix)...)
 		// `params:` is required on a module task (even if `{}`). Without it the
 		// applier cannot tell "forgot to pass" from "passed `{}`". See
 		// docs/destiny/tasks.md §4. The type of `params:` is validated via
@@ -706,10 +706,17 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	// 1a (the common string-field check); CEL parsing deferred to M1.3.
 	if kv, ok := present["on"]; ok {
 		out = append(out, validateOnField(kv, pathPrefix)...)
-		out = append(out, validateAsyncOnKeeper(kv, present, pathPrefix)...)
-		out = append(out, validateWhenOnKeeper(kv, present, pathPrefix)...)
-		out = append(out, validateBlockOnKeeper(kv, present, pathPrefix)...)
+		out = append(out, validateOnKeeperRedundant(kv, present, pathPrefix)...)
 	}
+	// 4a) The keeper-side checks hang off the SIDE of the task, not off the
+	// presence of `on:` (NIM-749). A `core.state.set` step is keeper-side whether
+	// or not the author wrote the key, so the three constructs that are
+	// meaningless there have to be judged the same way — reading them out of the
+	// `on:` branch is what let a dynamic `when:` on a capture through whenever the
+	// key was absent.
+	out = append(out, validateAsyncOnKeeper(present, pathPrefix)...)
+	out = append(out, validateWhenOnKeeper(present, pathPrefix)...)
+	out = append(out, validateBlockOnKeeper(present, pathPrefix)...)
 	if kv, ok := present["serial"]; ok {
 		out = append(out, validateSerialField(kv, pathPrefix)...)
 	}
@@ -1021,8 +1028,8 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 	return out
 }
 
-// validateBlockChildOnKeeper raises `block_on_keeper_invalid` for `on: keeper` on
-// a task nested INSIDE a block — the other half of [validateBlockOnKeeper].
+// validateBlockChildOnKeeper raises `block_on_keeper_invalid` for a keeper-side
+// task nested INSIDE a block — the other half of [validateBlockOnKeeper].
 //
 // Render fans a block's children out through the Soul-side roster resolve, which
 // refuses `on: keeper` with a "programming error" message meant for a broken
@@ -1030,30 +1037,45 @@ func validateBlockField(kv *ast.MappingValueNode, pathPrefix string) []diag.Diag
 // diagnostic with a line and a column instead. Checked at the block's recursion
 // site rather than inside validateTaskNode, which does not know whether it is
 // looking at a top-level task or a block child.
+//
+// ★ Since NIM-749 the child's MODULE decides, so `module: core.state.set` inside
+// a block is refused with no `on:` written anywhere. That is not a formality:
+// [render.IsKeeperTask] is consulted on top-level tasks only, so a keeper-side
+// module reached through a block is dispatched to a host, where no such module
+// exists. Without this half, dropping the now-redundant key off such a child
+// would have removed the only thing that caught it.
+//
+// The diagnostic anchors on the key that decided — `module:`, or `on:` when the
+// legacy literal is what made the child keeper-side.
 func validateBlockChildOnKeeper(item ast.Node, childPath string) []diag.Diagnostic {
 	m, ok := item.(*ast.MappingNode)
 	if !ok {
 		return nil
 	}
+	present := map[string]*ast.MappingValueNode{}
 	for _, kv := range m.Values {
-		kn, isStr := kv.Key.(*ast.StringNode)
-		if !isStr || kn.Value != "on" {
-			continue
+		if tok := kv.Key.GetToken(); tok != nil {
+			present[tok.Value] = kv
 		}
-		vn, isStr := kv.Value.(*ast.StringNode)
-		if !isStr || vn.Value != KeeperTarget {
-			return nil
-		}
-		tok := kv.Key.GetToken()
-		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "block_on_keeper_invalid",
-			Message:  "on: keeper is not allowed on a task inside a block — a block fans its children out over the run's hosts, and `keeper` is not one of them",
-			Hint:     "write the keeper-side task flat, in the scenario's own task list, outside the block",
-			YAMLPath: childPath + ".on",
-		})}
 	}
-	return nil
+	addr, isKeeper := keeperSideTask(present)
+	if !isKeeper {
+		return nil
+	}
+	// Whichever fact decided is a key that is present: a non-empty addr came from
+	// `module:`, an empty one means the `on:` literal is what matched.
+	anchor, anchorKey := present["on"], "on"
+	if addr != "" {
+		anchor, anchorKey = present["module"], "module"
+	}
+	tok := anchor.Key.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:     "block_on_keeper_invalid",
+		Message:  fmt.Sprintf("a keeper-side task (%s) is not allowed inside a block — a block fans its children out over the run's hosts, and the keeper is not one of them", keeperSideBecause(addr)),
+		Hint:     "write the keeper-side task flat, in the scenario's own task list, outside the block",
+		YAMLPath: childPath + "." + anchorKey,
+	})}
 }
 
 // blockForbiddenKeys — module-specific keys not allowed at the BLOCK level (fail-
@@ -1269,10 +1291,61 @@ func validateApplyForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 	return out
 }
 
+// taskModuleAddr returns a task node's `module:` address, or "" when the key is
+// absent or is not a string (validateModuleField reports that shape itself).
+func taskModuleAddr(present map[string]*ast.MappingValueNode) string {
+	kv, ok := present["module"]
+	if !ok {
+		return ""
+	}
+	sn, isStr := kv.Value.(*ast.StringNode)
+	if !isStr {
+		return ""
+	}
+	return sn.Value
+}
+
+// onIsKeeperLiteral reports whether the task node carries the scalar
+// `on: keeper`.
+func onIsKeeperLiteral(present map[string]*ast.MappingValueNode) bool {
+	kv, ok := present["on"]
+	if !ok {
+		return false
+	}
+	sn, isStr := kv.Value.(*ast.StringNode)
+	return isStr && sn.Value == KeeperTarget
+}
+
+// keeperSideTask is the AST half of [keeperSide]: does this task node execute on
+// the Keeper, and which fact decided it. addr is the module address when the
+// module's own side decided, and "" when the legacy `on: keeper` literal did —
+// so a diagnostic can name the reason instead of prescribing a key the author
+// may not have written.
+func keeperSideTask(present map[string]*ast.MappingValueNode) (addr string, ok bool) {
+	moduleAddr := taskModuleAddr(present)
+	if KeeperSideModule(moduleAddr) {
+		return moduleAddr, true
+	}
+	if onIsKeeperLiteral(present) {
+		return "", true
+	}
+	return "", false
+}
+
+// keeperSideBecause renders the reason a task is keeper-side, for a diagnostic's
+// message. Naming the module address is the useful half: after NIM-749 most
+// keeper-side tasks carry no `on:` at all, so "on: keeper" would send the reader
+// looking for a key that is not in the file.
+func keeperSideBecause(addr string) string {
+	if addr == "" {
+		return "on: keeper"
+	}
+	return "module: " + addr + " is keeper-side"
+}
+
 // validateAsyncOnKeeper raises `async_on_keeper_invalid` for `async:` on a
-// keeper-side task (`on: keeper`) — the third and last construct where the flag
-// has no meaning, joining `async_on_block_invalid` and `async_on_apply_invalid`
-// (NIM-247).
+// keeper-side task — the third and last construct where the flag has no meaning,
+// joining `async_on_block_invalid` and `async_on_apply_invalid` (NIM-247).
 //
 // `async:` is Soul-side task concurrency: a keeper task is executed by the
 // keeper's own scenario runner and never reaches a Soul runner, so honouring the
@@ -1280,12 +1353,16 @@ func validateApplyForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 // to where the author is looking, with a line and a column, instead of at apply
 // time. The render guard stays as defense-in-depth.
 //
+// Since NIM-749 the side is read off the module address ([keeperSideTask]), not
+// off a written `on: keeper`: `async:` is equally a no-op on a `core.state.set`
+// that carries no `on:` at all, and that is now the ordinary way to write one.
+//
 // `require:` on a keeper task is deliberately NOT touched: it is accepted and
 // redundant, since the keeper executor runs its tasks in plan order
 // (destiny/tasks.md §8).
-func validateAsyncOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
-	sn, isStr := onKV.Value.(*ast.StringNode)
-	if !isStr || sn.Value != KeeperTarget {
+func validateAsyncOnKeeper(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	addr, isKeeper := keeperSideTask(present)
+	if !isKeeper {
 		return nil
 	}
 	kv, ok := present["async"]
@@ -1296,16 +1373,64 @@ func validateAsyncOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.M
 	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 		Code:     "async_on_keeper_invalid",
-		Message:  "async: is not allowed on a keeper-side task (on: keeper) — async: is Soul-side task concurrency and a keeper task never reaches a Soul runner",
+		Message:  fmt.Sprintf("async: is not allowed on a keeper-side task (%s) — async: is Soul-side task concurrency and a keeper task never reaches a Soul runner", keeperSideBecause(addr)),
 		Hint:     "drop async: here; to overlap keeper-side work with host work, put async: on the Soul-side tasks instead",
 		YAMLPath: pathPrefix + ".async",
 	})}
 }
 
-// validateBlockOnKeeper raises `block_on_keeper_invalid` for `block:` on a
-// keeper-side task (`on: keeper`).
+// validateOnKeeperRedundant raises `on_keeper_redundant` for `on: keeper` on a
+// task whose module is keeper-side anyway (NIM-747).
 //
-// The render loop tests `on: keeper` BEFORE it tests `block:`, so such a task
+// The side follows from the address: the core module sets are disjoint, so
+// `core.state.set` can only be applied by the Keeper and `core.pkg.present` only
+// by a Soul. Writing the key restates what the engine already knows, and it
+// overloads `on:` — which otherwise means "which covens" — with a magic scalar
+// meaning "no hosts at all". Refusing it here is what lets the key go back to
+// one meaning.
+//
+// A PLUGIN address is NOT covered, deliberately. Nothing declares such a plugin
+// keeper-side in a way the engine reads, and the Keeper cannot execute one at
+// all yet (NIM-688), so `on: keeper` is the only spelling those scenarios have —
+// see [keeperSide]. `side:` in a module's schema document is the declaration
+// that will replace it.
+// A coven LIST on the same address is refused too, under
+// `on_covens_on_keeper_module`. Not the same finding and not the same word: the
+// literal restates something true, a list states something false — it selects
+// hosts for a step that has none, and render never reads `task.On` on a keeper
+// task, so the labels are dropped in silence. That is the silent-wrong-target
+// class, and it must not be reported as a redundancy.
+func validateOnKeeperRedundant(onKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	addr := taskModuleAddr(present)
+	if !KeeperSideModule(addr) {
+		return validateOnKeeperOnSoulModule(onKV, addr, pathPrefix)
+	}
+	tok := onKV.Key.GetToken()
+	if sn, isStr := onKV.Value.(*ast.StringNode); isStr && sn.Value == KeeperTarget {
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "on_keeper_redundant",
+			Message:  fmt.Sprintf("on: keeper is redundant — %s is a keeper-side module, so the step is routed there by its address", addr),
+			Hint:     "drop the `on:` key; on a scenario task `on:` selects covens, and a keeper-side module has no hosts to select",
+			YAMLPath: pathPrefix + ".on",
+		})}
+	}
+	if _, isSeq := onKV.Value.(*ast.SequenceNode); isSeq {
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "on_covens_on_keeper_module",
+			Message:  fmt.Sprintf("on: [covens] has no meaning on %s — it is a keeper-side module, the step runs against the incarnation row and no hosts, so the labels select nothing and are dropped", addr),
+			Hint:     "drop the `on:` key; to act on a subset of hosts, use a Soul-side module in its own task and put the covens there",
+			YAMLPath: pathPrefix + ".on",
+		})}
+	}
+	return nil
+}
+
+// validateBlockOnKeeper raises `block_on_keeper_invalid` for `block:` on a
+// keeper-side task.
+//
+// The render loop tests the task's side BEFORE it tests `block:`, so such a task
 // never reaches the block renderer: it lands in renderKeeperTask, whose task has
 // no `module:` at all. Render refuses it now (it used to dereference the nil
 // module and panic), and this moves the refusal to where the author is looking.
@@ -1318,9 +1443,15 @@ func validateAsyncOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.M
 // "a keeper-side task must be routed to renderKeeperTask"). Blocks and keeper
 // tasks are disjoint, so [validateBlockChildOnKeeper] raises the same code one
 // level down and the remedy is the same at both: write the keeper tasks flat.
-func validateBlockOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
-	sn, isStr := onKV.Value.(*ast.StringNode)
-	if !isStr || sn.Value != KeeperTarget {
+//
+// A block task carries no `module:` (the discriminators are exclusive), so the
+// module half of [keeperSideTask] cannot fire here and the literal is what
+// reaches this check — which is exactly why the CHILD half matters more after
+// NIM-749: there the address decides, and a keeper-side module dropped into a
+// block no longer needs a written key to be wrong.
+func validateBlockOnKeeper(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	addr, isKeeper := keeperSideTask(present)
+	if !isKeeper {
 		return nil
 	}
 	kv, ok := present["block"]
@@ -1331,15 +1462,14 @@ func validateBlockOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.M
 	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 		Code:     "block_on_keeper_invalid",
-		Message:  "block: is not allowed on a keeper-side task (on: keeper) — `on:` selects the hosts a block fans out to, and `keeper` is not a host",
-		Hint:     "a keeper-side task cannot live in a block at all, at either level — write the `on: keeper` tasks flat, in the scenario's own task list",
+		Message:  fmt.Sprintf("block: is not allowed on a keeper-side task (%s) — `on:` selects the hosts a block fans out to, and `keeper` is not a host", keeperSideBecause(addr)),
+		Hint:     "a keeper-side task cannot live in a block at all, at either level — write the keeper-side tasks flat, in the scenario's own task list",
 		YAMLPath: pathPrefix + ".block",
 	})}
 }
 
 // validateWhenOnKeeper raises `when_on_keeper_dynamic_unsupported` for a `when:`
-// on a keeper-side task (`on: keeper`) that reads `register.*`/`soulprint.*`
-// ([ADR-0084] F-D).
+// on a keeper-side task that reads `register.*`/`soulprint.*` ([ADR-0084] F-D).
 //
 // `when:` is a Soul-side predicate — it rides the RenderedTask to a Soul runner,
 // which evaluates it in its own flow-control sandbox. A keeper task never
@@ -1361,9 +1491,16 @@ func validateBlockOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.M
 // render guard (`guardKeeperWhen`) stays as defense-in-depth — this layer does
 // not see a block's `when:` ANDed into a keeper descendant, exactly as with
 // `apply_when_dynamic_unsupported`.
-func validateWhenOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
-	sn, isStr := onKV.Value.(*ast.StringNode)
-	if !isStr || sn.Value != KeeperTarget {
+//
+// ★ Reading the side off the module address (NIM-749) is what closed the hole
+// this check was shipped with. It used to require a written `on: keeper`, so the
+// predicate it exists to refuse went through untouched on every keeper-side task
+// that did not carry the key — the file said the step was conditional, the step
+// wrote state every time, and nothing said so. The address decides now, so the
+// ordinary keyless form is judged too.
+func validateWhenOnKeeper(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	addr, isKeeper := keeperSideTask(present)
+	if !isKeeper {
 		return nil
 	}
 	kv, ok := present["when"]
@@ -1378,49 +1515,115 @@ func validateWhenOnKeeper(onKV *ast.MappingValueNode, present map[string]*ast.Ma
 	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:     "when_on_keeper_dynamic_unsupported",
-		Message:  fmt.Sprintf("when: %q on a keeper-side task (on: keeper) reads register/soulprint — `when:` is evaluated Soul-side and a keeper task never reaches a Soul, so the predicate is ignored and the task runs anyway", wn.Value),
+		Message:  fmt.Sprintf("when: %q on a keeper-side task (%s) reads register/soulprint — `when:` is evaluated Soul-side and a keeper task never reaches a Soul, so the predicate is ignored and the task runs anyway", wn.Value, keeperSideBecause(addr)),
 		Hint:     "put the condition inside the value instead (${ cond ? a : b }, which sees a previous keeper task's register), or move the step to the Soul side; a static when: (input./vars./incarnation.) works as written",
 		YAMLPath: pathPrefix + ".when",
 	})}
 }
 
-// validateStateVerbOnKeeper raises `state_capture_not_on_keeper` for a
-// `core.state.<verb>` task that is not routed keeper-side.
+// validateKeeperModuleInDestiny raises `keeper_module_in_destiny` for a task in a
+// destiny's `tasks/main.yml` that addresses a keeper-side module.
 //
-// `core.state` is a keeper-side module and exists nowhere else: written without
-// `on: keeper` the step is dispatched to a Soul, which has no such module, and the
-// run dies there. The offline half matters more than the loudness of that failure,
-// because the L0 trial folds the step by its module ADDRESS — a capture written
-// without `on:` predicts `state_after` exactly as a real one does, so the case goes
-// green on a plan the run cannot execute.
+// A destiny is rendered per host and dispatched to a Soul — it is Soul-side by
+// construction, and no key changes that. So a `core.state.<verb>` written there
+// is an unknown module on the host and the run dies at that step, and `on: keeper`
+// is not the fix either: [render.resolveOn] aborts on the literal.
 //
-// [validateTaskNode] is shared by the scenario loader and the bare-sequence loader
-// ([LoadDestinyTasks], which also serves a scenario's `include:`d task file), so
-// this fires on a destiny task too. There `on: keeper` is not the fix — a destiny
-// task is Soul-side by construction and `resolveOn` aborts on the keeper literal
-// (`keeper/internal/render/dispatch.go:118`) — and the wording therefore names the
-// module's home rather than prescribing a key that only helps one of the two
-// readers.
-func validateStateVerbOnKeeper(moduleKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
-	sn, isStr := moduleKV.Value.(*ast.StringNode)
-	if !isStr {
+// The offline half is what this is really for. The L0 trial folds a capture by
+// its module ADDRESS, so a capture in a destiny predicts `state_after` exactly as
+// a real one does and the case goes green on a plan the run cannot execute.
+//
+// ★ This is the surviving half of `state_capture_not_on_keeper` (NIM-749). What
+// went was that rule's other half — refusing a capture that did NOT carry
+// `on: keeper` — which only forced the author to restate the address. What it
+// covered incidentally was this, and dropping the check with the key would have
+// lost it silently. Generalised while being split out: the old code named
+// `core.state`, this asks the catalog, so all seven keeper-side addresses are
+// covered rather than the one the ADR happened to be about.
+//
+// Reached only when [ValidateOptions.DestinyTasks] is set, because the loader
+// also serves a scenario's `include:`d body, where a keeper-side address is
+// correct and ordinary.
+func validateKeeperModuleInDestiny(item ast.Node, pathPrefix string) []diag.Diagnostic {
+	m, ok := item.(*ast.MappingNode)
+	if !ok {
 		return nil
 	}
-	if name, _, ok := SplitModuleAddr(sn.Value); !ok || name != stateModuleAddr {
-		return nil
-	}
-	if kv, ok := present["on"]; ok {
-		if on, isStr := kv.Value.(*ast.StringNode); isStr && on.Value == KeeperTarget {
-			return nil
+	present := map[string]*ast.MappingValueNode{}
+	for _, kv := range m.Values {
+		if tok := kv.Key.GetToken(); tok != nil {
+			present[tok.Value] = kv
 		}
 	}
-	tok := moduleKV.Key.GetToken()
+	var out []diag.Diagnostic
+	if addr := taskModuleAddr(present); KeeperSideModule(addr) {
+		tok := present["module"].Key.GetToken()
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "keeper_module_in_destiny",
+			Message:  fmt.Sprintf("%s is a keeper-side module and a destiny's tasks always run on a host — dispatched there it is an unknown module and the run fails at this step", addr),
+			Hint:     "move the step into the scenario's own task list, where a keeper-side address is routed to the keeper; a destiny cannot carry one at all, and `on: keeper` is not a way in",
+			YAMLPath: pathPrefix + ".module",
+		}))
+	}
+	// A block's children are tasks of the same destiny and reach a host by the
+	// same route, so the check has to recurse rather than stop at the top level.
+	if bkv, hasBlock := present["block"]; hasBlock {
+		if seq, isSeq := bkv.Value.(*ast.SequenceNode); isSeq {
+			for i, child := range seq.Values {
+				out = append(out, validateKeeperModuleInDestiny(child, fmt.Sprintf("%s.block[%d]", pathPrefix, i))...)
+			}
+		}
+	}
+	return out
+}
+
+// validateOnKeeperOnSoulModule raises `on_keeper_on_soul_module` for `on: keeper`
+// on a core module the SOUL executes.
+//
+// The reverse of `on_keeper_redundant`, and a live hole rather than a symmetry
+// exercise: [render.IsKeeperTask] honours the literal whatever the address, so
+// `on: keeper` on `core.pkg.present` routes a host module to the keeper, whose
+// registry has no such module, and the run dies with "unknown keeper-side
+// module". docs/keeper/modules.md has asserted this was "a validation error"
+// since ADR-017; nothing enforced it.
+//
+// Scoped to core modules this binary carries a DECLARATION for, which is
+// narrower than "the core namespace" and deliberately so.
+//
+// Widening it to the whole reserved namespace looked right and is wrong: the
+// keeper's module registry is built from its Deps, not from the catalog, so a
+// `core.*` address this binary has no declaration for can still be a registered
+// keeper-side module. The integration harness does exactly that with
+// `core.probe.*`, and refusing it broke a dozen keeper-chain cases — the
+// premise "the registry serves exactly the catalog" is simply false.
+//
+// The cost of the narrow scope is one blind spot: `core.augur` is served by the
+// Soul and ships no declaration, so `on: keeper` on it is still accepted here and
+// still fails at dispatch. Named rather than papered over — closing it means
+// giving augur a declaration in `shared/coremanifest`, which is its own change.
+// (`core.cert` is manifest-less on the keeper side for the same reason, which is
+// why the SIDE catalog is a list of addresses rather than a projection of the
+// declarations.)
+func validateOnKeeperOnSoulModule(onKV *ast.MappingValueNode, addr, pathPrefix string) []diag.Diagnostic {
+	sn, isStr := onKV.Value.(*ast.StringNode)
+	if !isStr || sn.Value != KeeperTarget {
+		return nil
+	}
+	base, _, ok := SplitModuleAddr(addr)
+	if !ok {
+		return nil
+	}
+	if _, declared := coremanifest.Default().Lookup(base); !declared {
+		return nil
+	}
+	tok := onKV.Key.GetToken()
 	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
-		Code:     "state_capture_not_on_keeper",
-		Message:  fmt.Sprintf("%s is a keeper-side module and this task is not routed there — dispatched to a host it is an unknown module and the run fails there", sn.Value),
-		Hint:     "a state capture belongs in a scenario's task list, carrying `on: keeper`: the write lands on the keeper, against the incarnation row, not on any host. A destiny's tasks always run on a host and cannot carry a capture at all",
-		YAMLPath: pathPrefix + ".module",
+		Code:     "on_keeper_on_soul_module",
+		Message:  fmt.Sprintf("on: keeper on %s — that is a Soul-side module, and routing it to the keeper reaches a registry that has no such module, so the run fails at this step", addr),
+		Hint:     "drop the `on:` key: the side follows from the module address, and a keeper-side core address is one of core.bootstrap/cert/choir/cloud/soul/state/vault",
+		YAMLPath: pathPrefix + ".on",
 	})}
 }
 

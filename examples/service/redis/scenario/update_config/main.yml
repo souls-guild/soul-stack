@@ -166,7 +166,6 @@ tasks:
   # on the vault-emitter and roster axes, neither of which the author could see.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -177,7 +176,6 @@ tasks:
       value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Resolve the passwords of the operator ACL users
-    on: keeper
     module: core.state.set
     register: redis_users
     params:
@@ -322,28 +320,24 @@ tasks:
       rewrite:  false
 
   - name: Record the effective Redis config
-    on: keeper
     module: core.state.set
     params:
       field: redis_config
       value: "${ compute.redis_config }"
 
   - name: Record the effective persistence settings
-    on: keeper
     module: core.state.set
     params:
       field: persistence
       value: "${ compute.persistence }"
 
   - name: Record the deployed memory limit
-    on: keeper
     module: core.state.set
     params:
       field: memory_mb
       value: "${ int(default(input.memory_mb, default(incarnation.state.memory_mb, 0))) }"
 
   - name: Record the deployed maxmemory policy
-    on: keeper
     module: core.state.set
     params:
       field: maxmemory_policy
@@ -352,7 +346,6 @@ tasks:
   # io_threads read-model (substrate like memory_mb): set -> new; else the previously
   # deployed state.io_threads; else 0. Keeps state.io_threads == redis_config['io-threads'].
   - name: Record the deployed io-threads count
-    on: keeper
     module: core.state.set
     params:
       field: io_threads

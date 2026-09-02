@@ -57,7 +57,6 @@ tasks:
 		"keeper task": {`name: x
 tasks:
   - module: core.vault.kv-read
-    on: keeper
     params: { path: "svc/db" }
     output: { dsn: "postgres://h/db" }
 `, "$.tasks[0].output", ""},

@@ -50,7 +50,6 @@ tasks:
   # empty provisioned_vm_ids excludes the task from the plan (render-phase,
   # not a placeholder).
   - name: Destroy provisioned VMs and cascade their keeper registry records
-    on: keeper
     module: core.cloud.destroyed
     when: "size(default(incarnation.state.provisioned_vm_ids, [])) > 0"
     params:

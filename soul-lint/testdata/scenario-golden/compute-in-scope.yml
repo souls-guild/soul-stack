@@ -24,7 +24,6 @@ tasks:
   # and push authors to rename unrelated things.
   - name: register the seed from the keeper side
     module: core.soul.registered
-    on: keeper
     vars:
       label: node-${ compute.node_count }
     params:

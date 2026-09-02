@@ -255,6 +255,20 @@ func validateModules(doc Document) []Issue {
 
 		out = append(out, validateVersionField(path+".introduced_in", m.IntroducedIn)...)
 
+		// `side:` is an enum, and the empty string is the declared default
+		// ([SideSoul]) rather than a missing value — a module that says nothing
+		// runs where modules have always run. Anything else is refused rather
+		// than folded into the default: `side: Keeper` silently meaning "soul"
+		// is the failure this check exists to prevent.
+		if m.Side != "" && m.Side != SideSoul && m.Side != SideKeeper {
+			out = append(out, Issue{
+				Level: LevelError, Phase: PhaseSchema, Path: path + ".side",
+				Code:    "module_side_invalid",
+				Message: fmt.Sprintf("side=%q is not a known side", m.Side),
+				Hint:    fmt.Sprintf("one of %v; omit the key for the default (%s)", AllSides, SideSoul),
+			})
+		}
+
 		for ci, c := range m.Capabilities {
 			if _, ok := validCapabilities[c]; !ok {
 				out = append(out, Issue{

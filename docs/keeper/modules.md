@@ -9,9 +9,9 @@ Addressing (`<namespace>.<module>.<state>`) and SoulModule contract are the same
 | `on:` | Where is it performed | Suitable for modules |
 |---|---|---|
 | omitted / `[coven, …]` | on incarnation hosts | Soul-side core (`core.pkg.installed`, `core.file.present`, ...) |
-| `keeper` | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.cloud.created` - cloud-create via CloudDriver, `core.bootstrap.issued` - tokens for ready-made VMs, `core.bootstrap.delivered` - token delivery via SSH, ...) |
+| **omitted** (keeper-side module address) | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.cloud.created` - cloud-create via CloudDriver, `core.bootstrap.issued` - tokens for ready-made VMs, `core.bootstrap.delivered` - token delivery via SSH, ...) |
 
-Launching Soul-side core module with `on: keeper` - validation error; and vice versa. The ownership of a module by a party is declared in its manifest; `soul-lint` checks statically.
+**The side is the module's, and a task does not restate it** (NIM-747). The seven keeper-side core base addresses - `core.bootstrap` / `core.cert` / `core.choir` / `core.cloud` / `core.soul` / `core.state` / `core.vault` - are disjoint from the twenty-one Soul-side ones, so the address alone routes the step. `on: keeper` on one of them is a validation error (`on_keeper_redundant`), and a Soul-side address is a host task however it is written. The catalog is one list, `shared/coremanifest`, read by both `soul-lint` and the render pipeline; a plugin declares its own side in its schema document (`side: keeper | soul`, default `soul`), which the Keeper cannot yet route by (NIM-688) - so `on: keeper` on a PLUGIN address stays legal.
 
 ## Registration and dispatch at (`base` + `state`)
 
@@ -38,7 +38,7 @@ Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core
 
 ### Audit-trace and per-task alerting
 
-Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-side handler `TaskEvent`): `sid = keeper` (address of the keeper-target of the run), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` - name `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / otherwise `TASK_STATUS_OK`). Thanks to this, **task:-Tiding subscription also works for keeper-side addresses** (`on: keeper`): a keeper task with the address `register ∪ id` (including `provision_vm` with `id:` without `register:`) ends up in `changed_tasks` of the terminal event `incarnation.run_completed` and is matched by the task selector ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)). Secret hygiene: keeper-side `task.executed` carries only address + status (without `register_data`/output); `error.message` - only on failure (nothing suppresses it per task since [ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 removed `no_log:`; the write-path vault-ref masking still applies). Operator-SSE keeper-side does not broadcast progress.
+Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-side handler `TaskEvent`): `sid = keeper` (address of the keeper-target of the run), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` - name `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / otherwise `TASK_STATUS_OK`). Thanks to this, **task:-Tiding subscription also works for keeper-side addresses**: a keeper task with the address `register ∪ id` (including `provision_vm` with `id:` without `register:`) ends up in `changed_tasks` of the terminal event `incarnation.run_completed` and is matched by the task selector ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)). Secret hygiene: keeper-side `task.executed` carries only address + status (without `register_data`/output); `error.message` - only on failure (nothing suppresses it per task since [ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 removed `no_log:`; the write-path vault-ref masking still applies). Operator-SSE keeper-side does not broadcast progress.
 
 ### The context of `params:` is `incarnation.state`, but not `soulprint`
 
@@ -50,11 +50,11 @@ In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-on
 
 A keeper-side task is executed by the keeper's own scenario runner, which walks the plan in order and evaluates no flow-control predicate. Everything a Soul-side runner answers - `when:` / `changed_when:` / `failed_when:` / `onchanges:` / `onfail:` / `retry:`+`until:` - rides the `RenderedTask` for symmetry and is read by nobody keeper-side. The keys whose being dropped would change what actually runs are therefore refused outright rather than accepted and ignored:
 
-| Key on `on: keeper` | Answer |
+| Key on a keeper-side task | Answer |
 |---|---|
 | `async:` | **Refused** (`async_on_keeper_invalid`) - Soul-side task concurrency, no meaning off a Soul ([destiny/tasks.md §6](../destiny/tasks.md)). |
 | `loop:` · `apply:` | **Refused** - a keeper task is module-only in the pilot. A capture over a runtime-sized collection is written out one step per element ([NIM-709](../adr/0084-explicit-state-capture.md)). |
-| `block:` | **Refused** (`block_on_keeper_invalid`) - `on:` selects the hosts a block fans out to, and `keeper` is not one. The key is refused at **both** levels: on the block, and on a task nested inside one. Keeper-side tasks go flat, in the scenario's own task list. |
+| `block:` | **Refused** (`block_on_keeper_invalid`) - a block fans its children out over the run's hosts, and the keeper is not one of them. Refused at **both** levels: on the block, and on a keeper-side task nested inside one - the child needs no `on:` to be caught, since its module address is what decides. Keeper-side tasks go flat, in the scenario's own task list. |
 | `when:` **static** (`input.` / `vars.` / `incarnation.`) | **Honoured.** The keeper settles it at render, before the task is routed keeper-side: false collapses the step to a skip placeholder, true renders it normally. This is the working form. |
 | `when:` reading `register.*` / `soulprint.*` | **Refused** (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - see below. |
 | `require:` | **Accepted, redundant** - the keeper runs its tasks in plan order, so the barrier is already satisfied; threading it keeps its names under the unknown-register check. |
@@ -68,7 +68,6 @@ Two replacements, both working today:
 # 1. The condition moves INSIDE the value - evaluated at render, in the keeper
 #    env, where a PREVIOUS keeper task's register is bound.
 - name: Record the provisioning outcome
-  on: keeper
   module: core.state.set
   params:
     field: tier
@@ -92,7 +91,7 @@ A keeper task's `register.*` context holds **keeper** tasks only. A capture that
 
 - Namespace: `core`. Module: `soul`. State: `registered`.
 - Full task name: `module: core.soul.registered`.
-- Side: **Keeper-side**. The step **must** carry `on: keeper`.
+- Side: **Keeper-side**, derived from the module address. The step carries **no** `on:` key - writing `on: keeper` on it is an error (`on_keeper_redundant`, NIM-747).
 
 ### State (state form)
 
@@ -178,7 +177,6 @@ The fields `online`/`pending`/`satisfied` are present in output **only** when `a
 
 ```yaml
 - name: Bind the new replica to the incarnation
-  on: keeper
   module: core.soul.registered
   register: registered
   params:
@@ -196,7 +194,6 @@ Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for o
 
 ```yaml
 - name: Register provisioned shards and await onboarding
-  on: keeper
   module: core.soul.registered
   register: shards
   params:
@@ -211,24 +208,32 @@ Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for o
 
 The step first registers all SIDs of the list, then blocks Redis SID-lease. If to `10m` online `< await_min_count` - step `failed` (B1-strict), the run goes to `error_locked`, `register.shards.pending` carries unfinished SIDs.
 
-### Relation to destiny `coven-assign`
+### Coven tags and the retired destiny `coven-assign`
 
-After [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation), `coven-assign` is **pure stable-tag management** — it assigns/updates the real stable Coven tags of an already-bound host and is **no longer a membership act** (assigning a tag does not make a host a member; membership is conferred by the bind, handled implicitly by `core.soul.registered` during onboarding/create). The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains a **thin wrapper** around this module: its `tasks/main.yml` is a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
+After [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation), assigning Coven tags is **pure stable-tag management** — it assigns/updates the real stable Coven tags of an already-bound host and is **no longer a membership act** (assigning a tag does not make a host a member; membership is conferred by the bind, handled implicitly by `core.soul.registered` during onboarding/create).
 
-When to write a module call directly, and when to write `apply: { destiny: coven-assign }`:
+**Write the module call directly**, in the scenario's own task list:
 
-- **Directly `module: core.soul.registered`** is a typical case in the scenario. One step, everything is visible in place, supports all `mode` modes.
-- **`apply: { destiny: coven-assign }`** - when there is already an established call through destiny (historical compatible code), or when destiny is used as a self-contained unit with a molecule test and an independent git ref ([ADR-007](../adr/0007-versioning-git-ref.md)). The wrapper fixes `mode: append` - `replace`/`remove` requires a direct call.
+```yaml
+- name: Assign the stable coven tags
+  module: core.soul.registered
+  params:
+    sid:   "${ input.sid }"
+    coven: "${ input.coven }"
+    mode:  append
+```
+
+There used to be a destiny wrapper for this (`examples/destiny/coven-assign/`), and it was **removed in NIM-749 because it could never have run**. A destiny is rendered per host and dispatched to a Soul, whose registry has no `core.soul` module: nothing in the destiny render path diverts a keeper-side address (`guardDestinyTask` looks at the discriminator, not at the side), so the step reached a host as an unknown module. Reading the side off the module address made that statable, and it is now refused offline as `keeper_module_in_destiny`. **A keeper-side module cannot be wrapped in a destiny at all** — a destiny is Soul-side by construction, so the scenario task list is the only place such a step belongs.
 
 ## `core.choir.present` / `core.choir.absent`
 
-Editing Voice membership in Choir incarnation (ADR-044): "SID is the Voice of the specified Choir of this incarnation." **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.choir`; state (`present`/`absent`) comes from the address suffix via `SplitModuleAddr` (see the Registration and Dispatch section). Registered only when `Deps.ChoirStore` is specified - otherwise the step drops to "unknown keeper-side module". Implementation - [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
+Editing Voice membership in Choir incarnation (ADR-044): "SID is the Voice of the specified Choir of this incarnation." **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.choir`; state (`present`/`absent`) comes from the address suffix via `SplitModuleAddr` (see the Registration and Dispatch section). Registered only when `Deps.ChoirStore` is specified - otherwise the step drops to "unknown keeper-side module". Implementation - [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
 
 ### Addressing and side
 
 - Namespace: `core`. Module: `choir`. State: `present` (default if state is empty) / `absent`.
 - Full task name: `module: core.choir.present` / `module: core.choir.absent`.
-- Side: **Keeper-side**. The step **must** carry `on: keeper`.
+- Side: **Keeper-side**, derived from the module address. The step carries **no** `on:` key - writing `on: keeper` on it is an error (`on_keeper_redundant`, NIM-747).
 
 ### State (state form)
 
@@ -246,7 +251,7 @@ Before mutation, the module validates the existence of incarnation (`Incarnation
 | `incarnation` | string | required | The name of the incarnation to which Choir belongs. Checks for existence. |
 | `choir` | string | required | Choir's name. Validated by `ValidChoirName`; garbage → `failed`. |
 | `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`; invalid → `failed`. |
-| `role` | string | optional | The host's **declared role** within the Choir (`present` only) - kebab-case, 1..63. Since [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330) this is the ONLY way to declare a role: `incarnation.spec.hosts[].role` and its `PATCH .../hosts` endpoint are gone, so a bootstrap-`create` that needs roles writes them with this step (`on: keeper`) before any task reads `soulprint.hosts[].role`. Omitted → SQL `NULL` = "no declared role", NOT a default group. |
+| `role` | string | optional | The host's **declared role** within the Choir (`present` only) - kebab-case, 1..63. Since [ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role) (NIM-330) this is the ONLY way to declare a role: `incarnation.spec.hosts[].role` and its `PATCH .../hosts` endpoint are gone, so a bootstrap-`create` that needs roles writes them with this step (keeper-side by its address) before any task reads `soulprint.hosts[].role`. Omitted → SQL `NULL` = "no declared role", NOT a default group. |
 | `position` | int (≥ 0) | optional | Voice position (`present` only); negative → `failed`. |
 
 ### Output contract (`output:` module)
@@ -262,7 +267,7 @@ Complete per-module reference - [docs/module/core/choir/README.md](../module/cor
 
 ## `core.cloud.created` / `core.cloud.destroyed`
 
-Creating/deleting VMs via CloudDriver plugin ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.cloud`; state (`created` / `destroyed`, also `resized`) comes from the address suffix. Implementation - [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Full flow (Provider/Profile-resolve, credentials Option A, userdata-render, guard-rails destroy) - [cloud.md](cloud.md); per-module reference - [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
+Creating/deleting VMs via CloudDriver plugin ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.cloud`; state (`created` / `destroyed`, also `resized`) comes from the address suffix. Implementation - [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Full flow (Provider/Profile-resolve, credentials Option A, userdata-render, guard-rails destroy) - [cloud.md](cloud.md); per-module reference - [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
 
 **Two sources for the driver tuple** ([ADR-017 amendment 2026-08-17](../adr/0017-keeper-side-core.md), NIM-668), for all three states: the **registry** (`provider:` = a row name, keeper resolves driver + credentials + region + fqdn_suffix out of it) or **inline** (`driver` + `credentials` + `region` / `fqdn_suffix` written in the step, `profile` as the VM spec object). One or the other - naming both is a `Validate` error, not a silent preference. The registries stay supported and simply stop being mandatory; a service can now provision with zero rows in Postgres. Comparison table and rules - [cloud.md → Two sources for the driver](cloud.md#two-sources-for-the-driver-registry-or-inline).
 
@@ -298,7 +303,7 @@ Canonical ready-made VM chain: `core.bootstrap.issued` → `core.bootstrap.deliv
 
 ## `core.bootstrap.delivered`
 
-Delivery of per-VM bootstrap token via SSH to newly created VMs ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.bootstrap`; state `delivered` comes from the address suffix. Implementation - [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+Delivery of per-VM bootstrap token via SSH to newly created VMs ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.bootstrap`; state `delivered` comes from the address suffix. Implementation - [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
 
 **Two transports** (`keeper.yml::push.transport`, [ADR-063 amendment Teleport](../adr/0063-bootstrap-token-delivery.md#amendment-teleport-by-name-transport)): **`direct`** (default) - generic `push.Dial` by required `primary_ip` via SshProvider plugin (Authorize/Sign + CA-signed host-cert verify from Vault host-CA); **`teleport`** - by-name via Teleport Proxy (target=SID, not IP; `primary_ip` is optional; transport+auth+host-verify entirely via Teleport identity-file, Authorize/Sign/Vault-host-CA are not used, retry-to-join). Delivery dependencies are state-specific: direct needs providers + host CAs + dialer, Teleport needs its dialer.
 
@@ -323,7 +328,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already i
 
 - Namespace `core`, module `bootstrap`, state `delivered`.
 - Full task name: `module: core.bootstrap.delivered`.
-- Side: **Keeper-side**. The step **must** carry `on: keeper`.
+- Side: **Keeper-side**, derived from the module address. The step carries **no** `on:` key - writing `on: keeper` on it is an error (`on_keeper_redundant`, NIM-747).
 
 ### Parameters (`params:`)
 
@@ -353,17 +358,17 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already i
 
 ## `core.vault.kv-read`
 
-Explicit reading of the secret from Vault KV (v1/v2, mount version is determined automatically) on the keeper side with a mandatory recording of the audit event `vault.kv-read` (ADR-017(b)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.vault`; state `kv-read` (verb) comes from the address suffix. Exists in parallel with implicit `${ vault(...) }` in CEL: the implicit form is cheap to render, but does not leave an audit record; this module is an explicit form for compliance-accurate reading. Read-only (`changed=false` always). Complete per-module reference with params/output/security - [docs/module/core/vault/README.md](../module/core/vault/README.md).
+Explicit reading of the secret from Vault KV (v1/v2, mount version is determined automatically) on the keeper side with a mandatory recording of the audit event `vault.kv-read` (ADR-017(b)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.vault`; state `kv-read` (verb) comes from the address suffix. Exists in parallel with implicit `${ vault(...) }` in CEL: the implicit form is cheap to render, but does not leave an audit record; this module is an explicit form for compliance-accurate reading. Read-only (`changed=false` always). Complete per-module reference with params/output/security - [docs/module/core/vault/README.md](../module/core/vault/README.md).
 
 ## `core.vault.kv-present`
 
-Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
+Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
 
 ## `core.state.<verb>`
 
-The write point of a service state field ([ADR-0084](../adr/0084-explicit-state-capture.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key — base `core.state`; the address suffix **is the verb**. Registered only when the Vault client is configured (`Deps.Vault`), the same pattern as `core.choir` / `core.cert` — otherwise the step fails with "unknown keeper-side module".
+The write point of a service state field ([ADR-0084](../adr/0084-explicit-state-capture.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key — base `core.state`; the address suffix **is the verb**. Registered only when the Vault client is configured (`Deps.Vault`), the same pattern as `core.choir` / `core.cert` — otherwise the step fails with "unknown keeper-side module".
 
 The field lands in `incarnation.state` **at the step**, under the run that produced it, not in an end-of-run commit. A later task in the same run reads what an earlier one wrote, and a run that dies half-way leaves what it had already captured instead of nothing.
 
@@ -387,7 +392,6 @@ These are the [ADR-057](../adr/0057-state-changes-crud-verbs.md) verbs, applied 
 
 ```yaml
 - name: capture the users we just created
-  on: keeper
   module: core.state.add
   register: redis_users
   params:
@@ -437,7 +441,7 @@ The audit event is `vault.kv-present`, **reused rather than renamed**: the fact 
 
 ## `core.cert.registered` / `core.cert.issued`
 
-Tracking of the incarnation's service TLS certs in the **Warrant** registry ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#domain-entities)) — the basis for auto-rotation by the Reaper. **Keeper-side**, dispatcher `on: keeper`. Registry key — base `core.cert`; state (`registered` / `issued`) comes from the address suffix via `SplitModuleAddr`. Registration in `coremod` is conditional on a configured `CertStore` (same pattern as `core.choir`/`core.vault`) — otherwise the step fails with "unknown keeper-side module". This is about the **service** cert (e.g. Redis server TLS), not the Soul agent's identity cert ([SoulSeed](../soul/identity.md), rotated separately).
+Tracking of the incarnation's service TLS certs in the **Warrant** registry ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#domain-entities)) — the basis for auto-rotation by the Reaper. **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key — base `core.cert`; state (`registered` / `issued`) comes from the address suffix via `SplitModuleAddr`. Registration in `coremod` is conditional on a configured `CertStore` (same pattern as `core.choir`/`core.vault`) — otherwise the step fails with "unknown keeper-side module". This is about the **service** cert (e.g. Redis server TLS), not the Soul agent's identity cert ([SoulSeed](../soul/identity.md), rotated separately).
 
 Two states — by cert source:
 
@@ -452,7 +456,7 @@ Without tracking in Warrant the Reaper is **blind to certs** — the step (`regi
 
 - Namespace `core`, module `cert`, state `registered` / `issued`.
 - Full task name: `module: core.cert.registered` / `module: core.cert.issued`.
-- Side: **Keeper-side**. The step **must** carry `on: keeper`.
+- Side: **Keeper-side**, derived from the module address. The step carries **no** `on:` key - writing `on: keeper` on it is an error (`on_keeper_redundant`, NIM-747).
 
 ### Parameters (`params:`)
 

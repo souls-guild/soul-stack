@@ -37,21 +37,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// keeperSideModules — core modules dispatched `on: keeper` (ADR-017). They have no
-// Soul-side destiny form ("task in tasks/main.yml"), but the `params:` validator
-// still resolves them through the same coremanifest.State (config.module_params),
-// so the synthetic probe task below is valid for them too.
+// keeperSideModule — is this core module executed by the Keeper (ADR-017)? Such a
+// module has no Soul-side destiny form ("task in tasks/main.yml"), but the
+// `params:` validator still resolves it through the same coremanifest.State
+// (config.module_params), so the synthetic probe task below is valid for it too.
 //
-// Listed here only so test messages can tag such modules, not to skip them: the
-// check is identical for both sides.
-var keeperSideModules = map[string]bool{
-	"core.soul":      true,
-	"core.cloud":     true,
-	"core.bootstrap": true,
-	"core.vault":     true,
-	"core.choir":     true,
-	"core.state":     true,
-}
+// Used only so test messages can tag such a module, not to skip it: the check is
+// identical for both sides. Asks the catalog rather than the hand-written map it
+// replaced (NIM-749) — that map had drifted, missing `core.cert`, and a second
+// list of keeper-side addresses in the very package that owns the first one is
+// the drift this ticket exists to remove.
+func keeperSideModule(name string) bool { return coremanifest.IsKeeperSide(name) }
 
 // allRegisteredModules — deterministic list of all registered core modules. Taken
 // from the registry itself (Names() is sorted), not a hardcoded table, so a
@@ -194,7 +190,7 @@ func TestP5_DeclaredTypesAreEnforceable(t *testing.T) {
 		for _, u := range unenforced {
 			side := "soul-side"
 			modName := "core." + strings.SplitN(strings.TrimPrefix(u.addr, "core."), ".", 2)[0]
-			if keeperSideModules[modName] {
+			if keeperSideModule(modName) {
 				side = "keeper-side"
 			}
 			t.Errorf("  - %s (%s, type=%s): %s", u.addr, side, u.typ, u.why)

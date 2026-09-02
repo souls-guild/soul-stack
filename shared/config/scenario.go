@@ -280,7 +280,7 @@ var deprecatedScenarioKeys = map[string]string{
 	// `core.state.<verb>` step where its value becomes known, not by an
 	// end-of-run block that could only ever run after every host was already
 	// configured.
-	"state_changes": "state_changes: removed ([ADR-0084]); write each field with a `core.state.<verb>` task (module: core.state.set / present / add / append / modify / remove / unset, on: keeper) placed where the value becomes known",
+	"state_changes": "state_changes: removed ([ADR-0084]); write each field with a `core.state.<verb>` task (module: core.state.set / present / add / append / modify / remove / unset) placed where the value becomes known -- the address routes it keeper-side, so it carries no on: key",
 }
 
 // deprecatedTaskKeys — deprecated task-level keys (inside a `tasks[]` element or

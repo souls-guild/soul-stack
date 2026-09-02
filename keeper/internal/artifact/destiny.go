@@ -159,7 +159,11 @@ func (l *DestinyLoader) parseTasks(art *DestinyArtifact) ([]config.Task, error) 
 	if err != nil {
 		return nil, fmt.Errorf("artifact: reading %s destiny %q: %w", destinyTasksFile, art.Ref.Name, err)
 	}
-	tasks, diags, err := config.LoadDestinyTasksFromBytes(destinyTasksFile, data, config.ValidateOptions{})
+	// DestinyTasks: a destiny is Soul-side by construction, so a keeper-side
+	// module address in one can never execute (`keeper_module_in_destiny`,
+	// NIM-749). The same loader also serves a scenario's included body, where
+	// such an address is correct — hence the flag rather than a blanket rule.
+	tasks, diags, err := config.LoadDestinyTasksFromBytes(destinyTasksFile, data, config.ValidateOptions{DestinyTasks: true})
 	if err != nil {
 		return nil, fmt.Errorf("artifact: parsing %s destiny %q: %w", destinyTasksFile, art.Ref.Name, err)
 	}
@@ -167,7 +171,7 @@ func (l *DestinyLoader) parseTasks(art *DestinyArtifact) ([]config.Task, error) 
 		return nil, fmt.Errorf("artifact: %s destiny %q invalid: %s", destinyTasksFile, art.Ref.Name, firstError(diags))
 	}
 
-	expanded, idiags := config.ExpandIncludes(tasks, destinyIncludeResolver(art.LocalDir))
+	expanded, idiags := config.ExpandIncludesInDestiny(tasks, destinyIncludeResolver(art.LocalDir))
 	if diag.HasErrors(idiags) {
 		return nil, fmt.Errorf("artifact: expanding includes in %s destiny %q: %s", destinyTasksFile, art.Ref.Name, firstError(idiags))
 	}

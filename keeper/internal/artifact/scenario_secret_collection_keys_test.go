@@ -55,7 +55,6 @@ func TestLoadScenarioManifestResolved_DuplicateSecretCollectionKeys(t *testing.T
 	diags := loadKeyedScenario(t, `name: update_users
 tasks:
   - name: Capture the users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users
@@ -76,7 +75,6 @@ func TestLoadScenarioManifestResolved_DistinctSecretCollectionKeys(t *testing.T)
 	diags := loadKeyedScenario(t, `name: update_users
 tasks:
   - name: Capture the users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users

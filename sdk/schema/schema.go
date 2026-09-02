@@ -99,6 +99,27 @@ type Compat struct {
 	Keeper string `json:"keeper,omitempty"`
 }
 
+// Side is the half of the platform that executes a module: a Soul on the target
+// host, or the Keeper itself. It is a property OF THE MODULE — `core.state` can
+// only be applied against the incarnation row, `core.pkg` only on a host — so
+// the module declares it once and every task addressing that module inherits it.
+//
+// The zero value is the empty string, read as [SideSoul]: a module that declares
+// nothing runs where modules have always run.
+type Side string
+
+const (
+	// SideSoul — executed by a Soul on each targeted host. The default.
+	SideSoul Side = "soul"
+	// SideKeeper — executed by the Keeper itself, against no host. A task
+	// addressing such a module has no roster, so the orchestration keys that
+	// select or fan out over hosts do not apply to it.
+	SideKeeper Side = "keeper"
+)
+
+// AllSides lists the declarable sides, for diagnostics and for the validator.
+var AllSides = []Side{SideSoul, SideKeeper}
+
 // Module is one subject the artifact serves — `acl`, `config`, `info`. Its name is
 // address level 2 (`<alias>.<module>.<state>`); level 1 is the registration alias and
 // is deliberately absent from this document.
@@ -114,6 +135,16 @@ type Compat struct {
 type Module struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+
+	// Side — which half of the platform executes this module. The module
+	// declares it; a task never restates it, and the address alone is what
+	// routes the step (docs/scenario/orchestration.md §3).
+	//
+	// Empty means [SideSoul], and that default is what keeps every plugin
+	// written before this field host-side without an edit. A keeper-side
+	// plugin is not executable yet (NIM-688) — the field is the declaration
+	// surface it will be routed by, not a switch that already routes.
+	Side Side `json:"side,omitempty"`
 
 	// IntroducedIn — the engine release in which this module first appeared
 	// (ADR-0076(i)), plain MAJOR.MINOR.PATCH. Empty = at or before the baseline,

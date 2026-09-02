@@ -52,7 +52,6 @@ input:
 tasks:
   # Если нужно — создаём VM через CloudDriver (ADR-017: keeper-side core).
   - name: provision
-    on: keeper
     when: input.spawn != null
     module: core.cloud.created
     params:
@@ -85,28 +84,24 @@ tasks:
   # ([ADR-0084]). The capture runs where the value becomes known, not at the end
   # of the run.
   - name: Record the cluster topology and settings
-    on: keeper
     module: core.state.set
     params:
       field: redis_version
       value: "${ input.redis_version }"
 
   - name: Record the ACL users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users
       value: "${ input.redis_users }"
 
   - name: Record the effective redis.conf overrides
-    on: keeper
     module: core.state.set
     params:
       field: redis_config
       value: "${ input.redis_config }"
 
   - name: Record the cluster hosts
-    on: keeper
     module: core.state.set
     params:
       field: redis_hosts

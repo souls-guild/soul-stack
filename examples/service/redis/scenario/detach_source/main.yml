@@ -82,7 +82,6 @@ tasks:
   # on the vault-emitter and roster axes, neither of which the author could see.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -98,7 +97,6 @@ tasks:
     when: "incarnation.state.redis_type == 'sentinel'"
 
   - name: Record that the seed source is detached
-    on: keeper
     module: core.state.set
     params:
       field: seeded_from

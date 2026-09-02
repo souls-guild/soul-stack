@@ -126,7 +126,6 @@ description: 2-passage all-keeper chain (cloud.created -> bootstrap.delivered)
 tasks:
   - name: provision vm
     module: core.cloud.created
-    on: keeper
     register: provision
     params:
       provider: fake
@@ -759,7 +758,6 @@ description: mixed keeper + host in Passage 0
 tasks:
   - name: vault read
     module: core.vault.kv-read
-    on: keeper
     register: secret
     params:
       path: secret/data/db
@@ -856,7 +854,6 @@ description: keeper chain stratify
 tasks:
   - name: provision
     module: core.cloud.created
-    on: keeper
     register: provision
     params:
       provider: fake

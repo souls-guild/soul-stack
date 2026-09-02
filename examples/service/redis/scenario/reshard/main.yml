@@ -48,7 +48,6 @@ tasks:
   # on the vault-emitter and roster axes, neither of which the author could see.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:

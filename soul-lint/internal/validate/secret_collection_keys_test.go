@@ -56,7 +56,6 @@ state_schema:
 const duplicateKeysCapture = `name: update_users
 tasks:
   - name: Capture the users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users
@@ -94,7 +93,6 @@ tasks:
   - include: users.yml
 `
 	included := `- name: Capture the users
-  on: keeper
   module: core.state.set
   params:
     field: redis_users
@@ -113,7 +111,6 @@ func TestLint_DistinctSecretCollectionKeysSurvive(t *testing.T) {
 	diags := runJSON(t, writeSecretCollectionService(t, `name: update_users
 tasks:
   - name: Capture the users
-    on: keeper
     module: core.state.set
     params:
       field: redis_users

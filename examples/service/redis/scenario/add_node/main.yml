@@ -60,7 +60,6 @@ tasks:
   # on the vault-emitter and roster axes, neither of which the author could see.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -71,7 +70,6 @@ tasks:
       value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Resolve the passwords of the operator ACL users
-    on: keeper
     module: core.state.set
     register: redis_users
     params:

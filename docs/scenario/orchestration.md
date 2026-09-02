@@ -371,7 +371,6 @@ compute:
 tasks:
   - name: record the effective config
     module: core.state.set
-    on: keeper
     params:
       field: redis_config
       value: "${ compute.redis_config }"    # ← same compute
@@ -510,19 +509,41 @@ tasks: [ ... ]
 | Form | Semantics |
 |---|---|
 | **omitted** | entire incarnation: all **member** hosts, resolved via the membership relation `incarnation_membership` (NOT via a coven). `incarnation.name` is not a Coven — `on: ["${ incarnation.name }"]` is a **validation error** (steering to the omitted form), see [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) |
-| `on: keeper` | keeper-side: local task on the keeper itself (cloud-create, vault-resolve, http-call). On its way out: [ADR-0087](../adr/0087-task-side-derived-from-module-address.md) derives the side from the module address and makes this form an error on a **core** address. Accepted, **not implemented** — the table describes the engine that ships. |
 | `on: [coven-a, coven-b]` | intersection (AND) of the listed **stable** covens; result **always ⊆ members** (the roster is already membership-scoped) |
+
+### The side is the module's, not the task's
+
+[ADR-0087](../adr/0087-task-side-derived-from-module-address.md), implemented in NIM-749.
+
+**A keeper-side step is not written with `on:` at all.** The side follows from the **module
+address**: the core module sets are disjoint — `core.bootstrap` / `core.cert` / `core.choir` /
+`core.cloud` / `core.soul` / `core.state` / `core.vault` are executed by the Keeper, the other
+twenty-one by a Soul on each host — so the address decides on its own, and an author writing
+`on: keeper` was telling the engine something it already knew. On a core keeper-side address the key
+is now an **error** (`on_keeper_redundant`).
+
+That leaves `on:` with one meaning, the one this section is about: **which covens**. It used to carry
+two, a list of labels and a magic scalar meaning "no hosts at all", in the same key. A coven list on a
+keeper-side address is refused too (`on_covens_on_keeper_module`) — it selects hosts for a step that
+has none, and render never reads it, so the labels would vanish in silence. And the literal on a
+**Soul-side** core address is refused from the other direction (`on_keeper_on_soul_module`): render
+honours it whatever the address, so it would send a host module to the keeper, which has no such
+module.
+
+**A plugin address is the exception, for now.** `on: keeper` on `<alias>.<module>.<state>` is still
+accepted: nothing the engine reads declares such a plugin keeper-side, and the Keeper cannot execute
+one at all yet (NIM-688 — a live run reports "unknown keeper-side module"). A module's schema
+document carries the declaration that will replace it — `side: keeper | soul`, default `soul`
+([plugins.md → schema document](../keeper/plugins.md#schema-document)) — and the key goes once the Keeper can honour it.
 
 ```yaml
 # Entire incarnation (on: omitted)
 - name: Apply base config everywhere
   apply: { destiny: redis-base, input: { ... } }
 
-# keeper only
+# Keeper-side: no `on:` — `core.cloud` is a keeper-side module, so the address routes it
 - name: Provision VMs
-  on: keeper
-  module: core.cloud.provisioned
-  state: created
+  module: core.cloud.created
   params: { ... }
 
 # Intersection of stable covens, ⊆ members
@@ -538,7 +559,12 @@ tasks: [ ... ]
 3. **Cross-incarnation targeting is prohibited by construction.** The `on:` resolver cannot return a host that is not a member of the current incarnation, given any set of covens — the roster is membership-scoped, so a stable coven can only intersect it, never reach outside it. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), now enforced by the membership join rather than by the name-coven.
 4. Role (master / replica) **never Coven** and does not participate in `on:`. The volatile role is expressed only through `where:` (see §4).
 
-**Flow control on `on: keeper` is not the Soul-side one.** The keeper's own runner walks its tasks in plan order and evaluates no predicate, so `async:` is refused (`async_on_keeper_invalid`), `loop:`/`apply:`/`block:` are refused, `require:` is accepted-and-redundant, and a `when:` reading `register.*`/`soulprint.*` is refused (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - it would be accepted and dropped, and the step that runs regardless of its condition is the one that writes incarnation state (§7). A **static** `when:` stays the working form: the keeper settles it at render, before the task is routed keeper-side. The full key-by-key answer with replacements - [keeper/modules.md](../keeper/modules.md).
+**Flow control on a keeper-side task is not the Soul-side one.** The keeper's own runner walks its tasks in plan order and evaluates no predicate, so `async:` is refused (`async_on_keeper_invalid`), `loop:`/`apply:`/`block:` are refused, `require:` is accepted-and-redundant, and a `when:` reading `register.*`/`soulprint.*` is refused (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - it would be accepted and dropped, and the step that runs regardless of its condition is the one that writes incarnation state (§7). A **static** `when:` stays the working form: the keeper settles it at render, before the task is routed keeper-side. The full key-by-key answer with replacements - [keeper/modules.md](../keeper/modules.md).
+
+These four are judged by the task's **side**, i.e. by its module address — not by a written
+`on: keeper`. That is a real widening rather than a restatement: while the checks keyed on the
+literal, a dynamic `when:` on a capture written without it went through untouched, so the file said
+the step was conditional and the step wrote state every time.
 
 ## 4. Volatile predicate - `where:`
 
@@ -981,20 +1007,24 @@ tasks: [ ... ]
 
 ## 7. State capture and the cross-host barrier
 
-`incarnation.state` is written by **capture steps** — ordinary `on: keeper` tasks addressed
+`incarnation.state` is written by **capture steps** — ordinary keeper-side tasks addressed
 `core.state.<verb>` — and every write lands **at its step**, not at the end of the run
 ([ADR-0084](../adr/0084-explicit-state-capture.md)). The end-of-run `state_changes:` section that
 used to hold all of a scenario's writes is **removed from the grammar**: a scenario still carrying
 one is rejected (`unknown_key`), never ignored — silently dropping the block would stop the writes
 it describes with nothing saying so.
 
-**`on: keeper` is not optional on a capture, and forgetting it is an ERROR**
-(`state_capture_not_on_keeper`), raised at config parse and by `soul-lint`. `core.state` lives on
-the keeper and nowhere else: dispatched to a host the step is an unknown module and the run dies
-there. The offline half is what the diagnostic is really for — the L0 trial folds a capture by its
-module **address**, so an unrouted one predicts `state_after` exactly as a routed one does, and the
-case goes green on a plan the run cannot execute. The check runs after `include:` is resolved, so a
-capture written in a shared file is flagged at that file's own line, not at the `- include:` node.
+**A capture carries no `on:` key.** `core.state` lives on the keeper and nowhere else, so its
+address routes the step (§3) and there is nothing left for the author to declare; writing
+`on: keeper` on it is an error (`on_keeper_redundant`). The rule this replaced was the mirror image
+— `state_capture_not_on_keeper`, which refused a capture that did NOT carry the key — and it existed
+only to make the author restate what the address already said.
+
+```yaml
+- name: Record the namespace
+  module: core.state.set
+  params: { field: namespace, value: "${ input.namespace }" }
+```
 
 **This rule reverses when [ADR-0087](../adr/0087-task-side-derived-from-module-address.md) lands:**
 the side becomes derived from the address, so writing `on: keeper` on a capture becomes the error
@@ -1090,14 +1120,12 @@ bindings are evaluated by the module at merge time, against the state as of that
 ```yaml
 - name: record the version we deployed
   module: core.state.set
-  on: keeper
   params:
     field: redis_version
     value: "${ input.version }"
 
 - name: pin the master this cluster was built around
   module: core.state.present       # a later run must not move it
-  on: keeper
   params:
     field: origin_master
     value: "${ compute.master_sid }"
@@ -1113,7 +1141,6 @@ nothing in state points at).
 ```yaml
 - name: record the new replica
   module: core.state.add
-  on: keeper
   params:
     field: redis_hosts             # list
     value: "${ vars.new_sid }"
@@ -1122,7 +1149,6 @@ nothing in state points at).
 
 - name: record the new user
   module: core.state.add
-  on: keeper
   params:
     field: redis_users             # map
     key: "${ input.username }"
@@ -1153,7 +1179,6 @@ refused for the same reason: one of them would be silently ignored.
 ```yaml
 - name: apply the new ACL
   module: core.state.modify
-  on: keeper
   params:
     field: redis_users
     match: "key == input.username"
@@ -1163,7 +1188,6 @@ refused for the same reason: one of them would be silently ignored.
 
 - name: retire the host
   module: core.state.remove
-  on: keeper
   params:
     field: redis_hosts
     match: "elem == input.sid"
@@ -1267,13 +1291,11 @@ Passage — see the `provisioned_*` captures in
 ```yaml
 - name: provision the VMs
   module: core.cloud.created
-  on: keeper
   register: provision
   params: { … }
 
 - name: record the VMs we just created
   module: core.state.append
-  on: keeper
   params:
     field: provisioned_vm_ids
     value: "${ register.provision.vm_ids }"
@@ -1301,7 +1323,6 @@ per-host set in one expression:
 
 - name: record all node ids
   module: core.state.set
-  on: keeper
   params:
     field: node_ids
     value: "${ register.hosts.node_id }"   # → { "<sid>": {stdout: …, exit_code: 0}, … }

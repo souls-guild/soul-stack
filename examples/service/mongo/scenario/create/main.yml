@@ -78,7 +78,6 @@ tasks:
   # vault-emitter and roster axes, neither of which the author could see from the file.
 
   - name: Mint the password of the service's own admin account
-    on: keeper
     module: core.state.set
     register: system_users
     params:
@@ -94,7 +93,6 @@ tasks:
            }) }
 
   - name: Mint the passwords of the operator MongoDB users
-    on: keeper
     module: core.state.set
     register: mongo_users
     params:
@@ -375,14 +373,12 @@ tasks:
   # this body ([ADR-0083] §4).
 
   - name: Record the deployed MongoDB version
-    on: keeper
     module: core.state.set
     params:
       field: mongo_version
       value: "${ compute.mongo_version }"
 
   - name: Record the effective mongod config
-    on: keeper
     module: core.state.set
     params:
       field: mongo_config
@@ -390,7 +386,6 @@ tasks:
 
   # memory_mb: operator's memory budget (int). Not set → 0.
   - name: Record the deployed memory budget
-    on: keeper
     module: core.state.set
     params:
       field: memory_mb
@@ -398,7 +393,6 @@ tasks:
 
   # wiredtiger_cache_gb: effective cache size (same compute that went into mongo_config).
   - name: Record the effective WiredTiger cache size
-    on: keeper
     module: core.state.set
     params:
       field: wiredtiger_cache_gb
@@ -406,7 +400,6 @@ tasks:
 
   # sysctl_settings: applied host tuning (the same vars.sysctl_settings that goes into the render).
   - name: Record the applied host tuning
-    on: keeper
     module: core.state.set
     params:
       field: sysctl_settings

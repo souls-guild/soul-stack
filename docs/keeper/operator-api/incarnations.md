@@ -537,7 +537,6 @@ was the **declared role** — and that has been an attribute of a Choir Voice si
   ```yaml
   - name: put the seed node into the primary part
     module: core.choir.present
-    on: keeper
     params:
       incarnation: "${ incarnation.name }"
       choir: redis_primary

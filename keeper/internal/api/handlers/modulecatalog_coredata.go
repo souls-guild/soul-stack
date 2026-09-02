@@ -136,32 +136,32 @@ var coreModuleDocs = []coreModuleDoc{
 		States:      []string{"present", "absent"},
 	},
 
-	// --- keeper-side (ADR-017/ADR-044, on: keeper) ---
+	// --- keeper-side (ADR-017/ADR-044; routed by the module address, NIM-749) ---
 	// Name — base name without the state suffix (like Soul-side core); the full
 	// author address = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
 	{
 		Name:        "core.bootstrap",
-		Description: "Issue one-time tokens for ready-made VM SIDs and deliver/redeem them over SSH or Teleport (keeper-side, on: keeper).",
+		Description: "Issue one-time tokens for ready-made VM SIDs and deliver/redeem them over SSH or Teleport (keeper-side).",
 		States:      []string{"issued", "delivered"},
 	},
 	{
 		Name:        "core.choir",
-		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side, on: keeper).",
+		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side).",
 		States:      []string{"present", "absent"},
 	},
 	{
 		Name:        "core.cloud",
-		Description: "Provision/destroy a cloud VM via a CloudDriver plugin (keeper-side, on: keeper).",
+		Description: "Provision/destroy a cloud VM via a CloudDriver plugin (keeper-side).",
 		States:      []string{"created", "destroyed"},
 	},
 	{
 		Name:        "core.soul",
-		Description: "Register a Soul in the keeper registry (keeper-side, on: keeper).",
+		Description: "Register a Soul in the keeper registry (keeper-side).",
 		States:      []string{"registered"},
 	},
 	{
 		Name:        "core.vault",
-		Description: "Work with Vault KV on the keeper side: kv-read (explicit read with an audit event) and kv-present (generate-if-absent - guarantees the secret exists, generates missing crypto/rand). keeper-side, on: keeper.",
+		Description: "Work with Vault KV on the keeper side: kv-read (explicit read with an audit event) and kv-present (generate-if-absent - guarantees the secret exists, generates missing crypto/rand). keeper-side.",
 		States:      []string{"kv-read", "kv-present"},
 	},
 }

@@ -33,7 +33,6 @@ tasks:
   # exempt from the `string` literal check the SDK param type would otherwise
   # apply (same workaround as `value: "${ vars.member }"` in scenario/create).
   - name: Record every host's node id
-    on: keeper
     module: core.state.set
     params:
       field: node_ids

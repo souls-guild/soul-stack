@@ -38,4 +38,20 @@ type ValidateOptions struct {
 	// a name colliding across files is a duplicate_task_address, and that is
 	// validateFlatTaskAddresses' verdict to give, on the flat expanded plan.
 	OuterRegisters map[string]bool
+
+	// DestinyTasks marks the file being loaded as a DESTINY's `tasks/main.yml`
+	// rather than a scenario's included body — the two share
+	// [LoadDestinyTasksFromBytes] and are otherwise indistinguishable at that
+	// layer, since both are a bare top-level task sequence.
+	//
+	// One rule needs the distinction (NIM-749): a destiny task is Soul-side by
+	// construction — it is rendered per host and dispatched to a Soul — so a
+	// keeper-side module address in one can never execute
+	// (`keeper_module_in_destiny`). In a scenario the same address is the
+	// ordinary, correct way to write a keeper-side step.
+	//
+	// Defaults to false, which is the safe direction: the scenario and include
+	// paths must NOT raise that diagnostic, and a destiny loader that forgets the
+	// flag loses one check rather than rejecting valid files.
+	DestinyTasks bool
 }

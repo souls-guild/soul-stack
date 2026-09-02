@@ -17,7 +17,6 @@ tasks:
   # same misspelling is caught in the same way and for the same reason.
   - name: Register the seed
     module: core.soul.registered
-    on: keeper
     params:
       sid: node-${ compute.nod_count }.example.com
       await_online: false

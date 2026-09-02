@@ -127,7 +127,6 @@ above): the new Voice is visible to subsequent runs.
 # Add a host to the Choir 'replicas' incarnations (present default).
 # on: keeper is required - this is a keeper-side step.
 - name: Add the new replica to the replicas choir
-  on: keeper
   module: core.choir.present
   params:
     incarnation: "${ incarnation.name }"
@@ -139,7 +138,6 @@ above): the new Voice is visible to subsequent runs.
 ```yaml
 # Removing membership when a host is removed from a role.
 - name: Remove the host from the replicas choir
-  on: keeper
   module: core.choir.absent
   params:
     incarnation: "${ incarnation.name }"

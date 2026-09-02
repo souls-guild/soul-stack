@@ -84,6 +84,9 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 			})
 		}
 		diags = append(diags, validateTaskNode(item, fmt.Sprintf("$[%d]", i))...)
+		if opts.DestinyTasks {
+			diags = append(diags, validateKeeperModuleInDestiny(item, fmt.Sprintf("$[%d]", i))...)
+		}
 	}
 	// Cross-task invariants over the whole list (duplicate register, unknown
 	// register references in onchanges/onfail/require). See validateTaskRefs.

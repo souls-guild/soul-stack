@@ -451,7 +451,6 @@ name: create
 tasks:
   - name: Register created hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"

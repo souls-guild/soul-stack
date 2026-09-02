@@ -100,7 +100,6 @@ tasks:
   # the vault-emitter axis, which the author could not see from the file.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -111,7 +110,6 @@ tasks:
       value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Mint the missing operator ACL user passwords
-    on: keeper
     module: core.state.set
     register: df_users
     params:

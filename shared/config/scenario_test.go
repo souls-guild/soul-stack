@@ -389,7 +389,6 @@ func TestLoadScenarioManifest_AsyncOnKeeper(t *testing.T) {
 	src := `name: x
 tasks:
   - module: core.soul.registered
-    on: keeper
     async: true
     params: { sid: a.example.com }
 `
@@ -411,7 +410,6 @@ tasks:
     register: probe
     params: { cmd: "true" }
   - module: core.soul.registered
-    on: keeper
     require: [probe]
     params: { sid: a.example.com }
 `
@@ -436,9 +434,12 @@ func TestLoadScenarioManifest_WhenOnKeeperDynamic(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// The producing task keeps the fixture free of
 			// unknown_register_reference, so the file's only defect is the one
-			// under test.
+			// under test. No `on:` key: since NIM-749 the capture's ADDRESS is what
+			// makes it keeper-side, and writing the key here would both add a
+			// second defect (`on_keeper_redundant`) and let this test pass with the
+			// derivation reverted.
 			src := "name: x\ntasks:\n  - module: core.exec.run\n    register: probe\n    params: { cmd: \"true\" }\n" +
-				"  - module: core.state.set\n    on: keeper\n    when: \"" + when + "\"\n    params: { field: provisioned, value: yes }\n"
+				"  - module: core.state.set\n    when: \"" + when + "\"\n    params: { field: provisioned, value: yes }\n"
 			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 			if !hasCodeAt(diags, "when_on_keeper_dynamic_unsupported", "$.tasks[1].when") {
 				dump(t, diags)
@@ -456,7 +457,6 @@ func TestLoadScenarioManifest_WhenOnKeeperStaticAccepted(t *testing.T) {
 	src := `name: x
 tasks:
   - module: core.state.set
-    on: keeper
     when: input.provision
     params: { field: provisioned, value: yes }
   - module: core.exec.run
@@ -473,36 +473,165 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_StateVerbNotOnKeeper - `core.state.<verb>` without
-// `on: keeper` is dispatched to a host that has no such module. The failure is loud
-// in a real run and silent in L0, where the trial folds the step by its module
-// address alone and predicts the state a run could never reach - which is why this
-// is refused offline rather than left to the run.
-func TestLoadScenarioManifest_StateVerbNotOnKeeper(t *testing.T) {
+// TestLoadScenarioManifest_SideFollowsTheModuleAddress — NIM-749: the side of a
+// task is read off its MODULE, and the task does not restate it.
+//
+// The core module sets are disjoint (`core.state`/`core.cloud`/`core.soul`/… on
+// the keeper, the other twenty-one on the Soul side), so the address decides on
+// its own. What used to be here was the opposite rule — `state_capture_not_on_keeper`,
+// which refused a capture that did NOT carry `on: keeper` — and it existed only
+// to force the author to write what the engine already knew. Both halves are
+// asserted together because they are one rule seen from two sides: the keyless
+// form is accepted, and the key is refused.
+func TestLoadScenarioManifest_SideFollowsTheModuleAddress(t *testing.T) {
+	capture := func(on string) string {
+		return `name: x
+tasks:
+  - name: record the owner
+    module: core.state.set
+` + on + `    params:
+      field: owner
+      value: alice
+`
+	}
+
+	t.Run("a capture without on: is accepted", func(t *testing.T) {
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(capture("")), ValidateOptions{})
+		if diag.HasErrors(diags) {
+			dump(t, diags)
+			t.Fatalf("a keeper-side module needs no on: key — the address routes it")
+		}
+	})
+
+	t.Run("on: keeper on a core keeper-side address is redundant", func(t *testing.T) {
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(capture("    on: keeper\n")), ValidateOptions{})
+		if !hasCodeAt(diags, "on_keeper_redundant", "$.tasks[0].on") {
+			dump(t, diags)
+			t.Fatalf("expected on_keeper_redundant at the on: key")
+		}
+	})
+
+	// A coven list on a keeper-side module is a DIFFERENT mistake, and refusing it
+	// is not optional: render never reads `task.On` on a keeper task, so the labels
+	// select nothing and vanish without a word — the silent-wrong-target class. It
+	// gets its own code because "redundant" would be a lie about it: the literal
+	// restates something true, a list states something false.
+	t.Run("a coven list is refused under its own code", func(t *testing.T) {
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(capture("    on: [\"primary\"]\n")), ValidateOptions{})
+		if !hasCodeAt(diags, "on_covens_on_keeper_module", "$.tasks[0].on") {
+			dump(t, diags)
+			t.Fatalf("expected on_covens_on_keeper_module at the on: key")
+		}
+		if hasCode(diags, "on_keeper_redundant") {
+			dump(t, diags)
+			t.Fatalf("a coven list is not the redundant-literal case")
+		}
+	})
+
+	// And the same list on a Soul-side module is ordinary targeting.
+	t.Run("a coven list on a Soul-side module is untouched", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: restart
+    module: core.service.restarted
+    on: ["primary"]
+    params: { name: redis }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if diag.HasErrors(diags) {
+			dump(t, diags)
+			t.Fatalf("on: [coven] is what the key is FOR on a Soul-side task")
+		}
+	})
+
+	// The boundary the epic draws: a PLUGIN address keeps the literal. Nothing
+	// declares such a plugin keeper-side that the engine reads, and the keeper
+	// cannot execute one yet (NIM-688), so refusing the key would leave those
+	// scenarios with no spelling at all.
+	t.Run("a plugin address keeps on: keeper", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: create the VM
+    module: wb-cloud.vm.created
+    on: keeper
+    params: { flavor: small }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "on_keeper_redundant") {
+			dump(t, diags)
+			t.Fatalf("on: keeper on a plugin address is still the only way to route it")
+		}
+		if diag.HasErrors(diags) {
+			dump(t, diags)
+			t.Fatalf("a plugin address with on: keeper must still validate")
+		}
+	})
+}
+
+// TestLoadScenarioManifest_KeeperChecksWithoutTheKey — the four constructs that
+// are meaningless keeper-side are judged by the task's SIDE, not by a written
+// `on: keeper` (NIM-749). Each case carries no `on:` at all, which is the form
+// every keeper-side task takes from now on.
+//
+// ★ The `when:` case is the defect this closes. It used to require the key, so a
+// dynamic predicate on a capture written without one went through untouched: the
+// file said the step was conditional, the step wrote state every time, and
+// nothing anywhere said so.
+func TestLoadScenarioManifest_KeeperChecksWithoutTheKey(t *testing.T) {
 	for name, tc := range map[string]struct {
-		on   string
-		want bool
+		key  string
+		code string
+		path string
 	}{
-		"no on: at all": {"", true},
-		"on: a coven":   {"    on: [\"primary\"]\n", true},
-		"on: keeper":    {"    on: keeper\n", false},
+		"dynamic when:": {
+			key:  "    when: \"register.probe.stdout == 'yes'\"\n",
+			code: "when_on_keeper_dynamic_unsupported",
+			path: "$.tasks[0].when",
+		},
+		"async:": {
+			key:  "    async: true\n",
+			code: "async_on_keeper_invalid",
+			path: "$.tasks[0].async",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			src := `name: x
 tasks:
   - name: record the owner
     module: core.state.set
-` + tc.on + `    params:
+` + tc.key + `    params:
       field: owner
       value: alice
 `
 			_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-			got := hasCode(diags, "state_capture_not_on_keeper")
-			if got != tc.want {
-				t.Fatalf("state_capture_not_on_keeper = %v, want %v -- diags: %v", got, tc.want, diags)
+			if !hasCodeAt(diags, tc.code, tc.path) {
+				dump(t, diags)
+				t.Fatalf("expected %s at %s with no on: key written", tc.code, tc.path)
 			}
 		})
 	}
+
+	// The negative half: the same keys on a Soul-side module stay legal. Without
+	// it the checks could fire on everything and still look correct.
+	t.Run("a Soul-side module is untouched", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    params: { cmd: "true" }
+  - name: restart
+    module: core.service.restarted
+    when: "register.probe.stdout == 'yes'"
+    async: true
+    params: { name: redis }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "when_on_keeper_dynamic_unsupported") || hasCode(diags, "async_on_keeper_invalid") {
+			dump(t, diags)
+			t.Fatalf("a Soul-side task must keep when:/async:")
+		}
+	})
 }
 
 // TestLoadScenarioManifest_BlockOnKeeper — ★ regression for a PANIC. A block
@@ -511,9 +640,15 @@ tasks:
 // into renderKeeperTask, which dereferenced its nil Module.
 //
 // Both levels are refused, because neither works. `on: keeper` on the block is
-// the crash; `on: keeper` on a child is fanned out through the Soul-side roster
-// resolve, which rejects the literal as a routing bug. Blocks and keeper tasks
-// are disjoint - the diagnostic says so at whichever level the author wrote it.
+// the crash; a keeper-side CHILD is fanned out through the Soul-side roster
+// resolve, which rejects it as a routing bug. Blocks and keeper tasks are
+// disjoint - the diagnostic says so at whichever level the author wrote it.
+//
+// ★ Since NIM-749 the child needs no `on:` to be caught: the module decides, so
+// the diagnostic anchors on `module:`. That is load-bearing rather than cosmetic
+// — [render.IsKeeperTask] is consulted on top-level tasks only, so a keeper-side
+// module reached through a block is dispatched to a host either way, and
+// dropping the now-redundant key would otherwise have removed the only check.
 func TestLoadScenarioManifest_BlockOnKeeper(t *testing.T) {
 	t.Run("on the block", func(t *testing.T) {
 		src := `name: x
@@ -537,13 +672,12 @@ tasks:
   - name: record the topology
     block:
       - module: core.state.set
-        on: keeper
         params: { field: mode, value: sentinel }
 `
 		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
-		if !hasCodeAt(diags, "block_on_keeper_invalid", "$.tasks[0].block[0].on") {
+		if !hasCodeAt(diags, "block_on_keeper_invalid", "$.tasks[0].block[0].module") {
 			dump(t, diags)
-			t.Fatalf("expected block_on_keeper_invalid at the child's on: key")
+			t.Fatalf("expected block_on_keeper_invalid at the child's module: key")
 		}
 	})
 
@@ -827,17 +961,20 @@ func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
 	}
 }
 
-func TestLoadScenarioManifest_OnAsKeeperOK(t *testing.T) {
+// TestLoadScenarioManifest_KeeperSideCoreAddressOK — a keeper-side core module
+// validates with no `on:` at all. Since NIM-749 that is the whole spelling: the
+// address is what routes it, and the key that used to sit here is now
+// `on_keeper_redundant` (see TestLoadScenarioManifest_SideFollowsTheModuleAddress).
+func TestLoadScenarioManifest_KeeperSideCoreAddressOK(t *testing.T) {
 	src := `name: x
 tasks:
-  - on: keeper
-    module: core.cloud.created
+  - module: core.cloud.created
     params: { provider: aws }
 `
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("expected no errors for on: keeper")
+		t.Fatalf("expected no errors for a keeper-side core address")
 	}
 }
 
@@ -1440,4 +1577,86 @@ tasks: []
 		dump(t, diags)
 		t.Fatalf("from: should not be unknown_key (a known field)")
 	}
+}
+
+// TestLoadScenarioManifest_OnKeeperOnSoulModule — the reverse of
+// `on_keeper_redundant`, and a hole rather than a symmetry exercise (NIM-749).
+//
+// [render.IsKeeperTask] honours the `on: keeper` literal whatever the address —
+// it has to, because that is still how a keeper-side PLUGIN is routed — so the
+// literal on a Soul-side core module sends a host module to the keeper, whose
+// registry has no such module, and the run dies there. docs/keeper/modules.md has
+// called this "a validation error" since ADR-017 with nothing enforcing it.
+func TestLoadScenarioManifest_OnKeeperOnSoulModule(t *testing.T) {
+	t.Run("a Soul-side core module is refused", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: install
+    module: core.pkg.installed
+    on: keeper
+    params: { name: redis }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if !hasCodeAt(diags, "on_keeper_on_soul_module", "$.tasks[0].on") {
+			dump(t, diags)
+			t.Fatalf("expected on_keeper_on_soul_module at the on: key")
+		}
+	})
+
+	// The scope is DECLARED core modules, not the whole `core` namespace, and the
+	// difference is load-bearing: the keeper's registry is built from its Deps, so a
+	// `core.*` address with no declaration here can still be a registered keeper-side
+	// module — the integration harness registers `core.probe.*` exactly that way.
+	// Refusing it broke a dozen keeper-chain cases.
+	t.Run("an undeclared core address is left alone", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: probe
+    module: core.probe.created
+    on: keeper
+    params: {}
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "on_keeper_on_soul_module") {
+			dump(t, diags)
+			t.Fatalf("a core address this binary has no declaration for may still be a registered keeper-side module")
+		}
+	})
+
+	// And a plugin MUST keep the literal.
+	t.Run("a plugin address keeps the literal", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: create the VM
+    module: wb-cloud.vm.created
+    on: keeper
+    params: { flavor: small }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "on_keeper_on_soul_module") {
+			dump(t, diags)
+			t.Fatalf("a plugin address has no other spelling — the literal must stay legal")
+		}
+	})
+
+	// And the keeper-side core case is the OTHER code: the two must not collapse
+	// into one, since the remedies read differently.
+	t.Run("a keeper-side core module is the redundancy case", func(t *testing.T) {
+		src := `name: x
+tasks:
+  - name: capture
+    module: core.state.set
+    on: keeper
+    params: { field: owner, value: alice }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if hasCode(diags, "on_keeper_on_soul_module") {
+			dump(t, diags)
+			t.Fatalf("core.state is keeper-side — this is on_keeper_redundant, not the Soul-module case")
+		}
+		if !hasCode(diags, "on_keeper_redundant") {
+			dump(t, diags)
+			t.Fatalf("expected on_keeper_redundant")
+		}
+	})
 }

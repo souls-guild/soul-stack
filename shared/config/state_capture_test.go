@@ -42,7 +42,6 @@ name: create
 tasks:
   - name: Capture
     module: core.state.` + verb + `
-    on: keeper
     params:
 ` + params
 			if !HasStateCapture(tasks(t, src)) {
@@ -66,7 +65,6 @@ tasks:
           cmd: "echo provision"
       - name: Capture the endpoint
         module: core.state.set
-        on: keeper
         params:
           field: endpoint
           value: "10.0.0.1"
@@ -83,7 +81,6 @@ name: create
 tasks:
   - name: Register and refresh
     module: core.soul.registered
-    on: keeper
     params:
       refresh_soulprint: true
       sid: "host-new.example.com"

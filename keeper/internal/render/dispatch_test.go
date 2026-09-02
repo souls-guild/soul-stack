@@ -1,6 +1,7 @@
 package render
 
 import (
+	"context"
 	"sort"
 	"testing"
 
@@ -147,4 +148,75 @@ func join(s []string) string {
 		out += v
 	}
 	return out + "]"
+}
+
+// TestIsKeeperTask_SideFollowsTheModuleAddress — NIM-749: the routing decision is
+// read off the module, and a task that says nothing about its side is routed by
+// its address alone.
+//
+// The four cases are the whole rule. A keeper-side core address with no `on:` is
+// the new ordinary form; a Soul-side core address is untouched however it is
+// written; a keeper-side address that still carries the (now redundant) literal
+// keeps routing where it always did; and a PLUGIN address with the literal stays
+// keeper-side, which is the half NIM-688 has to close before the key can go.
+func TestIsKeeperTask_SideFollowsTheModuleAddress(t *testing.T) {
+	mod := func(addr string) *config.ModuleTask {
+		return &config.ModuleTask{Module: addr, Params: map[string]any{}}
+	}
+	for name, tc := range map[string]struct {
+		task config.Task
+		want bool
+	}{
+		"keeper-side core, no on:":        {config.Task{Module: mod("core.state.set")}, true},
+		"keeper-side core, on: keeper":    {config.Task{On: "keeper", Module: mod("core.cloud.created")}, true},
+		"soul-side core, no on:":          {config.Task{Module: mod("core.pkg.present")}, false},
+		"soul-side core, on: a coven":     {config.Task{On: []any{"primary"}, Module: mod("core.exec.run")}, false},
+		"plugin address, on: keeper":      {config.Task{On: "keeper", Module: mod("wb-cloud.vm.created")}, true},
+		"plugin address, no on:":          {config.Task{Module: mod("wb-cloud.vm.created")}, false},
+		"block task carries no module":    {config.Task{Block: &config.BlockTask{}}, false},
+		"block task with the on: literal": {config.Task{On: "keeper", Block: &config.BlockTask{}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := IsKeeperTask(tc.task); got != tc.want {
+				t.Fatalf("IsKeeperTask = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRender_KeeperSideModuleWithoutOn_RoutesToTheKeeper — the derivation reaching
+// the plan, not just the predicate. A capture written the way an author writes one
+// now (no `on:` anywhere) must land on the keeper target and never touch the
+// roster: routed Soul-side it would be dispatched to a host that has no such
+// module, and the run would die there.
+func TestRender_KeeperSideModuleWithoutOn_RoutesToTheKeeper(t *testing.T) {
+	manifest := &config.ScenarioManifest{
+		Name: "k",
+		Tasks: []config.Task{
+			{Name: "capture", Module: &config.ModuleTask{Module: "core.state.set", Params: map[string]any{
+				"field": "owner",
+				"value": "${ input.owner }",
+			}}},
+		},
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	in := RenderInput{
+		Scenario:    manifest,
+		Incarnation: IncarnationMeta{Name: "svc"},
+		Input:       map[string]any{"owner": "alice"},
+		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
+	}
+	tasks, plans, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(plans) != 1 || !plans[0].Keeper {
+		t.Fatalf("plans = %+v, want one plan with Keeper=true", plans)
+	}
+	if len(plans[0].TargetSIDs) != 1 || plans[0].TargetSIDs[0] != KeeperTargetSID {
+		t.Fatalf("TargetSIDs = %v, want [%q] — a keeper task has no host roster", plans[0].TargetSIDs, KeeperTargetSID)
+	}
+	if got := tasks[0].Params.GetFields()["value"].GetStringValue(); got != "alice" {
+		t.Fatalf("params.value = %q, want alice (rendered in the keeper context)", got)
+	}
 }

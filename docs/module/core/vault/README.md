@@ -85,7 +85,6 @@ Plus standard `.changed` (always `false`) / `.failed` DSL cores.
 # on: keeper is required - this is a keeper-side core. fields optional: without it
 # the entire payload will be returned.
 - name: Read the shared DB credentials from Vault (audit-tracked)
-  on: keeper
   module: core.vault.kv-read
   register: db_creds
   params:
@@ -238,7 +237,6 @@ service's own namespace, where nothing derives a path for you:
 # state_schema derives it. on: keeper is required. policy is a real YAML map (not a
 # CEL string), and `targets` is a one-liner CEL-${…} when it is computed.
 - name: Ensure the shared metrics-scrape credential exists
-  on: keeper
   module: core.vault.kv-present
   params:
     policy:

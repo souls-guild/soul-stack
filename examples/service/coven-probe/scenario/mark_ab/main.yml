@@ -19,14 +19,12 @@ tasks:
       content: "marked-by mark_ab target=cluster-a,cluster-b\n"
 
   - name: Record the marker file this scenario writes
-    on: keeper
     module: core.state.set
     params:
       field: marker_file
       value: /tmp/coven-marker-ab.txt
 
   - name: Record which coven scenario ran last
-    on: keeper
     module: core.state.set
     params:
       field: last_target

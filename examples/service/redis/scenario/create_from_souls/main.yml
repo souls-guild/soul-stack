@@ -284,7 +284,6 @@ tasks:
   # file, and both of which had to be re-derived to be trusted.
 
   - name: Mint the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -300,7 +299,6 @@ tasks:
            }) }
 
   - name: Mint the passwords of the operator ACL users
-    on: keeper
     module: core.state.set
     register: redis_users
     params:
@@ -347,14 +345,12 @@ tasks:
   # is the minting step at the top of this body ([ADR-0083] §4).
 
   - name: Record the deployed topology type
-    on: keeper
     module: core.state.set
     params:
       field: redis_type
       value: "${ input.redis_type }"
 
   - name: Record the deployed Redis version
-    on: keeper
     module: core.state.set
     params:
       field: redis_version
@@ -362,7 +358,6 @@ tasks:
 
   # redis_config ≡ the branches' apply.input.config: a single compute.redis_config, declared once in the covenant compute.
   - name: Record the effective Redis config
-    on: keeper
     module: core.state.set
     params:
       field: redis_config
@@ -375,7 +370,6 @@ tasks:
   # tls: the same compute.tls_on/tls_only_on/tls_port/tls_*_ref that produced the TLS block in
   # redis_config (cert/key/ca - Vault PATHS, not PEM: the secret doesn't live in state).
   - name: Record the TLS material references
-    on: keeper
     module: core.state.set
     params:
       field: tls
@@ -392,7 +386,6 @@ tasks:
   # connection_mode: the operator's explicit network channel mode (enum tls/tls_plain/plain).
   # the read-model duplicates the choice; the tls namedfield above carries the derived enable/only/port.
   - name: Record the operator's connection mode
-    on: keeper
     module: core.state.set
     params:
       field: connection_mode
@@ -401,7 +394,6 @@ tasks:
   # persistence: input.persistence (default rdb) - the same key used to select
   # vars.persistence_presets in redis_config (the read-model duplicates the operator's choice).
   - name: Record the effective persistence preset
-    on: keeper
     module: core.state.set
     params:
       field: persistence
@@ -410,7 +402,6 @@ tasks:
   # memory_mb: the operator's memory budget (int). Not set → 0 (a flat set always
   # creates the key; 0 = "the operator didn't pin a budget", maxmemory comes from service vars).
   - name: Record the deployed memory budget
-    on: keeper
     module: core.state.set
     params:
       field: memory_mb
@@ -420,7 +411,6 @@ tasks:
   # substrate, see redis_config). The namedfield marks the ABSENCE of an explicit choice with an empty
   # string (we don't reach into redis_config for the actual value - this is a write-model).
   - name: Record the deployed maxmemory policy
-    on: keeper
     module: core.state.set
     params:
       field: maxmemory_policy
@@ -429,7 +419,6 @@ tasks:
   # io_threads: the operator's number of I/O threads (int, default 0). 0 = single-threaded I/O
   # (the io-threads directive isn't written to redis.conf). the read-model duplicates the choice.
   - name: Record the deployed io-threads count
-    on: keeper
     module: core.state.set
     params:
       field: io_threads
@@ -439,7 +428,6 @@ tasks:
   # < 8 → the full set (destiny loads all of them from vars.redis_modules); Redis 8+ → [] (modules
   # are built in). NOT an operator choice (input.modules was removed) - compute.redis_modules_deployed.
   - name: Record the Redis modules actually deployed
-    on: keeper
     module: core.state.set
     params:
       field: modules
@@ -452,7 +440,6 @@ tasks:
   # sysctl_settings: the applied host tuning (the same vars.sysctl_settings that
   # goes into destiny apply.input). from service vars (host-invariant, not operator input).
   - name: Record the applied host tuning
-    on: keeper
     module: core.state.set
     params:
       field: sysctl_settings
@@ -464,7 +451,6 @@ tasks:
   # monitoring user are NOT stored in state (security - they're in Vault, like tls.*_ref). The defaults
   # duplicate the service vars / migration 012_to_013 (ports :9100/:9121 are conventional; versions - from the service vars substrate).
   - name: Record the deployed exporters
-    on: keeper
     module: core.state.set
     params:
       field: monitoring
@@ -483,7 +469,6 @@ tasks:
   # monitoring password). The defaults duplicate the service vars / migration 013_to_014 (console - a safe default with no
   # infra required; version from the service vars substrate). The operator sees what's deployed; a repeat apply is idempotent.
   - name: Record the deployed log shipping
-    on: keeper
     module: core.state.set
     params:
       field: logging
@@ -503,21 +488,18 @@ tasks:
   # more operator field for it, the quorum is AUTO size/2+1 computed in apply, it isn't materialized in state;
   # 0 = "auto").
   - name: Record the shard count
-    on: keeper
     module: core.state.set
     params:
       field: shards
       value: "${ int(default(input.shards, 0)) }"
 
   - name: Record the replica count per master
-    on: keeper
     module: core.state.set
     params:
       field: replicas
       value: "${ int(default(input.replicas_per_master, 0)) }"
 
   - name: Record the sentinel quorum
-    on: keeper
     module: core.state.set
     params:
       field: sentinel_quorum
@@ -527,7 +509,6 @@ tasks:
   # (master-election) live in apply.input.sentinel and the cluster roles are laid out by
   # the plugin — the run roster is not part of the read-model.
   - name: Record an empty host roster
-    on: keeper
     module: core.state.set
     params:
       field: redis_hosts
@@ -544,7 +525,6 @@ tasks:
   # last-wins) and the global settings (input.sentinel_settings) - day-2 reads them by name
   # (like install/tls). Outside sentinel mode - an empty object (only cluster remains).
   - name: Record the monitored master (sentinel mode)
-    on: keeper
     module: core.state.set
     params:
       field: redis_sentinel

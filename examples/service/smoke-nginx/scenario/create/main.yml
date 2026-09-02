@@ -26,14 +26,12 @@ tasks:
       enabled: true
 
   - name: Record the nginx package name
-    on: keeper
     module: core.state.set
     params:
       field: nginx_package
       value: nginx
 
   - name: Record the nginx service name
-    on: keeper
     module: core.state.set
     params:
       field: nginx_service

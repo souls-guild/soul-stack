@@ -9,7 +9,6 @@
 name: vault-staged
 tasks:
   - name: Ensure secret exists in Vault (generate if absent)
-    on: keeper
     module: core.vault.kv-present
     params:
       policy: { length: 32, charset: alphanumeric }

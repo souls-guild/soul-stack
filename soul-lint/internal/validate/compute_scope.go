@@ -120,12 +120,13 @@ const visible = 1 << 30
 
 // tasks recurses over the task list, including block: children.
 //
-// `on:` is read from EACH task on its own and is never inherited downwards:
-// mergeBlockInheritance carries when/where/vars/requisites and never On, so a
-// descendant is keeper-side only by saying `on: keeper` itself. `on: keeper` on the
-// BLOCK renders no children at all — the top-level dispatch tests IsKeeperTask
-// before the block branch and hands it to renderKeeperTask, which is module-only
-// (NIM-652).
+// A task's SIDE is its own and is never inherited downwards:
+// mergeBlockInheritance carries when/where/vars/requisites and never On, and
+// since NIM-749 the side comes from the task's own module address anyway. A
+// keeper-side BLOCK renders no children at all — the top-level dispatch tests
+// IsKeeperTask before the block branch and hands it to renderKeeperTask, which is
+// module-only (NIM-652); a keeper-side task INSIDE a block is refused outright
+// (`block_on_keeper_invalid`), so neither shape reaches this walk.
 func (c *computeChecker) tasks(tasks []config.Task, prefix string) {
 	for i := range tasks {
 		t := &tasks[i]

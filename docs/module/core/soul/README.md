@@ -140,7 +140,6 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 # implicitly from the run's incarnation; coven carries only real stable tags
 # (optional). on: keeper is required - this is a keeper-side step.
 - name: Bind new replica to the incarnation
-  on: keeper
   module: core.soul.registered
   params:
     sid: "${ vars.new_sid }"
@@ -151,7 +150,6 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 # Register the list of created VMs and blockingly wait for them to be onboarded in one step
 # (ADR-061). on: keeper is required.
 - name: Register provisioned shards and await onboarding
-  on: keeper
   module: core.soul.registered
   register: shards
   params:
@@ -161,7 +159,7 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
     await_timeout: 10m                                # ≤ keeper.yml::max_await_timeout
 ```
 
-(see [`examples/destiny/coven-assign/tasks/main.yml`](../../../../examples/destiny/coven-assign/tasks/main.yml) - destiny-wrapper around `core.soul.registered`, and [`examples/service/keeper-register/scenario/create/main.yml`](../../../../examples/service/keeper-register/scenario/create/main.yml) - keeper-side dispatch in scenario)
+(see [`examples/service/keeper-register/scenario/create/main.yml`](../../../../examples/service/keeper-register/scenario/create/main.yml) - keeper-side dispatch in a scenario. There is no destiny form: a destiny is Soul-side by construction, so a keeper-side module in one is refused as `keeper_module_in_destiny` - the `coven-assign` destiny wrapper was removed in NIM-749 because it could never have run.)
 
 ## See also
 

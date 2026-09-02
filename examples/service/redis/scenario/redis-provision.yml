@@ -60,7 +60,6 @@
 #     register.provision.hosts[].bootstrap_token (plain one-time, masked by
 #     audit.MaskSecrets on all outputs).
 - name: Provision VMs for the redis topology (cloud-init bootstrap)
-  on: keeper
   module: core.cloud.created
   register: provision
   params:
@@ -94,7 +93,6 @@
 # include is dropped whole when provision is off, so a run that provisions nothing simply
 # has no such step and the three fields stay ABSENT (every reader defaults them).
 - name: Record the provider IDs of the VMs this run created
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_vm_ids
@@ -105,7 +103,6 @@
 # pending-VM souls). Gathered from register.provision.hosts[].sid (the same expression as
 # params.sid in step (c) below); there is no separate register.provision.sids.
 - name: Record the SIDs of the VMs this run created
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_sids
@@ -116,7 +113,6 @@
 # usually does NOT set provider (the provision form is hidden, default-on).
 # ★ TODO: prod/dev provider switch (ENV keeper / Coven overlay) — a separate ADR.
 - name: Record the cloud provider that created the VMs
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_provider
@@ -136,7 +132,6 @@
 #     A failure on any host → the step fails (B1-strict) → state isn't committed → error_locked.
 #     require: provision — tokens come from its register.
 - name: Install soul and deliver per-VM bootstrap token over SSH
-  on: keeper
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
@@ -162,7 +157,6 @@
 #     branch sees the online set. await_timeout: input.provision.await_timeout →
 #     vars.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
-  on: keeper
   module: core.soul.registered
   register: onboarded
   require:

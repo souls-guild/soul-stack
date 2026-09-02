@@ -95,7 +95,11 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 	if err != nil {
 		return nil, fmt.Errorf("trial: read tasks/main.yml fixture %q: %w", name, err)
 	}
-	tasks, tDiags, err := config.LoadDestinyTasksFromBytes("tasks/main.yml", tasksData, config.ValidateOptions{})
+	// DestinyTasks (NIM-749) matters most HERE: the L0 fold keys on the module
+	// address, so a keeper-side step written into a destiny predicts its result
+	// exactly as a routed one does and the case goes green on a plan the run
+	// cannot execute.
+	tasks, tDiags, err := config.LoadDestinyTasksFromBytes("tasks/main.yml", tasksData, config.ValidateOptions{DestinyTasks: true})
 	if err != nil {
 		return nil, fmt.Errorf("trial: parse tasks/main.yml fixture %q: %w", name, err)
 	}
@@ -105,7 +109,7 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 
 	// within-destiny include (tasks/<sub>.yml) is expanded before render — same as
 	// in prod DestinyLoader.parseTasks (destiny/tasks.md §4).
-	expanded, iDiags := config.ExpandIncludes(tasks, fixtureDestinyIncludeResolver(dir))
+	expanded, iDiags := config.ExpandIncludesInDestiny(tasks, fixtureDestinyIncludeResolver(dir))
 	if diag.HasErrors(iDiags) {
 		return nil, fmt.Errorf("trial: expand include in destiny %q: %s", name, formatDiags(iDiags))
 	}

@@ -125,7 +125,6 @@ description: provision-refresh-role single run (ADR-0061 §S3)
 tasks:
   - name: Register and refresh roster
     module: core.soul.registered
-    on: keeper
     register: roster
     params:
       refresh_soulprint: true
@@ -270,7 +269,6 @@ description: refresh then assert grown topology
 tasks:
   - name: Register and refresh roster
     module: core.soul.registered
-    on: keeper
     register: roster
     params:
       refresh_soulprint: true

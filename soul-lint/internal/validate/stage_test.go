@@ -474,7 +474,6 @@ const storeAfterUseGenerate = `  - name: generate the admin password
 
 const storeAfterUseCapture = `  - name: capture the admin password
     module: core.state.set
-    on: keeper
     params:
       field: admin_password
       value: "${ register.gen.stdout }"
@@ -541,7 +540,6 @@ func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
 	stageWrite(t, main, "name: create\ntasks:\n"+
 		`  - name: capture the endpoint
     module: core.state.set
-    on: keeper
     params:
       field: endpoint
       value: "10.0.0.1"
@@ -574,7 +572,6 @@ func TestStageDiagnostics_WideMatchAcrossInclude(t *testing.T) {
 	stageWrite(t, filepath.Join(root, "scenario", "_update", "purge.yml"),
 		`- name: drop the user
   module: core.state.remove
-  on: keeper
   params:
     field: redis_users
 `)
@@ -605,7 +602,6 @@ func TestStageDiagnostics_WideMatchConstTrueAndNarrow(t *testing.T) {
 	capture := func(match string) string {
 		return `  - name: patch the users
     module: core.state.modify
-    on: keeper
     params:
       field: redis_users
       match: "` + match + `"

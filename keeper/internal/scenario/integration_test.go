@@ -846,7 +846,6 @@ tasks:
     changed_when: "false"
   - name: Record the leader
     module: core.state.set
-    on: keeper
     params:
       field: leader
       value: "${ register.probe.stdout }"
@@ -1456,7 +1455,6 @@ tasks:
     changed_when: "false"
   - name: Record the roll
     module: core.state.set
-    on: keeper
     params:
       field: rolled
       value: "yes"
@@ -1681,7 +1679,6 @@ tasks:
     changed_when: "false"
   - name: Record the roll
     module: core.state.set
-    on: keeper
     params:
       field: rolled
       value: "yes"
@@ -2326,7 +2323,6 @@ tasks:
 	for i := 0; i < keeperTasks; i++ {
 		fmt.Fprintf(&b, `  - name: Keeper step %d
     module: %s
-    on: keeper
     register: keeper%d
     params:
       sid: "host-a.example.com"
@@ -2612,7 +2608,6 @@ description: keeper-only scenario
 tasks:
   - name: Keeper only step
     module: %s
-    on: keeper
     params:
       sid: "host-a.example.com"
       coven: ["tagged"]
@@ -2707,7 +2702,6 @@ description: mixed keeper+host scenario
 tasks:
   - name: Keeper step
     module: %s
-    on: keeper
     params:
       sid: "host-a.example.com"
       coven: ["tagged"]
@@ -2816,7 +2810,6 @@ description: mixed provision (refresh) + host deploy
 tasks:
   - name: Register provisioned hosts and refresh roster
     module: core.soul.registered
-    on: keeper
     register: provision
     params:
       refresh_soulprint: true

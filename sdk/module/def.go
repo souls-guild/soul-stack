@@ -33,6 +33,18 @@ type (
 	Deprecated  = schema.Deprecated
 	InputSource = schema.InputSource
 	Document    = schema.Document
+	Side        = schema.Side
+)
+
+// The declarable sides (NIM-747). A module says which half of the platform runs
+// it, and every task addressing it inherits that — `on:` in a scenario is back to
+// meaning "which covens" and nothing else.
+//
+// [SideSoul] is the zero value and the default: a module that declares nothing
+// runs on the host, which is where every module written before this field runs.
+const (
+	SideSoul   = schema.SideSoul
+	SideKeeper = schema.SideKeeper
 )
 
 // Parameter types. String/Int/Bool/List/Map are the canonical spellings; the rest are
@@ -107,6 +119,16 @@ type Def struct {
 	// baseline.
 	IntroducedIn string
 
+	// Side — which half of the platform executes this module ([SideSoul] by
+	// default, [SideKeeper] for one the Keeper runs itself against no host).
+	// Declared once here rather than restated by every task that addresses it.
+	//
+	// A keeper-side plugin is NOT executable yet (NIM-688 — a live run reports
+	// "unknown keeper-side module"), so declaring it is a statement of intent the
+	// engine records and does not yet route by. Until it does, such a scenario
+	// still writes `on: keeper` on the task.
+	Side Side
+
 	Capabilities []Capability
 	SideEffects  []SideEffect
 
@@ -150,6 +172,7 @@ func (b Bundle) Document() Document {
 		doc.Modules = append(doc.Modules, schema.Module{
 			Name:         d.Name,
 			Description:  d.Description,
+			Side:         d.Side,
 			IntroducedIn: d.IntroducedIn,
 			Capabilities: d.Capabilities,
 			SideEffects:  d.SideEffects,

@@ -408,7 +408,6 @@ tasks:
   # file, and both of which had to be re-derived to be trusted.
 
   - name: Mint the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -424,7 +423,6 @@ tasks:
            }) }
 
   - name: Mint the passwords of the operator ACL users
-    on: keeper
     module: core.state.set
     register: df_users
     params:
@@ -757,14 +755,12 @@ tasks:
         log_sources:   "${ default(vars.vector_log_sources, []) }"
 
   - name: Record the deployed DragonFly version
-    on: keeper
     module: core.state.set
     params:
       field: df_version
       value: "${ compute.df_version }"
 
   - name: Record the effective DragonFly config
-    on: keeper
     module: core.state.set
     params:
       field: df_config
@@ -773,7 +769,6 @@ tasks:
   # tls: the same compute.tls_* (cert/key/ca — Vault PATHS, not PEM). ★ WITHOUT only/port: with
   # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — day-2 connects via the socket.
   - name: Record the TLS material references
-    on: keeper
     module: core.state.set
     params:
       field: tls
@@ -786,14 +781,12 @@ tasks:
            } }
 
   - name: Record the requested memory limit
-    on: keeper
     module: core.state.set
     params:
       field: memory_mb
       value: "${ int(default(input.memory_mb, 0)) }"
 
   - name: Record the applied sysctl settings
-    on: keeper
     module: core.state.set
     params:
       field: sysctl_settings
@@ -804,7 +797,6 @@ tasks:
   # that go into apply.input for the node-exporter destiny). ★ node-exporter-ONLY (DragonFly exposes
   # metrics natively) — there are no redis_exporter fields here. Defaults duplicate the service vars / migration 004_to_005.
   - name: Record the deployed node_exporter
-    on: keeper
     module: core.state.set
     params:
       field: monitoring
@@ -819,7 +811,6 @@ tasks:
   # apply.input for the vector destiny). ★ vector_sink_auth_ref is NOT written HERE — it's a secret (in Vault, like
   # tls.*_ref). Defaults duplicate the service vars / migration 005_to_006 (console — a safe default).
   - name: Record the deployed log shipping
-    on: keeper
     module: core.state.set
     params:
       field: logging
@@ -833,14 +824,12 @@ tasks:
 
   # Topology: replicas (master's replicas), sentinel_quorum=0 (auto, not materialized).
   - name: Record the replica count per master
-    on: keeper
     module: core.state.set
     params:
       field: replicas
       value: "${ int(default(input.replicas_per_master, 0)) }"
 
   - name: Record the sentinel quorum
-    on: keeper
     module: core.state.set
     params:
       field: sentinel_quorum
@@ -849,7 +838,6 @@ tasks:
   # df_hosts stays empty on purpose: the declared roles live in apply.input.sentinel,
   # the run roster is not part of the read-model.
   - name: Record an empty host roster
-    on: keeper
     module: core.state.set
     params:
       field: df_hosts
@@ -858,7 +846,6 @@ tasks:
   # df_sentinel: facts about the monitored master. master_name from service vars; quorum=0 (auto); master_ip
   # is not written (host-variant); failover timings from input.
   - name: Record the sentinel monitoring facts
-    on: keeper
     module: core.state.set
     params:
       field: df_sentinel

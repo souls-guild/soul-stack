@@ -28,7 +28,6 @@ tasks:
   # the keeper instance. mode: append — adds the label to the ones already bound (the root
   # coven incarnation, set during onboarding, is preserved).
   - name: Bind the coven label to the soul on the keeper
-    on: keeper
     module: core.soul.registered
     register: registered
     params:

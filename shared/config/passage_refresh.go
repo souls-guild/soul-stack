@@ -1,5 +1,7 @@
 package config
 
+import "github.com/souls-guild/soul-stack/shared/coremanifest"
+
 // roster-refresh passage boundary (ADR-0061 §S2, amends ADR-056).
 //
 // Why. The target ADR-0061 scenario is a single create run provision→onboarding→role:
@@ -187,11 +189,27 @@ func AssertReadsRoster(t *Task) bool {
 // Recursively via block: (block is an atomic Passage unit; a roster read by any child
 // makes the container a refresh consumer).
 //
-// Keeper-side tasks (`on: keeper`) do NOT read the roster (they have no run hosts —
+// Keeper-side tasks do NOT read the roster (they have no run hosts —
 // keeperVars without soulprint, render_host.go), so they are excluded: the refresh
-// emitter is itself `on: keeper` and must NOT depend on the refresh boundary recursively.
+// emitter is itself keeper-side and must NOT depend on the refresh boundary recursively.
+//
+// ★ That exclusion used to be free and is not any more (NIM-749). While a keeper
+// task was spelled `on: keeper`, its `On` was a non-nil string that
+// [onTargetsRoster] rejected. Now the side comes from the module ADDRESS and such
+// a task carries no `on:` at all — and `On == nil` is exactly the spelling that
+// means "the whole incarnation roster" on a host task. Without the explicit test
+// below, every capture in the tree would read as a roster consumer, every one
+// standing after a `refresh_soulprint: true` step would move into a later
+// Passage, and the emitter would land after its own boundary. Nothing else in the
+// suite sees it: it changes execution ORDER, not validity.
+//
+// Only the `on:` inference is suppressed, not the whole task. The soulprint scans
+// below still run on a keeper-side task, exactly as they did when the key was
+// written — a keeper task referencing `soulprint.*` is a separate error
+// (soulprint is unbound in keeperVars), and silently reclassifying it here would
+// be a second change hiding inside this one.
 func taskReadsRoster(t *Task) bool {
-	if onTargetsRoster(t.On) {
+	if !IsKeeperSideTask(*t) && onTargetsRoster(t.On) {
 		return true
 	}
 	// soulprint.* (hosts/where/self) in any keeper-rendered CEL field of the task.
@@ -231,6 +249,11 @@ func taskReadsRoster(t *Task) bool {
 //   - nil (omitted on:) → the whole incarnation (all members, orchestration.md §3);
 //   - `on: keeper` (string) → NOT the roster (keeper-side, no hosts);
 //   - a coven list → a SUBset, NOT the whole roster.
+//
+// Asked only about a task the caller has already established is Soul-side (see
+// [taskReadsRoster]). The keeper-literal case is what remains of the old spelling
+// and still answers correctly for a plugin address that carries it; it is no
+// longer what keeps a CORE keeper-side task out of the roster axis.
 //
 // ADR-008 amendment 2026-07-17/NIM-124: `incarnation.name` is not a Coven, so
 // `on: [incarnation.name]` is invalid (a render error) — the whole-roster form is
@@ -292,7 +315,11 @@ func valueReadsSoulprint(v any) bool {
 // stateModuleAddr — the base address of the keeper-side state-capture module
 // family ([ADR-0084]); the state suffix is the verb, so the base is what a plan
 // scan matches on.
-const stateModuleAddr = "core.state"
+//
+// Taken from the shared catalog rather than spelled again here (NIM-749): that
+// catalog is also what decides the step is keeper-side, and an address that
+// disagreed between the two would fold a capture the engine does not route.
+const stateModuleAddr = coremanifest.StateModuleAddr
 
 // HasStateCapture reports whether the plan carries a `core.state.<verb>` step.
 //

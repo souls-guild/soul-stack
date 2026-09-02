@@ -99,7 +99,6 @@ tasks:
   # body, so the old form had nothing but the vault-emitter axis to lean on.
 
   - name: Resolve the passwords of the service's own ACL accounts
-    on: keeper
     module: core.state.set
     register: system_acl_users
     params:
@@ -112,7 +111,6 @@ tasks:
       value: "${ default(incarnation.state.system_acl_users, []) }"
 
   - name: Mint the new operator ACL user's password, keep the rest
-    on: keeper
     module: core.state.set
     register: redis_users
     params:

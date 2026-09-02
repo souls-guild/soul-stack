@@ -51,6 +51,19 @@ func TestValidate_HappyPaths(t *testing.T) {
 		"soul_beacon_without_params": {
 			Kind: KindSoulBeacon, ProtocolVersion: 1,
 		},
+		// NIM-747: both declarable sides pass, and so does saying nothing —
+		// which is the case every plugin written before the field is in, and the
+		// one that must keep meaning "soul".
+		"module_declaring_side_soul": func() Document {
+			d := minimalSoulModule()
+			d.Modules[0].Side = SideSoul
+			return d
+		}(),
+		"module_declaring_side_keeper": func() Document {
+			d := minimalSoulModule()
+			d.Modules[0].Side = SideKeeper
+			return d
+		}(),
 	}
 	for name, doc := range docs {
 		t.Run(name, func(t *testing.T) {
@@ -136,6 +149,19 @@ func TestValidate_Failures(t *testing.T) {
 				return d
 			}(),
 			want: "state_name_invalid",
+		},
+		{
+			// NIM-747: `side:` is an enum, and the empty string is the declared
+			// default (soul) rather than a missing value. Anything else is refused
+			// instead of folded into that default — `side: Keeper` quietly meaning
+			// "runs on every host" is the failure the check exists for.
+			name: "module_side_invalid",
+			doc: func() Document {
+				d := minimalSoulModule()
+				d.Modules[0].Side = "Keeper"
+				return d
+			}(),
+			want: "module_side_invalid",
 		},
 		{
 			name: "unknown_capability",

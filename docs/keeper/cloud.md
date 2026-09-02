@@ -60,7 +60,6 @@ In the cloud-create service script, a normal step with `on: keeper`, using the k
 
 ```yaml
 - name: provision
-  on: keeper                             # step is executed on the keeper
   module: core.cloud.created             # base core.cloud + state created (state is the last address segment)
   params:
     provider: "${ input.spawn.provider }"  # Provider NAME from the providers registry
@@ -96,7 +95,6 @@ The step gets its CloudDriver from **exactly one** of two sources (NIM-668). Bot
 
 ```yaml
 - name: provision
-  on: keeper
   module: core.cloud.created
   params:
     driver:       wb                             # plugin alias -> soul-cloud-wb
@@ -266,7 +264,6 @@ If there is no block, the `generate_userdata: true` parameter fails the script s
 
 ```yaml
 - name: provision
-  on: keeper
   module: core.cloud.created           # base core.cloud + state created (NOT core.cloud.provisioned; state is the last segment)
   params:
     provider:          aws-prod
@@ -286,7 +283,6 @@ Third mode of bootstrap delivery ([ADR-017(h) amendment 2026-07-01](../adr/0017-
 
 ```yaml
 - name: provision
-  on: keeper
   module: core.cloud.created
   params:
     provider:     dev-cloud       # Provider must have fqdn_suffix set

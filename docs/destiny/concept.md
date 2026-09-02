@@ -21,7 +21,7 @@ operator ──► incarnation.spec   (what is declared)
                   │
        ┌──────────┴──────────┐
        ▼                     ▼
-     on: keeper         on: [coven, …]
+  keeper-side module    on: [coven, …]
        │                     │
        ▼                     ▼
      destiny             destiny   ◄── atomic brick

@@ -194,7 +194,6 @@ billing operation should not happen silently). In audit-payload - `provider`,
 # If necessary, create a VM via CloudDriver. on: keeper required -
 # this is a keeper-side core. when:-guard - spawn is optional.
 - name: provision
-  on: keeper
   when: has(input.spawn)
   module: core.cloud.provisioned
   params:

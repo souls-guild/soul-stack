@@ -76,6 +76,7 @@ One artifact serves several modules; each declares its own states.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `modules[].name` | `string` | — | Address level 2 (`acl` in `redis.acl.present`) and the **subcommand** the host uses to select it. |
+| `modules[].side` | `enum{soul,keeper}` | `soul` | Which half of the platform executes the module (NIM-747). Declared once here; every task addressing it inherits the side, and `on:` in a scenario is back to meaning "which covens" only — see [orchestration.md §3](../scenario/orchestration.md#the-side-is-the-modules-not-the-tasks). Omitting it means `soul`, which is where every module written before this field runs. **A keeper-side plugin is not executable yet** (NIM-688 — a live run reports "unknown keeper-side module"), so declaring `keeper` records the intent and such a scenario still writes `on: keeper` on the task. |
 | `modules[].capabilities` | `list<enum>` | `[]` | Disclosure to the operator, **not a control** — see [plugins.md](../keeper/plugins.md#capabilities-and-side_effects-are-disclosure). |
 | `modules[].side_effects` | `list<{type: value}>` | `[]` | Disclosure to the operator, **not a contract**. |
 | `modules[].states` | `map<state-name, state>` | — | The supported states. The key is the state name (`installed` / `running` / `run` / …, see [naming-rules.md → Destiny modules](../naming-rules.md)). |

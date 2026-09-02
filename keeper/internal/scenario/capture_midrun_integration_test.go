@@ -92,7 +92,6 @@ tasks:
       args: ["ok"]
   - name: record the outcome
     module: core.state.set
-    on: keeper
     params:
       field: recorded
       value: "at-the-end"
@@ -164,7 +163,6 @@ tasks:
       args: ["ok"]
   - name: record the outcome
     module: core.state.set
-    on: keeper
     params:
       field: after_the_failure
       value: "never-reached"

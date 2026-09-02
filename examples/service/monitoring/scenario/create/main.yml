@@ -231,21 +231,18 @@ tasks:
       name: redis_exporter
 
   - name: Record the deployed node_exporter version
-    on: keeper
     module: core.state.set
     params:
       field: node_exporter_version
       value: "${ input.node_exporter_version }"
 
   - name: Record the deployed redis_exporter version
-    on: keeper
     module: core.state.set
     params:
       field: redis_exporter_version
       value: "${ input.redis_exporter_version }"
 
   - name: Record the Redis socket the exporter connects to
-    on: keeper
     module: core.state.set
     params:
       field: redis_socket

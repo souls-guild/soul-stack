@@ -48,7 +48,6 @@ tasks:
   # pair is refused by the module (one source, never both), so this step cannot
   # half-drift onto the registry.
   - name: Provision VMs from vars (no registry rows)
-    on: keeper
     module: core.cloud.created
     register: provision
     params:
@@ -68,7 +67,6 @@ tasks:
   # (core.soul.registered, ADR-061). Self-onboard needs no delivery step - the
   # VM picks its own token out of userdata in its first cloud-init cycle.
   - name: Register provisioned VMs and await their onboarding
-    on: keeper
     module: core.soul.registered
     register: onboarded
     require:

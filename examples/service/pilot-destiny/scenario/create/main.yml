@@ -27,14 +27,12 @@ tasks:
   - include: marker.yml
 
   - name: Record the marker path the destiny wrote
-    on: keeper
     module: core.state.set
     params:
       field: marker_path
       value: "${ input.path }"
 
   - name: Record the marker content the destiny wrote
-    on: keeper
     module: core.state.set
     params:
       field: marker_content

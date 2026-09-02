@@ -22,14 +22,12 @@ tasks:
         true
 
   - name: Record which scenario ran last
-    on: keeper
     module: core.state.set
     params:
       field: last_run
       value: "serial_waves"
 
   - name: Record the marker file this scenario writes
-    on: keeper
     module: core.state.set
     params:
       field: runner_marker

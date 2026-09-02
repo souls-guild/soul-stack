@@ -62,7 +62,6 @@
 #     register.provision.hosts[].bootstrap_token (plain one-time, masked by
 #     audit.MaskSecrets on all outputs).
 - name: Provision VMs for the dragonfly topology (cloud-init bootstrap)
-  on: keeper
   module: core.cloud.created
   register: provision
   params:
@@ -98,7 +97,6 @@
 # the include is dropped whole when provision is off, so a run that provisions nothing
 # simply has no such step, and the fields stay absent (every reader defaults them).
 - name: Record the provider IDs of the VMs this run created
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_vm_ids
@@ -109,7 +107,6 @@
 # DIFFERS from vm_ids: those are provider-side ids for core.cloud.destroyed. The .map is
 # the same expression as params.sid of step (c) below.
 - name: Record the SIDs of the VMs this run created
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_sids
@@ -119,7 +116,6 @@
 # reads it: input.provision.provider with a fallback to vars.provision_provider (the
 # provision form is hidden and default-on, so the operator usually sets neither).
 - name: Record the cloud provider that created the VMs
-  on: keeper
   module: core.state.set
   params:
     field: provisioned_provider
@@ -138,7 +134,6 @@
 #     Any host error → step failed (B1-strict) → state is not committed → error_locked.
 #     require: provision — tokens come from its register.
 - name: Install soul and deliver per-VM bootstrap token over SSH
-  on: keeper
   module: core.bootstrap.delivered
   params:
     hosts:        "${ register.provision.hosts }"
@@ -164,7 +159,6 @@
 #     branch sees the online set. await_timeout: input.provision.await_timeout →
 #     vars.provision_await_timeout → '10m'.
 - name: Register provisioned VMs and await their onboarding
-  on: keeper
   module: core.soul.registered
   register: onboarded
   require:

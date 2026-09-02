@@ -76,7 +76,27 @@ const maxIncludeDepth = 32
 // conjunction. So dropping a parent (e.g. `outer=='no'`) cascades to the child
 // naturally: its conjunctive include-when also evaluates to false.
 func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
-	e := &includeExpander{resolve: resolve}
+	return expandIncludes(tasks, resolve, false)
+}
+
+// ExpandIncludesInDestiny is [ExpandIncludes] for a DESTINY's own `tasks/` tree,
+// where an included body is subject to the one rule a scenario's is not: a
+// destiny is Soul-side by construction, so a keeper-side module address anywhere
+// in it can never execute (`keeper_module_in_destiny`, NIM-749).
+//
+// A separate entry point rather than a parameter on [ExpandIncludes] because the
+// seven scenario callers must never pass it, and a bool at every call site is a
+// bool somebody eventually passes the wrong way round. The flag reaches the
+// included body's own [LoadDestinyTasksFromBytes] — without it the check stops at
+// the destiny's `tasks/main.yml` and a capture one `include:` deep is linted
+// clean, folded by L0, and dies at dispatch: the exact false-green this rule
+// exists to close.
+func ExpandIncludesInDestiny(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
+	return expandIncludes(tasks, resolve, true)
+}
+
+func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool) ([]Task, []diag.Diagnostic) {
+	e := &includeExpander{resolve: resolve, destinyTasks: destinyTasks}
 	out := e.expand(tasks, nil, "", nil)
 	// Uniqueness of the subscription address space (register ∪ id) over the FLAT
 	// run list: per-file validateTaskRefs catches a duplicate within one file, but
@@ -87,8 +107,64 @@ func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagn
 	// diagnostic addresses by name.
 	if !diag.HasErrors(e.diags) {
 		e.diags = append(e.diags, validateFlatTaskAddresses(out)...)
+		e.diags = append(e.diags, validateFlatBlockKeeperSide(out)...)
 	}
 	return out, e.diags
+}
+
+// validateFlatBlockKeeperSide raises `block_on_keeper_invalid` for a keeper-side
+// task sitting inside a `block:` in the FLATTENED plan.
+//
+// The per-file check ([validateBlockChildOnKeeper]) cannot see this one. An
+// `include:` written as a block CHILD is a block child to the expander and a
+// TOP-LEVEL task to the included file's own validation, so a capture arriving
+// that way is judged by neither: the block-child pass looks at an `include:` node
+// with no module, and the included file's pass sees a task that is perfectly
+// legal where it is written. Only the spliced result is both.
+//
+// It is not a formality. `Render` consults [render.IsKeeperTask] on top-level
+// tasks ONLY, so a keeper-side module reached through a block is fanned out over
+// the roster and dispatched to hosts that have no such module. And the L0 trial
+// folds a capture by its module address alone, so the case predicts `state_after`
+// exactly as a routed one does and goes GREEN on a plan the run cannot execute —
+// the same false green the retired `state_capture_not_on_keeper` used to close
+// here by being unconditional.
+//
+// Runs after expansion, so there are no line/col coordinates left (as with
+// [validateFlatTaskAddresses]); the diagnostic addresses by name.
+func validateFlatBlockKeeperSide(tasks []Task) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for i := range tasks {
+		if tasks[i].Block == nil {
+			continue
+		}
+		collectBlockKeeperSide(tasks[i].Block.Block, &out)
+	}
+	return out
+}
+
+// collectBlockKeeperSide walks a block's children (and nested blocks) for
+// keeper-side tasks.
+func collectBlockKeeperSide(children []Task, out *[]diag.Diagnostic) {
+	for i := range children {
+		t := &children[i]
+		if IsKeeperSideTask(*t) {
+			addr := ""
+			if t.Module != nil {
+				addr = t.Module.Module
+			}
+			*out = append(*out, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code: "block_on_keeper_invalid",
+				Message: fmt.Sprintf("task %q inside a block: is keeper-side (%s) — a block fans its children out over the run's hosts, and the keeper is not one of them",
+					t.Name, keeperSideBecause(addr)),
+				Hint: "write the keeper-side task flat, in the scenario's own task list, outside the block — including when it reaches the block through an include:",
+			})
+		}
+		if t.Block != nil {
+			collectBlockKeeperSide(t.Block.Block, out)
+		}
+	}
 }
 
 // validateFlatTaskAddresses checks uniqueness of the `register ∪ id` subscription
@@ -170,6 +246,11 @@ func collectDeclaredRegisters(tasks []Task, out map[string]bool) {
 type includeExpander struct {
 	resolve IncludeResolver
 	diags   []diag.Diagnostic
+	// destinyTasks — this expansion is inside a DESTINY's `tasks/` tree, so each
+	// included body is loaded under [ValidateOptions.DestinyTasks]. Set only by
+	// [ExpandIncludesInDestiny]; a scenario's included body must NOT carry it,
+	// since a keeper-side address there is correct and ordinary.
+	destinyTasks bool
 	// lastGroupID — id counter for conditional include-groups (carry-through
 	// group-drop). Monotonically grows on EVERY include with a non-empty `when:`;
 	// 0 is reserved for "outside a conditional include" (Task.IncludeGroupID==0).
@@ -325,7 +406,7 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 		}
 	}
 
-	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{OuterRegisters: outer})
+	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{OuterRegisters: outer, DestinyTasks: e.destinyTasks})
 	if diag.HasErrors(diags) {
 		e.diags = append(e.diags, diags...)
 		return nil, false

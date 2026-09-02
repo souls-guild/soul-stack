@@ -78,14 +78,12 @@ tasks:
       name: nginx
 
   - name: Record that the nginx package is installed
-    on: keeper
     module: core.state.set
     params:
       field: nginx_package
       value: installed
 
   - name: Record that the nginx service is active
-    on: keeper
     module: core.state.set
     params:
       field: nginx_service
@@ -94,7 +92,6 @@ tasks:
   # A lone ${…} yields the native type (ADR-010) — bool here, matching the
   # state_schema; a bare literal like "active" above stays a string.
   - name: Record that the nginx config is managed
-    on: keeper
     module: core.state.set
     params:
       field: nginx_config_managed

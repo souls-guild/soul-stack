@@ -62,7 +62,6 @@ tasks:
       args: ["bump"]
     changed_when: "false"
   - name: Record b
-    on: keeper
     module: core.state.set
     params:
       field: b

@@ -17,7 +17,6 @@ tasks:
       content: "${ input.greeting }"
 
   - name: Record the greeting file path
-    on: keeper
     module: core.state.set
     params:
       field: greeting_file

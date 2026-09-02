@@ -23,14 +23,12 @@ input:
 
 tasks:
   - name: Issue bootstrap tokens for ready-made VMs
-    on: keeper
     module: core.bootstrap.issued
     register: bootstrap
     params:
       sids: "${ input.sids }"
 
   - name: Install Soul and deliver tokens through Teleport
-    on: keeper
     module: core.bootstrap.delivered
     register: delivered
     require: [bootstrap]
@@ -41,7 +39,6 @@ tasks:
       join_wait_timeout: "${ has(input.join_wait_timeout) ? input.join_wait_timeout : '15m' }"
 
   - name: Await ready-made VM onboarding
-    on: keeper
     module: core.soul.registered
     register: onboarded
     require: [delivered]

@@ -1,6 +1,10 @@
 package coremanifest
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/souls-guild/soul-stack/sdk/schema"
+)
 
 // expectedModules is the full set of core declarations after the H2 rollout. Key is
 // the top-level name (Namespace+"."+Name), value is the expected states. Guards
@@ -144,5 +148,33 @@ func TestState_FileStates(t *testing.T) {
 func TestState_UnknownState(t *testing.T) {
 	if _, ok := Default().State("core.exec", "runn"); ok {
 		t.Error("non-existent state returned ok=true")
+	}
+}
+
+// TestRegistrySideMatchesTheCatalog — the declaration surface and the routing
+// catalog give ONE answer (NIM-749).
+//
+// `side` exists on [schema.Module] because a plugin declares its own; a core
+// declaration therefore has the field too, and an empty one reads as "soul". Left
+// unstamped, `Lookup("core.state").Side` would say soul while
+// [IsKeeperSide]("core.state") says keeper — two answers in one package, which is
+// the drift this whole ticket is about, reproduced at arm's length.
+func TestRegistrySideMatchesTheCatalog(t *testing.T) {
+	r := Default()
+	for _, addr := range r.Names() {
+		m, ok := r.Lookup(addr)
+		if !ok {
+			t.Fatalf("Names() returned %q which Lookup does not serve", addr)
+		}
+		if want := SideOf(addr); m.Side != want {
+			t.Errorf("%s: declaration Side = %q, catalog says %q", addr, m.Side, want)
+		}
+	}
+	// Anchored, so the loop above cannot pass by comparing two empty strings.
+	if m, _ := r.Lookup(StateModuleAddr); m.Side != schema.SideKeeper {
+		t.Errorf("%s: Side = %q, want %q", StateModuleAddr, m.Side, schema.SideKeeper)
+	}
+	if m, _ := r.Lookup(Namespace + ".exec"); m.Side != schema.SideSoul {
+		t.Errorf("core.exec: Side = %q, want %q", m.Side, schema.SideSoul)
 	}
 }

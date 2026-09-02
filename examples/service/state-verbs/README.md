@@ -70,7 +70,8 @@ payloads are pinned in Go instead — `keeper/internal/render/register_hosts_tes
 
 ## Both scenarios
 
-Every capture carries `on: keeper`. Without it the task is dispatched to a host,
-which has no `core.state` module — an ERROR at parse
-(`state_capture_not_on_keeper`), because the L0 fold keys on the module address
-and would otherwise predict the state for a plan the run cannot execute.
+No capture carries `on:` at all. `core.state` is a keeper-side module, so the
+task's **address** routes it there (NIM-747) and there is nothing left to
+declare; writing `on: keeper` on one is an ERROR (`on_keeper_redundant`). The
+rule this replaced was the mirror image — it refused a capture written WITHOUT
+the key — and existed only to make the author restate what the address said.

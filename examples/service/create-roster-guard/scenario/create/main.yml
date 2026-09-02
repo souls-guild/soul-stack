@@ -38,7 +38,6 @@ tasks:
   # the run may legitimately start on an empty roster — the refresh-emitter
   # bypass of the no_hosts gate (run.go §3).
   - name: Bind the declared roster and wait for it online
-    on: keeper
     module: core.soul.registered
     register: bound
     params:

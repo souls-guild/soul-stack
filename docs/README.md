@@ -95,7 +95,7 @@ Reference: exact formats, behavior, parameters. The source of truth is here (and
 Implemented modules in [module/core/](module/core/) - **23 directories** (each with its own `README.md`), and not all "modules" in the same sense:
 
 - **18 Soul-side core** (apply on hosts): `pkg`, `file`, `service`, `user`, `group`, `exec`, `cmd`, `cron`, `mount`, `git`, `archive`, `sysctl`, `url`, `line`, `repo`, `firewall`, `http` (17 per [ADR-015](adr/0015-core-modules-mvp.md): 12 original MVP + post-MVP `url`/`line`/`repo`/`firewall`/`http`) + `augur` ([ADR-025](adr/0025-augur.md), read-probe via broker).
-- **4 Keeper-side core** (`on: keeper` dispatcher): `soul`, `cloud`, `vault` ([ADR-017](adr/0017-keeper-side-core.md)) + `choir` ([ADR-044](adr/0044-choir.md)).
+- **7 Keeper-side core** (routed by the module address, NIM-749 — the task carries no `on:` key): `soul`, `cloud`, `vault` ([ADR-017](adr/0017-keeper-side-core.md)), `choir` ([ADR-044](adr/0044-choir.md)), `bootstrap` ([ADR-063](adr/0063-bootstrap-token-delivery.md)), `state` ([ADR-0084](adr/0084-explicit-state-capture.md)) and `cert`.
 - **1 `beacon`** - Vigil body ([ADR-030](adr/0030-vigil-oracle.md)), read-only observer, not apply-module.
 
 The exact summary of "what we think" and the source of truth (registry in the code) is [module/README.md → Directory status](module/README.md).
