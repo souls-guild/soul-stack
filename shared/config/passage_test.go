@@ -49,8 +49,7 @@ input:
     additional_properties:
       type: object
       properties:
-        acl: { type: string }
-      required: [acl]
+        acl: { type: string, required: true }
 tasks:
   - name: Detect actual redis role per host
     module: core.cmd.shell

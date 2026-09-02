@@ -49,7 +49,7 @@ import (
 //
 // No keeper tasks for this Passage → no-op (host-only Passage, or a run with no
 // keeper-side tasks at all — ordinary Soul-side path).
-func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSchema map[string]any, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
+func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
 	keeperTasks := keeperTasksOf(tasks, plans, passage)
 	if len(keeperTasks) == 0 {
 		return nil
@@ -266,7 +266,7 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 // module whose Vault path is DERIVED from the run's owner rather than authored
 // ([ADR-0083] §4). stateSchema is the loaded artifact's map, shared not copied —
 // every reader treats it as immutable.
-func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema map[string]any, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
+func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
 	base, state, ok := config.SplitModuleAddr(rt.Module)
 	if !ok {
 		return false, true, nil, fmt.Sprintf("invalid keeper-side module address %q (want <namespace>.<module>.<state>)", rt.Module)

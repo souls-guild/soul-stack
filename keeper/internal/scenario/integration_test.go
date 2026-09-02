@@ -217,9 +217,7 @@ func noopServiceRepo(t *testing.T) string {
 
 	write("service.yml", `state_schema_version: 1
 description: noop service for scenario-runner integration test
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
 description: smoke core.exec.run
@@ -829,10 +827,8 @@ func registerServiceRepo(t *testing.T) string {
 	write("service.yml", `state_schema_version: 1
 description: register-in-sets service
 state_schema:
-  type: object
-  properties:
-    leader:
-      type: string
+  leader:
+    type: string
 `)
 	write("scenario/probe/main.yml", `name: probe
 description: a capture reaching for a host task's register
@@ -965,9 +961,7 @@ func applyDestinyServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: apply:destiny integration service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 destiny:
   - { name: pilot-flat, ref: master }
 `)
@@ -1152,9 +1146,7 @@ func inputDefaultsServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: scenario input-defaults service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
 description: scenario input defaults merge
@@ -1438,10 +1430,8 @@ func serialServiceRepo(t *testing.T, serial string) string {
 	write("service.yml", `state_schema_version: 1
 description: serial rolling service
 state_schema:
-  type: object
-  properties:
-    rolled:
-      type: string
+  rolled:
+    type: string
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: rolling restart with serial
@@ -1655,10 +1645,8 @@ func serialMultiTaskRepo(t *testing.T, serialA, serialB string) string {
 	write("service.yml", `state_schema_version: 1
 description: serial multi-task service
 state_schema:
-  type: object
-  properties:
-    rolled:
-      type: string
+  rolled:
+    type: string
 `)
 	write("scenario/roll/main.yml", `name: roll
 description: two tasks with different serial widths
@@ -1988,9 +1976,7 @@ func runOnceServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: run_once service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/once/main.yml", `name: once
 description: run_once on a single host
@@ -2098,14 +2084,12 @@ func writeServiceRepo(t *testing.T, scenarioMain string) string {
 	write("service.yml", `state_schema_version: 1
 description: noop service
 state_schema:
-  type: object
-  properties:
-    captured:
-      type: string
-    recorded:
-      type: string
-    provisioned_ip:
-      type: string
+  captured:
+    type: string
+  recorded:
+    type: string
+  provisioned_ip:
+    type: string
 `)
 	write("scenario/create/main.yml", scenarioMain)
 	wt, err := repo.Worktree()

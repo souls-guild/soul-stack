@@ -8,14 +8,12 @@ description: >-
 # the scenario's state-changes record the installed package and the active service in
 # incarnation.state for post-apply asserts.
 state_schema:
-  type: object
-  properties:
-    nginx_package:
-      type: string
-      description: Name of the installed package (literal nginx).
-    nginx_service:
-      type: string
-      description: Name of the running systemd unit (literal nginx).
+  nginx_package:
+    type: string
+    description: Name of the installed package (literal nginx).
+  nginx_service:
+    type: string
+    description: Name of the running systemd unit (literal nginx).
 
 # No dependencies: the scenario uses only core modules (ADR-015) —
 # not listed in destiny[]/modules[] (ADR-009).

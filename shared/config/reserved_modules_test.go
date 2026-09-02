@@ -74,7 +74,7 @@ func TestRequiredModules_OrdinaryAddressIsAccepted(t *testing.T) {
 }
 
 func TestServiceModules_ReservedNameIsRejected(t *testing.T) {
-	const head = "name: x\nstate_schema_version: 1\nstate_schema:\n  type: object\n  properties: {}\n"
+	const head = "name: x\nstate_schema_version: 1\nstate_schema: {}\n"
 	for _, name := range plugin.ReservedNames() {
 		diags := serviceDiags(t, head+"modules:\n  - { name: "+name+".widget, ref: v1 }\n")
 		want := "reserved_module_namespace"
@@ -95,7 +95,7 @@ func TestServiceModules_ReservedNameIsRejected(t *testing.T) {
 // A destiny dependency is a single-level name, so the two-level reserved test must not
 // fire on one that happens to spell a reserved word.
 func TestServiceDestiny_ReservedWordAsDestinyNameIsNotAModuleAddress(t *testing.T) {
-	const head = "name: x\nstate_schema_version: 1\nstate_schema:\n  type: object\n  properties: {}\n"
+	const head = "name: x\nstate_schema_version: 1\nstate_schema: {}\n"
 	diags := serviceDiags(t, head+"destiny:\n  - { name: core, ref: v1 }\n")
 	if hasCode(diags, "reserved_module_namespace") || hasCode(diags, "core_module_in_modules_list") {
 		t.Errorf("a destiny named `core` was treated as a module address: %v", diagCodesP(diags))

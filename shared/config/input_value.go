@@ -285,13 +285,8 @@ func requireInputValues(schema InputSchemaMap, merged map[string]any) error {
 		if _, present := merged[name]; present {
 			continue
 		}
-		// Required (field-level, bool) is read directly — not via requiredKind:
-		// a post-resolve $type node carries object-level RequiredProps
-		// (requiredKind==requiredList from the type) AND the overlay-carried
-		// field-mandatory Required=true at the same time (ADR-062,
-		// applyRefOverlay). Symmetric with validateObjectFields, which reads
-		// RequiredProps directly. For non-resolved schemas the invariant is
-		// unchanged: Required=true ⟺ requiredKind==requiredBool.
+		// One spelling since [ADR-0086] §2: requiredness is the field's own bool,
+		// here and inside an object alike (see validateObjectFields).
 		if s.Required {
 			return fmt.Errorf("input %q is required but was not provided and has no default", name)
 		}
@@ -511,10 +506,17 @@ func validateArrayItems(path string, s *InputSchema, v any) error {
 func validateObjectFields(path string, s *InputSchema, v any) error {
 	obj := v.(map[string]any)
 
-	for _, req := range s.RequiredProps {
-		fv, present := obj[req]
-		if !present || isMissingField(s.Properties[req], fv) {
-			return fmt.Errorf("input %s.%s is required but was not provided", path, req)
+	// Each property carries its own requiredness ([ADR-0086] §2), so the check reads
+	// the properties rather than a list beside them. Sorted, because the first missing
+	// field decides the error and map order would otherwise make it vary run to run.
+	for _, name := range sortedMapKeys(s.Properties) {
+		prop := s.Properties[name]
+		if prop == nil || !prop.Required {
+			continue
+		}
+		fv, present := obj[name]
+		if !present || isMissingField(prop, fv) {
+			return fmt.Errorf("input %s.%s is required but was not provided", path, name)
 		}
 	}
 

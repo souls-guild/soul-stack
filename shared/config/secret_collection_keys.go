@@ -44,7 +44,7 @@ const SecretKeyDuplicateCode = "secret_collection_key_duplicate"
 //
 // tasks is passed separately from the schema so the caller decides whether includes
 // are already expanded, exactly as [ScanOwnNamespaceVault].
-func ScanDuplicateSecretKeys(file string, schema map[string]any, tasks []Task) []diag.Diagnostic {
+func ScanDuplicateSecretKeys(file string, schema InputSchemaMap, tasks []Task) []diag.Diagnostic {
 	if len(schema) == 0 || len(tasks) == 0 {
 		return nil
 	}

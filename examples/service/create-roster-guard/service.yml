@@ -11,9 +11,6 @@ description: >-
 # state_schema_version = 1 → no migrations/ directory required (ADR-019).
 # The service writes nothing to incarnation.state: the run only binds membership
 # and echoes on the bound hosts.
-state_schema:
-  type: object
-  properties: {}
-
+state_schema: {}
 # No dependencies: the scenario uses only core modules (ADR-015), which are not
 # listed in destiny[]/modules[] (ADR-009).

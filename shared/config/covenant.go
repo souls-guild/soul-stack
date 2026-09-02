@@ -204,7 +204,7 @@ func schemaValidateCovenant(_ string, root *ast.MappingNode, m *ScenarioFragment
 
 	topKeys := topLevelKeys(root)
 	if topKeys["input"] {
-		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
+		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input", dialectInput, nil)...)
 	}
 	if topKeys["compute"] {
 		out = append(out, validateComputeBlock(root, "$.compute")...)

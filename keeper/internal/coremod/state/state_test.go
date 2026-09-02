@@ -14,6 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/stateop"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/secretpolicy"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -86,35 +87,31 @@ func (a *fakeAudit) Write(_ context.Context, e *audit.Event) error {
 
 // collectionSchema is the wb-service-redis shape: a list of users, each with a
 // `password` declared `type: secret` and addressed by its `name` sibling.
-func collectionSchema() map[string]any {
-	return map[string]any{
-		"properties": map[string]any{
-			"redis_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"perms":    map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name"},
-					},
+func collectionSchema() config.InputSchemaMap {
+	return config.InputSchemaMap{
+		"redis_users": {
+			Type: "array",
+			Items: &config.InputSchema{
+				Type: "object",
+				Properties: config.InputSchemaMap{
+					"name":     {Type: "string"},
+					"perms":    {Type: "string"},
+					"password": {Type: config.SecretTypeName, Key: "name"},
 				},
 			},
-			"port": map[string]any{"type": "integer"},
 		},
+		"port": {Type: "integer"},
 	}
 }
 
 // scalarSchema is the one-value-per-incarnation shape.
-func scalarSchema() map[string]any {
-	return map[string]any{
-		"properties": map[string]any{
-			"admin_password": map[string]any{"type": "secret"},
-		},
+func scalarSchema() config.InputSchemaMap {
+	return config.InputSchemaMap{
+		"admin_password": {Type: config.SecretTypeName},
 	}
 }
 
-func runScope(schema map[string]any) context.Context {
+func runScope(schema config.InputSchemaMap) context.Context {
 	ctx := coremodutil.WithService(context.Background(), "wb-service-redis")
 	ctx = coremodutil.WithIncarnation(ctx, "redis-prod")
 	ctx = coremodutil.WithStateSchema(ctx, schema)
@@ -559,18 +556,16 @@ func TestSecret_Collection_RefusesDuplicateKeys(t *testing.T) {
 // secret, deriving two different paths. A check keyed on the element rather than on
 // the declared secret would refuse this.
 func TestSecret_Collection_DuplicateKeyIsPerDeclaredSecret(t *testing.T) {
-	schema := map[string]any{
-		"properties": map[string]any{
-			"accounts": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"alias":    map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name"},
-						"token":    map[string]any{"type": "secret", "key": "alias"},
-					},
+	schema := config.InputSchemaMap{
+		"accounts": {
+			Type: "array",
+			Items: &config.InputSchema{
+				Type: "object",
+				Properties: config.InputSchemaMap{
+					"name":     {Type: "string"},
+					"alias":    {Type: "string"},
+					"password": {Type: config.SecretTypeName, Key: "name"},
+					"token":    {Type: config.SecretTypeName, Key: "alias"},
 				},
 			},
 		},
@@ -960,13 +955,13 @@ func TestCapture_WriteFailureFailsTheStep(t *testing.T) {
 
 // plainSchema is a field with no declared secret: the verb dispatch is what is
 // under test, and secret resolution is orthogonal to it.
-func plainSchema() map[string]any {
-	return map[string]any{"properties": map[string]any{
-		"users":  map[string]any{"type": "array"},
-		"conf":   map[string]any{"type": "object"},
-		"port":   map[string]any{"type": "integer"},
-		"events": map[string]any{"type": "array"},
-	}}
+func plainSchema() config.InputSchemaMap {
+	return config.InputSchemaMap{
+		"users":  {Type: "array"},
+		"conf":   {Type: "object"},
+		"port":   {Type: "integer"},
+		"events": {Type: "array"},
+	}
 }
 
 // withEvals attaches merge-time evaluators that match on a literal CEL-free

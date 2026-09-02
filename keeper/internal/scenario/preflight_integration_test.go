@@ -66,9 +66,7 @@ func clusterAssertServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: cluster topology pre-flight assert test service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
 description: cluster topology size-guard via assert
@@ -217,9 +215,7 @@ func dispatcherAssertServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: dispatcher-with-include pre-flight assert test service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	// main.yml is the DISPATCHER: top-level = mode-guard + branch include. No assert here.
 	write("scenario/create/main.yml", `name: create
@@ -401,9 +397,7 @@ func createGuardServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: ungated topology size-guard on the create path
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
 description: ungated size-guard + an input-only guard

@@ -13,11 +13,9 @@ description: >-
   (Trial L0 does not assert it). destiny arch is taken directly from
   soulprint.self.os.arch (apply:input does not pass it).
 
-# state_schema is nominal: L0 render-only does not use it, but service.yml
-# requires a non-empty object schema.
-state_schema:
-  type: object
-
+# state_schema is nominal: L0 render-only does not use it, and this service writes
+# no state — an empty map is the honest declaration of that.
+state_schema: {}
 # Declared destiny dependency: apply:destiny resolves it by name (an
 # undeclared one would be rejected, mirroring prod). The git URL comes from
 # default_destiny_source case.yml (file://, relative to service-root = _trial/).

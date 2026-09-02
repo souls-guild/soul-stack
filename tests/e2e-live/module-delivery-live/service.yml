@@ -10,10 +10,7 @@ description: >-
   fetch→verify→atomic-rename→hot-register and immediately executes the consumer.
 
 # state_schema_version=1 → the migrations/ directory is not required (ADR-019).
-state_schema:
-  type: object
-  properties: {}
-
+state_schema: {}
 # modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
 # keeper synthesizes core.module.installed {name: community, ref} before the first
 # consumer of community.redis.* in the plan — params.name is address level 1, the

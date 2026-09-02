@@ -43,6 +43,13 @@ func scenarioSecretKeyDiags(scenarioPath string, scn *config.ScenarioManifest) [
 	if serr != nil || svc == nil {
 		return nil
 	}
+	// Resolve the state_schema's `$type` references before reading it: a declared
+	// secret may live in a named type ([NIM-740]), and an unresolved reference node
+	// carries no properties — the rule would find no collection secrets and go quiet.
+	// The catalog's own diagnostics are dropped for the same reason the include
+	// expansion's are: the service.yml lint reports them, at its own file, and a
+	// second copy here would name a scenario that did nothing wrong.
+	stateSchemaTypeRefDiags(servicePath, svc)
 
 	tasks := scn.Tasks
 	if serviceDir := scenarioServiceLevelDir(scenarioPath); serviceDir != "" {

@@ -9,9 +9,7 @@ description: >-
 # state_schema v2: field schema_v2 is added by migration 001_to_002 (flags the
 # fact of the upgrade, read-model). note is inherited from v1.
 state_schema:
-  type: object
-  properties:
-    note:
-      type: string
-    schema_v2:
-      type: boolean
+  note:
+    type: string
+  schema_v2:
+    type: boolean

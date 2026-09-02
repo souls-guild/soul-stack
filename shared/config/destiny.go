@@ -141,10 +141,10 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 
 	// 4) input: / output: — recursive validation via the shared validator.
 	if topKeys["input"] {
-		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
+		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input", dialectInput, nil)...)
 	}
 	if topKeys["output"] {
-		out = append(out, validateInputSchemaMap(m.Output, findInputMapping(root, "output"), "$.output")...)
+		out = append(out, validateInputSchemaMap(m.Output, findInputMapping(root, "output"), "$.output", dialectInput, nil)...)
 	}
 
 	// 4a) `validate:` — top-level input invariants, shared validator with

@@ -752,11 +752,11 @@ func secretsOfField(declared []config.SecretField, field string) []config.Secret
 
 // topLevelProperty reports whether the state_schema declares field at its root.
 // A typo in `key:` would otherwise write a field the schema does not know, and
-// the state commit would reject the whole run one phase later.
-func topLevelProperty(schema map[string]any, field string) bool {
-	props, _ := schema["properties"].(map[string]any)
-	_, ok := props[field]
-	return ok
+// the state commit would reject the whole run one phase later. Since [NIM-740]
+// the schema IS the map of state field → schema, so the root key is the field.
+func topLevelProperty(schema config.InputSchemaMap, field string) bool {
+	s, ok := schema[field]
+	return ok && s != nil
 }
 
 // scanMarkers records the path of EVERY secret-request marker in the value. The

@@ -1,8 +1,6 @@
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    foo: { type: string }
+  foo: { type: string }
 scenarios:
   - create
   - restart

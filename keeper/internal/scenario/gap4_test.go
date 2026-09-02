@@ -92,10 +92,8 @@ func writeServiceRepoScenario(t *testing.T, scenarioName, scenarioMain string) s
 	write("service.yml", `state_schema_version: 1
 description: noop service
 state_schema:
-  type: object
-  properties:
-    b:
-      type: string
+  b:
+    type: string
 `)
 	write("scenario/"+scenarioName+"/main.yml", scenarioMain)
 	wt, err := repo.Worktree()

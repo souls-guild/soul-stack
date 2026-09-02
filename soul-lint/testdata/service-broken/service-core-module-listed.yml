@@ -1,6 +1,4 @@
 state_schema_version: 1
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 modules:
   - { name: core.haproxy, ref: v1 }

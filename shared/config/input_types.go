@@ -21,6 +21,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
@@ -64,10 +65,18 @@ const typeRefResolveLimit = 64
 //     here (the parent = an array with items, not a node with `$type`); here any
 //     `items` next to `$type` is exactly a conflict.
 //
+// In dialectState `properties:` is NOT a conflict but the deliberate exception
+// ([NIM-740]): `state_schema` describes declared secrets as well as shape, and the
+// secret of a collection element exists only at the point of USE — one AclUser sits
+// under `redis_users` and under `system_acl_users`, and writing its password into
+// the type would fix an address the type has no business fixing. So the reference
+// may ADD properties on top of the type. The relaxation is scoped to this dialect on
+// purpose: applied to `input:` it would reopen the deep-merge ADR-062 refused.
+//
 // The very existence of type T in the catalog is checked by [ResolveTypeRefs] (needs
 // the catalog) — here only the node's local shape (symmetric to validateSource:
 // shape locally, membership by the resolver).
-func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
+func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present map[string]*ast.MappingValueNode, path string, dialect schemaDialect) []diag.Diagnostic {
 	var out []diag.Diagnostic
 
 	// $type — must be a non-empty string of valid form.
@@ -97,7 +106,20 @@ func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present ma
 
 	// Conflict: $type TOGETHER with the node's own shape. Any of these keys
 	// next to $type makes the node ambiguous.
-	for _, key := range []string{"type", "properties", "items"} {
+	//
+	// `additional_properties` is in the list because the resolver substitutes the
+	// TYPE for a reference node and keeps none of the node's own shape: written here
+	// it is not merged, not refused, just gone. A `type: secret` under it therefore
+	// vanished with no diagnostic at any stage — the one outcome
+	// [CollectSecretFields] exists to rule out. Refusing it is what makes that
+	// impossible to write by accident.
+	conflicting := []string{"type", "properties", "items", "additional_properties"}
+	if dialect == dialectState {
+		// `properties:` is the scoped exception (see the doc comment); the rest stay
+		// ambiguous — the named type already supplies the shape.
+		conflicting = []string{"type", "items", "additional_properties"}
+	}
+	for _, key := range conflicting {
 		kv, ok := present[key]
 		if !ok {
 			continue
@@ -107,7 +129,7 @@ func validateTypeRefNode(s *InputSchema, refKV *ast.MappingValueNode, present ma
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "input_type_ref_conflict",
 			Message:  fmt.Sprintf("$type cannot be combined with %q on the same node", key),
-			Hint:     "a $type node is a reference — drop type:/properties:/items: (the named type provides the shape)",
+			Hint:     "a $type node is a reference — drop " + strings.Join(conflicting, ":/") + ": (the named type provides the shape)",
 			YAMLPath: path + "." + key,
 		}))
 	}
@@ -267,7 +289,7 @@ func ParseTypeCatalog(filename string, data []byte) (TypeCatalog, []diag.Diagnos
 			}))
 			continue
 		}
-		diags = append(diags, validateInputSchemaNode(decoded.Types[tok.Value], bodyNode, "$.types."+tok.Value)...)
+		diags = append(diags, validateInputSchemaNode(decoded.Types[tok.Value], bodyNode, "$.types."+tok.Value, dialectTypes)...)
 	}
 
 	// Resolve `$type` references between types with cycle-detection. We work on a COPY
@@ -298,7 +320,11 @@ func resolveOneType(name string, catalog TypeCatalog, path string) (*InputSchema
 	}
 	// The stack of active types on the current traversal branch — for cycle detection.
 	stack := map[string]bool{name: true}
-	return resolveSchemaRefs(schema, catalog, stack, path, 0)
+	// dialectTypes: a type body may declare a secret ([ADR-0086] §5) but does NOT get
+	// the `$type` overlay. A type referencing another type and adding properties to it
+	// is the deep merge ADR-062 refused — the exception is granted to the USE site,
+	// where the added property's Vault address is readable, not to the catalog.
+	return resolveSchemaRefs(schema, catalog, stack, path, 0, dialectTypes)
 }
 
 // resolveSchemaRefs returns a copy of `schema` with all `$type` references
@@ -312,7 +338,7 @@ func resolveOneType(name string, catalog TypeCatalog, path string) (*InputSchema
 // property of the ref-graph): incremented ONLY when entering a reference's target type.
 // Structural descent into items/properties/additional_properties leaves depth untouched,
 // otherwise a deeply nested plain object would falsely exceed the limit and give input_type_cycle.
-func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[string]bool, path string, depth int) (*InputSchema, []diag.Diagnostic) {
+func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[string]bool, path string, depth int, dialect schemaDialect) (*InputSchema, []diag.Diagnostic) {
 	if schema == nil {
 		return nil, nil
 	}
@@ -348,13 +374,17 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 			}}
 		}
 		stack[ref] = true
-		resolved, diags := resolveSchemaRefs(target, catalog, stack, path, depth+1)
+		resolved, diags := resolveSchemaRefs(target, catalog, stack, path, depth+1, dialect)
 		delete(stack, ref)
 		// The reference node's own keys (description/required/required_when) over the
 		// resolved type — applyRefOverlay (does not touch the type's shape). Conflicting
-		// keys (type/properties/items) are already rejected by the conflict check.
+		// keys (type/items, and properties outside dialectState) are already rejected
+		// by the conflict check.
 		if resolved != nil {
 			applyRefOverlay(schema, resolved)
+			if dialect == dialectState && len(schema.Properties) > 0 {
+				diags = append(diags, applyRefProperties(schema, resolved, catalog, stack, path, depth)...)
+			}
 		}
 		return resolved, diags
 	}
@@ -366,21 +396,21 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 	var diags []diag.Diagnostic
 
 	if schema.Items != nil {
-		ri, d := resolveSchemaRefs(schema.Items, catalog, stack, path+".items", depth)
+		ri, d := resolveSchemaRefs(schema.Items, catalog, stack, path+".items", depth, dialect)
 		out.Items = ri
 		diags = append(diags, d...)
 	}
 	if len(schema.Properties) > 0 {
 		props := make(InputSchemaMap, len(schema.Properties))
 		for pn, ps := range schema.Properties {
-			rp, d := resolveSchemaRefs(ps, catalog, stack, path+".properties."+pn, depth)
+			rp, d := resolveSchemaRefs(ps, catalog, stack, path+".properties."+pn, depth, dialect)
 			props[pn] = rp
 			diags = append(diags, d...)
 		}
 		out.Properties = props
 	}
 	if ap, ok := schema.AdditionalProperties.(*InputSchema); ok {
-		rap, d := resolveSchemaRefs(ap, catalog, stack, path+".additional_properties", depth)
+		rap, d := resolveSchemaRefs(ap, catalog, stack, path+".additional_properties", depth, dialect)
 		out.AdditionalProperties = rap
 		diags = append(diags, d...)
 	}
@@ -391,22 +421,147 @@ func resolveSchemaRefs(schema *InputSchema, catalog TypeCatalog, stack map[strin
 // applyRefOverlay overlays the reference node's own keys `{ $type: T, … }`
 // on top of the resolved type schema — surgically, without changing the type's shape:
 //   - description — the reference's label;
-//   - the reference's field-level requiredness (`required: <bool>`, requiredKind==
-//     requiredBool) → the Required field. The resolved type's requiredKind/RequiredProps
-//     are left untouched: the type's object-level `required: [a,b]` (requiredList) and the
-//     reference's field-mandatory flag are DIFFERENT model fields that coexist (requireInputValues
-//     reads Required, validateObjectFields reads RequiredProps);
+//   - the reference's field-level requiredness (`required: <bool>`) → the Required
+//     field. Written on the REFERENCE it says "this field is mandatory"; the type's own
+//     properties keep whatever each of them declares. Since [ADR-0086] §2 there is one
+//     spelling, so this is a plain override of one bool rather than the former dance
+//     between a field-level flag and an object-level list;
 //   - required_when — the reference's CEL-conditional requiredness, if the type did not set it.
 func applyRefOverlay(ref, resolved *InputSchema) {
 	if ref.Description != "" {
 		resolved.Description = ref.Description
 	}
-	if ref.requiredKind == requiredBool {
+	// Only a real bool overrides. Gating on "the key was written" would let a malformed
+	// value — a leftover list, a null — carry its zero `false` over the requiredness the
+	// TYPE declares, turning a mandatory field optional with no diagnostic anywhere.
+	// The malformed value is refused separately ([validateRequiredShape]); this is the
+	// second half of that pair, for the resolve that runs even when validation found
+	// something.
+	if _, isBool := ref.rawRequired.(*ast.BoolNode); isBool {
 		resolved.Required = ref.Required
 	}
 	if ref.RequiredWhen != "" && resolved.RequiredWhen == "" {
 		resolved.RequiredWhen = ref.RequiredWhen
 	}
+}
+
+// TypeRefOverlayConflictCode — a `$type` reference in `state_schema` adding a property
+// the referenced type already declares ([ADR-0086] §4). The name is the ADR's: the
+// mechanism is the ADR-062 overlay, widened by one key, not a state-schema invention.
+const TypeRefOverlayConflictCode = "input_type_ref_overlay_conflict"
+
+// applyRefProperties merges the properties a `$type` reference in `state_schema`
+// writes NEXT TO the reference into the resolved type ([NIM-740]). It is the whole
+// of the ADR-062 exception, and it is deliberately a shallow ADD:
+//
+//   - a name the type does not declare is added — this is how `redis_users:
+//     { items: { $type: AclUser, properties: { password: { type: secret, key: name } } } }`
+//     says "an AclUser, plus the secret this particular use of it owns";
+//   - a name the type DOES declare is refused ([TypeRefOverlayConflictCode]). Adopted
+//     by reference from ADR-009's `extends:` covenant, which resolves the same question
+//     the same way: two authors disagreeing about one property is a fact worth
+//     reporting, and silently preferring either produces a schema neither of them wrote.
+//     Two declarations of one property is exactly the drift the epic exists to
+//     remove: silently letting one win would put the reader back where they
+//     started, unable to tell which shape applies.
+//
+// A reference to a type that is not an object has nowhere to put them, and is
+// refused for the same reason a `type:` next to `$type` is: the node means two
+// contradictory things at once.
+//
+// The added properties are themselves resolved (they may reference types too), and
+// they land in a map built here, never in the catalog's own — a type used under two
+// state fields must not collect the other one's secret.
+func applyRefProperties(ref, resolved *InputSchema, catalog TypeCatalog, stack map[string]bool, path string, depth int) []diag.Diagnostic {
+	if resolved.Type != "object" {
+		return []diag.Diagnostic{{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code: "input_type_ref_conflict",
+			Message: fmt.Sprintf("$type %q resolves to type %q, so the properties written next to the reference have nowhere to go",
+				ref.TypeRef, resolved.Type),
+			Hint:     "only an object type can be extended at the point of use; drop properties: or reference an object type",
+			YAMLPath: path + ".properties",
+		}}
+	}
+
+	merged := make(InputSchemaMap, len(resolved.Properties)+len(ref.Properties))
+	for name, sub := range resolved.Properties {
+		merged[name] = sub
+	}
+
+	var diags []diag.Diagnostic
+	for _, name := range sortedMapKeys(ref.Properties) {
+		propPath := path + ".properties." + name
+		if _, taken := merged[name]; taken {
+			diags = append(diags, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:     TypeRefOverlayConflictCode,
+				Message:  fmt.Sprintf("property %q is already declared by type %q", name, ref.TypeRef),
+				Hint:     "a $type reference may only ADD properties — rename this one, or move the declaration into types.yml",
+				YAMLPath: propPath,
+			})
+			continue
+		}
+		sub, d := resolveSchemaRefs(ref.Properties[name], catalog, stack, propPath, depth, dialectState)
+		diags = append(diags, d...)
+		merged[name] = sub
+	}
+	resolved.Properties = merged
+	return diags
+}
+
+// ResolveStateSchemaTypeRefs resolves `$type` references in a `state_schema:` block
+// against the service's type catalog. It is [ResolveTypeRefs] in the state dialect:
+// same substitution, same cycle detection, plus the one relaxation the state block
+// gets — a reference may carry its own `properties:` (see [applyRefProperties]).
+//
+// The source `in` is not mutated; the returned map is self-contained (no `$type`
+// left). Diagnostics carry `$.state_schema.<field>…` paths, so the caller only has
+// to set File.
+func ResolveStateSchemaTypeRefs(in InputSchemaMap, catalog TypeCatalog) (InputSchemaMap, []diag.Diagnostic) {
+	if in == nil {
+		return nil, nil
+	}
+	out := make(InputSchemaMap, len(in))
+	var diags []diag.Diagnostic
+	for name, schema := range in {
+		stack := map[string]bool{}
+		resolved, d := resolveSchemaRefs(schema, catalog, stack, "$.state_schema."+name, 0, dialectState)
+		out[name] = resolved
+		diags = append(diags, d...)
+	}
+	return out, diags
+}
+
+// SchemaHasTypeRef reports whether a schema map references a named type anywhere,
+// through items/properties/additional_properties. A cheap short-circuit for a caller
+// deciding whether reading types.yml is worth it — a definition with no references
+// needs no catalog. Dialect-neutral: an `input:` block and a `state_schema:` are the
+// same map type and reference types the same way.
+func SchemaHasTypeRef(m InputSchemaMap) bool {
+	for _, s := range m {
+		if schemaHasTypeRef(s) {
+			return true
+		}
+	}
+	return false
+}
+
+func schemaHasTypeRef(s *InputSchema) bool {
+	if s == nil {
+		return false
+	}
+	if s.TypeRef != "" {
+		return true
+	}
+	if schemaHasTypeRef(s.Items) {
+		return true
+	}
+	if SchemaHasTypeRef(s.Properties) {
+		return true
+	}
+	ap, ok := s.AdditionalProperties.(*InputSchema)
+	return ok && schemaHasTypeRef(ap)
 }
 
 // ResolveTypeRefs resolves `$type` references in the input schema `in` (e.g. a scenario's
@@ -427,7 +582,7 @@ func ResolveTypeRefs(in InputSchemaMap, catalog TypeCatalog) (InputSchemaMap, []
 		// a cycle by itself; cycles are only BETWEEN types (already caught in
 		// ParseTypeCatalog), but we re-check for robustness.
 		stack := map[string]bool{}
-		resolved, d := resolveSchemaRefs(schema, catalog, stack, "$.input."+name, 0)
+		resolved, d := resolveSchemaRefs(schema, catalog, stack, "$.input."+name, 0, dialectInput)
 		out[name] = resolved
 		diags = append(diags, d...)
 	}

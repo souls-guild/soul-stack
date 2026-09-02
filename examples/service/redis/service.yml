@@ -107,7 +107,7 @@ description: >-
 # repeated apply is idempotent.
 #
 # BOUNDARY between the two config representations (architect a9e1c2c6):
-#   - redis_config (opaque, additionalProperties:true) — the COMPUTED RESULT of translating
+#   - redis_config (opaque, additional_properties: true) — the COMPUTED RESULT of translating
 #     simple input into a redis.conf map (what actually goes into render and CONFIG SET). This is the
 #     write-model of "as deployed".
 #   - named fields (tls/persistence/...) — the operator's INTENT in simple
@@ -118,280 +118,276 @@ description: >-
 # BOTH representations are filled from a SINGLE create compute pass (compute.*): namedfields
 # and redis_config are computed from the same compute.tls_*/input.* — no drift between them.
 state_schema:
-  type: object
-  required: [redis_type, redis_config]
-  properties:
-    # Deployment mode (role concept). Produces derived flags
-    # (deploy_redis/deploy_sentinel/cluster_enabled), fed into destiny via
-    # apply: input: in the corresponding scenario. Service modes: sentinel/cluster
-    # (standalone/sentinel_only removed 2026-06-25, see 003_to_004 migration).
-    redis_type:
-      type: string
-      enum: [sentinel, cluster]
-    redis_version:
-      type: string
-    # The final redis.conf config (merged default→preset→user from service vars). Goes both
-    # into the `redis` destiny render, and into community.redis.config (CONFIG SET to a live Redis).
-    redis_config:
-      type: object
-      additionalProperties: true
+  # Deployment mode (role concept). Produces derived flags
+  # (deploy_redis/deploy_sentinel/cluster_enabled), fed into destiny via
+  # apply: input: in the corresponding scenario. Service modes: sentinel/cluster
+  # (standalone/sentinel_only removed 2026-06-25, see 003_to_004 migration).
+  redis_type:
+    type: string
+    required: true
+    enum: [sentinel, cluster]
+  redis_version:
+    type: string
+  # The final redis.conf config (merged default→preset→user from service vars). Goes both
+  # into the `redis` destiny render, and into community.redis.config (CONFIG SET to a live Redis).
+  redis_config:
+    type: object
+    required: true
+    additional_properties: true
 
-    # ── Named intent fields (read-model, v3) ───────────────────────────
-    # Simple typed operator concepts, alongside opaque redis_config. Day-2
-    # scenarios read them BY NAME (they don't parse redis_config). Populated by create from
-    # the same compute.*/input as redis_config (a single source of truth, no drift).
+  # ── Named intent fields (read-model, v3) ───────────────────────────
+  # Simple typed operator concepts, alongside opaque redis_config. Day-2
+  # scenarios read them BY NAME (they don't parse redis_config). Populated by create from
+  # the same compute.*/input as redis_config (a single source of truth, no drift).
 
-    # TLS intent: whether TLS is on, whether the plain port is closed, on which TLS port, and
-    # Vault PATHS for the server cert/key/CA (NOT the PEM itself — the secret is not stored in state, security).
-    # Populated from compute.tls_on/tls_only_on/tls_port/tls_*_ref (the same values
-    # that went into the redis_config TLS block). day-2 restart reads state.tls.enable/port.
-    tls:
-      type: object
-      additionalProperties: false
-      properties:
-        enable:   { type: boolean }
-        only:     { type: boolean }
-        port:     { type: integer }
-        cert_ref: { type: string }
-        key_ref:  { type: string }
-        ca_ref:   { type: string }
-    # Redis network-channel mode (enum, read-model v11). Explicit operator choice
-    # (input.connection_mode): plain — plain port only; tls_plain — TLS+plain;
-    # tls — TLS only. The tls namedfield above carries the DERIVED enable/only/port
-    # (compute.tls_on/tls_only_on), connection_mode duplicates the ORIGINAL enum choice.
-    # For v≤10 incarnations it's derived from tls.enable/only via a reverse fold (010_to_011).
-    connection_mode:
+  # TLS intent: whether TLS is on, whether the plain port is closed, on which TLS port, and
+  # Vault PATHS for the server cert/key/CA (NOT the PEM itself — the secret is not stored in state, security).
+  # Populated from compute.tls_on/tls_only_on/tls_port/tls_*_ref (the same values
+  # that went into the redis_config TLS block). day-2 restart reads state.tls.enable/port.
+  tls:
+    type: object
+    additional_properties: false
+    properties:
+      enable:   { type: boolean }
+      only:     { type: boolean }
+      port:     { type: integer }
+      cert_ref: { type: string }
+      key_ref:  { type: string }
+      ca_ref:   { type: string }
+  # Redis network-channel mode (enum, read-model v11). Explicit operator choice
+  # (input.connection_mode): plain — plain port only; tls_plain — TLS+plain;
+  # tls — TLS only. The tls namedfield above carries the DERIVED enable/only/port
+  # (compute.tls_on/tls_only_on), connection_mode duplicates the ORIGINAL enum choice.
+  # For v≤10 incarnations it's derived from tls.enable/only via a reverse fold (010_to_011).
+  connection_mode:
+    type: string
+    enum: [tls, tls_plain, plain]
+  # Number of Redis I/O threads (io-threads directive, read-model v11). From
+  # input.io_threads (default 0 = single-threaded I/O). 0 → the io-threads directive in
+  # redis_config is NOT written (compute has-guard >0). For v≤10 — best-effort 0
+  # (the original value wasn't stored in state; 010_to_011, symmetric to memory_mb).
+  io_threads:
+    type: integer
+    min: 0
+  # Persistence mode (role concept). From input.persistence (default rdb).
+  # ★ v11: the enum was EXPANDED to 6 values (aof/rdb_aof split into _1sec/_always by
+  # AOF fsync frequency; off/rdb unchanged). Old aof/rdb_aof are remapped to
+  # _1sec by the 010_to_011 migration (back-compat fsync everysec).
+  persistence:
+    type: string
+    enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
+  # Memory budget for Redis, MB. From input.memory_mb; if not set → absent/0.
+  memory_mb:
+    type: integer
+    min: 64
+  # Eviction policy. From input.maxmemory_policy; if not set → an empty string
+  # (the directive is taken from the service vars merge base — namedfields marks it
+  # as "operator made no explicit choice").
+  maxmemory_policy:
+    type: string
+  # Deployed Redis modules (read-model). "Modules ALWAYS ALL" directive: on Redis
+  # < 8 — the full set of aliases (destiny loads all from vars.redis_modules), on Redis
+  # 8+ — empty (built in). NOT an operator choice (input.modules removed).
+  modules:
+    type: array
+    items:
       type: string
-      enum: [tls, tls_plain, plain]
-    # Number of Redis I/O threads (io-threads directive, read-model v11). From
-    # input.io_threads (default 0 = single-threaded I/O). 0 → the io-threads directive in
-    # redis_config is NOT written (compute has-guard >0). For v≤10 — best-effort 0
-    # (the original value wasn't stored in state; 010_to_011, symmetric to memory_mb).
-    io_threads:
-      type: integer
-      minimum: 0
-    # Persistence mode (role concept). From input.persistence (default rdb).
-    # ★ v11: the enum was EXPANDED to 6 values (aof/rdb_aof split into _1sec/_always by
-    # AOF fsync frequency; off/rdb unchanged). Old aof/rdb_aof are remapped to
-    # _1sec by the 010_to_011 migration (back-compat fsync everysec).
-    persistence:
+      enum: [search, json, timeseries, bloom]
+  # Applied kernel parameters for Redis (host tuning). From vars.sysctl_settings
+  # (the same map that went into destiny via apply.input). key→value (strings).
+  sysctl_settings:
+    type: object
+    additional_properties:
       type: string
-      enum: [off, aof_1sec, aof_always, rdb, rdb_aof_1sec, rdb_aof_always]
-    # Memory budget for Redis, MB. From input.memory_mb; if not set → absent/0.
-    memory_mb:
-      type: integer
-      minimum: 64
-    # Eviction policy. From input.maxmemory_policy; if not set → an empty string
-    # (the directive is taken from the service vars merge base — namedfields marks it
-    # as "operator made no explicit choice").
-    maxmemory_policy:
+
+  # ── Data-plane monitoring (read-model, v13, Slice I) ──────────────────
+  # FACT of deployed metrics exporters: create UNCONDITIONALLY installs node_exporter +
+  # redis_exporter on every host (AFTER deploy). Versions/listen ports — from service vars
+  # (node_exporter_*/redis_exporter_*, the same values that went into apply.input for both
+  # destinies). Symmetric to the install/tls read-model: the operator sees what's deployed, and
+  # a repeated apply is idempotent. The monitoring ACL user's password/username are NOT written HERE —
+  # they're in Vault (secret/redis/<inc>/users/monitoring), like tls.*_ref (security). For
+  # v≤12 incarnations (monitoring not yet deployed) — a conservative default: versions ''
+  # (best-effort like memory_mb/io_threads), ports :9100/:9121 (012_to_013).
+  monitoring:
+    type: object
+    additional_properties: false
+    properties:
+      node_exporter_version:  { type: string }
+      redis_exporter_version: { type: string }
+      node_exporter_listen:   { type: string }
+      redis_exporter_listen:  { type: string }
+
+  # ── Data-plane log-shipping (read-model, v14, Slice V-I, ADR-067) ──────
+  # FACT of a deployed log-shipping agent: create UNCONDITIONALLY installs vector on
+  # every host (AFTER deploy+exporters). version/sink_type/endpoint/log_sources —
+  # from vars.vector_* (the same values that went into the vector destiny's apply.input).
+  # ★ sink_auth_ref (the collector token) is NOT written HERE — the secret lives in Vault
+  # (like tls.*_ref and the monitoring password). Symmetric to the monitoring read-model: the operator
+  # sees what's deployed. For v≤13 incarnations (log-shipping not yet deployed) —
+  # a conservative default: version '' (not deployed, best-effort like monitoring),
+  # sink_type console (safe, no infra needed), endpoint '', log_sources [] (013_to_014).
+  logging:
+    type: object
+    additional_properties: false
+    properties:
+      vector_version:       { type: string }
+      vector_sink_type:     { type: string }
+      vector_sink_endpoint: { type: string }
+      vector_log_sources:
+        type: array
+        items: { type: string }
+
+  # ── cloud-provision read-model (v7–v8, ADR-061) ───────────────────────────
+  # FACT that "these hosts were raised by our create run via cloud-create". Populated by
+  # create ONLY when input.provision.enabled (provider/vm_ids/sids from the
+  # core.cloud.created register); otherwise [] / '' (hosts not provisioned by the service — declared
+  # roster). day-2 teardown reads provisioned_vm_ids for core.cloud.destroyed.
+  # provider — the cloud-Provider name in the registry (for the same destroy call).
+  provisioned_vm_ids:
+    type: array
+    items:
       type: string
-    # Deployed Redis modules (read-model). "Modules ALWAYS ALL" directive: on Redis
-    # < 8 — the full set of aliases (destiny loads all from vars.redis_modules), on Redis
-    # 8+ — empty (built in). NOT an operator choice (input.modules removed).
-    modules:
-      type: array
-      items:
-        type: string
-        enum: [search, json, timeseries, bloom]
-    # Applied kernel parameters for Redis (host tuning). From vars.sysctl_settings
-    # (the same map that went into destiny via apply.input). key→value (strings).
-    sysctl_settings:
-      type: object
-      additionalProperties:
-        type: string
-
-    # ── Data-plane monitoring (read-model, v13, Slice I) ──────────────────
-    # FACT of deployed metrics exporters: create UNCONDITIONALLY installs node_exporter +
-    # redis_exporter on every host (AFTER deploy). Versions/listen ports — from service vars
-    # (node_exporter_*/redis_exporter_*, the same values that went into apply.input for both
-    # destinies). Symmetric to the install/tls read-model: the operator sees what's deployed, and
-    # a repeated apply is idempotent. The monitoring ACL user's password/username are NOT written HERE —
-    # they're in Vault (secret/redis/<inc>/users/monitoring), like tls.*_ref (security). For
-    # v≤12 incarnations (monitoring not yet deployed) — a conservative default: versions ''
-    # (best-effort like memory_mb/io_threads), ports :9100/:9121 (012_to_013).
-    monitoring:
-      type: object
-      additionalProperties: false
-      properties:
-        node_exporter_version:  { type: string }
-        redis_exporter_version: { type: string }
-        node_exporter_listen:   { type: string }
-        redis_exporter_listen:  { type: string }
-
-    # ── Data-plane log-shipping (read-model, v14, Slice V-I, ADR-067) ──────
-    # FACT of a deployed log-shipping agent: create UNCONDITIONALLY installs vector on
-    # every host (AFTER deploy+exporters). version/sink_type/endpoint/log_sources —
-    # from vars.vector_* (the same values that went into the vector destiny's apply.input).
-    # ★ sink_auth_ref (the collector token) is NOT written HERE — the secret lives in Vault
-    # (like tls.*_ref and the monitoring password). Symmetric to the monitoring read-model: the operator
-    # sees what's deployed. For v≤13 incarnations (log-shipping not yet deployed) —
-    # a conservative default: version '' (not deployed, best-effort like monitoring),
-    # sink_type console (safe, no infra needed), endpoint '', log_sources [] (013_to_014).
-    logging:
-      type: object
-      additionalProperties: false
-      properties:
-        vector_version:       { type: string }
-        vector_sink_type:     { type: string }
-        vector_sink_endpoint: { type: string }
-        vector_log_sources:
-          type: array
-          items: { type: string }
-
-    # ── cloud-provision read-model (v7–v8, ADR-061) ───────────────────────────
-    # FACT that "these hosts were raised by our create run via cloud-create". Populated by
-    # create ONLY when input.provision.enabled (provider/vm_ids/sids from the
-    # core.cloud.created register); otherwise [] / '' (hosts not provisioned by the service — declared
-    # roster). day-2 teardown reads provisioned_vm_ids for core.cloud.destroyed.
-    # provider — the cloud-Provider name in the registry (for the same destroy call).
-    provisioned_vm_ids:
-      type: array
-      items:
-        type: string
-    provisioned_provider:
+  provisioned_provider:
+    type: string
+  # provisioned_sids (v8): SID (FQDN) of each VM raised by this create run. DIFFERS
+  # from provisioned_vm_ids: vm_ids — provider-side id (for core.cloud.destroyed), sids —
+  # the Keeper-side Soul identity. day-2 teardown (cascade destroy) reads sids to
+  # finish off orphaned souls (→destroyed) / seeds (→orphaned) / bootstrap tokens
+  # (→burned): Reaper does NOT tear down pending-VM-souls itself (mark_disconnected only
+  # goes connected→disconnected); without sids the records would remain (anti-replay violation).
+  # Populated with the same guard+shape as provisioned_vm_ids (input.provision.enabled →
+  # register.provision.hosts.map(h, h.sid)); otherwise [].
+  provisioned_sids:
+    type: array
+    items:
       type: string
-    # provisioned_sids (v8): SID (FQDN) of each VM raised by this create run. DIFFERS
-    # from provisioned_vm_ids: vm_ids — provider-side id (for core.cloud.destroyed), sids —
-    # the Keeper-side Soul identity. day-2 teardown (cascade destroy) reads sids to
-    # finish off orphaned souls (→destroyed) / seeds (→orphaned) / bootstrap tokens
-    # (→burned): Reaper does NOT tear down pending-VM-souls itself (mark_disconnected only
-    # goes connected→disconnected); without sids the records would remain (anti-replay violation).
-    # Populated with the same guard+shape as provisioned_vm_ids (input.provision.enabled →
-    # register.provision.hosts.map(h, h.sid)); otherwise [].
-    provisioned_sids:
-      type: array
-      items:
-        type: string
 
-    # ── seed-source read-model (v9–v10, S1 pilot migrate_cluster) ─────────────
-    # FACT that "the incarnation's data was seeded by migration from an EXTERNAL Redis
-    # cluster" (S1 migrate_cluster). source_endpoints — the source's addresses (where the data was
-    # pulled from); detached — whether the source has been detached: false right after migrate (the source is still
-    # alive, still replicating/catching up), true after day-2 detach_source (the source is
-    # no longer needed). Time is deliberately NOT stored here — it's in state_history (a
-    # per-change snapshot carries the time), while state itself stays deterministic (important
-    # for L0; timestamps in state are a deferred S-batch). A regular create (not a
-    # migration) → a conservative default {source_endpoints: [], detached: false,
-    # source_password_ref: '', source_tls_ca_ref: ''}.
-    #
-    # ★ source_password_ref / source_tls_ca_ref (v10) — REFERENCES (Vault PATHS, NOT
-    # values) to the EXTERNAL source's credentials, PERSISTED by migrate_cluster from
-    # input.source.password_ref/tls_ca_ref. Production fix: day-2 detach_source does a
-    # final offset-gate to the source, and if the source is under AUTH/TLS — without these
-    # refs the connection would hit a failure (the credentials aren't in detach's input contract,
-    # and the secret doesn't land in state — security). detach reads them via vault() keeper-side
-    # (vault(state.seeded_from.source_password_ref)) and authenticates to the
-    # source. Empty → the source has no AUTH/TLS (source_password=''), as before the
-    # fix. state holds the PATH, not the PEM/password — symmetric to tls.*_ref (security).
-    seeded_from:
-      type: object
-      additionalProperties: false
-      properties:
-        source_endpoints:
-          type: array
-          items:
-            type: string
-        detached:
-          type: boolean
-        source_password_ref:
+  # ── seed-source read-model (v9–v10, S1 pilot migrate_cluster) ─────────────
+  # FACT that "the incarnation's data was seeded by migration from an EXTERNAL Redis
+  # cluster" (S1 migrate_cluster). source_endpoints — the source's addresses (where the data was
+  # pulled from); detached — whether the source has been detached: false right after migrate (the source is still
+  # alive, still replicating/catching up), true after day-2 detach_source (the source is
+  # no longer needed). Time is deliberately NOT stored here — it's in state_history (a
+  # per-change snapshot carries the time), while state itself stays deterministic (important
+  # for L0; timestamps in state are a deferred S-batch). A regular create (not a
+  # migration) → a conservative default {source_endpoints: [], detached: false,
+  # source_password_ref: '', source_tls_ca_ref: ''}.
+  #
+  # ★ source_password_ref / source_tls_ca_ref (v10) — REFERENCES (Vault PATHS, NOT
+  # values) to the EXTERNAL source's credentials, PERSISTED by migrate_cluster from
+  # input.source.password_ref/tls_ca_ref. Production fix: day-2 detach_source does a
+  # final offset-gate to the source, and if the source is under AUTH/TLS — without these
+  # refs the connection would hit a failure (the credentials aren't in detach's input contract,
+  # and the secret doesn't land in state — security). detach reads them via vault() keeper-side
+  # (vault(state.seeded_from.source_password_ref)) and authenticates to the
+  # source. Empty → the source has no AUTH/TLS (source_password=''), as before the
+  # fix. state holds the PATH, not the PEM/password — symmetric to tls.*_ref (security).
+  seeded_from:
+    type: object
+    additional_properties: false
+    properties:
+      source_endpoints:
+        type: array
+        items:
           type: string
-        source_tls_ca_ref:
-          type: string
+      detached:
+        type: boolean
+      source_password_ref:
+        type: string
+      source_tls_ca_ref:
+        type: string
 
-    # ── Topology (counts, v3) ────────────────────────────────────────────────
-    # Layout of roles across targeted souls. From input.shards/replicas/
-    # sentinel_quorum (see input create). Mode-dependent: cluster uses shards/
-    # replicas (replicas_per_shard), sentinel — replicas/sentinel_quorum; for other
-    # modes — 0. Not set in input → 0 (sentinel auto-quorum is computed in apply,
-    # in namedfields 0 materializes as "operator didn't explicitly set it").
-    shards:          { type: integer }
-    replicas:        { type: integer }
-    sentinel_quorum: { type: integer }
+  # ── Topology (counts, v3) ────────────────────────────────────────────────
+  # Layout of roles across targeted souls. From input.shards/replicas/
+  # sentinel_quorum (see input create). Mode-dependent: cluster uses shards/
+  # replicas (replicas_per_shard), sentinel — replicas/sentinel_quorum; for other
+  # modes — 0. Not set in input → 0 (sentinel auto-quorum is computed in apply,
+  # in namedfields 0 materializes as "operator didn't explicitly set it").
+  shards:          { type: integer }
+  replicas:        { type: integer }
+  sentinel_quorum: { type: integer }
 
-    # Redis ACL users: a TYPED array [{name, perms, state, password}] (types-epic
-    # wave 1b, ADR-062 AclUser; map→array conversion, migration 005_to_006). name —
-    # the user name (previously the map key); perms — the full ACL string (Redis ACL
-    # directives verbatim). Populated by create from input.users (also an AclUser array).
-    # password is declared `type: secret` (ADR-0083 §1): the value lives in Vault at a
-    # path Keeper DERIVES from (service, incarnation, redis_users, name) — no path is
-    # written anywhere in this repo — and never in state. `key: name` says which sibling
-    # property is the element's identity, i.e. the last path segment. Written by
-    # core.state.set, revealed to the operator by .../secrets/reveal, and read back
-    # by day-2 scenarios through that module's register.
-    redis_users:
-      type: array
-      items:
-        type: object
-        required: [name, perms, state]
-        properties:
-          name:  { type: string }
-          perms: { type: string }
-          state: { type: string, enum: [on, off] }
-          password:
-            type: secret
-            key: name
-            label: "Redis user password"
-        additionalProperties: false
-    # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/
-    # haproxy) — the counterpart of redis_users, which is operator intent. Only the
-    # NAME is state: perms live in service vars (vars.system_acl_users /
-    # vars.system_acl_users_sentinel — policy, not a per-incarnation fact), and the
-    # password is declared `type: secret`, so its value lives in Vault at a path
-    # Keeper DERIVES from (service, incarnation, system_acl_users, name). Written by
-    # create/create_from_souls, read back by every day-2 scenario through
-    # core.state.set's register — which is why the set is recorded rather than
-    # recomputed from vars: an operator who edits vars after create must not silently
-    # re-point an in-cluster credential.
-    system_acl_users:
-      type: array
-      items:
-        type: object
-        required: [name]
-        additionalProperties: false
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "Redis system account password"
-    # Topology hosts (sid + role). For cluster/sentinel populated by the create scenario
-    # (role layout across targeted souls). The exact role of each SID in state — a follow-up.
-    redis_hosts:
-      type: array
-      items:
-        type: object
-        required: [sid, role]
-        properties:
-          sid:  { type: string, format: fqdn }
-          role: { type: string, enum: [primary, replica, sentinel] }
-    # sentinel-mode facts (master_name + quorum monitored master + effective
-    # sentinel directives). Populated by create when redis_type=sentinel; empty for cluster.
-    # create does NOT write master_ip (the master is chosen from the roster, host-variable) —
-    # the field remains in the schema only for back-compat with legacy state (sentinel_only remap,
-    # 003_to_004); current modes don't materialize it.
-    # ★ v11: the named down_after_ms/failover_timeout_ms are REPLACED by generalized maps
-    # (input redesign — input.sentinel_master_settings/sentinel_settings):
-    #   - master_settings — effective PER-MASTER sentinel directives (key→value, strings;
-    #     option name for SENTINEL SET without the prefix/master-name, e.g. down-after-milliseconds/
-    #     failover-timeout/parallel-syncs). Replaces the 2 named fields (their values
-    #     move into down-after-milliseconds/failover-timeout of this map, 010_to_011);
-    #   - settings — global (NOT per-master) sentinel.conf directives (key→value, strings).
-    redis_sentinel:
+  # Redis ACL users: a TYPED array [{name, perms, state, password}] (types-epic
+  # wave 1b, ADR-062 AclUser; map→array conversion, migration 005_to_006). name —
+  # the user name (previously the map key); perms — the full ACL string (Redis ACL
+  # directives verbatim). Populated by create from input.users (also an AclUser array).
+  # password is declared `type: secret` (ADR-0083 §1): the value lives in Vault at a
+  # path Keeper DERIVES from (service, incarnation, redis_users, name) — no path is
+  # written anywhere in this repo — and never in state. `key: name` says which sibling
+  # property is the element's identity, i.e. the last path segment. Written by
+  # core.state.set, revealed to the operator by .../secrets/reveal, and read back
+  # by day-2 scenarios through that module's register.
+  redis_users:
+    type: array
+    items:
       type: object
-      additionalProperties: false
       properties:
-        master_name: { type: string }
-        master_ip:   { type: string }
-        quorum:      { type: integer }
-        master_settings:
-          type: object
-          additionalProperties:
-            type: string
-        settings:
-          type: object
-          additionalProperties:
-            type: string
+        name: { type: string, required: true }
+        perms: { type: string, required: true }
+        state: { type: string, enum: [on, off], required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
+      additional_properties: false
+  # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/
+  # haproxy) — the counterpart of redis_users, which is operator intent. Only the
+  # NAME is state: perms live in service vars (vars.system_acl_users /
+  # vars.system_acl_users_sentinel — policy, not a per-incarnation fact), and the
+  # password is declared `type: secret`, so its value lives in Vault at a path
+  # Keeper DERIVES from (service, incarnation, system_acl_users, name). Written by
+  # create/create_from_souls, read back by every day-2 scenario through
+  # core.state.set's register — which is why the set is recorded rather than
+  # recomputed from vars: an operator who edits vars after create must not silently
+  # re-point an in-cluster credential.
+  system_acl_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis system account password"
+  # Topology hosts (sid + role). For cluster/sentinel populated by the create scenario
+  # (role layout across targeted souls). The exact role of each SID in state — a follow-up.
+  redis_hosts:
+    type: array
+    items:
+      type: object
+      properties:
+        sid: { type: string, format: fqdn, required: true }
+        role: { type: string, enum: [primary, replica, sentinel], required: true }
+  # sentinel-mode facts (master_name + quorum monitored master + effective
+  # sentinel directives). Populated by create when redis_type=sentinel; empty for cluster.
+  # create does NOT write master_ip (the master is chosen from the roster, host-variable) —
+  # the field remains in the schema only for back-compat with legacy state (sentinel_only remap,
+  # 003_to_004); current modes don't materialize it.
+  # ★ v11: the named down_after_ms/failover_timeout_ms are REPLACED by generalized maps
+  # (input redesign — input.sentinel_master_settings/sentinel_settings):
+  #   - master_settings — effective PER-MASTER sentinel directives (key→value, strings;
+  #     option name for SENTINEL SET without the prefix/master-name, e.g. down-after-milliseconds/
+  #     failover-timeout/parallel-syncs). Replaces the 2 named fields (their values
+  #     move into down-after-milliseconds/failover-timeout of this map, 010_to_011);
+  #   - settings — global (NOT per-master) sentinel.conf directives (key→value, strings).
+  redis_sentinel:
+    type: object
+    additional_properties: false
+    properties:
+      master_name: { type: string }
+      master_ip:   { type: string }
+      quorum:      { type: integer }
+      master_settings:
+        type: object
+        additional_properties:
+          type: string
+      settings:
+        type: object
+        additional_properties:
+          type: string
 
 # Destiny dependencies (ADR-007: dependency version = git ref, not a semver range).
 # git URL resolution is hybrid (docs/keeper/config.md::default_destiny_source):

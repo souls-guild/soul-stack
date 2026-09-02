@@ -4,10 +4,8 @@ import "testing"
 
 const manifestWithDeps = `state_schema_version: 2
 state_schema:
-  type: object
-  properties:
-    master_host:
-      type: string
+  master_host:
+    type: string
 destiny:
   - { name: redis, ref: v2.0.0 }
   - { name: redis-replication-config, ref: v1.0.0, git: "git@github.com:custom/destiny-repl.git" }

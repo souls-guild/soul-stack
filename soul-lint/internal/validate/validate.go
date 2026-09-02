@@ -132,6 +132,11 @@ func Run(opts Options, out io.Writer, errOut io.Writer) int {
 	case KindService:
 		var svc *config.ServiceManifest
 		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, cfgOpts)
+		// `$type` in state_schema against the sibling types.yml: catches
+		// input_type_unknown/cycle/duplicate BEFORE the keeper, and — because it
+		// resolves in place — is what makes the declared secrets inside a referenced
+		// type visible to validateSecretFields at all.
+		diags = append(diags, stateSchemaTypeRefDiags(opts.Path, svc)...)
 		diags = append(diags, serviceCompatFloorDiags(opts.Path, svc)...)
 		// vars/ lives next to service.yml and is not reachable from the manifest,
 		// so it needs its own walk: a malformed _stack.yaml, a layer file parked

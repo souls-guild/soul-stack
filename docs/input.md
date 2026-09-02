@@ -239,7 +239,7 @@ The scenario-directory endpoint is **`GET /v1/services/{name}/scenarios`** ([`ke
 | `input_type_cycle` | Loop in type reference graph (`A→B→A`, self-reference `A→A`). |
 | `input_type_duplicate` | Duplicate name in section `types:`. |
 | `input_type_ref_conflict` | `$type` is specified **together** with the node's own shape. The checked set is closed and is exactly `{type, properties, items}` ([`shared/config/input_types.go`](../shared/config/input_types.go)) — a reference node is either `$type` or its own schema. |
-| `input_type_ref_overlay_conflict` | **`state_schema` only, and not implemented (NIM-742).** A key the reference overlays is present on **both** the reference node and the resolved type. |
+| `input_type_ref_overlay_conflict` | **`state_schema` only.** A key the reference overlays is present on **both** the reference node and the resolved type. |
 
 **The overlay boundary — `$type` + `properties:` is a `state_schema` privilege.** A reference node has always been allowed to overlay a few of its own keys onto the resolved type: `description`, the field-level `required: <bool>` and `required_when` (`applyRefOverlay`, [`shared/config/input_types.go`](../shared/config/input_types.go)). In `state_schema` that overlay widens by **exactly one key — `properties`** — so a state field can reuse a shared type and add the properties that field alone carries ([ADR-0086](adr/0086-one-schema-dialect.md)).
 
@@ -411,12 +411,24 @@ The schema layer validates only the **structure** of `source` (known variant, va
 
 > **Hint:** For a strict structure (no extra fields) use `additional_properties: false`. Open by default for compatibility and extensions.
 
-> **`properties` is required even when `additional_properties` carries a schema.**
-> `validateObjectSchema` ([`shared/config/input_schema.go`](../shared/config/input_schema.go))
-> demands it unconditionally, with no exemption for the open-map case. This is why a
-> *map-shaped* `state_schema` field (`redis_config`, `sysctl_settings`) has no expressible
-> form — an **open question** in ADR-0086, to be resolved in NIM-742. Do not write
-> `properties: {}` to get such a field past the parser.
+An object must say what is in it, through one of the two: named `properties`, or an
+`additional_properties` that describes the values when the keys are not known at
+authoring time — an opaque config bag, a map keyed by operator input. Declaring neither
+is `missing_required_field`.
+
+`additional_properties: false` does **not** count. It FORBIDS the keys `properties` did
+not name rather than describing any, so on its own it declares an object that may hold
+nothing at all — which is the shape the check exists to catch.
+
+> **This resolves ADR-0086 §14** (decided with the user 2026-09-01, candidate 1 of the
+> two the ADR recorded). Before it, a *map-shaped* field — `redis_config`,
+> `sysctl_settings`, `redis_sentinel.master_settings` — had no expressible form, and the
+> only way past the parser was an empty `properties: {}` written beside the real
+> declaration. That workaround is already in the tree, in an `input:` block:
+> [`examples/destiny/redis/destiny.yml`](../examples/destiny/redis/destiny.yml) → `users`.
+> The gap was the input dialect's, not the state block's; `state_schema` only made it
+> visible. **Do not write `properties: {}` to get a field past the parser** — it is no
+> longer needed, and the existing one should go with NIM-744.
 
 ## Examples
 

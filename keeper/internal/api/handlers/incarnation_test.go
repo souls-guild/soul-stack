@@ -2185,7 +2185,7 @@ type fakeLoader struct {
 	// secretSchemaForIncarnation walks it for `secret: true` (seal read-path), and
 	// revealableSecretsFor collects its `type: secret` declarations for the reveal
 	// endpoint ([ADR-0083] §2). nil → no state_schema.
-	stateSchema map[string]any
+	stateSchema config.InputSchemaMap
 
 	loadCalls     int
 	chainCalls    int

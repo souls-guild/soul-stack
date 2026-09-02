@@ -54,8 +54,7 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 func TestLoadServiceManifest_NoNameIsValid(t *testing.T) {
 	src := `description: a service states no name of its own
 state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
@@ -73,8 +72,7 @@ state_schema:
 func TestLoadServiceManifest_NameIsRefused(t *testing.T) {
 	src := `name: redis
 state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	n := 0
@@ -102,8 +100,7 @@ state_schema:
 // (NOT unknown_key), the flags decode into *bool.
 func TestLoadServiceManifest_Lifecycle(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 lifecycle:
   auto_create: false
   auto_destroy: true
@@ -127,7 +124,7 @@ lifecycle:
 // TestLoadServiceManifest_LifecycleAbsent — without a lifecycle block both flags
 // default to true (backcompat), the nil-safe accessors work.
 func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
-	src := "state_schema_version: 1\nstate_schema:\n  type: object\n"
+	src := "state_schema_version: 1\nstate_schema: {}\n"
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
@@ -146,8 +143,7 @@ func TestLoadServiceManifest_LifecycleAbsent(t *testing.T) {
 // (e.g. auto_creat) is caught by the reflect-walker as unknown_key.
 func TestLoadServiceManifest_LifecycleUnknownKey(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 lifecycle:
   auto_creat: false
 `
@@ -163,7 +159,7 @@ func TestLoadServiceManifest_DeprecatedKeys(t *testing.T) {
 	for _, key := range cases {
 		key := key
 		t.Run(key, func(t *testing.T) {
-			src := "state_schema_version: 1\nstate_schema:\n  type: object\n" + key + ": foo\n"
+			src := "state_schema_version: 1\nstate_schema: {}\n" + key + ": foo\n"
 			_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 			found := false
 			for _, d := range diags {
@@ -186,8 +182,7 @@ func TestLoadServiceManifest_RevealableSecretsRetired(t *testing.T) {
 	// than `key: foo` does, and this is the form every migrating service carries.
 	src := `name: redis
 state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 revealable_secrets:
   - id: user-password
     label: "Redis user password"
@@ -219,8 +214,7 @@ func TestLoadServiceManifest_DeprecatedKeyNoDuplicate(t *testing.T) {
 	// Like destiny: a deprecated top-level key must yield exactly one diagnostic
 	// (from schemaValidateService with a hint), not a duplicate from the reflect-walker.
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 tasks: foo
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
@@ -237,8 +231,7 @@ tasks: foo
 }
 
 func TestLoadServiceManifest_MissingStateSchemaVersion(t *testing.T) {
-	src := `state_schema:
-  type: object
+	src := `state_schema: {}
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "missing_required_field") {
@@ -249,8 +242,7 @@ func TestLoadServiceManifest_MissingStateSchemaVersion(t *testing.T) {
 
 func TestLoadServiceManifest_BadStateSchemaVersion(t *testing.T) {
 	src := `state_schema_version: 0
-state_schema:
-  type: object
+state_schema: {}
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "value_out_of_range") {
@@ -269,15 +261,32 @@ func TestLoadServiceManifest_MissingStateSchema(t *testing.T) {
 	}
 }
 
+// The root of state_schema is a mapping of state field -> schema. A sequence there is
+// not one, and it is refused rather than decoded into an empty schema — which would
+// load a service whose state contract is silently nothing.
 func TestLoadServiceManifest_StateSchemaNotObject(t *testing.T) {
 	src := `state_schema_version: 1
 state_schema:
-  type: string
+  - foo
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if !hasCode(diags, "state_schema_root_not_object") {
 		dump(t, diags)
 		t.Fatalf("expected state_schema_root_not_object")
+	}
+}
+
+// An EMPTY mapping is valid, though: a service whose scenarios write no state declares
+// no fields, and several of the examples do exactly that. Refusing it would force a
+// dummy field on every one of them.
+func TestLoadServiceManifest_StateSchemaEmptyIsValid(t *testing.T) {
+	src := `state_schema_version: 1
+state_schema: {}
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatal("an empty state_schema must load clean")
 	}
 }
 
@@ -293,34 +302,21 @@ state_schema:
 	}
 }
 
-func TestLoadServiceManifest_StateSchemaNoType(t *testing.T) {
-	// type absent on the root — `state_schema_root_not_object` (as root not object).
-	src := `state_schema_version: 1
-state_schema:
-  properties:
-    foo: { type: string }
-`
-	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "state_schema_root_not_object") {
-		dump(t, diags)
-		t.Fatalf("expected state_schema_root_not_object when type is absent on root")
-	}
-}
-
 func TestLoadServiceManifest_StateSchemaRequiredNotArray(t *testing.T) {
-	// required must be an array of strings; nested schema (under `users`) → recursive.
+	// `required:` takes a bool at the field level or a list of property names inside an
+	// object; a scalar string is neither, and the input dialect says so at the key.
 	src := `state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    users:
-      type: object
-      required: "not-an-array"
+  users:
+    type: object
+    properties:
+      name: { type: string }
+    required: "not-an-array"
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "state_schema_invalid") {
+	if !hasCode(diags, "input_required_value_invalid") {
 		dump(t, diags)
-		t.Fatalf("expected state_schema_invalid for required: scalar inside nested schema")
+		t.Fatalf("expected input_required_value_invalid for required: scalar inside nested schema")
 	}
 }
 
@@ -329,18 +325,15 @@ func TestLoadServiceManifest_StateSchemaPropertiesRecursive(t *testing.T) {
 	// Regression: recursion must not add spurious diagnostics.
 	src := `state_schema_version: 2
 state_schema:
-  type: object
-  required: [version, hosts]
-  properties:
-    version: { type: string }
-    hosts:
-      type: array
-      items:
-        type: object
-        required: [sid, role]
-        properties:
-          sid: { type: string }
-          role: { type: string }
+  version: { type: string, required: true }
+  hosts:
+    required: true
+    type: array
+    items:
+      type: object
+      properties:
+        sid: { type: string, required: true }
+        role: { type: string, required: true }
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
@@ -351,8 +344,7 @@ state_schema:
 
 func TestLoadServiceManifest_DestinyBadRef(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 destiny:
   - { name: redis, ref: "" }
 `
@@ -372,8 +364,7 @@ destiny:
 
 func TestLoadServiceManifest_DestinyBadName(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 destiny:
   - { name: BAD_NAME, ref: v1 }
 `
@@ -393,8 +384,7 @@ destiny:
 
 func TestLoadServiceManifest_ModuleBadName(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: BAD_NAME, ref: v1 }
 `
@@ -415,8 +405,7 @@ modules:
 func TestLoadServiceManifest_ModuleNamespacedName(t *testing.T) {
 	// The two-level form is the only valid one for modules[] (strict).
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme.haproxy, ref: v1.2.0 }
 `
@@ -430,8 +419,7 @@ modules:
 func TestLoadServiceManifest_ModuleSingleLevelName(t *testing.T) {
 	// The one-level form is no longer accepted (strict <ns>.<module>).
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: redis-failover, ref: v1 }
 `
@@ -452,8 +440,7 @@ modules:
 func TestLoadServiceManifest_ModuleUnderscoreInName(t *testing.T) {
 	// underscore is forbidden in both parts (kebab-case naming-rules.md §57/§186).
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: wb_x.haproxy, ref: v1 }
 `
@@ -473,8 +460,7 @@ modules:
 
 func TestLoadServiceManifest_DependencyMissingName(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 destiny:
   - { name: "", ref: v1 }
 `
@@ -496,8 +482,7 @@ destiny:
 // for destiny[] (hybrid source, overrides default_destiny_source).
 func TestLoadServiceManifest_DestinyGitOverride(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 destiny:
   - { name: redis, ref: v2.0.0, git: "git@github.com:custom/destiny-special.git" }
 `
@@ -515,8 +500,7 @@ destiny:
 // for modules[] (supported only for destiny[]); one unknown_key at $.modules[0].git.
 func TestLoadServiceManifest_ModuleGitRejected(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme.haproxy, ref: v1, git: "git@github.com:custom/mod.git" }
 `
@@ -537,8 +521,7 @@ modules:
 // `modules:` (ADR-009/ADR-015), a dedicated code instead of name_invalid_format.
 func TestLoadServiceManifest_ModuleCoreModule(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: core.haproxy, ref: v1 }
 `
@@ -576,8 +559,7 @@ func TestLoadServiceManifest_KebabCaseStrict(t *testing.T) {
 		{
 			name: "trailing dash in module namespace",
 			src: `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme-.foo, ref: v1 }
 `,
@@ -587,8 +569,7 @@ modules:
 		{
 			name: "trailing dash in module module-part",
 			src: `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme.foo-, ref: v1 }
 `,
@@ -598,8 +579,7 @@ modules:
 		{
 			name: "double dash in module namespace",
 			src: `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme--foo.bar, ref: v1 }
 `,
@@ -609,8 +589,7 @@ modules:
 		{
 			name: "multi-dash valid in module both parts",
 			src: `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: acme-foo-bar.haproxy, ref: v1 }
 `,
@@ -619,8 +598,7 @@ modules:
 		{
 			name: "double dash in destiny name",
 			src: `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 destiny:
   - { name: acme--foo, ref: v1 }
 `,
@@ -653,8 +631,7 @@ destiny:
 
 func TestLoadServiceManifest_UnknownTopKey(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 mystery: 42
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
@@ -667,7 +644,7 @@ mystery: 42
 // TestLoadServiceManifest_TelemetryAbsent — without a telemetry block the getters give
 // defaults (nil-safe), the manifest parses without errors (backcompat, NIM-87).
 func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
-	src := "state_schema_version: 1\nstate_schema:\n  type: object\n"
+	src := "state_schema_version: 1\nstate_schema: {}\n"
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
@@ -690,8 +667,7 @@ func TestLoadServiceManifest_TelemetryAbsent(t *testing.T) {
 // TestLoadServiceManifest_Telemetry — set values are read into *bool/*string/[]string.
 func TestLoadServiceManifest_Telemetry(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 telemetry:
   enabled: false
   interval: "45s"
@@ -719,8 +695,7 @@ telemetry:
 // TestLoadServiceManifest_TelemetryBadCollector — unknown collector → unknown_collector.
 func TestLoadServiceManifest_TelemetryBadCollector(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 telemetry:
   collectors: [cpu, foobar]
 `
@@ -734,8 +709,7 @@ telemetry:
 // TestLoadServiceManifest_TelemetryIntervalFloor — interval < 10s → value_out_of_range.
 func TestLoadServiceManifest_TelemetryIntervalFloor(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 telemetry:
   interval: "3s"
 `
@@ -749,8 +723,7 @@ telemetry:
 // TestLoadServiceManifest_TelemetryIntervalInvalid — interval fails to parse → duration_invalid.
 func TestLoadServiceManifest_TelemetryIntervalInvalid(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 telemetry:
   interval: "nonsense"
 `
@@ -765,8 +738,7 @@ telemetry:
 // by the reflect-walker as unknown_key (auto, TelemetryConfig is not in the stop types).
 func TestLoadServiceManifest_TelemetryUnknownKey(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 telemetry:
   bogus: 1
 `
@@ -788,8 +760,7 @@ telemetry:
 // never wrote beside the module that failed.
 func TestLoadServiceManifest_ConflictingModuleRef(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: community.redis, ref: v1.0.0 }
   - { name: community.sentinel, ref: v2.0.0 }
@@ -814,8 +785,7 @@ modules:
 // direction a test written only for the error case leaves open.
 func TestLoadServiceManifest_SharedAliasSameRefIsClean(t *testing.T) {
 	src := `state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 modules:
   - { name: community.redis, ref: v1.0.0 }
   - { name: community.sentinel, ref: v1.0.0 }

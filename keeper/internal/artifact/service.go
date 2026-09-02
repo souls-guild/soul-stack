@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
@@ -72,7 +73,66 @@ func (l *ServiceLoader) parseManifest(art *ServiceArtifact) (*config.ServiceMani
 	if diag.HasErrors(diags) {
 		return nil, fmt.Errorf("artifact: %s service %q invalid: %s", serviceManifestFile, art.Ref.Name, firstError(diags))
 	}
+	if rdiags := resolveManifestStateSchemaTypeRefs(art, manifest); diag.HasErrors(rdiags) {
+		return nil, fmt.Errorf("artifact: %s service %q invalid: %s", serviceManifestFile, art.Ref.Name, firstError(rdiags))
+	}
 	return manifest, nil
+}
+
+// resolveManifestStateSchemaTypeRefs substitutes the `$type` references of
+// `state_schema:` with the service's named types, in place on the manifest.
+//
+// It is the state-side twin of [resolveScenarioInputTypeRefs] and exists for the same
+// reason: every runtime consumer of the schema — [config.CollectSecretFields] and so
+// the whole declared-secret path, the collection-kind lookup in stateop, the
+// top-level-field check in core.state — reads the SHAPE, and an unresolved
+// `{$type: AclUser}` node has none. Left to each consumer, one of them would forget
+// and answer "no secrets here" about a schema that declares one. Doing it at the
+// single load-time chokepoint means every path downstream sees the same resolved
+// schema.
+//
+// types.yml absent → an empty catalog: a reference against it still yields
+// input_type_unknown pointing at the reference, and a schema without references
+// passes through untouched. Any other read error is an error — a snapshot whose
+// catalog cannot be read must not load as a service whose secrets went missing.
+func resolveManifestStateSchemaTypeRefs(art *ServiceArtifact, manifest *config.ServiceManifest) []diag.Diagnostic {
+	if manifest == nil || !config.SchemaHasTypeRef(manifest.StateSchema) {
+		return nil
+	}
+	data, err := readSnapshotFile(art.LocalDir, config.TypesCatalogFile)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return []diag.Diagnostic{{
+				Level: diag.LevelError, Phase: diag.PhaseParse,
+				File: config.TypesCatalogFile, Code: "io_error",
+				Message: err.Error(),
+				Hint:    "types.yml exists but cannot be read — the $type references in state_schema will not resolve",
+			}}
+		}
+		data = nil
+	}
+	catalog, diags := config.ParseTypeCatalog(config.TypesCatalogFile, data)
+	resolved, rdiags := config.ResolveStateSchemaTypeRefs(manifest.StateSchema, catalog)
+	diags = append(diags, withFile(rdiags, serviceManifestFile)...)
+	if diag.HasErrors(diags) {
+		return diags
+	}
+	// A declared secret reaching through `$type` is judged only now: at load the
+	// element shape was still a reference, so its `key:` had no sibling to name.
+	secretDiags := config.ValidateStateSchemaSecrets(manifest.StateSchema, resolved)
+	manifest.StateSchema = resolved
+	return append(diags, withFile(secretDiags, serviceManifestFile)...)
+}
+
+// withFile stamps File on diagnostics that carry none (the config resolver is
+// I/O-free and does not know which file it was handed).
+func withFile(ds []diag.Diagnostic, file string) []diag.Diagnostic {
+	for i := range ds {
+		if ds[i].File == "" {
+			ds[i].File = file
+		}
+	}
+	return ds
 }
 
 // ReadFile reads a file from snapshot by relative path. Path is resolved via

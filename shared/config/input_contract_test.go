@@ -157,10 +157,9 @@ func intPtr(v int) *int { return &v }
 func TestResolveInputContract_EmptyStringIsAbsentAtEveryLevel(t *testing.T) {
 	schema := InputSchemaMap{
 		"install": {
-			Type:          "object",
-			RequiredProps: []string{"method"},
+			Type: "object",
 			Properties: map[string]*InputSchema{
-				"method":  {Type: "string", Enum: []any{"package", "binary"}},
+				"method":  {Type: "string", Required: true, Enum: []any{"package", "binary"}},
 				"version": {Type: "string", Pattern: `^[0-9]+\.[0-9]+\.[0-9]+$`},
 				"marker":  {Type: "string", AllowEmpty: true, Pattern: "^ok$"},
 			},

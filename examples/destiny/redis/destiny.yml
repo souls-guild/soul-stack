@@ -226,15 +226,17 @@ input:
     properties: {}
     additional_properties:
       type: object
-      required: [perms, state, password]
       additional_properties: false
       properties:
         perms:
+          required: true
           type: string
         state:
+          required: true
           type: string
           enum: [on, off]
         password:
+          required: true
           type: string
           secret: true
 
@@ -255,15 +257,17 @@ input:
     properties: {}
     additional_properties:
       type: object
-      required: [perms, state, password]
       additional_properties: false
       properties:
         perms:
+          required: true
           type: string
         state:
+          required: true
           type: string
           enum: [on, off]
         password:
+          required: true
           type: string
           secret: true
 
@@ -398,12 +402,12 @@ input:
     # task rendering sentinel.conf reads ${ input.sentinel.master_ip } WITHOUT a has()-guard
     # (gated on sentinel_enabled). Required catches a missing address with a clear
     # schema error BEFORE render, rather than a cryptic CEL "no such key" in the template.
-    required: [master_ip]
     additional_properties: false
     properties:
       master_name:
         type: string
       master_ip:
+        required: true
         type: string
       master_port:
         type: integer

@@ -97,14 +97,11 @@ Offline tooling has no registry to ask, so it takes the name as an argument: `so
 > JSON Schema envelope: `validateStateSchema` ([`shared/config/service.go`](../../shared/config/service.go))
 > demands `type: object` on the root and raises `state_schema_root_not_object` without it,
 > and `validateJSONSchemaNode` below it reads the object-level list `required: [names]`.
-> When the change lands the old envelope is refused **by name** —
-> `state_schema_legacy_json_schema_form` — and the list form by
-> `input_required_list_removed`; neither is emitted by anything yet. The change is
-> **breaking, with no transition window**: no manifest parses under both forms. Engine —
-> **NIM-742**; `soul-lint list-secret-paths`, which prints the Vault paths a manifest
-> derives — **NIM-743**; the rewrite of `examples/**` and the WB redis service —
-> **NIM-744**. Until NIM-742 merges, write the old form and read this section as the
-> target.
+> The old envelope is refused **by name** — `state_schema_legacy_json_schema_form` — and
+> the list form by `input_required_list_removed`. Both are live (NIM-742). The change is
+> **breaking, with no transition window**: no manifest parses under both forms. Write the
+> form this section describes. `soul-lint list-secret-paths`, which prints the Vault paths
+> a manifest derives, is NIM-743; the rewrite of the WB redis service is **NIM-744**.
 
 `state_schema` describes the expected structure of the JSONB field `incarnation.state` in Postgres. It is written in the **input DSL** ([`docs/input.md`](../input.md)) — the same dialect `input:` uses — and at the root it is a **map `<field name>` → schema**, not a schema document:
 
@@ -153,17 +150,25 @@ Only the keys with an input-DSL counterpart are renamed. Do not transliterate th
 
 Keeper validates `incarnation.state` against `state_schema` when creating an incarnation and when upgrading to a new version of schema via migration (see [`docs/migrations.md`](../migrations.md)).
 
-> **Open question — map-shaped state fields.** A state field that is a *map* with no
-> declared keys — `redis_config`, `sysctl_settings`, and inside `redis_sentinel` both
-> `master_settings` and `.settings`
-> ([`examples/service/redis/service.yml`](../../examples/service/redis/service.yml):387-394) —
-> has **no expressible form today** and
-> ADR-0086 records it as open. `validateObjectSchema`
-> ([`shared/config/input_schema.go`](../../shared/config/input_schema.go)) demands
-> `properties` on every `type: object` node unconditionally, with no exemption when
-> `additional_properties` carries a schema ([`docs/input.md` → Type `object`](../input.md)
-> agrees). Do not write `properties: {}` to make such a field parse — read the open
-> question in the ADR instead; resolving it is part of NIM-742, not of this page.
+**Map-shaped state fields** — a field that is a map with no declared keys, like
+`redis_config` or `sysctl_settings` — describe their contents with
+`additional_properties` instead of `properties`:
+
+```yaml
+redis_config:
+  type: object
+  additional_properties: true        # any key, any value: the opaque redis.conf bag
+sysctl_settings:
+  type: object
+  additional_properties: { type: string }
+```
+
+This closes ADR-0086 §14, decided 2026-09-01 as candidate 1 of the two the ADR recorded.
+It is a relaxation of the **input** dialect, not of this block alone
+([`docs/input.md` → Type `object`](../input.md)), and it was already needed there: an
+`input:` block in the tree carries an empty `properties: {}` written only to satisfy the
+old rule. `additional_properties: false` does not count — it forbids keys rather than
+describing them. **Do not write `properties: {}`** to make a field parse.
 
 #### `type: secret` — a value that lives in Vault, not in state
 

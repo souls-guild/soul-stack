@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // incarnationKey carries the incarnation of the current scenario run into a
@@ -67,7 +68,7 @@ type stateSchemaKey struct{}
 // The map is NOT copied: it belongs to the loaded service artifact and every
 // reader treats it as immutable (the render path shares the same map). A module
 // that mutated it would corrupt the artifact cache for the rest of the process.
-func WithStateSchema(ctx context.Context, schema map[string]any) context.Context {
+func WithStateSchema(ctx context.Context, schema config.InputSchemaMap) context.Context {
 	if schema == nil {
 		return ctx
 	}
@@ -76,8 +77,8 @@ func WithStateSchema(ctx context.Context, schema map[string]any) context.Context
 
 // StateSchemaFrom returns the run service's `state_schema`, or nil outside a
 // scenario run.
-func StateSchemaFrom(ctx context.Context) map[string]any {
-	schema, _ := ctx.Value(stateSchemaKey{}).(map[string]any)
+func StateSchemaFrom(ctx context.Context) config.InputSchemaMap {
+	schema, _ := ctx.Value(stateSchemaKey{}).(config.InputSchemaMap)
 	return schema
 }
 

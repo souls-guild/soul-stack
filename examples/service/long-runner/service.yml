@@ -7,9 +7,7 @@ description: >-
   in applying until ALL hosts finish (single-winner commit). Core modules only.
 
 state_schema:
-  type: object
-  properties:
-    last_run:
-      type: string
-    runner_marker:
-      type: string
+  last_run:
+    type: string
+  runner_marker:
+    type: string

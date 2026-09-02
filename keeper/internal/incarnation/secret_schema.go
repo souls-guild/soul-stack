@@ -42,11 +42,13 @@ func StateSchemaSecrets(art *artifact.ServiceArtifact) audit.SecretSchema {
 	return set
 }
 
-// CollectStateSchemaSecrets recursively walks the flat JSON-schema state_schema and
-// marks in set the dot/idx paths of fields with `secret: true`. Structure:
-//   - properties: map<field, schema> → recurse with path = join(path, field);
+// CollectStateSchemaSecrets recursively walks the state_schema — since [NIM-740] the
+// input dialect, a map of state field → schema — and marks in set the dot/idx paths of
+// fields with `secret: true`. Structure:
+//   - the map itself, and every `properties:` inside it → recurse with
+//     path = join(path, field);
 //   - items: schema → recurse with path = path+"[]" (array element);
-//   - additionalProperties: schema → recurse with path = path (WITHOUT a `.*` segment).
+//   - additional_properties: schema → recurse with path = path (WITHOUT a `.*` segment).
 //
 // Additive into set, so a caller that combines sources (the read path adds the
 // create-scenario `input.<name>` secrets to the same set) passes one set through.
@@ -72,68 +74,53 @@ func StateSchemaSecrets(art *artifact.ServiceArtifact) audit.SecretSchema {
 // it degrades to vault+regex (the `password` key is caught by the sensitive-by-name regex last
 // resort — an alarm fallback, not schema). The current behavior is pinned by the test
 // TestCollectStateSchemaSecrets_AdditionalPropertiesNestedSecret_DynamicKeyGap.
-func CollectStateSchemaSecrets(schema map[string]any, path string, set audit.SecretPathSet) {
-	if schema == nil {
-		return
-	}
-	if isSecretNode(schema) && path != "" {
-		set[path] = true
-	}
-	if props, ok := schema["properties"].(map[string]any); ok {
-		for field, sub := range props {
-			if subm, ok := sub.(map[string]any); ok {
-				CollectStateSchemaSecrets(subm, joinSchemaPath(path, field), set)
-			}
-		}
-	}
-	if items, ok := schema["items"].(map[string]any); ok {
-		CollectStateSchemaSecrets(items, path+"[]", set)
-	}
-	if ap, ok := schema["additionalProperties"].(map[string]any); ok {
-		// Do not mark secret ON the ap node itself (see the ★ limitation in the doc comment:
-		// the path `map_field` would mark the WHOLE map as secret — over-mask on the read path;
-		// and IsSecret never requests `map_field.*` → the entry is dead. Degradation to
-		// vault+regex is intentional). We recurse, but WITHOUT the secret flag of the ap node
-		// itself: the schema layer covers nested concrete `properties` inside ap by exact path,
-		// while we clear the secret ON the ap node so isSecretNode does not mark path.
-		recurse := ap
-		if isSecretNode(ap) {
-			recurse = mapWithoutSecret(ap)
-		}
-		CollectStateSchemaSecrets(recurse, path, set)
+func CollectStateSchemaSecrets(schema config.InputSchemaMap, path string, set audit.SecretPathSet) {
+	for field, sub := range schema {
+		collectStateSchemaSecretsNode(sub, joinSchemaPath(path, field), set, false)
 	}
 }
 
-// isSecretNode reports whether the JSON-schema node is a secret leaf: the older
+// collectStateSchemaSecretsNode walks one schema node. apNode says the node is an
+// `additional_properties` value, which changes ONE thing: its `secret: true` flag is
+// ignored. Its path is the MAP's, so honouring the flag would mark the whole map
+// secret — an over-mask on the read path, and a dead entry besides, since IsSecret
+// never requests `map_field.*` (see the ★ limitation in the doc comment above; the
+// degradation to vault+regex is intentional).
+//
+// `type: secret` on such a node is still marked, exactly as before the schema became
+// typed: the older code stripped the `secret` KEY and left the type, so the path was
+// entered. That branch is unreachable through a loaded manifest —
+// [config.CollectSecretFields] refuses a declared secret in that position — and the
+// mask is belt and braces either way, which is precisely why it should not quietly
+// narrow.
+//
+// Everything nested inside is still walked, because a concrete `properties` name under
+// it does have an exact path.
+func collectStateSchemaSecretsNode(s *config.InputSchema, path string, set audit.SecretPathSet, apNode bool) {
+	if s == nil {
+		return
+	}
+	if path != "" && isSecretNode(s, apNode) {
+		set[path] = true
+	}
+	CollectStateSchemaSecrets(s.Properties, path, set)
+	collectStateSchemaSecretsNode(s.Items, path+"[]", set, false)
+	if ap, ok := s.AdditionalProperties.(*config.InputSchema); ok {
+		collectStateSchemaSecretsNode(ap, path, set, true)
+	}
+}
+
+// isSecretNode reports whether the schema node is a secret leaf: the older
 // `secret: true` marker ([ADR-010] §7.4 — the value LIVES in state and is masked on the
 // way out), or `type: secret` ([ADR-0083] §1 — the value lives in Vault and never in
-// state at all).
+// state at all). ignoreFlag drops the first of the two (see the caller).
 //
 // The second is belt and braces rather than the mechanism: nothing writes a declared
 // secret into state, so the path is normally empty and the mask is inert. It is here so
 // that a value arriving there by some other route — an old snapshot, a migration, a bug
 // — is masked instead of printed.
-func isSecretNode(schema map[string]any) bool {
-	if b, _ := schema["secret"].(bool); b {
-		return true
-	}
-	t, _ := schema["type"].(string)
-	return t == config.SecretTypeName
-}
-
-// mapWithoutSecret is a shallow copy of a schema node without the `secret` key, so
-// recursion over additionalProperties does not mark the ap node itself as a secret leaf
-// (its path = the map name, marking it would over-mask the whole map). Nested
-// `properties`/`items` copies are untouched — recursion over them follows their exact paths.
-func mapWithoutSecret(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema))
-	for k, v := range schema {
-		if k == "secret" {
-			continue
-		}
-		out[k] = v
-	}
-	return out
+func isSecretNode(s *config.InputSchema, ignoreFlag bool) bool {
+	return (s.Secret && !ignoreFlag) || s.Type == config.SecretTypeName
 }
 
 // joinSchemaPath concatenates a state_schema dot path (BIT-FOR-BIT like audit.joinPath /

@@ -1,7 +1,5 @@
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    arr:
-      type: array
-      items: "scalar"
+  arr:
+    type: array
+    items: "scalar"

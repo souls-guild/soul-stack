@@ -55,7 +55,7 @@ description: >-
 # PILOT scope; provision-read-model added v2->v4, observability v4->v6 modeled on redis).
 #
 # BOUNDARY between the two config representations (same as redis):
-#   - df_config (opaque, additionalProperties:true) - the COMPUTED RESULT of translating simple
+#   - df_config (opaque, additional_properties: true) - the COMPUTED RESULT of translating simple
 #     input into the flagfile map (what actually goes into render). This is the write-model of "as deployed".
 #   - named fields (tls/memory_mb/...) - the operator's INTENT in simple typed
 #     terms (read-model). Day-2 scenarios read them by name. install and host-layout
@@ -63,173 +63,168 @@ description: >-
 #     readers, layout - day-2 reads vars.
 # BOTH representations are filled from a SINGLE create compute pass - no drift between them.
 state_schema:
-  type: object
-  required: [df_config]
-  properties:
-    # Effective DragonFly version (distro pin for package; upstream semver for binary).
-    df_version:
+  # Effective DragonFly version (distro pin for package; upstream semver for binary).
+  df_version:
+    type: string
+  # Final flagfile config (merged default->computed->passthrough from service vars). Goes
+  # into the render of destiny `dragonfly`. Keys are DF flags (underscore form).
+  df_config:
+    type: object
+    required: true
+    additional_properties: true
+
+  # ── Named intent fields (read-model) ────────────────────────────────────
+  # TLS intent: whether TLS is on + Vault PATHS for cert/key/CA (NOT the PEM itself - the secret is not
+  # stored in state, security). From compute.tls_* (the same values as in the df_config TLS block). ★ NO only/port:
+  # DragonFly has TLS on the MAIN port (no tls_port, no "TLS-only") - day-2 scenarios
+  # connect to the local instance over a UNIX socket, they don't need the TLS port.
+  tls:
+    type: object
+    additional_properties: false
+    properties:
+      enable:   { type: boolean }
+      cert_ref: { type: string }
+      key_ref:  { type: string }
+      ca_ref:   { type: string }
+  # ★ install + host-layout (conf_dir/data_dir) MOVED into service vars (v1->v2, Option A):
+  # install - a read-model with no readers, layout - day-2 reads service vars directly
+  # (default(vars.conf_dir, '/etc/dragonfly') / data_dir). state no longer has these fields -
+  # set would write a key outside the schema -> state validation would fail (see migration 001_to_002).
+  # Memory budget for DragonFly, MB. From input.memory_mb; not set -> 0.
+  memory_mb:
+    type: integer
+    min: 64
+  # Applied kernel parameters for DragonFly (host tuning). From vars.sysctl_settings.
+  sysctl_settings:
+    type: object
+    additional_properties:
       type: string
-    # Final flagfile config (merged default->computed->passthrough from service vars). Goes
-    # into the render of destiny `dragonfly`. Keys are DF flags (underscore form).
-    df_config:
-      type: object
-      additionalProperties: true
 
-    # ── Named intent fields (read-model) ────────────────────────────────────
-    # TLS intent: whether TLS is on + Vault PATHS for cert/key/CA (NOT the PEM itself - the secret is not
-    # stored in state, security). From compute.tls_* (the same values as in the df_config TLS block). ★ NO only/port:
-    # DragonFly has TLS on the MAIN port (no tls_port, no "TLS-only") - day-2 scenarios
-    # connect to the local instance over a UNIX socket, they don't need the TLS port.
-    tls:
+  # ── Data-plane monitoring (read-model, v5, Slice II, ADR-024) ──────────
+  # FACT of a deployed host metrics exporter: create UNCONDITIONALLY installs node_exporter
+  # on every host (AFTER deploy). ★ node-exporter-ONLY: DragonFly exposes its OWN metrics
+  # natively (built-in prometheus endpoint) -> no data-plane exporter needed (unlike
+  # redis, where redis_exporter is mandatory). Version/listen - from service vars (node_exporter_*,
+  # the same values that went into apply.input for destiny node-exporter). Symmetric to the install/tls
+  # read-model. For v<=4 (monitoring not yet deployed) - a conservative default (version '',
+  # port :9100; 004_to_005).
+  monitoring:
+    type: object
+    additional_properties: false
+    properties:
+      node_exporter_version: { type: string }
+      node_exporter_listen:  { type: string }
+
+  # ── Data-plane log-shipping (read-model, v6, Slice V-I, ADR-067) ─────────
+  # FACT of a deployed log-shipping agent: create UNCONDITIONALLY installs vector on every
+  # host (AFTER deploy+exporter). version/sink_type/endpoint/log_sources - from
+  # vars.vector_* (the same values that went into apply.input for destiny vector). ★ sink_auth_ref
+  # (the collector token) is NOT written here - the secret lives in Vault (like tls.*_ref). For v<=5 (log-shipping
+  # not yet deployed) - a conservative default: version '', sink console (safe, no infra needed),
+  # endpoint '', log_sources [] (005_to_006).
+  logging:
+    type: object
+    additional_properties: false
+    properties:
+      vector_version:       { type: string }
+      vector_sink_type:     { type: string }
+      vector_sink_endpoint: { type: string }
+      vector_log_sources:
+        type: array
+        items: { type: string }
+
+  # ── Topology (counts, sentinel mode) ────────────────────────────────────────
+  # replicas - master replicas (from input.replicas_per_master). sentinel_quorum - ALWAYS 0
+  # (auto-quorum size/2+1 is computed in apply, not materialized in state; 0 = "auto").
+  replicas:        { type: integer }
+  sentinel_quorum: { type: integer }
+
+  # DragonFly ACL users: a TYPED array [{name, perms, state}] (ADR-062
+  # AclUser). Populated by create from input.users (also an AclUser array). The password is
+  # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper DERIVES
+  # from (service, incarnation, df_users, name) - no path is written anywhere in this repo -
+  # and never in state. `key: name` says which sibling property is the element's identity, i.e.
+  # the last path segment. Written by core.state.set, revealed to the operator by
+  # .../secrets/reveal, and read back by day-2 scenarios through that module's register.
+  df_users:
+    type: array
+    items:
       type: object
-      additionalProperties: false
       properties:
-        enable:   { type: boolean }
-        cert_ref: { type: string }
-        key_ref:  { type: string }
-        ca_ref:   { type: string }
-    # ★ install + host-layout (conf_dir/data_dir) MOVED into service vars (v1->v2, Option A):
-    # install - a read-model with no readers, layout - day-2 reads service vars directly
-    # (default(vars.conf_dir, '/etc/dragonfly') / data_dir). state no longer has these fields -
-    # set would write a key outside the schema -> state validation would fail (see migration 001_to_002).
-    # Memory budget for DragonFly, MB. From input.memory_mb; not set -> 0.
-    memory_mb:
-      type: integer
-      minimum: 64
-    # Applied kernel parameters for DragonFly (host tuning). From vars.sysctl_settings.
-    sysctl_settings:
+        name: { type: string, required: true }
+        perms: { type: string, required: true }
+        state: { type: string, enum: [on, off], required: true }
+        password:
+          type: secret
+          key: name
+          label: "DragonFly user password"
+      additional_properties: false
+  # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/haproxy) -
+  # the counterpart of df_users, which is operator intent. Only the NAME is state: perms live
+  # in service vars (vars.system_acl_users / vars.system_acl_users_sentinel - policy, not a
+  # per-incarnation fact), and the password is declared `type: secret`, so its value lives in
+  # Vault at a path Keeper DERIVES from (service, incarnation, system_acl_users, name).
+  # Written by create, read back by every day-2 scenario through core.state.set's
+  # register - which is why the set is recorded rather than recomputed from vars: an operator
+  # who edits vars after create must not silently re-point an in-cluster credential.
+  system_acl_users:
+    type: array
+    items:
       type: object
-      additionalProperties:
-        type: string
-
-    # ── Data-plane monitoring (read-model, v5, Slice II, ADR-024) ──────────
-    # FACT of a deployed host metrics exporter: create UNCONDITIONALLY installs node_exporter
-    # on every host (AFTER deploy). ★ node-exporter-ONLY: DragonFly exposes its OWN metrics
-    # natively (built-in prometheus endpoint) -> no data-plane exporter needed (unlike
-    # redis, where redis_exporter is mandatory). Version/listen - from service vars (node_exporter_*,
-    # the same values that went into apply.input for destiny node-exporter). Symmetric to the install/tls
-    # read-model. For v<=4 (monitoring not yet deployed) - a conservative default (version '',
-    # port :9100; 004_to_005).
-    monitoring:
-      type: object
-      additionalProperties: false
+      additional_properties: false
       properties:
-        node_exporter_version: { type: string }
-        node_exporter_listen:  { type: string }
-
-    # ── Data-plane log-shipping (read-model, v6, Slice V-I, ADR-067) ─────────
-    # FACT of a deployed log-shipping agent: create UNCONDITIONALLY installs vector on every
-    # host (AFTER deploy+exporter). version/sink_type/endpoint/log_sources - from
-    # vars.vector_* (the same values that went into apply.input for destiny vector). ★ sink_auth_ref
-    # (the collector token) is NOT written here - the secret lives in Vault (like tls.*_ref). For v<=5 (log-shipping
-    # not yet deployed) - a conservative default: version '', sink console (safe, no infra needed),
-    # endpoint '', log_sources [] (005_to_006).
-    logging:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "DragonFly system account password"
+  # Topology hosts (sid + role). Populated by the create scenario (role layout across
+  # targeted souls). The exact role of each SID in state is a follow-up (same as redis).
+  df_hosts:
+    type: array
+    items:
       type: object
-      additionalProperties: false
       properties:
-        vector_version:       { type: string }
-        vector_sink_type:     { type: string }
-        vector_sink_endpoint: { type: string }
-        vector_log_sources:
-          type: array
-          items: { type: string }
+        sid: { type: string, format: fqdn, required: true }
+        role: { type: string, enum: [primary, replica, sentinel], required: true }
+  # Sentinel-mode facts (master_name + quorum monitored master + failover timings).
+  # Populated by create. create does NOT write master_ip (the master is chosen from the
+  # roster, host-variable).
+  df_sentinel:
+    type: object
+    additional_properties: false
+    properties:
+      master_name:         { type: string }
+      master_ip:           { type: string }
+      quorum:              { type: integer }
+      down_after_ms:       { type: integer }
+      failover_timeout_ms: { type: integer }
 
-    # ── Topology (counts, sentinel mode) ────────────────────────────────────────
-    # replicas - master replicas (from input.replicas_per_master). sentinel_quorum - ALWAYS 0
-    # (auto-quorum size/2+1 is computed in apply, not materialized in state; 0 = "auto").
-    replicas:        { type: integer }
-    sentinel_quorum: { type: integer }
-
-    # DragonFly ACL users: a TYPED array [{name, perms, state}] (ADR-062
-    # AclUser). Populated by create from input.users (also an AclUser array). The password is
-    # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper DERIVES
-    # from (service, incarnation, df_users, name) - no path is written anywhere in this repo -
-    # and never in state. `key: name` says which sibling property is the element's identity, i.e.
-    # the last path segment. Written by core.state.set, revealed to the operator by
-    # .../secrets/reveal, and read back by day-2 scenarios through that module's register.
-    df_users:
-      type: array
-      items:
-        type: object
-        required: [name, perms, state]
-        properties:
-          name:  { type: string }
-          perms: { type: string }
-          state: { type: string, enum: [on, off] }
-          password:
-            type: secret
-            key: name
-            label: "DragonFly user password"
-        additionalProperties: false
-    # The service's OWN ACL accounts (default_admin/replica/monitoring/sentinel/haproxy) -
-    # the counterpart of df_users, which is operator intent. Only the NAME is state: perms live
-    # in service vars (vars.system_acl_users / vars.system_acl_users_sentinel - policy, not a
-    # per-incarnation fact), and the password is declared `type: secret`, so its value lives in
-    # Vault at a path Keeper DERIVES from (service, incarnation, system_acl_users, name).
-    # Written by create, read back by every day-2 scenario through core.state.set's
-    # register - which is why the set is recorded rather than recomputed from vars: an operator
-    # who edits vars after create must not silently re-point an in-cluster credential.
-    system_acl_users:
-      type: array
-      items:
-        type: object
-        required: [name]
-        additionalProperties: false
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "DragonFly system account password"
-    # Topology hosts (sid + role). Populated by the create scenario (role layout across
-    # targeted souls). The exact role of each SID in state is a follow-up (same as redis).
-    df_hosts:
-      type: array
-      items:
-        type: object
-        required: [sid, role]
-        properties:
-          sid:  { type: string, format: fqdn }
-          role: { type: string, enum: [primary, replica, sentinel] }
-    # Sentinel-mode facts (master_name + quorum monitored master + failover timings).
-    # Populated by create. create does NOT write master_ip (the master is chosen from the
-    # roster, host-variable).
-    df_sentinel:
-      type: object
-      additionalProperties: false
-      properties:
-        master_name:         { type: string }
-        master_ip:           { type: string }
-        quorum:              { type: integer }
-        down_after_ms:       { type: integer }
-        failover_timeout_ms: { type: integer }
-
-    # ── cloud-provision read-model (v2->v4, ADR-061, Option A) ──────────────────
-    # FACT that "these hosts were raised by our create run via cloud-create". Populated by
-    # create ONLY when input.provision.enabled (provider/vm_ids/sids from the register
-    # core.cloud.created); otherwise [] / '' (hosts not provisioned by the service - declared
-    # roster). day-2 teardown reads provisioned_vm_ids for core.cloud.destroyed.
-    # provider - the cloud-Provider name in the registry (for the same destroy call). Mirrors
-    # redis service.yml provisioned_* (user decision 2026-07-01).
-    provisioned_vm_ids:
-      type: array
-      items:
-        type: string
-    provisioned_provider:
+  # ── cloud-provision read-model (v2->v4, ADR-061, Option A) ──────────────────
+  # FACT that "these hosts were raised by our create run via cloud-create". Populated by
+  # create ONLY when input.provision.enabled (provider/vm_ids/sids from the register
+  # core.cloud.created); otherwise [] / '' (hosts not provisioned by the service - declared
+  # roster). day-2 teardown reads provisioned_vm_ids for core.cloud.destroyed.
+  # provider - the cloud-Provider name in the registry (for the same destroy call). Mirrors
+  # redis service.yml provisioned_* (user decision 2026-07-01).
+  provisioned_vm_ids:
+    type: array
+    items:
       type: string
-    # provisioned_sids (v4): SID (FQDN) of every VM raised by this create run. DIFFERS
-    # from provisioned_vm_ids: vm_ids - provider-side id (for core.cloud.destroyed), sids -
-    # the Keeper-side Soul identity. day-2 teardown (cascade destroy) reads sids to
-    # finish off orphaned souls (->destroyed) / seeds (->orphaned) / bootstrap tokens
-    # (->burned): the Reaper does NOT tear down pending-VM-souls itself (mark_disconnected only
-    # goes connected->disconnected), without sids the records would remain (anti-replay violation).
-    # Populated with the same guard+shape as provisioned_vm_ids (input.provision.enabled ->
-    # register.provision.hosts.map(h, h.sid)); otherwise [].
-    provisioned_sids:
-      type: array
-      items:
-        type: string
+  provisioned_provider:
+    type: string
+  # provisioned_sids (v4): SID (FQDN) of every VM raised by this create run. DIFFERS
+  # from provisioned_vm_ids: vm_ids - provider-side id (for core.cloud.destroyed), sids -
+  # the Keeper-side Soul identity. day-2 teardown (cascade destroy) reads sids to
+  # finish off orphaned souls (->destroyed) / seeds (->orphaned) / bootstrap tokens
+  # (->burned): the Reaper does NOT tear down pending-VM-souls itself (mark_disconnected only
+  # goes connected->disconnected), without sids the records would remain (anti-replay violation).
+  # Populated with the same guard+shape as provisioned_vm_ids (input.provision.enabled ->
+  # register.provision.hosts.map(h, h.sid)); otherwise [].
+  provisioned_sids:
+    type: array
+    items:
+      type: string
 
 # Destiny dependencies (ADR-007: dependency version = git ref, not a semver range).
 #   - `dragonfly` - the DragonFly data-plane brick (examples/destiny/dragonfly/);

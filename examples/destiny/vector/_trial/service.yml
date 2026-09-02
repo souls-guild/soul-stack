@@ -10,8 +10,6 @@ description: >-
   Trial. state_schema here is nominal (Trial L0 doesn't assert it). destiny arch comes
   directly from soulprint.self.os.arch (apply:input doesn't pass it).
 
-state_schema:
-  type: object
-
+state_schema: {}
 destiny:
   - { name: vector, ref: v1.0.0 }

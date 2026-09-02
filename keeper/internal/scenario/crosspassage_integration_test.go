@@ -65,9 +65,7 @@ func crossPassageServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: cross-passage onchanges service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/crosspassage/main.yml", `name: crosspassage
 description: probe role + config (passage 0); restart where primary onchanges cfg (passage 1)

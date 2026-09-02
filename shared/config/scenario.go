@@ -365,7 +365,7 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 
 	// 5) `input:` — shared schema validator.
 	if topKeys["input"] {
-		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input")...)
+		out = append(out, validateInputSchemaMap(m.Input, findInputMapping(root, "input"), "$.input", dialectInput, nil)...)
 	}
 
 	// 5a) `validate:` — top-level list of input invariants (only if the key is present).

@@ -17,18 +17,16 @@ func writeSecretCollectionService(t *testing.T, mainYAML string, extra map[strin
 	const svc = `name: redis
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    redis_users:
-      type: array
-      items:
-        type: object
-        properties:
-          name: { type: string }
-          perms: { type: string }
-          password:
-            type: secret
-            key: name
+  redis_users:
+    type: array
+    items:
+      type: object
+      properties:
+        name: { type: string }
+        perms: { type: string }
+        password:
+          type: secret
+          key: name
 `
 	if err := os.WriteFile(filepath.Join(root, "service.yml"), []byte(svc), 0o600); err != nil {
 		t.Fatal(err)

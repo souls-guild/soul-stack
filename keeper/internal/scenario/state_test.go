@@ -127,17 +127,14 @@ func TestMergeOps_NilBefore(t *testing.T) {
 // redisHostsSchema — a redis-cluster state_schema fragment (redis_hosts is an
 // array). The source of collection-type materialization for add into a
 // missing field.
-var redisHostsSchema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"redis_hosts": map[string]any{
-			"type":  "array",
-			"items": map[string]any{"type": "object"},
-		},
-		"redis_users": map[string]any{
-			"type":                 "object",
-			"additionalProperties": map[string]any{"type": "object"},
-		},
+var redisHostsSchema = config.InputSchemaMap{
+	"redis_hosts": &config.InputSchema{
+		Type:  "array",
+		Items: &config.InputSchema{Type: "object"},
+	},
+	"redis_users": &config.InputSchema{
+		Type:                 "object",
+		AdditionalProperties: &config.InputSchema{Type: "object"},
 	},
 }
 
@@ -557,9 +554,9 @@ func TestStateAddTasks_GrowByN(t *testing.T) {
 	ops := buildOps(t, tasks)
 
 	// list of scalars schema.
-	schema := map[string]any{"type": "object", "properties": map[string]any{
-		"redis_hosts": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-	}}
+	schema := config.InputSchemaMap{
+		"redis_hosts": &config.InputSchema{Type: "array", Items: &config.InputSchema{Type: "string"}},
+	}
 	before := map[string]any{"redis_hosts": []any{"r0"}}
 
 	after, err := stateop.Merge(before, ops, schema, matchEval, opEval)
@@ -786,9 +783,9 @@ func TestMergeOps_Composition_AddThenRemove(t *testing.T) {
 // of scalars (elem=scalar): remove works by a predicate over the scalar;
 // modify (a dotted-path patch) produces a CLEAR error, not a panic.
 func TestMergeOps_ScalarList_ModifyRemove(t *testing.T) {
-	scalarSchema := map[string]any{"type": "object", "properties": map[string]any{
-		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-	}}
+	scalarSchema := config.InputSchemaMap{
+		"tags": &config.InputSchema{Type: "array", Items: &config.InputSchema{Type: "string"}},
+	}
 	before := func() map[string]any {
 		return map[string]any{"tags": []any{"a", "b", "c"}}
 	}
@@ -1220,21 +1217,18 @@ func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 // The `secret: true` field next to it is the OTHER marker ([ADR-010] §7.4) — that
 // value LIVES in state and is masked on the way out. It must survive untouched;
 // stripping it would silently delete an operator's data.
-func secretStripSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"admin_password": map[string]any{"type": "secret"},
-			"tls_key":        map[string]any{"type": "string", "secret": true},
-			"redis_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"perms":    map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name"},
-					},
+func secretStripSchema() config.InputSchemaMap {
+	return config.InputSchemaMap{
+		"admin_password": {Type: config.SecretTypeName},
+		"tls_key":        {Type: "string", Secret: true},
+		"redis_users": {
+			Type: "array",
+			Items: &config.InputSchema{
+				Type: "object",
+				Properties: config.InputSchemaMap{
+					"name":     {Type: "string"},
+					"perms":    {Type: "string"},
+					"password": {Type: config.SecretTypeName, Key: "name"},
 				},
 			},
 		},

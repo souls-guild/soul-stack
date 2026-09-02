@@ -24,10 +24,8 @@ func TestMain(m *testing.M) {
 // validManifest is the minimal valid service.yml for test repositories.
 const validManifest = `state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    replicas:
-      type: integer
+  replicas:
+    type: integer
 `
 
 // testRepo is a working wrapper around a local git repository for tests.

@@ -7,9 +7,7 @@ description: >-
   Only core modules (core.pkg / core.file), no custom modules or destiny.
 
 state_schema:
-  type: object
-  properties:
-    marker_file:
-      type: string
-    last_target:
-      type: string
+  marker_file:
+    type: string
+  last_target:
+    type: string

@@ -3,6 +3,8 @@ package artifact
 import (
 	"testing"
 
+	"github.com/goccy/go-yaml"
+
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
@@ -18,21 +20,15 @@ func loadKeyedScenario(t *testing.T, body string) []diag.Diagnostic {
 		LocalDir: t.TempDir(),
 		Ref:      ServiceRef{Name: "redis"},
 		Manifest: &config.ServiceManifest{
-			StateSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"redis_users": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"name":     map[string]any{"type": "string"},
-								"password": map[string]any{"type": "secret", "key": "name"},
-							},
-						},
-					},
-				},
-			},
+			StateSchema: stateSchemaFixture(t, `
+redis_users:
+  type: array
+  items:
+    type: object
+    properties:
+      name:     { type: string }
+      password: { type: secret, key: name }
+`),
 		},
 	}
 	_, _, diags, err := LoadScenarioManifestResolved(art, "scenario/update_users/main.yml", []byte(body), nil)
@@ -85,4 +81,18 @@ tasks:
 	if hasDuplicateKeyDiag(diags) {
 		t.Fatalf("the check fired on distinct keys: %+v", diags)
 	}
+}
+
+// stateSchemaFixture parses a `state_schema:` body written in the input dialect
+// ([NIM-740]) through the real decoder. The tests build their fixtures this way rather
+// than by hand: the keys whose meaning the struct cannot express — `required` as a bool
+// versus a list, `$type` — are resolved in InputSchema.UnmarshalYAML, so a hand-built
+// InputSchema would be a shape the parser never produces.
+func stateSchemaFixture(t *testing.T, src string) config.InputSchemaMap {
+	t.Helper()
+	var m config.InputSchemaMap
+	if err := yaml.Unmarshal([]byte(src), &m); err != nil {
+		t.Fatalf("state_schema fixture does not parse: %v\n%s", err, src)
+	}
+	return m
 }

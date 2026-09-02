@@ -255,20 +255,22 @@ func TestListScenarios_SharedTypeIsolated(t *testing.T) {
 }
 
 // TestListScenarios_TypeRefKeepsRequiredChildren — NIM-72: when resolving
-// $type for the DTO, the object-level `required: [name, perms]` of the type
-// body (an array of children) is NOT overwritten by the reference node's
-// boolean `required: true` (which would clobber the list the UI relies on).
+// $type for the DTO, the requiredness each of the type's own properties declares
+// survives, and the reference node's own `required: true` does not reach down and
+// clobber them. Since [ADR-0086] §2 both are the same bool at different levels: the
+// reference says "this FIELD is mandatory", a property says "this PROPERTY is".
 // The presentational description key is carried over.
 func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
   AclUser:
     type: object
-    required: [name, perms]
     properties:
       name:
+        required: true
         type: string
       perms:
+        required: true
         type: string
       state:
         type: string
@@ -295,18 +297,22 @@ func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	if user[typeAnnotationKey] != "AclUser" {
 		t.Fatalf("x-type = %v, want AclUser", user[typeAnnotationKey])
 	}
-	// object-level required array is NOT overwritten by the reference node's
-	// boolean true.
-	req, ok := user["required"].([]any)
+	// the type's properties are preserved, each carrying its own requiredness.
+	props, ok := user["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("required should remain array [name perms], got %#v (%T)", user["required"], user["required"])
-	}
-	if len(req) != 2 || req[0] != "name" || req[1] != "perms" {
-		t.Fatalf("required array is distorted: %#v", req)
-	}
-	// the type's properties are preserved.
-	if _, ok := user["properties"].(map[string]any); !ok {
 		t.Fatalf("properties should be preserved: %#v", user)
+	}
+	for _, name := range []string{"name", "perms"} {
+		child, isMap := props[name].(map[string]any)
+		if !isMap {
+			t.Fatalf("property %q missing from the DTO: %#v", name, props)
+		}
+		if child["required"] != true {
+			t.Errorf("property %q lost its own required flag in the DTO: %#v", name, child)
+		}
+	}
+	if state, _ := props["state"].(map[string]any); state["required"] == true {
+		t.Error("property `state` gained a required flag it never declared")
 	}
 	// the reference node's presentational description is carried over.
 	if user["description"] != "ACL user" {
@@ -314,22 +320,26 @@ func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	}
 }
 
-// TestListScenarios_TypeRefCarriesXRequired — NIM-72: the $type reference
-// node's field-level `required: true` is projected as a separate x-required
-// annotation (the DTO key required is taken by the array of the type's
-// required children) — the UI puts a `*` on the field itself without
-// confusing it with the required-children list. The children array is
-// preserved.
+// TestListScenarios_TypeRefCarriesXRequired — NIM-72: the $type reference node's
+// field-level `required: true` is projected as a separate `x-required` annotation.
+//
+// The annotation is now VESTIGIAL and deliberately kept ([ADR-0086] §13). It existed
+// because the DTO key `required` was taken by the object-level list of required
+// children; §2 frees the key, so the annotation is redundant — but retiring it is a DTO
+// change plus a web-UI re-vendor, which buys this ticket nothing. What the guard pins is
+// that it is still produced, so the bundle's `e.required===true || e["x-required"]===true`
+// predicate keeps seeing what it saw.
 func TestListScenarios_TypeRefCarriesXRequired(t *testing.T) {
 	root := t.TempDir()
 	writeTypesCatalog(t, root, `types:
   AclUser:
     type: object
-    required: [name, perms]
     properties:
       name:
+        required: true
         type: string
       perms:
+        required: true
         type: string
 `)
 	writeScenario(t, root, "add_user", `input:
@@ -347,11 +357,12 @@ func TestListScenarios_TypeRefCarriesXRequired(t *testing.T) {
 	if user[typeRequiredAnnotationKey] != true {
 		t.Fatalf("x-required = %v, want true (field-level required from reference node)", user[typeRequiredAnnotationKey])
 	}
-	// the type's required-children array is NOT affected (coexists with
-	// x-required).
-	req, ok := user["required"].([]any)
-	if !ok || len(req) != 2 {
-		t.Fatalf("required should remain array [name perms], got %#v", user["required"])
+	// The children keep their own flags, untouched by the reference-level one.
+	props := user["properties"].(map[string]any)
+	for _, name := range []string{"name", "perms"} {
+		if props[name].(map[string]any)["required"] != true {
+			t.Errorf("property %q lost its own required flag: %#v", name, props[name])
+		}
 	}
 }
 
@@ -364,9 +375,9 @@ func TestListScenarios_TypeRefNoXRequiredWhenAbsent(t *testing.T) {
 	writeTypesCatalog(t, root, `types:
   AclUser:
     type: object
-    required: [name]
     properties:
       name:
+        required: true
         type: string
 `)
 	writeScenario(t, root, "scenario", `input:

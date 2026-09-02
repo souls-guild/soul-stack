@@ -106,12 +106,12 @@ func TestAppend_MaterializesFromNothing(t *testing.T) {
 func TestAppend_RefusesANonList(t *testing.T) {
 	for name, tc := range map[string]struct {
 		before map[string]any
-		schema map[string]any
+		schema config.InputSchemaMap
 	}{
 		"map value":    {map[string]any{"users": map[string]any{"alice": "x"}}, nil},
 		"scalar value": {map[string]any{"users": "alice"}, nil},
-		"schema object": {map[string]any{}, map[string]any{
-			"properties": map[string]any{"users": map[string]any{"type": "object"}}}},
+		"schema object": {map[string]any{}, config.InputSchemaMap{
+			"users": &config.InputSchema{Type: "object"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			op := render.RenderedOp{Verb: config.VerbAppend, Field: "users", Value: "bob"}

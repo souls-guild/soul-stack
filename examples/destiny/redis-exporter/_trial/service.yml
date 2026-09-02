@@ -10,8 +10,6 @@ description: >-
   L0 harness for destiny redis-exporter (ADR-023). Not a service - a scenario wrapper for
   render-only Trial. state_schema here is nominal (Trial L0 does not assert it).
 
-state_schema:
-  type: object
-
+state_schema: {}
 destiny:
   - { name: redis-exporter, ref: v1.0.0 }

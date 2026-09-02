@@ -30,29 +30,27 @@ func run(t *testing.T, src, serviceName string) (stdout, stderr string, code int
 const wbRedisShape = `
 state_schema_version: 2
 state_schema:
-  type: object
-  properties:
-    namespace: { type: string }
-    redis_users:
-      type: array
-      items:
-        type: object
-        properties:
-          name:  { type: string }
-          perms: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "Redis user password"
-    system_acl_users:
-      type: array
-      items:
-        type: object
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name
+  namespace: { type: string }
+  redis_users:
+    type: array
+    items:
+      type: object
+      properties:
+        name:  { type: string }
+        perms: { type: string }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
+  system_acl_users:
+    type: array
+    items:
+      type: object
+      properties:
+        name: { type: string }
+        password:
+          type: secret
+          key: name
 `
 
 // TestRun_CollectionShape — the acceptance case. Both collections appear, in sorted
@@ -78,9 +76,7 @@ func TestRun_ScalarShape(t *testing.T) {
 	src := `
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    admin_password: { type: secret }
+  admin_password: { type: secret }
 `
 	stdout, stderr, code := run(t, src, "redis")
 	if code != ExitOK {
@@ -99,16 +95,14 @@ func TestRun_BothShapesAlign(t *testing.T) {
 	src := `
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    admin_password: { type: secret }
-    redis_users:
-      type: array
-      items:
-        type: object
-        properties:
-          name: { type: string }
-          password: { type: secret, key: name }
+  admin_password: { type: secret }
+  redis_users:
+    type: array
+    items:
+      type: object
+      properties:
+        name: { type: string }
+        password: { type: secret, key: name }
 `
 	stdout, _, code := run(t, src, "redis")
 	if code != ExitOK {
@@ -128,15 +122,13 @@ func TestRun_KeyPlaceholderIsTheKeyName(t *testing.T) {
 	src := `
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    accounts:
-      type: array
-      items:
-        type: object
-        properties:
-          login:    { type: string }
-          password: { type: secret, key: login }
+  accounts:
+    type: array
+    items:
+      type: object
+      properties:
+        login:    { type: string }
+        password: { type: secret, key: login }
 `
 	stdout, _, code := run(t, src, "redis")
 	if code != ExitOK {
@@ -155,15 +147,11 @@ func TestRun_NoDeclaredSecrets(t *testing.T) {
 		"schema without secrets": `
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    namespace: { type: string }
+  namespace: { type: string }
 `,
 		"empty properties": `
 state_schema_version: 1
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -188,15 +176,13 @@ func TestRun_RefusedDeclarationIsNotSilent(t *testing.T) {
 	src := `
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    nested:
-      type: object
-      properties:
-        deeper:
-          type: object
-          properties:
-            password: { type: secret }
+  nested:
+    type: object
+    properties:
+      deeper:
+        type: object
+        properties:
+          password: { type: secret }
 `
 	stdout, stderr, code := run(t, src, "redis")
 	if code != ExitHasErrors {
@@ -276,9 +262,8 @@ description: a service that states no schema
 `,
 		"not the manifest at all": `
 AclUser:
-  required: [name, perms]
   properties:
-    name: { type: string }
+    name: { type: string, required: true }
 `,
 		"state_schema is a scalar": `
 state_schema_version: 1
@@ -342,11 +327,11 @@ func TestRun_MissingFile(t *testing.T) {
 // that all but certain to show, where a single run would pass by luck.
 func TestRun_Deterministic(t *testing.T) {
 	var b strings.Builder
-	b.WriteString("state_schema_version: 1\nstate_schema:\n  type: object\n  properties:\n")
+	b.WriteString("state_schema_version: 1\nstate_schema:\n")
 	// Written in an order that is NOT the sorted one, so a traversal that echoed the
 	// document order would also be caught.
 	for _, n := range []string{"users_h", "users_c", "users_a", "users_g", "users_d", "users_b", "users_f", "users_e"} {
-		fmt.Fprintf(&b, "    %s:\n      type: array\n      items:\n        type: object\n        properties:\n          name: { type: string }\n          password: { type: secret, key: name }\n", n)
+		fmt.Fprintf(&b, "  %s:\n    type: array\n    items:\n      type: object\n      properties:\n        name: { type: string }\n        password: { type: secret, key: name }\n", n)
 	}
 	src := b.String()
 
@@ -412,15 +397,13 @@ func TestRun_UnsafeKeyNameFailsClosed(t *testing.T) {
 			src := fmt.Sprintf(`
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    users:
-      type: array
-      items:
-        type: object
-        properties:
-          %q: { type: string }
-          password: { type: secret, key: %q }
+  users:
+    type: array
+    items:
+      type: object
+      properties:
+        %q: { type: string }
+        password: { type: secret, key: %q }
 `, key, key)
 			stdout, stderr, code := run(t, src, "redis")
 			if code != ExitHasErrors {
@@ -450,15 +433,13 @@ func TestRun_NonASCIIRefusedOnEveryAxis(t *testing.T) {
 		return fmt.Sprintf(`
 state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    %q:
-      type: array
-      items:
-        type: object
-        properties:
-          %q: { type: string }
-          %q: { type: secret, key: %q }
+  %q:
+    type: array
+    items:
+      type: object
+      properties:
+        %q: { type: string }
+        %q: { type: secret, key: %q }
 `, state, key, prop, key)
 	}
 	for name, c := range map[string]struct{ src, service string }{
@@ -494,5 +475,81 @@ func TestPathForm_SentinelCollisionFailsClosed(t *testing.T) {
 	}
 	if _, err := pathForm(config.SecretField{State: keySentinel}, "redis"); err == nil {
 		t.Fatal("a state field colliding with the key sentinel was accepted")
+	}
+}
+
+// runIn is `run` with a sibling types.yml written next to the manifest.
+func runIn(t *testing.T, src, catalog, serviceName string) (stdout, stderr string, code int) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "service.yml")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if catalog != "" {
+		if err := os.WriteFile(filepath.Join(dir, "types.yml"), []byte(catalog), 0o600); err != nil {
+			t.Fatalf("write catalog: %v", err)
+		}
+	}
+	var out, errOut bytes.Buffer
+	code = Run(Options{Path: path, ServiceName: serviceName}, &out, &errOut)
+	return out.String(), errOut.String(), code
+}
+
+const typedUsersManifest = `state_schema_version: 1
+state_schema:
+  redis_users:
+    type: array
+    items:
+      $type: AclUser
+      properties:
+        password: { type: secret, key: name }
+`
+
+const aclUserCatalog = `types:
+  AclUser:
+    type: object
+    properties:
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
+`
+
+// A declaration whose element shape lives in types.yml is still printed. Since
+// NIM-742 a collection may reach its shape through `$type`, and an unresolved
+// reference carries no properties -- so without the resolve this command would print
+// NOTHING and exit 0, which is the answer it refuses to give without having read the
+// declarations.
+func TestRun_DeclarationThroughTypeRefIsPrinted(t *testing.T) {
+	stdout, stderr, code := runIn(t, typedUsersManifest, aclUserCatalog, "redis")
+	if code != ExitOK {
+		t.Fatalf("code = %d, want ExitOK; stderr = %q", code, stderr)
+	}
+	want := "secret/redis/<incarnation>/redis_users/<name>#password   ← state_schema.redis_users[].password\n"
+	if stdout != want {
+		t.Errorf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+// A catalog that does not resolve REFUSES rather than printing a shorter list: an
+// under-report here reads exactly like a service that declares fewer secrets.
+func TestRun_UnresolvableTypeRefRefuses(t *testing.T) {
+	for name, catalog := range map[string]string{
+		"absent":  "",
+		"unknown": "types: {}\n",
+		"duplicate": "types:\n  AclUser: { type: object, properties: { a: { type: string } } }\n" +
+			"  AclUser: { type: object, properties: { b: { type: string } } }\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, code := runIn(t, typedUsersManifest, catalog, "redis")
+			if code == ExitOK {
+				t.Fatalf("code = ExitOK on a catalog that does not resolve; stdout = %q", stdout)
+			}
+			if stdout != "" {
+				t.Errorf("printed a list anyway: %q", stdout)
+			}
+			if !strings.Contains(stderr, "$type") {
+				t.Errorf("stderr does not name the unresolved reference: %q", stderr)
+			}
+		})
 	}
 }

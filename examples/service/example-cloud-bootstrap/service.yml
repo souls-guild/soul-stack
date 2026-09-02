@@ -23,11 +23,8 @@ description: >-
   core.soul.registered(await_online).
 
 state_schema:
-  type: object
-  required: [provider, count]
-  properties:
-    provider:    { type: string }
-    profile:     { type: string }
-    count:       { type: integer, minimum: 1 }
-    vm_ids:      { type: array,   items: { type: string } }
-    sids:        { type: array,   items: { type: string, format: fqdn } }
+  provider: { type: string, required: true }
+  profile:     { type: string }
+  count: { type: integer, min: 1, required: true }
+  vm_ids:      { type: array,   items: { type: string } }
+  sids:        { type: array,   items: { type: string, format: fqdn } }

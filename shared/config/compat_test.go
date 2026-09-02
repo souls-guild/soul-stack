@@ -250,8 +250,7 @@ func TestKeeperCompatErrorNamesTheVersion(t *testing.T) {
 func TestServiceManifestCompatParse(t *testing.T) {
 	const withWindow = `
 state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 compat:
   keeper: {min: "0.1.0", max: "0.3.0"}
 `
@@ -269,8 +268,7 @@ compat:
 
 	const withoutWindow = `
 state_schema_version: 1
-state_schema:
-  type: object
+state_schema: {}
 `
 	m2, _, diags2, err := LoadServiceManifestFromBytes("service.yml", []byte(withoutWindow), ValidateOptions{})
 	if err != nil {
@@ -366,7 +364,7 @@ func TestCompatSchemaDiagnostics(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "name: redis\nstate_schema_version: 1\nstate_schema:\n  type: object\n" + tc.compat
+			src := "name: redis\nstate_schema_version: 1\nstate_schema: {}\n" + tc.compat
 			_, _, diags, err := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 			if err != nil {
 				t.Fatalf("LoadServiceManifestFromBytes: %v", err)

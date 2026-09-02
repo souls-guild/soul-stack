@@ -68,7 +68,7 @@ fixtures:
 			t.Fatalf("mkdir: %v", err)
 		}
 		writeFile(t, filepath.Join(root, "scenario", "create", "main.yml"), fencedMainYML)
-		writeFile(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\nstate_schema:\n  type: object\n")
+		writeFile(t, filepath.Join(root, "service.yml"), "state_schema_version: 1\nstate_schema: {}\n")
 		writeFile(t, filepath.Join(caseDir, caseFileName), `name: own-namespace vault is fenced
 fixtures:
   vault:

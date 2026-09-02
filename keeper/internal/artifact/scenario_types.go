@@ -136,6 +136,26 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 		// description/required_when are separate keys, safe even if the type
 		// didn't set them.
 		rm[typeAnnotationKey] = ref
+		// Properties written NEXT TO the reference are added on top of the type body
+		// — the `state_schema` exception to ADR-062 ([NIM-740]), where a use of a
+		// shared type owns the declared secret that use addresses. Add-only: a name
+		// the type already declares is a load-time error the config validator
+		// reports, and letting the reference win here would render a shape the engine
+		// refuses. In `input:` the same node is refused outright, so nothing reaches
+		// this branch from there.
+		if own, ok := m["properties"].(map[string]any); ok {
+			merged, _ := rm["properties"].(map[string]any)
+			if merged == nil {
+				merged = map[string]any{}
+			}
+			for pn, pv := range own {
+				if _, taken := merged[pn]; taken {
+					continue
+				}
+				merged[pn] = resolveTypeNode(pv, catalog, stack, depth+1)
+			}
+			rm["properties"] = merged
+		}
 		if rb, ok := m["required"].(bool); ok && rb {
 			rm[typeRequiredAnnotationKey] = true
 		}
@@ -154,9 +174,14 @@ func resolveTypeNode(node any, catalog typeCatalog, stack map[string]bool, depth
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		switch k {
-		case "items":
+		case "items", "additional_properties":
+			// Both hold ONE schema, not a bag of named ones. Walking
+			// additional_properties as a name→schema map resolved nothing and quietly
+			// mangled the common form: `{$type: T}` iterated as the single pair
+			// `"$type" → "T"`, so the reference reached the UI unresolved — which is
+			// the failure this resolve exists to prevent.
 			out[k] = resolveTypeNode(v, catalog, stack, depth+1)
-		case "properties", "additional_properties":
+		case "properties":
 			if pm, ok := v.(map[string]any); ok {
 				resolvedProps := make(map[string]any, len(pm))
 				for pn, pv := range pm {

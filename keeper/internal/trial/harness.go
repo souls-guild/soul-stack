@@ -454,12 +454,39 @@ func loadServiceDestinyDeps(caseFile string) ([]config.DependencyRef, error) {
 // add materialization, mirror of prod art.Manifest.StateSchema). Absence
 // of service.yml / state_schema — not an error (nil): add to already existing
 // collection derives type from state value.
-func loadServiceStateSchema(caseFile string) (map[string]any, error) {
+//
+// The `$type` references are resolved here, against the sibling types.yml, because
+// prod resolves them at its own load ([artifact.ServiceLoader.parseManifest]) and this
+// is the Trial twin of that load. Without it the twin diverges silently and in the
+// worst direction: [stateop.Merge] ends in [config.StripDeclaredSecrets], which reads
+// the element shape to find the declared secrets, and an unresolved `{$type: AclUser}`
+// has none — so a password prod deletes from the record would survive into
+// `assert.state_after` and the trial diff, and the case that pinned it would be
+// pinning the wrong record.
+//
+// A broken catalog is not fatal here, unlike in prod: L0 lints a service tree that may
+// legitimately be mid-edit, and the schema's own errors are reported by
+// `soul-lint validate-service` at the file they belong to. The unresolved schema is
+// used, which loses the secrets — the same "no schema, no check" asymmetry the offline
+// half of the collection-key rule carries.
+func loadServiceStateSchema(caseFile string) (config.InputSchemaMap, error) {
 	manifest, err := loadTrialServiceManifest(caseFile)
 	if manifest == nil || err != nil {
 		return nil, err
 	}
-	return manifest.StateSchema, nil
+	if !config.SchemaHasTypeRef(manifest.StateSchema) {
+		return manifest.StateSchema, nil
+	}
+	data, rerr := os.ReadFile(filepath.Join(serviceRootFor(caseFile), config.TypesCatalogFile))
+	if rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		return nil, fmt.Errorf("trial: reading %s: %w", config.TypesCatalogFile, rerr)
+	}
+	catalog, cdiags := config.ParseTypeCatalog(config.TypesCatalogFile, data)
+	resolved, rdiags := config.ResolveStateSchemaTypeRefs(manifest.StateSchema, catalog)
+	if hasErrors(cdiags) || hasErrors(rdiags) {
+		return manifest.StateSchema, nil
+	}
+	return resolved, nil
 }
 
 // fixtureScenarioIncludeResolver — two-level scenario-include resolver for L0

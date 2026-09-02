@@ -12,41 +12,37 @@ state_schema_version: 1
 description: A service declaring secrets in both supported shapes.
 
 state_schema:
-  type: object
-  required: [namespace]
-  properties:
-    namespace:
-      type: string
+  namespace:
+    type: string
+    required: true
 
-    # Scalar: one secret per incarnation, no addressing property.
-    admin_password:
-      type: secret
-      label: "Administrator password"
+  # Scalar: one secret per incarnation, no addressing property.
+  admin_password:
+    type: secret
+    label: "Administrator password"
 
-    # Collection: one secret per element, addressed by the sibling `name`.
-    redis_users:
-      type: array
-      items:
-        type: object
-        required: [name, perms]
-        additionalProperties: false
-        properties:
-          name:  { type: string }
-          perms: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "Redis user password"
+  # Collection: one secret per element, addressed by the sibling `name`.
+  redis_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        perms: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
 
-    system_acl_users:
-      type: array
-      items:
-        type: object
-        required: [name]
-        additionalProperties: false
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "Redis system account password"
+  system_acl_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis system account password"

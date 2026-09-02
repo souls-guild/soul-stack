@@ -9,9 +9,6 @@ description: >-
 # state_schema_version = 1 → the migrations/ directory is not required (ADR-019).
 # incarnation.state structure is empty: the keeper step writes to the souls registry, not to
 # incarnation.state.
-state_schema:
-  type: object
-  properties: {}
-
+state_schema: {}
 # No dependencies: the scenario uses only core modules (ADR-015),
 # which are not listed in destiny[]/modules[] (ADR-009).

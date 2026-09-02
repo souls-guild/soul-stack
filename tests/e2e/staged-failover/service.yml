@@ -4,6 +4,4 @@ description: |
   NOT in examples/**: a test fixture staged-render-proof (examples/ is the
   user's WIP zone). Reproduces the canonical probe→where idiom
   (orchestration.md §4-5 / ADR-008 volatile role) on the contract tier.
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}

@@ -5,14 +5,14 @@ package config
 // DSL is used in destiny.yml / scenario/<name>/main.yml / a module manifest; the
 // implementation is shared.
 //
-// `required` in the DSL has two context-split meanings:
-//   - at the parameter level (any type) — a bool "is the parameter required";
-//   - inside type=object — a []string list of required `properties` sub-keys.
-//
-// So downstream code need not parse `any`, we split these in Go: fields `Required`
-// and `RequiredProps`. A custom `UnmarshalYAML` decides by YAML node type
-// (`!!bool` → Required, `!!seq` → RequiredProps); semantic-validate checks
-// consistency with `type`.
+// `required` is a BOOL, everywhere, on the field it belongs to ([ADR-0086] §2). It
+// used to mean two things depending on context — a bool at the parameter level, and a
+// []string list of sub-keys inside `type: object` — decided by YAML node kind and
+// stored in two Go fields. That is how one record came to be described two ways at
+// once: `types.yml` said `required: [name, perms]` while the same accounts were listed
+// `required: [name, perms, state]` in `state_schema`, and nothing compared them. With
+// one spelling per property there is exactly one place to write it, so the two
+// statements cannot disagree — they are the same statement.
 
 import (
 	"fmt"
@@ -30,6 +30,91 @@ import (
 // InputSchemaMap maps a parameter name → schema.
 type InputSchemaMap map[string]*InputSchema
 
+// schemaDialect selects which block of the DSL is being read.
+//
+// The grammar is ONE grammar — that is the whole point of the `state_schema`
+// move ([NIM-740]): a service used to describe one shape three ways, and the
+// descriptions had already drifted apart with nothing to compare them against.
+// Two keys are nevertheless meaningful in exactly one of the two places, and a
+// validator that ignored the difference would either accept a declared secret
+// in an operator form or refuse the only shape `state_schema` has for one.
+type schemaDialect int
+
+const (
+	// dialectInput — `input:` / `output:` / a `types.yml` type body: the form an
+	// operator fills in.
+	dialectInput schemaDialect = iota
+	// dialectState — the `state_schema:` block of service.yml: the contract for
+	// `incarnation.state`.
+	dialectState
+	// dialectTypes — a `types.yml` type body. A shared type is referenced from BOTH
+	// blocks, so it has to be able to carry what either of them needs: `type: secret`
+	// is legal here ([ADR-0086] §5), because a type describing a stored record
+	// describes its secret too.
+	//
+	// It is a third dialect rather than dialectState because the `$type` OVERLAY is
+	// not widened here. A type referencing another type and adding properties to it is
+	// the deep merge ADR-062 refused; the exception is granted to the use site, where
+	// the added property's Vault address is readable, not to the catalog.
+	//
+	// ★ What this does NOT do: make a `type: secret` property safe to reach from an
+	// `input:` block. ADR-0086 §5 states the rule — such a property is not asked for on
+	// input — and then records, at length, that the engine does not yet enforce it
+	// (deferred as NIM-751). Until that lands, the guarantee rests on the author.
+	dialectTypes
+)
+
+// RequiredListRemovedCode — a `required:` whose value is a sequence, anywhere in the
+// dialect ([ADR-0086] §2). Distinct from `input_required_value_invalid` because it names
+// a form that used to be correct rather than a mistake.
+const RequiredListRemovedCode = "input_required_list_removed"
+
+// stateSchemaExtraKeys — the keys the state dialect adds to
+// [inputSchemaKnownKeys]. Both belong to a `type: secret` node and nowhere else
+// ([ADR-0083] §1): `key` names the sibling property addressing one element's
+// secret, `label` is the UI caption. In `input:` they stay unknown_key — an
+// operator form has no declared secrets to address.
+var stateSchemaExtraKeys = map[string]bool{"key": true, "label": true}
+
+// knownKey reports whether name is a key of this dialect.
+func (d schemaDialect) knownKey(name string) bool {
+	return inputSchemaKnownKeys[name] || (d.declaresSecrets() && stateSchemaExtraKeys[name])
+}
+
+// declaresSecrets reports whether this dialect may spell a declared secret —
+// `type: secret` with its `key:`/`label:`. True for the state block and for a type
+// body, false for an operator form.
+func (d schemaDialect) declaresSecrets() bool {
+	return d == dialectState || d == dialectTypes
+}
+
+// typeEnum — the `type:` values this dialect accepts. The state dialect adds
+// `secret`, the declared-secret marker. It is deliberately absent from
+// dialectInput: on a form "secret" is the modifier `secret: true` on an
+// ordinary field ("the operator types it, mask it"), which says the opposite of
+// `type: secret` ("the platform issues it; the value never lives in state").
+func (d schemaDialect) typeEnum() []string {
+	if d.declaresSecrets() {
+		return stateTypeEnum
+	}
+	return inputTypeEnum
+}
+
+// noun — what one entry of this dialect's map is called, for diagnostics. The
+// CODES stay the `input_*` ones: the rule being broken is the same rule, and a
+// parallel `state_*` vocabulary for every one of them would be two names for one
+// check.
+func (d schemaDialect) noun() string {
+	switch d {
+	case dialectState:
+		return "state field"
+	case dialectTypes:
+		return "type property"
+	default:
+		return "input parameter"
+	}
+}
+
 // InputSchema is the schema of one parameter per [`docs/input.md`].
 //
 // All fields are form-valid across types at once (YAML accepts an "extra key for the
@@ -37,9 +122,8 @@ type InputSchemaMap map[string]*InputSchema
 // Pointers (*int/*float64) distinguish "absent" from "zero-value"; bool flags are
 // stored as bool (absent = false).
 //
-// `Required` and `RequiredProps` are tagged `yaml:"-"` — filled via `UnmarshalYAML`
-// below so the reflect-walker does not complain about a missing `required` among the
-// known keys.
+// `Required` is tagged `yaml:"-"` — filled via `UnmarshalYAML` below so the
+// reflect-walker does not complain about a missing `required` among the known keys.
 type InputSchema struct {
 	Type        string `yaml:"type"`
 	Default     any    `yaml:"default,omitempty"`
@@ -47,9 +131,7 @@ type InputSchema struct {
 	Secret      bool   `yaml:"secret,omitempty"`
 	Description string `yaml:"description,omitempty"`
 
-	Required      bool     `yaml:"-"`
-	RequiredProps []string `yaml:"-"`
-	requiredKind  requiredKind
+	Required bool `yaml:"-"`
 
 	// RequiredWhen is a CEL predicate over `input.*`: the parameter is required WHEN
 	// the predicate is true (docs/input.md → "Conditional requiredness"). Applies to
@@ -74,10 +156,11 @@ type InputSchema struct {
 	// notation), but here it is a LITERAL path reference to one value, not a CEL
 	// predicate. Empty = key absent.
 	PrefillFromState string `yaml:"prefill_from_state,omitempty"`
-	// rawRequired keeps the original `required:` AST node before classification into
-	// `requiredKind`. Used in `validateInputSchemaNode` to raise
-	// `input_required_value_invalid` when the value is neither a bool nor a sequence of
-	// strings (see UnmarshalYAML, default branch).
+	// rawRequired keeps the original `required:` AST node. Two readers: it tells
+	// "the key was written" apart from "the key was written false" — which is what
+	// [applyRefOverlay] and [requiredOnSecretIssue] need — and it carries the position
+	// `validateInputSchemaNode` reports `input_required_value_invalid` at when the
+	// value is not a bool.
 	rawRequired ast.Node
 
 	Pattern    string `yaml:"pattern,omitempty"`
@@ -103,6 +186,16 @@ type InputSchema struct {
 	MinItems *int         `yaml:"min_items,omitempty"`
 	MaxItems *int         `yaml:"max_items,omitempty"`
 	Unique   bool         `yaml:"unique,omitempty"`
+
+	// Key is the sibling property whose value addresses one element's secret
+	// ([ADR-0083] §1). `state_schema` dialect only, on a `type: secret` property
+	// of a collection element; empty on a scalar secret. The value becomes the
+	// last segment of the derived Vault path, so it is the one segment that
+	// comes from state DATA — see [SecretField.VaultPath].
+	Key string `yaml:"key,omitempty"`
+	// Label is the optional UI caption of a declared secret ([ADR-0083] §2).
+	// `state_schema` dialect only, on a `type: secret` node.
+	Label string `yaml:"label,omitempty"`
 
 	// Source is the catalog of allowed field values (ADR-044 S-T1). An
 	// object-discriminator: exactly one sub-key defines the set from which the backend
@@ -198,17 +291,12 @@ func declaresRosterSource(prop *InputSchema) bool {
 	return prop.Items != nil && prop.Items.Source != nil && prop.Items.Source.Roster
 }
 
-type requiredKind int
-
-const (
-	requiredAbsent requiredKind = iota
-	requiredBool                // top-level `required: true/false`
-	requiredList                // `required: [name1, name2]` inside an object
-)
-
 // Allowed `type` and `format` values — fixed by [`docs/input.md`].
 var (
-	inputTypeEnum   = []string{"string", "integer", "number", "boolean", "array", "object"}
+	inputTypeEnum = []string{"string", "integer", "number", "boolean", "array", "object"}
+	// stateTypeEnum — the input types plus `secret`, valid only in `state_schema`
+	// (see [schemaDialect.typeEnum]).
+	stateTypeEnum   = append(append([]string{}, inputTypeEnum...), SecretTypeName)
 	inputFormatEnum = []string{
 		"hostname", "fqdn", "ipv4", "ipv6", "cidr",
 		"email", "uri", "uuid", "semver", "duration",
@@ -270,13 +358,21 @@ var (
 //  2. for the rest, call the shared goccy decoder via a temporary alias type (to
 //     avoid recursion into UnmarshalYAML).
 //
-// If the `required` value is a bool → `Required` (kind=requiredBool). If a sequence of
-// strings → `RequiredProps` (kind=requiredList). If anything else → kind=requiredAbsent
-// and `input_required_value_invalid` is raised in semantic-validate (by inspecting the AST).
+// A bool `required` fills `Required`. Anything else — a sequence, a string, a number —
+// leaves it false and raises `input_required_value_invalid` in semantic-validate from
+// the saved AST node. The sequence form was the object-level list, and it left the
+// dialect with [ADR-0086] §2.
 func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 	m, ok := node.(*ast.MappingNode)
 	if !ok {
-		return fmt.Errorf("input schema must be a mapping, got %T", node)
+		// Not a mapping — leave the schema zero instead of failing the whole
+		// document decode. [validateInputSchemaMap] reports `type_mismatch` at the
+		// offending key with a line and a column; a decode error is collected once
+		// per file, carries no position inside the block, and would SHADOW that.
+		// Returning nil here is what lets `state_schema: { type: object }` — the
+		// JSON-Schema form the state dialect replaced — be refused by name and
+		// address rather than as an opaque type error.
+		return nil
 	}
 	// Snapshot the `required`, `additional_properties` and `$type` nodes and cut them
 	// out of the mapping before the shared decode: all three are fields with special
@@ -346,30 +442,8 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 
 	// Parse `required` by node type.
 	s.rawRequired = reqNode
-	switch n := reqNode.(type) {
-	case nil:
-		s.requiredKind = requiredAbsent
-	case *ast.BoolNode:
+	if n, ok := reqNode.(*ast.BoolNode); ok {
 		s.Required = n.Value
-		s.requiredKind = requiredBool
-	case *ast.SequenceNode:
-		s.RequiredProps = make([]string, 0, len(n.Values))
-		for _, item := range n.Values {
-			if sn, ok := item.(*ast.StringNode); ok {
-				s.RequiredProps = append(s.RequiredProps, sn.Value)
-				continue
-			}
-			tok := item.GetToken()
-			if tok != nil {
-				s.RequiredProps = append(s.RequiredProps, tok.Value)
-			}
-		}
-		s.requiredKind = requiredList
-	default:
-		// Any other type (number, mapping, scalar string, null) — leave requiredAbsent;
-		// `validateInputSchemaNode` raises `input_required_value_invalid` from the saved
-		// rawRequired node.
-		s.requiredKind = requiredAbsent
 	}
 
 	return nil
@@ -378,8 +452,10 @@ func (s *InputSchema) UnmarshalYAML(node ast.Node) error {
 // validateInputSchemaMap is the public entry point for recursive validation of an
 // input: (or output:) block. `pathPrefix` is the yaml-path to the block itself (e.g.
 // `$.input` or `$.output`). `node` is the corresponding AST MappingNode (nil is safe,
-// no checks run).
-func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+// no checks run). `skip` names keys of `node` the caller has already reported on and
+// wants left alone (nil for none) — [validateStateSchema] uses it so the JSON-Schema
+// keys it refuses by name are not then refused a second time as malformed fields.
+func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix string, dialect schemaDialect, skip map[string]bool) []diag.Diagnostic {
 	if m == nil && node == nil {
 		return nil
 	}
@@ -394,12 +470,15 @@ func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix 
 			continue
 		}
 		paramName := keyTok.Value
+		if skip[paramName] {
+			continue
+		}
 		paramPath := pathPrefix + "." + paramName
 		if !reInputParamName.MatchString(paramName) {
 			out = append(out, diagAt(keyTok.Position.Line, keyTok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "input_param_name_invalid",
-				Message:  fmt.Sprintf("input parameter name %q does not match %s", paramName, reInputParamName),
+				Message:  fmt.Sprintf("%s name %q does not match %s", dialect.noun(), paramName, reInputParamName),
 				Hint:     "snake_case: starts with lowercase letter; only [a-z0-9_]; no dots/spaces — they break input.<name> in templates",
 				YAMLPath: paramPath,
 			}))
@@ -409,7 +488,7 @@ func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix 
 			out = append(out, diagAt(keyTok.Position.Line, keyTok.Position.Column, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:     "type_mismatch",
-				Message:  fmt.Sprintf("input parameter %q must be a mapping", paramName),
+				Message:  fmt.Sprintf("%s %q must be a mapping", dialect.noun(), paramName),
 				YAMLPath: paramPath,
 			}))
 			continue
@@ -418,7 +497,7 @@ func validateInputSchemaMap(m InputSchemaMap, node *ast.MappingNode, pathPrefix 
 		if m != nil {
 			schema = m[paramName]
 		}
-		out = append(out, validateInputSchemaNode(schema, paramNode, paramPath)...)
+		out = append(out, validateInputSchemaNode(schema, paramNode, paramPath, dialect)...)
 	}
 	out = append(out, validateRosterSourceUniqueness(m, node, pathPrefix)...)
 	return out
@@ -473,7 +552,7 @@ func validateRosterSourceUniqueness(m InputSchemaMap, node *ast.MappingNode, pat
 
 // validateInputSchemaNode validates one schema (one parameter). Does unknown_key +
 // per-key schema checks + recursion into items/properties.
-func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string) []diag.Diagnostic {
+func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string, dialect schemaDialect) []diag.Diagnostic {
 	if node == nil {
 		return nil
 	}
@@ -487,7 +566,7 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 			continue
 		}
 		name := keyTok.Value
-		if !inputSchemaKnownKeys[name] {
+		if !dialect.knownKey(name) {
 			// `x-*` — vendor extension (OpenAPI/JSON-Schema convention): the backend
 			// passes such keys into the raw input_schema DTO as UI annotations (e.g.
 			// `x-directives: redis` — validate keys against the directive catalog,
@@ -511,8 +590,24 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 	// (ResolveTypeRefs). So such a node skips the per-type validation below
 	// (type-required + per-key checks) — here only the REFERENCE's structural
 	// invariants: a non-empty string name + no conflicting keys.
+	// `required` is checked BEFORE the reference branch returns. A reference node takes
+	// its own field-level `required: true` ([ADR-062] overlay), so the key is legal
+	// here — but its VALUE has to be a bool like everywhere else. Checked after the
+	// return, a list on a `$type` node escaped every check: not unknown_key (the key is
+	// known), not a `$type` conflict (not in the list), and never reaching the branch
+	// below. Worse than silent: applyRefOverlay would then write the resulting `false`
+	// over the requiredness the type itself declares.
+	out = append(out, validateRequiredShape(s, present, path)...)
+
 	if refKV, ok := present["$type"]; ok {
-		out = append(out, validateTypeRefNode(s, refKV, present, path)...)
+		out = append(out, validateTypeRefNode(s, refKV, present, path, dialect)...)
+		// In `state_schema` a reference MAY carry its own `properties:` — the one
+		// point where ADR-062's "either a reference or an inline shape" is relaxed
+		// ([NIM-740]). Those properties are real schema nodes and are validated as
+		// such; the type's own body was validated when the catalog was parsed.
+		if dialect == dialectState {
+			out = append(out, recurseItemsProperties(s, present, path, dialect)...)
+		}
 		return out
 	}
 
@@ -521,13 +616,13 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 		out = append(out, diagAt(node.GetToken().Position.Line, node.GetToken().Position.Column, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "missing_required_field",
-			Message:  "input parameter must declare type",
-			Hint:     "type: one of string|integer|number|boolean|array|object",
+			Message:  dialect.noun() + " must declare type",
+			Hint:     "type: one of " + strings.Join(dialect.typeEnum(), "|"),
 			YAMLPath: path + ".type",
 		}))
 		// Without type, further per-type checks are impossible. But we still validate
 		// items/properties to surface their errors too.
-		out = append(out, recurseItemsProperties(s, present, path)...)
+		out = append(out, recurseItemsProperties(s, present, path, dialect)...)
 		return out
 	}
 
@@ -540,24 +635,6 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 	// `required: 1`, `required: null`). UnmarshalYAML classifies that as requiredAbsent
 	// and keeps the original node in rawRequired; here we raise the diagnostic. A nil
 	// node (key absent) and BoolNode / SequenceNode are skipped.
-	if s.rawRequired != nil {
-		switch s.rawRequired.(type) {
-		case *ast.BoolNode, *ast.SequenceNode:
-			// valid forms — already parsed
-		default:
-			if kv, ok := present["required"]; ok {
-				tok := kv.Value.GetToken()
-				out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-					Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
-					Code:     "input_required_value_invalid",
-					Message:  "required must be bool (parameter-level) or sequence of strings (object property list)",
-					Hint:     "use `required: true/false` for any type; `required: [a, b]` only inside type=object",
-					YAMLPath: path + ".required",
-				}))
-			}
-		}
-	}
-
 	// required_when — a statically parsable CEL over input.* (docs/input.md →
 	// "Conditional requiredness"). Applies to any type, so checked before the
 	// per-type fork. An unparsable/invalid expression → input_required_when_invalid.
@@ -574,17 +651,51 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 	}
 
 	// type — enum.
-	if !contains(inputTypeEnum, s.Type) {
+	if !contains(dialect.typeEnum(), s.Type) {
 		tkv := present["type"]
 		tt := tkv.Value.GetToken()
+		hint := ""
+		if s.Type == SecretTypeName {
+			hint = "type: secret declares a secret the PLATFORM issues and only state_schema has those; on a form, mark the field `secret: true` instead"
+		}
 		out = append(out, diagAt(tt.Position.Line, tt.Position.Column, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "input_type_invalid",
-			Message:  fmt.Sprintf("type %q is not in %v", s.Type, inputTypeEnum),
+			Message:  fmt.Sprintf("type %q is not in %v", s.Type, dialect.typeEnum()),
+			Hint:     hint,
 			YAMLPath: path + ".type",
 		}))
 		// on an unknown type, keep validating recursion without the per-type fork.
-		out = append(out, recurseItemsProperties(s, present, path)...)
+		out = append(out, recurseItemsProperties(s, present, path, dialect)...)
+		return out
+	}
+
+	// A `type: secret` node has no shape of its own: its whole grammar is
+	// type/key/label ([ADR-0083] §9), and [checkSecretNodeGrammar] refuses
+	// everything else in ONE diagnostic naming every offender. Running the
+	// per-type checks over it would report the same keys a second time under a
+	// different code, and `enum`/`default` would be judged against a type that
+	// never carries a value here at all.
+	if s.Type == SecretTypeName {
+		// `key` and `label` are strings. The decode reports a mismatch too, but as a
+		// document-level type error with no position inside the block; this one points
+		// at the value the author wrote.
+		for _, k := range []string{"key", "label"} {
+			kv, has := present[k]
+			if !has {
+				continue
+			}
+			if _, isStr := kv.Value.(*ast.StringNode); isStr {
+				continue
+			}
+			tok := kv.Value.GetToken()
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "type_mismatch",
+				Message:  k + " must be a string",
+				YAMLPath: path + "." + k,
+			}))
+		}
 		return out
 	}
 
@@ -616,9 +727,43 @@ func validateInputSchemaNode(s *InputSchema, node *ast.MappingNode, path string)
 	out = append(out, validateCommonInvariants(s, present, path)...)
 
 	// recurse into items/properties — after the other checks of the current level.
-	out = append(out, recurseItemsProperties(s, present, path)...)
+	out = append(out, recurseItemsProperties(s, present, path, dialect)...)
 
 	return out
+}
+
+// validateRequiredShape refuses a `required:` whose value is not a bool.
+//
+// The sequence gets its OWN code. It is not a typo but the former spelling, correct
+// until [ADR-0086] §2, and an author who wrote it deserves to be told that rather than
+// "this is not a bool".
+//
+// Runs on every node including a `$type` reference — see the caller for why that
+// ordering is load-bearing.
+func validateRequiredShape(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
+	if s == nil || s.rawRequired == nil {
+		return nil
+	}
+	if _, isBool := s.rawRequired.(*ast.BoolNode); isBool {
+		return nil
+	}
+	kv, ok := present["required"]
+	if !ok {
+		return nil
+	}
+	code, hint := "input_required_value_invalid", "use `required: true` on the field itself"
+	if _, isSeq := s.rawRequired.(*ast.SequenceNode); isSeq {
+		code = RequiredListRemovedCode
+		hint = "the list form left the dialect ([ADR-0086] §2) — mark each property instead: `<name>: { type: …, required: true }`"
+	}
+	tok := kv.Value.GetToken()
+	return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:     code,
+		Message:  "required must be a bool",
+		Hint:     hint,
+		YAMLPath: path + ".required",
+	})}
 }
 
 // checkKeyTypeApplicability catches keys applied to an inapplicable type. Acts only
@@ -653,6 +798,12 @@ func checkKeyTypeApplicability(s *InputSchema, present map[string]*ast.MappingVa
 		// it additionally requires items.type=string — checked in validateSource
 		// (structural validity of the source).
 		{"source", []string{"string", "array"}},
+
+		// key/label address and caption a declared secret and belong to a
+		// `type: secret` node ([ADR-0083] §1). In dialectInput they are unknown_key
+		// and never reach `present`, so the rule is inert there.
+		{"key", []string{SecretTypeName}},
+		{"label", []string{SecretTypeName}},
 	}
 	var out []diag.Diagnostic
 	for _, r := range rules {
@@ -668,19 +819,6 @@ func checkKeyTypeApplicability(s *InputSchema, present map[string]*ast.MappingVa
 				Message:  fmt.Sprintf("key %q is not applicable to type %q", r.key, s.Type),
 				Hint:     fmt.Sprintf("allowed only for type %v", r.onlyTypes),
 				YAMLPath: path + "." + r.key,
-			}))
-		}
-	}
-	// `required` as []string — only for type=object.
-	if s.requiredKind == requiredList && s.Type != "object" {
-		if kv, ok := present["required"]; ok {
-			tok := kv.Key.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "input_key_invalid_for_type",
-				Message:  fmt.Sprintf(`"required" as list is only allowed for type "object", got type %q`, s.Type),
-				Hint:     "use `required: true/false` (bool) for parameter-level requirement; list form is for object properties",
-				YAMLPath: path + ".required",
 			}))
 		}
 	}
@@ -967,13 +1105,23 @@ func validateNumericSchema(s *InputSchema, present map[string]*ast.MappingValueN
 
 func validateArraySchema(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
-	// items — required for array.
-	if _, ok := present["items"]; !ok {
+	// items — required for array, and it must be a schema. A scalar or a sequence
+	// there decodes to an empty schema, which describes every element and rejects
+	// none: without this the element shape is silently unconstrained.
+	if kv, ok := present["items"]; !ok {
 		out = append(out, diagAtKV(present["type"], diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "missing_required_field",
 			Message:  "array parameter must declare items",
 			Hint:     "items: <schema> — defines element shape, recursively",
+			YAMLPath: path + ".items",
+		}))
+	} else if _, isMap := kv.Value.(*ast.MappingNode); !isMap {
+		tok := kv.Value.GetToken()
+		out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "type_mismatch",
+			Message:  "items must be a schema (mapping)",
 			YAMLPath: path + ".items",
 		}))
 	}
@@ -1004,12 +1152,39 @@ func validateArraySchema(s *InputSchema, present map[string]*ast.MappingValueNod
 
 func validateObjectSchema(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
 	var out []diag.Diagnostic
-	if _, ok := present["properties"]; !ok {
+	// An object must say what is in it — through named `properties`, or through
+	// `additional_properties` when the keys are not known at authoring time (an
+	// opaque config bag, a map keyed by operator input). Either one describes the
+	// contents; demanding a `properties: {}` next to an `additional_properties`
+	// that already does would be noise, not a check.
+	//
+	// `additional_properties: false` is the exception: it does not describe contents,
+	// it FORBIDS the ones `properties` did not name. On its own it declares an object
+	// that may hold nothing at all, which is the shape this check exists to catch.
+	propsKV, hasProps := present["properties"]
+	apKV, hasAP := present["additional_properties"]
+	if hasAP {
+		if b, isBool := apKV.Value.(*ast.BoolNode); isBool && !b.Value {
+			hasAP = false
+		}
+	}
+	if hasProps {
+		if _, isMap := propsKV.Value.(*ast.MappingNode); !isMap {
+			tok := propsKV.Value.GetToken()
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:     "type_mismatch",
+				Message:  "properties must be a mapping of name → schema",
+				YAMLPath: path + ".properties",
+			}))
+		}
+	}
+	if !hasProps && !hasAP {
 		out = append(out, diagAtKV(present["type"], diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "missing_required_field",
-			Message:  "object parameter must declare properties",
-			Hint:     "properties: { <name>: <schema>, ... }",
+			Message:  "object parameter must declare properties or additional_properties",
+			Hint:     "properties: { <name>: <schema>, ... } for known keys; additional_properties: true (or a schema) for an open map",
 			YAMLPath: path + ".properties",
 		}))
 	}
@@ -1026,20 +1201,6 @@ func validateObjectSchema(s *InputSchema, present map[string]*ast.MappingValueNo
 				Message:  "additional_properties must be bool or schema (mapping)",
 				YAMLPath: path + ".additional_properties",
 			}))
-		}
-	}
-	// `required: [name1, name2]` — each name must be among properties.
-	if s.requiredKind == requiredList && s.Properties != nil {
-		for _, name := range s.RequiredProps {
-			if _, ok := s.Properties[name]; !ok {
-				out = append(out, diagAtKV(present["required"], diag.Diagnostic{
-					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-					Code:     "missing_required_field",
-					Message:  fmt.Sprintf("required references unknown property %q", name),
-					Hint:     "every entry of `required` must match a key in `properties`",
-					YAMLPath: path + ".required",
-				}))
-			}
 		}
 	}
 	return out
@@ -1115,7 +1276,7 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 	}
 
 	// required: true + default → conflict (warning).
-	if s.requiredKind == requiredBool && s.Required {
+	if s.Required {
 		if _, has := present["default"]; has {
 			out = append(out, diagAtKV(present["default"], diag.Diagnostic{
 				Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
@@ -1135,7 +1296,7 @@ func validateCommonInvariants(s *InputSchema, present map[string]*ast.MappingVal
 // from per-type so it also descends into a schema without type (there we already
 // emitted missing_required_field, but we still want to surface nested errors in one
 // pass).
-func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValueNode, path string) []diag.Diagnostic {
+func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValueNode, path string, dialect schemaDialect) []diag.Diagnostic {
 	var out []diag.Diagnostic
 	if kv, ok := present["items"]; ok {
 		if itemNode, isMap := kv.Value.(*ast.MappingNode); isMap {
@@ -1143,7 +1304,7 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 			if s != nil {
 				sub = s.Items
 			}
-			out = append(out, validateInputSchemaNode(sub, itemNode, path+".items")...)
+			out = append(out, validateInputSchemaNode(sub, itemNode, path+".items", dialect)...)
 		}
 	}
 	if kv, ok := present["properties"]; ok {
@@ -1152,7 +1313,7 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 			if s != nil {
 				sub = s.Properties
 			}
-			out = append(out, validateInputSchemaMap(sub, propsNode, path+".properties")...)
+			out = append(out, validateInputSchemaMap(sub, propsNode, path+".properties", dialect, nil)...)
 		}
 	}
 	if kv, ok := present["additional_properties"]; ok {
@@ -1166,7 +1327,7 @@ func recurseItemsProperties(s *InputSchema, present map[string]*ast.MappingValue
 					sub = ap
 				}
 			}
-			out = append(out, validateInputSchemaNode(sub, apNode, path+".additional_properties")...)
+			out = append(out, validateInputSchemaNode(sub, apNode, path+".additional_properties", dialect)...)
 		}
 	}
 	return out

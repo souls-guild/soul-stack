@@ -63,22 +63,19 @@ func redisUsersState(names ...string) map[string]any {
 // sibling `name`) and a scalar one (admin_password). NO Vault path is authored
 // anywhere — that is the point of the ticket; reveal derives it from
 // (service, incarnation, state field, key).
-func redisSecretSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"redis_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name", "label": "Redis user password"},
-					},
+func redisSecretSchema() config.InputSchemaMap {
+	return config.InputSchemaMap{
+		"redis_users": &config.InputSchema{
+			Type: "array",
+			Items: &config.InputSchema{
+				Type: "object",
+				Properties: config.InputSchemaMap{
+					"name":     {Type: "string"},
+					"password": {Type: config.SecretTypeName, Key: "name", Label: "Redis user password"},
 				},
 			},
-			"admin_password": map[string]any{"type": "secret", "label": "Admin password"},
 		},
+		"admin_password": &config.InputSchema{Type: config.SecretTypeName, Label: "Admin password"},
 	}
 }
 
@@ -92,7 +89,7 @@ const (
 // scoper+vault+auditW). schema is the snapshot's state_schema — the ONLY source of
 // secret declarations. logger=nil → discard (NewIncarnationHandler). Mount "" → the
 // default KV mount, so derived paths start with `secret/`.
-func revealHandler(state, schema map[string]any, vr VaultKVReader, scoper PurviewResolver, aw audit.Writer) *IncarnationHandler {
+func revealHandler(state map[string]any, schema config.InputSchemaMap, vr VaultKVReader, scoper PurviewResolver, aw audit.Writer) *IncarnationHandler {
 	db := &fakeIncDB{selectByNameRow: func(name string) pgx.Row { return makeIncRowWithState(name, state) }}
 	loader := &fakeLoader{stateSchema: schema}
 	h := NewIncarnationHandler(db, nil, nil, &fakeResolver{ok: true}, loader, aw, scoper, nil)
@@ -452,12 +449,13 @@ func TestRevealableSecrets_OutOfScope_404(t *testing.T) {
 // TestRevealableSecrets_NoDeclarations_Empty — a service whose state_schema declares no
 // `type: secret` → empty list (valid, not an error).
 func TestRevealableSecrets_NoDeclarations_Empty(t *testing.T) {
-	plain := map[string]any{"type": "object", "properties": map[string]any{
-		"redis_users": map[string]any{"type": "array", "items": map[string]any{
-			"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}},
+	plain := config.InputSchemaMap{
+		"redis_users": {Type: "array", Items: &config.InputSchema{
+			Type:       "object",
+			Properties: config.InputSchemaMap{"name": {Type: "string"}},
 		}},
-	}}
-	for label, schema := range map[string]map[string]any{"no-secrets": plain, "no-schema": nil} {
+	}
+	for label, schema := range map[string]config.InputSchemaMap{"no-secrets": plain, "no-schema": nil} {
 		h := revealHandler(redisUsersState("alice"), schema,
 			&fakeVaultReader{}, fakeIncScoper{unrestricted: true}, &fakeAuditWriter{})
 

@@ -14,9 +14,8 @@ input:
     additional_properties:
       type: object
       properties:
-        acl:   { type: string }
-        state: { type: string, enum: [on, off] }
-      required: [acl, state]
+        acl: { type: string, required: true }
+        state: { type: string, enum: [on, off], required: true }
 
   redis_config:
     type: object

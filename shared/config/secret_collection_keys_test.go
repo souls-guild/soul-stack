@@ -9,32 +9,27 @@ import (
 
 // usersSchema is the wb-service-redis shape: a collection whose elements each carry
 // a `password` declared `type: secret` and addressed by the `name` sibling.
-func usersSchema() map[string]any {
-	return map[string]any{
-		"properties": map[string]any{
-			"redis_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"perms":    map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name"},
-					},
-				},
-			},
-			// Same shape, no `type: secret` anywhere in it: a repeated `name` here
-			// derives no path and must stay quiet.
-			"plain_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"name": map[string]any{"type": "string"}},
-				},
-			},
-			"admin_password": map[string]any{"type": "secret"},
-		},
-	}
+func usersSchema(t *testing.T) InputSchemaMap {
+	t.Helper()
+	return stateSchema(t, `
+redis_users:
+  type: array
+  items:
+    type: object
+    properties:
+      name:     { type: string }
+      perms:    { type: string }
+      password: { type: secret, key: name }
+# Same shape, no declared secret anywhere in it: a repeated name here derives no
+# path and must stay quiet.
+plain_users:
+  type: array
+  items:
+    type: object
+    properties:
+      name: { type: string }
+admin_password: { type: secret }
+`)
 }
 
 func captureTask(field string, value any) Task {
@@ -48,7 +43,7 @@ func captureTask(field string, value any) Task {
 // whole diagnostic an author reads: the code the gate matches on, and a message and
 // path that name the SECOND element and the one it collides with.
 func TestScanDuplicateSecretKeys(t *testing.T) {
-	got := ScanDuplicateSecretKeys("scenario/update_users/main.yml", usersSchema(), []Task{captureTask("redis_users", []any{
+	got := ScanDuplicateSecretKeys("scenario/update_users/main.yml", usersSchema(t), []Task{captureTask("redis_users", []any{
 		map[string]any{"name": "alice", "perms": "+@read"},
 		map[string]any{"name": "bob", "perms": "+@read"},
 		map[string]any{"name": "alice", "perms": "+@write"},
@@ -131,7 +126,7 @@ func TestScanDuplicateSecretKeysQuiet(t *testing.T) {
 	}
 	for name, tasks := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := ScanDuplicateSecretKeys("main.yml", usersSchema(), tasks); len(got) != 0 {
+			if got := ScanDuplicateSecretKeys("main.yml", usersSchema(t), tasks); len(got) != 0 {
 				t.Fatalf("diagnostics = %+v, want none", got)
 			}
 		})
@@ -140,7 +135,7 @@ func TestScanDuplicateSecretKeysQuiet(t *testing.T) {
 
 // A capture inside a `block:` writes the same field through the same module.
 func TestScanDuplicateSecretKeysBlock(t *testing.T) {
-	got := ScanDuplicateSecretKeys("main.yml", usersSchema(), []Task{{
+	got := ScanDuplicateSecretKeys("main.yml", usersSchema(t), []Task{{
 		Name: "guarded",
 		Block: &BlockTask{Block: []Task{captureTask("redis_users", []any{
 			map[string]any{"name": "alice"},
@@ -159,22 +154,17 @@ func TestScanDuplicateSecretKeysBlock(t *testing.T) {
 // element's identity: two secrets of one element may be addressed by DIFFERENT
 // siblings, and then the same text is legitimately a key twice.
 func TestScanDuplicateSecretKeysPerDeclaredSecret(t *testing.T) {
-	schema := map[string]any{
-		"properties": map[string]any{
-			"accounts": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"name":     map[string]any{"type": "string"},
-						"alias":    map[string]any{"type": "string"},
-						"password": map[string]any{"type": "secret", "key": "name"},
-						"token":    map[string]any{"type": "secret", "key": "alias"},
-					},
-				},
-			},
-		},
-	}
+	schema := stateSchema(t, `
+accounts:
+  type: array
+  items:
+    type: object
+    properties:
+      name:     { type: string }
+      alias:    { type: string }
+      password: { type: secret, key: name }
+      token:    { type: secret, key: alias }
+`)
 	got := ScanDuplicateSecretKeys("main.yml", schema, []Task{captureTask("accounts", []any{
 		map[string]any{"name": "alice", "alias": "ops"},
 		map[string]any{"name": "ops", "alias": "alice"},

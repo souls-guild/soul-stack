@@ -54,9 +54,7 @@ func stagedServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: staged-render proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/failover/main.yml", `name: failover
 description: probe role (passage 0) then act on master (passage 1)
@@ -310,9 +308,7 @@ func stagedExpandingServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: staged-render expanding-passage proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/expand/main.yml", `name: expand
 description: probe role (p0) then fan-out loop on live hosts (p1 expands to N tasks)
@@ -685,9 +681,7 @@ func staged3PassageServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: staged-render 3-passage proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/restart/main.yml", `name: restart
 description: probe role (p0) → failover on master (p1) → re-probe role_after (p1) → act on new master (p2)
@@ -1002,9 +996,7 @@ func TestIntegration_RunOnceStaged(t *testing.T) {
 	}
 	write("service.yml", `state_schema_version: 1
 description: run_once+staged service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/runoncestaged/main.yml", `name: runoncestaged
 description: probe role then run_once-act on master (staged + run_once)
@@ -1207,9 +1199,7 @@ func multiTaskPassage0ServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: multi-task passage-0 proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/failover/main.yml", `name: failover
 description: probe X (p0) + noop (p0) → act where X (p1)
@@ -1406,9 +1396,7 @@ func perHostWhereServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: per-host where in same passage proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	// Passage 0 carries #0 (host-A-only prep, where on the STABLE fact
 	// soulprint.self.covens — coven 'box-a' only on host-a) + #1 (probe role,

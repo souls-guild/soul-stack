@@ -34,13 +34,24 @@ type ServiceManifest struct {
 	// `migrations/` (chain validation is out of scope for MVP, M1.5).
 	StateSchemaVersion int `yaml:"state_schema_version"`
 
-	// StateSchema is kept as a flat `map[string]any` (PM decision): JSON Schema
-	// draft-07 is a large standard, full Go typing is separate work. MVP validate
-	// (see validateStateSchema) checks the minimum: `type: object` on root,
-	// `required` as []string, `properties` as map<string, recursive>. Extended
-	// JSON-Schema validation (`enum`/`pattern`/`min`/`max`/`items`) is a separate
-	// backlog item.
-	StateSchema map[string]any `yaml:"state_schema"`
+	// StateSchema is the contract for `incarnation.state`, written in the SAME
+	// dialect as a scenario's `input:` — hence the same Go type ([NIM-740]).
+	//
+	// It used to be a JSON-Schema subset in a flat `map[string]any`, which meant a
+	// service described one shape three ways: `input:` per field, `types.yml` with
+	// a `required:` list, `state_schema` in JSON Schema. Nothing compared the three,
+	// and they had already drifted — `AclUser.state` carries a `default` and is
+	// optional on the form while the same accounts were listed
+	// `required: [name, perms, state]` here. One dialect leaves nothing to drift.
+	//
+	// So the root is a map of state field → schema: no `type: object` above it, no
+	// `required:` list, no `properties:` wrapper. Those three are refused by name and
+	// address rather than ignored (see validateStateSchema) — they mean something
+	// today, and reading them silently as field names would give a schema different
+	// from the one written. Two things are true here and nowhere else: `type: secret`
+	// (the declared secret, [ADR-0083] §1) and a `$type` reference that ADDS its own
+	// properties on top of the named type.
+	StateSchema InputSchemaMap `yaml:"state_schema"`
 
 	Destiny []DependencyRef `yaml:"destiny,omitempty"`
 	Modules []DependencyRef `yaml:"modules,omitempty"`
@@ -297,11 +308,11 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     "missing_required_field",
 			Message:  "state_schema is required at top-level",
-			Hint:     "declare state_schema: { type: object, properties: {...} } — see docs/service/manifest.md → state_schema",
+			Hint:     "declare state_schema: { <field>: { type: … }, … } — see docs/service/manifest.md → state_schema",
 			YAMLPath: "$.state_schema",
 		})
 	} else {
-		out = append(out, validateStateSchema(root, findInputMapping(root, "state_schema"), "$.state_schema")...)
+		out = append(out, validateStateSchema(root, findInputMapping(root, "state_schema"), "$.state_schema", m.StateSchema)...)
 		out = append(out, validateSecretFields(root, m.StateSchema, "$.state_schema")...)
 	}
 
@@ -482,71 +493,89 @@ func nameHint(listKey string) string {
 	return "kebab-case: lowercase letters, digits, dashes; must start with letter"
 }
 
-// validateStateSchema — MVP JSON Schema validation at the `state_schema:` root.
+// StateSchemaLegacyFormCode — a `state_schema:` root still written in the JSON-Schema
+// form the input dialect replaced ([ADR-0086] §11).
+const StateSchemaLegacyFormCode = "state_schema_legacy_json_schema_form"
+
+// stateSchemaLegacyRootKeys — the three JSON-Schema keys the root no longer takes,
+// each with what the author writes instead. They are RESERVED at the root, not
+// merely obsolete: under the new dialect a root key is a state field NAME, so a
+// `type: object` left in place would read as a field called `type`, `required: [a,
+// b]` as a field called `required`, and `properties:` as a field called
+// `properties` holding the real ones one level too deep. Every one of those is a
+// schema DIFFERENT from the one the author is looking at, which is why they are
+// refused by name and address instead of being quietly re-read (a service cannot
+// have a state field named any of the three; that is the price, and it is stated).
+var stateSchemaLegacyRootKeys = map[string]string{
+	"type": "drop it — the root is a map of state field → schema, and `incarnation.state` is an object by construction",
+	"required": "drop the list and mark each field itself: `<field>: { type: …, required: true }`" +
+		" — the same spelling `input:` uses",
+	"properties": "drop the wrapper — the fields go straight under state_schema:",
+}
+
+// validateStateSchema validates the `state_schema:` block as the INPUT DIALECT
+// ([NIM-740]): the root is a map of state field → schema, exactly as a scenario's
+// `input:` is a map of parameter → schema. The differences the state dialect adds
+// (`type: secret`, `key:`/`label:`, a `$type` reference that adds properties) live
+// in [schemaDialect]; everything else is the one shared grammar.
 //
-// Checks the minimum that guarantees correct runtime validation of
-// `incarnation.state` by Keeper:
-//   - the root must be a mapping with `type: object` (an object is the only
-//     valid form for top-level state);
-//   - `required` (if present) — an array of strings;
-//   - `properties` (if present) — map<string, mapping>; recurse into each nested
-//     schema by the same rules, but without a mandatory `type: object` (nested
-//     schemas may be of any type).
+// Before that, the three keys of the JSON-Schema form the dialect replaced are
+// refused where they are written (see [stateSchemaLegacyRootKeys]) and then left
+// out of the dialect walk, so a manifest that has not migrated gets one clear
+// diagnostic per key rather than three obscure ones about malformed fields.
 //
-// Extended JSON Schema (`enum`/`pattern`/`min`/`max`/`items`/
-// `additionalProperties`, etc.) is deliberately NOT typed in MVP — it's a large
-// draft-07 standard. We catch a malformed schema but don't validate the
-// semantics of each key (PM decision).
-func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+// `m` is the decoded block, `node` its AST mapping (nil when the value is not a
+// mapping at all).
+func validateStateSchema(root *ast.MappingNode, node *ast.MappingNode, pathPrefix string, m InputSchemaMap) []diag.Diagnostic {
 	if node == nil {
 		// The key is present in YAML, but the value is not a mapping
 		// (null/scalar/sequence). goccy won't raise a decode error for null →
-		// map[string]any (just yields nil), so a diagnostic is needed here. For
+		// InputSchemaMap (just yields nil), so a diagnostic is needed here. For
 		// scalar/sequence the generic `type_mismatch` was already emitted by the
 		// decode phase; but an explicit diagnostic reads better here too.
 		return []diag.Diagnostic{atPath(root, pathPrefix, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "state_schema_root_not_object",
-			Message: "state_schema must be a mapping with type: object on root",
-			Hint:    "declare state_schema: { type: object, properties: {...} }",
+			Message: "state_schema must be a mapping of state field → schema",
+			Hint:    "declare state_schema: { <field>: { type: … }, … }",
 		})}
 	}
 	var out []diag.Diagnostic
 
-	// At the root level `type: object` is mandatory (incarnation.state is always
-	// an object). At nested levels type may be any valid JSON Schema type.
-	tn := findScalarValue(node, "type")
-	if tn == nil {
-		out = append(out, diagAt(node.GetToken().Position.Line, node.GetToken().Position.Column, diag.Diagnostic{
-			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "state_schema_root_not_object",
-			Message:  "state_schema must declare type: object on root",
-			Hint:     "incarnation.state is always an object; nested schemas may use other types",
-			YAMLPath: pathPrefix + ".type",
-		}))
-	} else if t, ok := tn.(*ast.StringNode); !ok || t.Value != "object" {
-		actual := "<non-string>"
-		if t, ok := tn.(*ast.StringNode); ok {
-			actual = t.Value
+	legacy := map[string]bool{}
+	for _, kv := range node.Values {
+		keyTok := kv.Key.GetToken()
+		if keyTok == nil {
+			continue
 		}
-		out = append(out, diagAt(tn.GetToken().Position.Line, tn.GetToken().Position.Column, diag.Diagnostic{
+		hint, isLegacy := stateSchemaLegacyRootKeys[keyTok.Value]
+		if !isLegacy {
+			continue
+		}
+		legacy[keyTok.Value] = true
+		out = append(out, diagAt(keyTok.Position.Line, keyTok.Position.Column, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-			Code:     "state_schema_root_not_object",
-			Message:  fmt.Sprintf("state_schema.type must be \"object\" on root, got %q", actual),
-			Hint:     "incarnation.state is always an object",
-			YAMLPath: pathPrefix + ".type",
+			Code:     StateSchemaLegacyFormCode,
+			Message:  fmt.Sprintf("state_schema no longer takes %q at its root — it is written in the same dialect as a scenario's input:", keyTok.Value),
+			Hint:     hint,
+			YAMLPath: pathPrefix + "." + keyTok.Value,
 		}))
 	}
 
-	out = append(out, validateJSONSchemaNode(node, pathPrefix)...)
-	return out
+	return append(out, validateInputSchemaMap(m, node, pathPrefix, dialectState, legacy)...)
 }
 
 // validateSecretFields turns the refusals of [CollectSecretFields] into positional
 // diagnostics ([ADR-0083] §1). The rules themselves live there, in a pure function over
 // the decoded schema, because keeper resolves the same declarations at runtime — reveal
 // and `core.state.*` — and a second implementation would drift from this one.
-func validateSecretFields(root *ast.MappingNode, schema map[string]any, pathPrefix string) []diag.Diagnostic {
+//
+// A declaration sitting under an unresolved `$type` is NOT judged here: the element
+// shape lives in types.yml, which this package never reads, and half a schema would
+// refuse every correct use of a shared type. Those are validated once the references
+// are resolved — [ValidateStateSchemaSecrets], called by whoever did the resolving
+// (keeper's artifact loader, soul-lint's service pass).
+func validateSecretFields(root *ast.MappingNode, schema InputSchemaMap, pathPrefix string) []diag.Diagnostic {
 	_, issues := CollectSecretFields(schema)
 	out := make([]diag.Diagnostic, 0, len(issues))
 	for _, iss := range issues {
@@ -560,115 +589,43 @@ func validateSecretFields(root *ast.MappingNode, schema map[string]any, pathPref
 	return out
 }
 
-// validateJSONSchemaNode — recursive structural check of one JSON Schema node.
-// The `state_schema` root needs no special handling: `type: object` is already
-// checked by validateStateSchema, and validation of
-// `required`/`properties`/`items`/`additionalProperties` is symmetric at all levels.
-func validateJSONSchemaNode(node *ast.MappingNode, path string) []diag.Diagnostic {
-	if node == nil {
-		return nil
+// ValidateStateSchemaSecrets reports the refusals a declared secret could not be
+// judged for until its `$type` reference was resolved.
+//
+// The two halves of validating a declared secret happen at different times. Everything
+// written inline is judged at load, positionally, by validateSecretFields. Everything
+// reaching through `$type` cannot be: the element shape is in a file `shared/config`
+// never reads. So the caller that resolved the references runs this afterwards.
+//
+// `before` is the schema as parsed, `after` the same schema resolved. An issue the
+// parsed schema already produced was reported at load WITH a line and a column, so it
+// is dropped here: one mistake is one diagnostic, and the positional copy is the better
+// of the two. Only what the resolve made visible survives.
+//
+// What survives carries a YAML path but no line — the resolved schema is a value, not a
+// document. The path names the declaration, which is what the author needs; the file is
+// the caller's to stamp.
+func ValidateStateSchemaSecrets(before, after InputSchemaMap) []diag.Diagnostic {
+	_, already := CollectSecretFields(before)
+	reported := make(map[string]bool, len(already))
+	for _, iss := range already {
+		reported[iss.Code+"\x00"+iss.Path] = true
 	}
-	var out []diag.Diagnostic
 
-	// required: must be a sequence of strings (if the key is present).
-	reqKV := findKV(node, "required")
-	if reqKV != nil {
-		seq, ok := reqKV.Value.(*ast.SequenceNode)
-		if !ok {
-			tok := reqKV.Value.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "state_schema_invalid",
-				Message:  "required must be an array of strings",
-				YAMLPath: path + ".required",
-			}))
-		} else {
-			for i, item := range seq.Values {
-				if _, isStr := item.(*ast.StringNode); !isStr {
-					tok := item.GetToken()
-					out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-						Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-						Code:     "state_schema_invalid",
-						Message:  fmt.Sprintf("required[%d] must be a string", i),
-						YAMLPath: fmt.Sprintf("%s.required[%d]", path, i),
-					}))
-				}
-			}
+	_, issues := CollectSecretFields(after)
+	out := make([]diag.Diagnostic, 0, len(issues))
+	for _, iss := range issues {
+		if reported[iss.Code+"\x00"+iss.Path] {
+			continue
 		}
+		out = append(out, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     iss.Code,
+			Message:  iss.Message,
+			Hint:     iss.Hint,
+			YAMLPath: "$.state_schema" + iss.Path,
+		})
 	}
-
-	// properties: map<string, mapping>; recurse into each nested schema.
-	propsKV := findKV(node, "properties")
-	if propsKV != nil {
-		propsNode, ok := propsKV.Value.(*ast.MappingNode)
-		if !ok {
-			tok := propsKV.Value.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "state_schema_invalid",
-				Message:  "properties must be a mapping of name → schema",
-				YAMLPath: path + ".properties",
-			}))
-		} else {
-			for _, kv := range propsNode.Values {
-				keyTok := kv.Key.GetToken()
-				if keyTok == nil {
-					continue
-				}
-				subPath := path + ".properties." + keyTok.Value
-				subMap, isMap := kv.Value.(*ast.MappingNode)
-				if !isMap {
-					tok := kv.Value.GetToken()
-					out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-						Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-						Code:     "state_schema_invalid",
-						Message:  fmt.Sprintf("property %q must be a schema (mapping)", keyTok.Value),
-						YAMLPath: subPath,
-					}))
-					continue
-				}
-				out = append(out, validateJSONSchemaNode(subMap, subPath)...)
-			}
-		}
-	}
-
-	// items: recursion — appears in nested schemas with type=array. Only a
-	// mapping (nested schema) is allowed; scalar / sequence is invalid.
-	itemsKV := findKV(node, "items")
-	if itemsKV != nil {
-		if subMap, ok := itemsKV.Value.(*ast.MappingNode); ok {
-			out = append(out, validateJSONSchemaNode(subMap, path+".items")...)
-		} else {
-			tok := itemsKV.Value.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "state_schema_invalid",
-				Message:  "items must be a schema (mapping)",
-				YAMLPath: path + ".items",
-			}))
-		}
-	}
-
-	// additionalProperties: schema branch → recursion; a bool branch is valid on
-	// its own (true/false per JSON Schema draft-07); other values are invalid.
-	apKV := findKV(node, "additionalProperties")
-	if apKV != nil {
-		switch v := apKV.Value.(type) {
-		case *ast.MappingNode:
-			out = append(out, validateJSONSchemaNode(v, path+".additionalProperties")...)
-		case *ast.BoolNode:
-			// valid, needs no recursion
-		default:
-			tok := apKV.Value.GetToken()
-			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:     "state_schema_invalid",
-				Message:  "additionalProperties must be a boolean or a schema (mapping)",
-				YAMLPath: path + ".additionalProperties",
-			}))
-		}
-	}
-
 	return out
 }
 

@@ -60,9 +60,7 @@ func serialStagedServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: serial+staged 2D proof service
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/restart/main.yml", `name: restart
 description: probe role (p0, no serial) then rolling serial:1 act on replicas (p1)

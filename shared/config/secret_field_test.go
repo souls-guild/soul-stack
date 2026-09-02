@@ -5,48 +5,57 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goccy/go-yaml"
+
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
+// stateSchema parses a `state_schema:` body written in the input dialect ([NIM-740]).
+// The tests build their fixtures through the real decode rather than by hand: the
+// keys with a meaning the struct cannot express — `required` as a bool versus a list,
+// `$type` — are resolved in UnmarshalYAML, so a hand-built InputSchema would be a
+// shape the parser never produces.
+func stateSchema(t *testing.T, src string) InputSchemaMap {
+	t.Helper()
+	var m InputSchemaMap
+	if err := yaml.Unmarshal([]byte(src), &m); err != nil {
+		t.Fatalf("state_schema fixture does not parse: %v\n%s", err, src)
+	}
+	return m
+}
+
 // redisStateSchema — the collection shape wb-service-redis actually declares
 // ([ADR-0083] §1): one secret per element of a top-level array, addressed by a sibling.
-func redisStateSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"redis_users": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type":                 "object",
-					"additionalProperties": false,
-					"required":             []any{"name", "perms", "state"},
-					"properties": map[string]any{
-						"name":  map[string]any{"type": "string"},
-						"perms": map[string]any{"type": "string"},
-						"state": map[string]any{"type": "string", "enum": []any{"on", "off"}},
-						"password": map[string]any{
-							"type":  "secret",
-							"key":   "name",
-							"label": "Redis user password",
-						},
-					},
-				},
-			},
-		},
-	}
+func redisStateSchema(t *testing.T) InputSchemaMap {
+	t.Helper()
+	return stateSchema(t, `
+redis_users:
+  type: array
+  items:
+    type: object
+    additional_properties: false
+    properties:
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
+      state: { type: string, enum: [on, off], required: true }
+      password:
+        type: secret
+        key: name
+        label: Redis user password
+`)
 }
 
 // TestCollectSecretFields_Collection — the redis shape yields one field, and the path is
 // derived from (service, incarnation, state field, key) with nothing authored.
 func TestCollectSecretFields_Collection(t *testing.T) {
-	fields, issues := CollectSecretFields(redisStateSchema())
+	fields, issues := CollectSecretFields(redisStateSchema(t))
 	if len(issues) != 0 {
 		t.Fatalf("issues on a valid declaration: %+v", issues)
 	}
 	want := SecretField{
 		State: "redis_users", Property: "password", Key: "name",
 		Label: "Redis user password",
-		Path:  ".properties.redis_users.items.properties.password",
+		Path:  ".redis_users.items.properties.password",
 	}
 	if len(fields) != 1 || !reflect.DeepEqual(fields[0], want) {
 		t.Fatalf("fields = %+v, want exactly [%+v]", fields, want)
@@ -71,12 +80,9 @@ func TestCollectSecretFields_Collection(t *testing.T) {
 // a 3-segment path with the `value` field ([ADR-0083] §1, closing ADR-070's deferred
 // "singleton secrets without enumerate").
 func TestCollectSecretFields_Scalar(t *testing.T) {
-	fields, issues := CollectSecretFields(map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"admin_password": map[string]any{"type": "secret"},
-		},
-	})
+	fields, issues := CollectSecretFields(stateSchema(t, `
+admin_password: { type: secret }
+`))
 	if len(issues) != 0 {
 		t.Fatalf("issues on a valid scalar declaration: %+v", issues)
 	}
@@ -104,37 +110,36 @@ func TestCollectSecretFields_Scalar(t *testing.T) {
 // `incarnation.state` and no mask covers it.
 func TestCollectSecretFields_UnsupportedLocation(t *testing.T) {
 	cases := []struct {
-		name   string
-		schema map[string]any
+		name string
+		src  string
 	}{
-		{"nested object", map[string]any{"properties": map[string]any{
-			"tls": map[string]any{"type": "object", "properties": map[string]any{
-				"key": map[string]any{"type": "secret"},
-			}},
-		}}},
-		{"array of arrays", map[string]any{"properties": map[string]any{
-			"matrix": map[string]any{"type": "array", "items": map[string]any{
-				"type": "array", "items": map[string]any{"type": "secret"},
-			}},
-		}}},
-		{"under additionalProperties", map[string]any{"properties": map[string]any{
-			"users": map[string]any{"type": "object", "additionalProperties": map[string]any{
-				"type": "secret",
-			}},
-		}}},
-		{"the array element itself", map[string]any{"properties": map[string]any{
-			"tokens": map[string]any{"type": "array", "items": map[string]any{"type": "secret"}},
-		}}},
-		{"inside a combinator", map[string]any{"properties": map[string]any{
-			"either": map[string]any{"oneOf": []any{
-				map[string]any{"type": "string"},
-				map[string]any{"type": "secret"},
-			}},
-		}}},
+		{"nested object", `
+tls:
+  type: object
+  properties:
+    key: { type: secret }
+`},
+		{"array of arrays", `
+matrix:
+  type: array
+  items:
+    type: array
+    items: { type: secret }
+`},
+		{"under additional_properties", `
+users:
+  type: object
+  additional_properties: { type: secret }
+`},
+		{"the array element itself", `
+tokens:
+  type: array
+  items: { type: secret }
+`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fields, issues := CollectSecretFields(c.schema)
+			fields, issues := CollectSecretFields(stateSchema(t, c.src))
 			if len(fields) != 0 {
 				t.Errorf("collected %+v from an unsupported location", fields)
 			}
@@ -148,34 +153,33 @@ func TestCollectSecretFields_UnsupportedLocation(t *testing.T) {
 // TestCollectSecretFields_KeyRules — `key:` addresses one element, so it must name a
 // sibling string property; every other spelling fails closed.
 func TestCollectSecretFields_KeyRules(t *testing.T) {
-	withKey := func(secret map[string]any) map[string]any {
-		return map[string]any{"properties": map[string]any{
-			"redis_users": map[string]any{"type": "array", "items": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name":     map[string]any{"type": "string"},
-					"perms":    map[string]any{"type": "object"},
-					"password": secret,
-				},
-			}},
-		}}
+	withKey := func(secret string) string {
+		return `
+redis_users:
+  type: array
+  items:
+    type: object
+    properties:
+      name:  { type: string }
+      perms: { type: object, additional_properties: true }
+      password: ` + secret + `
+`
 	}
 	cases := []struct {
-		name   string
-		schema map[string]any
-		code   string
+		name string
+		src  string
+		code string
 	}{
-		{"absent", withKey(map[string]any{"type": "secret"}), "secret_field_key_required"},
-		{"not a string", withKey(map[string]any{"type": "secret", "key": 7}), "secret_field_key_invalid"},
-		{"names no sibling", withKey(map[string]any{"type": "secret", "key": "uid"}), "secret_field_key_unknown"},
-		{"sibling is not a string", withKey(map[string]any{"type": "secret", "key": "perms"}), "secret_field_key_not_string"},
-		{"on a scalar", map[string]any{"properties": map[string]any{
-			"admin_password": map[string]any{"type": "secret", "key": "name"},
-		}}, "secret_field_key_on_scalar"},
+		{"absent", withKey(`{ type: secret }`), "secret_field_key_required"},
+		{"names no sibling", withKey(`{ type: secret, key: uid }`), "secret_field_key_unknown"},
+		{"sibling is not a string", withKey(`{ type: secret, key: perms }`), "secret_field_key_not_string"},
+		{"on a scalar", `
+admin_password: { type: secret, key: name }
+`, "secret_field_key_on_scalar"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			fields, issues := CollectSecretFields(c.schema)
+			fields, issues := CollectSecretFields(stateSchema(t, c.src))
 			if len(fields) != 0 {
 				t.Errorf("collected %+v from a broken key declaration", fields)
 			}
@@ -190,27 +194,35 @@ func TestCollectSecretFields_KeyRules(t *testing.T) {
 // as enforced and is not: the value never passes through state validation, because it is
 // never in state. Rejecting it is the only way the author finds out.
 func TestCollectSecretFields_UnknownKey(t *testing.T) {
-	fields, issues := CollectSecretFields(map[string]any{"properties": map[string]any{
-		"admin_password": map[string]any{"type": "secret", "minLength": 40, "pattern": "^x"},
-	}})
+	fields, issues := CollectSecretFields(stateSchema(t, `
+admin_password: { type: secret, min_length: 40, pattern: "^x" }
+`))
 	if len(fields) != 0 {
 		t.Errorf("collected %+v despite an unknown key", fields)
 	}
 	if !hasIssue(issues, "secret_field_unknown_key") {
 		t.Fatalf("issues = %+v, want secret_field_unknown_key", issues)
 	}
-	// Offenders are listed in sorted order — identical input must produce identical text.
-	if got := issueMessage(issues, "secret_field_unknown_key"); !strings.Contains(got, "minLength, pattern") {
-		t.Errorf("message = %q, want the offenders sorted as \"minLength, pattern\"", got)
+	// Offenders are listed in a fixed order — identical input must produce identical text.
+	if got := issueMessage(issues, "secret_field_unknown_key"); !strings.Contains(got, "min_length, pattern") {
+		t.Errorf("message = %q, want the offenders in order as \"min_length, pattern\"", got)
 	}
 }
 
 // TestCollectSecretFields_RequiredRejected — `required` naming a secret can never be
 // satisfied: the value is in Vault, so it is absent from every state instance.
 func TestCollectSecretFields_RequiredRejected(t *testing.T) {
-	schema := redisStateSchema()
-	items := schema["properties"].(map[string]any)["redis_users"].(map[string]any)["items"].(map[string]any)
-	items["required"] = []any{"name", "perms", "state", "password"}
+	schema := stateSchema(t, `
+redis_users:
+  type: array
+  items:
+    type: object
+    properties:
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
+      state: { type: string, required: true }
+      password: { type: secret, key: name, required: true }
+`)
 
 	fields, issues := CollectSecretFields(schema)
 	if len(fields) != 0 {
@@ -225,12 +237,12 @@ func TestCollectSecretFields_RequiredRejected(t *testing.T) {
 // is DATA that happens to look like a declaration. Scanning it would reject a legal
 // schema, so the data-bearing keys are skipped.
 func TestCollectSecretFields_DataSubtreesNotScanned(t *testing.T) {
-	fields, issues := CollectSecretFields(map[string]any{"properties": map[string]any{
-		"policy": map[string]any{
-			"type":    "object",
-			"default": map[string]any{"type": "secret"},
-		},
-	}})
+	fields, issues := CollectSecretFields(stateSchema(t, `
+policy:
+  type: object
+  additional_properties: true
+  default: { type: secret }
+`))
 	if len(fields) != 0 || len(issues) != 0 {
 		t.Fatalf("fields = %+v, issues = %+v, want both empty", fields, issues)
 	}
@@ -268,11 +280,14 @@ func TestSecretField_VaultPathFailsClosed(t *testing.T) {
 // TestCollectSecretFields_Deterministic — identical input must produce byte-identical
 // output; the walk sorts every map it iterates.
 func TestCollectSecretFields_Deterministic(t *testing.T) {
-	schema := map[string]any{"properties": map[string]any{
-		"b_secret": map[string]any{"type": "secret"},
-		"a_secret": map[string]any{"type": "secret"},
-		"nested":   map[string]any{"type": "object", "properties": map[string]any{"z": map[string]any{"type": "secret"}}},
-	}}
+	schema := stateSchema(t, `
+b_secret: { type: secret }
+a_secret: { type: secret }
+nested:
+  type: object
+  properties:
+    z: { type: secret }
+`)
 	first, firstIssues := CollectSecretFields(schema)
 	for i := 0; i < 20; i++ {
 		got, gotIssues := CollectSecretFields(schema)
@@ -291,16 +306,14 @@ func TestCollectSecretFields_Deterministic(t *testing.T) {
 func TestServiceManifest_SecretFieldDiagnosticIsPositional(t *testing.T) {
 	src := `state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    redis_users:
-      type: array
-      items:
-        type: object
-        properties:
-          name: { type: string }
-          password:
-            type: secret
+  redis_users:
+    type: array
+    items:
+      type: object
+      properties:
+        name: { type: string }
+        password:
+          type: secret
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	var found *diag.Diagnostic
@@ -317,7 +330,7 @@ state_schema:
 	if found.Line == 0 {
 		t.Errorf("diagnostic carries no line: %+v", *found)
 	}
-	if want := "$.state_schema.properties.redis_users.items.properties.password"; found.YAMLPath != want {
+	if want := "$.state_schema.redis_users.items.properties.password"; found.YAMLPath != want {
 		t.Errorf("YAMLPath = %q, want %q", found.YAMLPath, want)
 	}
 }
@@ -327,22 +340,19 @@ state_schema:
 func TestServiceManifest_ValidSecretFieldLoadsClean(t *testing.T) {
 	src := `state_schema_version: 1
 state_schema:
-  type: object
-  properties:
-    redis_users:
-      type: array
-      items:
-        type: object
-        additionalProperties: false
-        required: [name, perms, state]
-        properties:
-          name: { type: string }
-          perms: { type: string }
-          state: { type: string, enum: [on, off] }
-          password:
-            type: secret
-            key: name
-            label: "Redis user password"
+  redis_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        perms: { type: string, required: true }
+        state: { type: string, enum: [on, off], required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
 `
 	cfg, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
@@ -373,28 +383,22 @@ func issueMessage(issues []SecretFieldIssue, code string) string {
 	return ""
 }
 
-// The skip set names JSON Schema keywords. Under a `properties` bag the keys are field
-// names the author chose, so a field named `default` used to take its whole subtree out
-// of the walk — and the walk is what makes a refusal loud. A declaration the deriver
-// cannot support came back as "no secrets here": no field, no diagnostic, and a
-// plaintext value in incarnation.state, which is the one answer this function's
-// contract says it must never give by accident.
+// A state field may be NAMED like a schema keyword. When the schema was a raw map the
+// walk had to guess from the spelling, and a field called `default` took its whole
+// subtree out of the scan — so a declaration the deriver cannot support came back as
+// "no secrets here": no field, no diagnostic, and a plaintext value in
+// incarnation.state, the one answer this function's contract says it must never give by
+// accident. Typed, position decides and spelling cannot lie.
 func TestCollectSecretFields_FieldNamedLikeASchemaKeyword(t *testing.T) {
 	for _, name := range []string{"default", "const", "enum", "examples"} {
-		schema := map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				name: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"nested": map[string]any{
-							"type":       "object",
-							"properties": map[string]any{"pw": map[string]any{"type": SecretTypeName}},
-						},
-					},
-				},
-			},
-		}
+		schema := stateSchema(t, name+`:
+  type: object
+  properties:
+    nested:
+      type: object
+      properties:
+        pw: { type: secret }
+`)
 		fields, issues := CollectSecretFields(schema)
 		if len(fields) != 0 {
 			t.Fatalf("%s: fields = %+v, want none -- the position is not one the path is derived from", name, fields)
@@ -403,15 +407,12 @@ func TestCollectSecretFields_FieldNamedLikeASchemaKeyword(t *testing.T) {
 			t.Errorf("%s: issues = %v, want the refusal to be loud", name, issues)
 		}
 	}
-	// The keyword itself is still skipped where it IS a keyword: a `default:` holding a
-	// value shaped like a declaration is data, and scanning it would reject a legal schema.
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"mode": map[string]any{"type": "string", "default": map[string]any{"type": SecretTypeName}},
-		},
-	}
-	fields, issues := CollectSecretFields(schema)
+	// A `default:` holding a value shaped like a declaration is DATA. It decodes into
+	// an `any` that can never be an InputSchema, so the walk cannot reach it at all —
+	// what the old skip set approximated, the type now guarantees.
+	fields, issues := CollectSecretFields(stateSchema(t, `
+mode: { type: string, default: "x" }
+`))
 	if len(fields) != 0 || len(issues) != 0 {
 		t.Errorf("fields=%+v issues=%v, want a default: subtree treated as data", fields, issues)
 	}
@@ -467,7 +468,7 @@ func TestStripDeclaredSecrets_Shapes(t *testing.T) {
 	}
 	for name, build := range cases {
 		state := map[string]any{"redis_users": build()}
-		StripDeclaredSecrets(state, redisStateSchema())
+		StripDeclaredSecrets(state, redisStateSchema(t))
 		for _, elem := range collectionElements(state["redis_users"]) {
 			if _, still := elem["password"]; still {
 				t.Errorf("%s: password survived the strip: %+v", name, elem)
@@ -484,13 +485,10 @@ func TestStripDeclaredSecrets_Shapes(t *testing.T) {
 
 // A scalar declaration takes the whole property out, not a sub-key.
 func TestStripDeclaredSecrets_Scalar(t *testing.T) {
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"admin_password": map[string]any{"type": SecretTypeName},
-			"port":           map[string]any{"type": "integer"},
-		},
-	}
+	schema := stateSchema(t, `
+admin_password: { type: secret }
+port:           { type: integer }
+`)
 	state := map[string]any{"admin_password": "hunter2", "port": 6379}
 	StripDeclaredSecrets(state, schema)
 	if _, still := state["admin_password"]; still {

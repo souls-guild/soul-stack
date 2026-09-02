@@ -13,12 +13,12 @@ types:
   MongoUser:
     type: object
     additional_properties: false
-    required: [name, roles]
     properties:
       # MongoDB username. lowercase identifier (convention; mongo names are case-
       # sensitive, but lowercase is a simple consistent rule, same as redis AclUser).
       name:
         type: string
+        required: true
         pattern: "^[a-z][a-z0-9_-]*$"
         description: >-
           MongoDB username (unique within the users array). Created via
@@ -41,13 +41,14 @@ types:
       # enforced by mongod on createUser.
       roles:
         type: array
+        required: true
         items:
           type: object
           additional_properties: false
-          required: [role]
           properties:
             role:
               type: string
+              required: true
               pattern: "^[A-Za-z][A-Za-z0-9_]*$"
               description: >-
                 MongoDB role name (built-in: read/readWrite/dbAdmin/clusterAdmin/

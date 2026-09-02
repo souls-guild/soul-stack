@@ -67,9 +67,7 @@ func destroyServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: noop service with destroy teardown
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("scenario/destroy/main.yml", `name: destroy
 description: teardown step

@@ -11,6 +11,4 @@ description: >-
 # state_schema_version=1 -> the migrations/ catalog isn't required (ADR-019).
 # The focus scenario doesn't mutate incarnation.state (commit state is a
 # separate invariant, covered by other L3a/L3b tests).
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}

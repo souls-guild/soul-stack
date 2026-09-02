@@ -61,9 +61,7 @@ func stateAssertServiceRepo(t *testing.T) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: pre-flight asserts that read incarnation.state
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}
 `)
 	write("vars/00-base.yaml", "base_marker: default\n")
 

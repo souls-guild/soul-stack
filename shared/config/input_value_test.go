@@ -376,12 +376,13 @@ func aclUsersSchema(t *testing.T) InputSchemaMap {
   required: true
   items:
     type: object
-    required: [name, acl]
     properties:
       name:
+        required: true
         type: string
         pattern: "^[A-Za-z0-9._-]+$"
       acl:
+        required: true
         type: string
 `)
 }

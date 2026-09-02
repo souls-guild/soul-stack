@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
+	yaml "gopkg.in/yaml.v3"
 
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -27,6 +28,14 @@ import (
 // JSON field names match UI API (`ServiceStateSchemaReply`); types are minimal:
 // Schema is stored as `map[string]any` (repeats raw YAML), Migrations is a list
 // of [Migration] sorted by `to` ASC.
+//
+// Schema stays the RAW mapping rather than the manifest's typed
+// [config.InputSchemaMap], the same way the scenario input projection does
+// ([resolveScenarioTypeRefs]): the UI renders the form and does not want the
+// server's opinion about which keys exist. Since [NIM-740] what it carries is the
+// input dialect — a map of state field → schema, with no `type: object` wrapper —
+// and `$type` references are substituted before it goes out, because a UI handed a
+// bare `{$type: AclUser}` can only fail silently.
 type StateSchemaInfo struct {
 	Version    int            `json:"state_schema_version"`
 	Schema     map[string]any `json:"schema,omitempty"`
@@ -56,8 +65,8 @@ var reMigrationFile = regexp.MustCompile(`^(\d{3})_to_(\d{3})\.yml$`)
 //     does NOT re-validate manifest-level validation — error diagnostics mean
 //     broken manifest in repo, error is raised above (caller returns 502).
 //  2. Extracts `state_schema_version` (≥1; ADR-019: monotonic int) and `state_schema:`
-//     (optional; service.yml MAY declare structure via MVP JSON Schema subset —
-//     type/required/properties/items/additionalProperties, see validateStateSchema).
+//     (optional; a map of state field → schema in the input dialect, see
+//     validateStateSchema) as a raw mapping with `$type` resolved — [rawStateSchema].
 //     If field is missing — Schema=nil, omitempty drops it from JSON; UI treats as
 //     "structure not declared".
 //  3. Scans `migrations/` (if directory missing → empty list, no error; parity with
@@ -95,7 +104,7 @@ func ListStateSchema(serviceRoot string, logger *slog.Logger) (*StateSchemaInfo,
 
 	info := &StateSchemaInfo{
 		Version: manifest.StateSchemaVersion,
-		Schema:  manifest.StateSchema,
+		Schema:  rawStateSchema(data, serviceRoot, logger),
 	}
 
 	migrations, err := scanMigrations(serviceRoot, logger)
@@ -104,6 +113,32 @@ func ListStateSchema(serviceRoot string, logger *slog.Logger) (*StateSchemaInfo,
 	}
 	info.Migrations = migrations
 	return info, nil
+}
+
+// rawStateSchema re-reads the `state_schema:` block off the manifest bytes as a raw
+// mapping and resolves its `$type` references against the service's type catalog —
+// the projection the UI Schema explorer gets (see [StateSchemaInfo]).
+//
+// It decodes a second time on purpose. The manifest's own StateSchema is the typed
+// [config.InputSchemaMap], which is what every ENGINE consumer wants and what an
+// operator form does not: marshalling it would put Go field names and every absent
+// key on the wire, and the projection would then be pinned to the struct's shape
+// rather than to the dialect. `data` has already been parsed once and found valid, so
+// this decode is over known-good bytes; a failure here is not fatal — the UI treats
+// an absent schema as "structure not declared", which beats a 502 over a listing.
+func rawStateSchema(data []byte, serviceRoot string, logger *slog.Logger) map[string]any {
+	var raw struct {
+		StateSchema map[string]any `yaml:"state_schema"`
+	}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		logger.Warn("artifact: state_schema projection skipped — invalid YAML",
+			slog.Any("error", err))
+		return nil
+	}
+	if raw.StateSchema == nil {
+		return nil
+	}
+	return resolveScenarioTypeRefs(raw.StateSchema, loadTypeCatalog(serviceRoot, logger))
 }
 
 // scanMigrations reads the `migrations/` directory of snapshot and returns a list

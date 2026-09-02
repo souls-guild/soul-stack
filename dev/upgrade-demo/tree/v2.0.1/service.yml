@@ -8,9 +8,7 @@ description: >-
   status=drift (no host orchestration, the operator finishes with a plain apply).
 
 state_schema:
-  type: object
-  properties:
-    note:
-      type: string
-    schema_v2:
-      type: boolean
+  note:
+    type: string
+  schema_v2:
+    type: boolean

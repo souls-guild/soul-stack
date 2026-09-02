@@ -129,21 +129,15 @@ func TestPathUnderReservedNamespace(t *testing.T) {
 // can be refused.
 func TestCollectSecretFields_RefusesReservedStateField(t *testing.T) {
 	t.Run("collection", func(t *testing.T) {
-		_, issues := CollectSecretFields(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"tls": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"name": map[string]any{"type": "string"},
-							"cert": map[string]any{"type": "secret", "key": "name"},
-						},
-					},
-				},
-			},
-		})
+		_, issues := CollectSecretFields(stateSchema(t, `
+tls:
+  type: array
+  items:
+    type: object
+    properties:
+      name: { type: string }
+      cert: { type: secret, key: name }
+`))
 		requireIssueCode(t, issues, SecretFieldReservedStateCode)
 	})
 
@@ -151,24 +145,18 @@ func TestCollectSecretFields_RefusesReservedStateField(t *testing.T) {
 	// `…/tls/cert` — not a data collision, but two owners on one prefix, which is the
 	// confusion the namespace fence exists to remove. One predicate, both shapes.
 	t.Run("scalar", func(t *testing.T) {
-		_, issues := CollectSecretFields(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"tls": map[string]any{"type": "secret"},
-			},
-		})
+		_, issues := CollectSecretFields(stateSchema(t, `
+tls: { type: secret }
+`))
 		requireIssueCode(t, issues, SecretFieldReservedStateCode)
 	})
 
 	// A non-reserved field of the same shape stays accepted — the guard must be the
 	// name, not the shape.
 	t.Run("ordinary-field-untouched", func(t *testing.T) {
-		fields, issues := CollectSecretFields(map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"password": map[string]any{"type": "secret"},
-			},
-		})
+		fields, issues := CollectSecretFields(stateSchema(t, `
+password: { type: secret }
+`))
 		for _, iss := range issues {
 			if iss.Code == SecretFieldReservedStateCode {
 				t.Fatalf("ordinary state field rejected as reserved: %+v", iss)

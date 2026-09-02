@@ -32,13 +32,12 @@ func writeMigration(t *testing.T, root, name, body string) {
 
 const validManifestV2 = `state_schema_version: 2
 state_schema:
-  type: object
-  required: [master_host, replicas]
-  properties:
-    master_host:
-      type: string
-    replicas:
-      type: integer
+  master_host:
+    required: true
+    type: string
+  replicas:
+    required: true
+    type: integer
 `
 
 // TestListStateSchema_ReadsManifest is the happy path: version + structure +
@@ -59,8 +58,14 @@ func TestListStateSchema_ReadsManifest(t *testing.T) {
 	if info.Schema == nil {
 		t.Fatal("Schema=nil, want state_schema declaration")
 	}
-	if got, ok := info.Schema["type"].(string); !ok || got != "object" {
-		t.Errorf("Schema.type = %v, want object", info.Schema["type"])
+	// The projection is the RAW mapping of the input dialect ([NIM-740]): state field
+	// -> schema, with no `type: object` wrapper above it.
+	field, ok := info.Schema["master_host"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema.master_host = %#v, want the field's schema", info.Schema["master_host"])
+	}
+	if field["type"] != "string" {
+		t.Errorf("Schema.master_host.type = %v, want string", field["type"])
 	}
 	if len(info.Migrations) != 2 {
 		t.Fatalf("Migrations len = %d, want 2; %+v", len(info.Migrations), info.Migrations)

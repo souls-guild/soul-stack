@@ -30,9 +30,12 @@
 package secretpaths
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -110,11 +113,31 @@ func Run(opts Options, out, errOut io.Writer) int {
 		return ExitHasErrors
 	}
 
+	// `$type` is resolved before the walk. Since NIM-742 the element shape of a
+	// collection may live in types.yml, and an unresolved reference carries no
+	// properties — so the declaration inside it would come back as "no declared
+	// secrets", which is the one answer this command refuses to print without having
+	// read the declarations. Both other readers of a state_schema do the same at their
+	// own load (artifact.parseManifest, validate's service pass).
+	//
+	// A catalog that does not resolve leaves the schema alone and says so on stderr
+	// rather than printing a shorter list: an under-report here reads exactly like a
+	// service with fewer secrets than it has.
+	schema := svc.StateSchema
+	if config.SchemaHasTypeRef(schema) {
+		resolved, rerr := resolveTypes(opts.Path, schema)
+		if rerr != nil {
+			fmt.Fprintf(errOut, "soul-lint list-secret-paths: %v — run `soul-lint validate-service %s`\n", rerr, opts.Path)
+			return ExitHasErrors
+		}
+		schema = resolved
+	}
+
 	// The traversal order is [config.CollectSecretFields]'s, which sorts. Reusing it
 	// rather than walking the schema here is what keeps this command working when
 	// `state_schema` moves to the input dialect (NIM-742), and what keeps one run
 	// byte-identical to the next.
-	fields, issues := config.CollectSecretFields(svc.StateSchema)
+	fields, issues := config.CollectSecretFields(schema)
 
 	type line struct{ form, decl string }
 	var (
@@ -226,4 +249,35 @@ func hasParseError(ds []diag.Diagnostic) bool {
 		}
 	}
 	return false
+}
+
+// resolveTypes substitutes the `$type` references of a state_schema against the
+// sibling types.yml. It returns an error rather than a best-effort partial schema:
+// this command's whole output is the list of declarations, and a list shortened by a
+// catalog nobody could read is indistinguishable from a service that declares less.
+func resolveTypes(servicePath string, schema config.InputSchemaMap) (config.InputSchemaMap, error) {
+	typesPath := filepath.Join(filepath.Dir(servicePath), config.TypesCatalogFile)
+	data, err := os.ReadFile(typesPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%s is present but unreadable: %w", config.TypesCatalogFile, err)
+	}
+	catalog, cdiags := config.ParseTypeCatalog(typesPath, data)
+	resolved, rdiags := config.ResolveStateSchemaTypeRefs(schema, catalog)
+	if d := firstError(cdiags, rdiags); d != "" {
+		return nil, fmt.Errorf("the $type references in state_schema do not resolve: %s", d)
+	}
+	return resolved, nil
+}
+
+// firstError returns the message of the first error-level diagnostic across the given
+// sets, or "" when there is none.
+func firstError(sets ...[]diag.Diagnostic) string {
+	for _, set := range sets {
+		for _, d := range set {
+			if d.Level == diag.LevelError {
+				return d.Message
+			}
+		}
+	}
+	return ""
 }

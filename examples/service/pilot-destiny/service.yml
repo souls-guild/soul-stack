@@ -7,11 +7,8 @@ description: >
 
 # incarnation.state — what is fixed after apply.
 state_schema:
-  type: object
-  required: [marker_path, marker_content]
-  properties:
-    marker_path:    { type: string }
-    marker_content: { type: string }
+  marker_path: { type: string, required: true }
+  marker_content: { type: string, required: true }
 
 # The destiny dependency. Hybrid source:
 #  - an entry without git: → git-URL = default_destiny_source + {name} (keeper.yml);

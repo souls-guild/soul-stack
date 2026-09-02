@@ -8,7 +8,5 @@ description: >-
 # state_schema_version = 1 → migrations/ directory is not required (ADR-019).
 # state is empty for a bare incarnation (no create run); the note field is a schema placeholder.
 state_schema:
-  type: object
-  properties:
-    note:
-      type: string
+  note:
+    type: string

@@ -17,12 +17,12 @@ types:
   AclUser:
     type: object
     additional_properties: false
-    required: [name, perms]
     properties:
       # ACL username. Pattern stricter than the previous inline variant (lowercase start):
       # Redis ACL names are case-sensitive, but the role convention is a lowercase identifier.
       name:
         type: string
+        required: true
         pattern: "^[a-z][a-z0-9_-]*$"
         description: >-
           DragonFly ACL username (unique within the users array). Rendered into
@@ -40,6 +40,7 @@ types:
       # Passwords inside the perms string are masked on output (logs/UI) by the common secret masking.
       perms:
         type: string
+        required: true
         pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
         description: >-
           Redis ACL: permissions as one string, tokens space-separated. Example:

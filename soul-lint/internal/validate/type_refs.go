@@ -87,34 +87,67 @@ func typeRefDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.
 	return out
 }
 
+// stateSchemaTypeRefDiags resolves the `$type` references of a service manifest's
+// `state_schema:` against the sibling `types.yml`, IN PLACE on svc, and returns the
+// catalog's and the resolve's diagnostics.
+//
+// It is the state-side twin of [typeRefDiagnostics], and it does more than report:
+// the resolved schema is what [scenarioSecretKeyDiags] and every other consumer of
+// svc.StateSchema then reads. An unresolved `{$type: AclUser}` node declares no
+// shape, so a declared secret inside a referenced type would come back as "no
+// secrets here" — the linter would go quiet on exactly the file it exists to check.
+// The keeper does the same thing at the same point (artifact.parseManifest); this is
+// the offline half.
+//
+// servicePath is the path to service.yml; the catalog is its sibling. A missing
+// types.yml is not an error — resolving against an empty catalog still points
+// input_type_unknown at the broken reference.
+func stateSchemaTypeRefDiags(servicePath string, svc *config.ServiceManifest) []diag.Diagnostic {
+	if svc == nil || !config.SchemaHasTypeRef(svc.StateSchema) {
+		return nil
+	}
+	typesPath := filepath.Join(filepath.Dir(servicePath), config.TypesCatalogFile)
+
+	data, err := os.ReadFile(typesPath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return []diag.Diagnostic{{
+				Level:   diag.LevelWarning,
+				Phase:   diag.PhaseParse,
+				File:    typesPath,
+				Code:    "io_error",
+				Message: err.Error(),
+				Hint:    "types.yml is present but unreadable - the $type references in state_schema are not checked offline",
+			}}
+		}
+		data = nil
+	}
+
+	catalog, out := config.ParseTypeCatalog(typesPath, data)
+	resolved, refDiags := config.ResolveStateSchemaTypeRefs(svc.StateSchema, catalog)
+	// The CATALOG's own errors gate the substitution too, not just the resolve's: a
+	// types.yml that declares one name twice still resolves — to the last body that
+	// won the collision — and judging a secret's `key:` against the wrong element
+	// would report a second, invented mistake on top of the real one. Same gate the
+	// keeper's loader applies (artifact.resolveManifestStateSchemaTypeRefs).
+	if !diag.HasErrors(out) && !diag.HasErrors(refDiags) {
+		// A declared secret reaching through `$type` is judged only now: at parse the
+		// element shape was still a reference, so its `key:` had no sibling to name.
+		refDiags = append(refDiags, config.ValidateStateSchemaSecrets(svc.StateSchema, resolved)...)
+		svc.StateSchema = resolved
+	}
+	for i := range refDiags {
+		if refDiags[i].File == "" {
+			refDiags[i].File = servicePath
+		}
+	}
+	return append(out, refDiags...)
+}
+
 // inputHasTypeRef reports true if at least one input: node (recursively
 // through items/properties/additional_properties) carries a `$type`
 // reference. A cheap short-circuit: no references means no need to read the
 // catalog.
 func inputHasTypeRef(m config.InputSchemaMap) bool {
-	for _, s := range m {
-		if schemaHasTypeRef(s) {
-			return true
-		}
-	}
-	return false
-}
-
-func schemaHasTypeRef(s *config.InputSchema) bool {
-	if s == nil {
-		return false
-	}
-	if s.TypeRef != "" {
-		return true
-	}
-	if schemaHasTypeRef(s.Items) {
-		return true
-	}
-	if inputHasTypeRef(s.Properties) {
-		return true
-	}
-	if ap, ok := s.AdditionalProperties.(*config.InputSchema); ok && schemaHasTypeRef(ap) {
-		return true
-	}
-	return false
+	return config.SchemaHasTypeRef(m)
 }

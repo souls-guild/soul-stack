@@ -27,7 +27,7 @@ description: >-
 # — out of PILOT scope).
 #
 # BOUNDARY between the two config representations (as with redis/dragonfly):
-#   - mongo_config (opaque, additionalProperties:true) — the COMPUTED RESULT of translating
+#   - mongo_config (opaque, additional_properties: true) — the COMPUTED RESULT of translating
 #     simple input into the mongod.conf structure (what actually goes into render). Write-model
 #     "as deployed".
 #   - named fields (memory_mb/wiredtiger_cache_gb/...) — the operator's INTENT in simple
@@ -35,88 +35,84 @@ description: >-
 #     are moved into service vars (author-context, day-2 reads service vars directly).
 # BOTH are filled from a SINGLE create compute pass — there is no desync.
 state_schema:
-  type: object
-  required: [mongo_config]
-  properties:
-    # Effective MongoDB version (upstream series for binary; distro pin for package).
-    mongo_version:
+  # Effective MongoDB version (upstream series for binary; distro pin for package).
+  mongo_version:
+    type: string
+  # Final mongod.conf (merged default→computed→passthrough from service vars). Goes into
+  # rendering the scenario-local mongod.conf.tmpl. Structure — nested YAML mongod (net/
+  # storage/security/systemLog as subtrees).
+  mongo_config:
+    type: object
+    required: true
+    additional_properties: true
+
+  # ── Named intent fields (read-model) ────────────────────────────────
+  # Memory budget for MongoDB, MB. From input.memory_mb; unset → 0. Mongo has no
+  # maxmemory equivalent (WiredTiger manages its own cache), but the memory budget determines
+  # wiredTiger cacheSizeGB (a share of memory_mb) — read-model of operator intent.
+  memory_mb:
+    type: integer
+    min: 256
+  # Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.
+  # cacheSizeGB directive). From input.wiredtiger_cache_gb; unset → 0 (computed from memory_mb
+  # or the mongod default). read-model.
+  wiredtiger_cache_gb:
+    type: number
+    min: 0
+  # Applied kernel parameters for MongoDB (host-tuning). From vars.sysctl_settings.
+  sysctl_settings:
+    type: object
+    additional_properties:
       type: string
-    # Final mongod.conf (merged default→computed→passthrough from service vars). Goes into
-    # rendering the scenario-local mongod.conf.tmpl. Structure — nested YAML mongod (net/
-    # storage/security/systemLog as subtrees).
-    mongo_config:
-      type: object
-      additionalProperties: true
 
-    # ── Named intent fields (read-model) ────────────────────────────────
-    # Memory budget for MongoDB, MB. From input.memory_mb; unset → 0. Mongo has no
-    # maxmemory equivalent (WiredTiger manages its own cache), but the memory budget determines
-    # wiredTiger cacheSizeGB (a share of memory_mb) — read-model of operator intent.
-    memory_mb:
-      type: integer
-      minimum: 256
-    # Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.
-    # cacheSizeGB directive). From input.wiredtiger_cache_gb; unset → 0 (computed from memory_mb
-    # or the mongod default). read-model.
-    wiredtiger_cache_gb:
-      type: number
-      minimum: 0
-    # Applied kernel parameters for MongoDB (host-tuning). From vars.sysctl_settings.
-    sysctl_settings:
+  # MongoDB users: TYPED array of MongoUser (types.yml, ADR-062).
+  # Populated by create from input.users (also an array of MongoUser). The password is
+  # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper
+  # DERIVES from (service, incarnation, mongo_users, name) — no path is written anywhere in
+  # this repo — and never in state. `key: name` says which sibling property is the element's
+  # identity, i.e. the last path segment. ★ MongoDB vs redis: roles — an array of
+  # {role, db}, not a single perms string.
+  mongo_users:
+    type: array
+    items:
       type: object
-      additionalProperties:
-        type: string
-
-    # MongoDB users: TYPED array of MongoUser (types.yml, ADR-062).
-    # Populated by create from input.users (also an array of MongoUser). The password is
-    # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper
-    # DERIVES from (service, incarnation, mongo_users, name) — no path is written anywhere in
-    # this repo — and never in state. `key: name` says which sibling property is the element's
-    # identity, i.e. the last path segment. ★ MongoDB vs redis: roles — an array of
-    # {role, db}, not a single perms string.
-    mongo_users:
-      type: array
-      items:
-        type: object
-        required: [name, roles, state]
-        additionalProperties: false
-        properties:
-          name:     { type: string }
-          database: { type: string }
-          state:    { type: string, enum: [present, absent] }
-          password:
-            type: secret
-            key: name
-            label: "MongoDB user password"
-          roles:
-            type: array
-            items:
-              type: object
-              required: [role]
-              additionalProperties: false
-              properties:
-                role: { type: string }
-                db:   { type: string }
-    # The service's OWN accounts (PILOT: default_admin only) — the counterpart of
-    # mongo_users, which is operator intent. Only the NAME is state: roles live in service
-    # vars (vars.system_users — policy, not a per-incarnation fact), and the password is
-    # declared `type: secret`, so its value lives in Vault at a path Keeper DERIVES from
-    # (service, incarnation, system_users, name). Written by create, read back through
-    # core.state.set's register — which is why the set is recorded rather than recomputed
-    # from vars: an operator who edits vars after create must not silently re-point an
-    # in-cluster credential.
-    system_users:
-      type: array
-      items:
-        type: object
-        required: [name]
-        additionalProperties: false
-        properties:
-          name: { type: string }
-          password:
-            type: secret
-            key: name
-            label: "MongoDB system account password"
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        database: { type: string }
+        state: { type: string, enum: [present, absent], required: true }
+        password:
+          type: secret
+          key: name
+          label: "MongoDB user password"
+        roles:
+          required: true
+          type: array
+          items:
+            type: object
+            additional_properties: false
+            properties:
+              role: { type: string, required: true }
+              db:   { type: string }
+  # The service's OWN accounts (PILOT: default_admin only) — the counterpart of
+  # mongo_users, which is operator intent. Only the NAME is state: roles live in service
+  # vars (vars.system_users — policy, not a per-incarnation fact), and the password is
+  # declared `type: secret`, so its value lives in Vault at a path Keeper DERIVES from
+  # (service, incarnation, system_users, name). Written by create, read back through
+  # core.state.set's register — which is why the set is recorded rather than recomputed
+  # from vars: an operator who edits vars after create must not silently re-point an
+  # in-cluster credential.
+  system_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "MongoDB system account password"
 
 # ★ There are NO destiny dependencies: install + render mongod.conf is done by the scenario INLINE via
 # core modules (core.pkg/core.url/core.file.rendered from scenario-local templates). For

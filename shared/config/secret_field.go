@@ -21,8 +21,16 @@ package config
 //	  type: secret
 //
 // A `type: secret` anywhere else — deeper nesting, an array of arrays, under
-// `additionalProperties` — is a load-time error rather than a best-effort guess. The
+// `additional_properties` — is a load-time error rather than a best-effort guess. The
 // alternative is a path the author cannot predict from the declaration they wrote.
+//
+// Since [NIM-740] the schema arrives as an [InputSchemaMap] — the same type a
+// scenario's `input:` is — so the element shape may equally be written out inline or
+// referenced with `$type` and extended with the secret this use of it owns. The
+// collection's element properties are read off the RESOLVED schema, which is why the
+// caller resolves references before collecting (ResolveStateSchemaTypeRefs): an
+// unresolved `{$type: AclUser}` node declares nothing, and "no secrets here" is the
+// one answer this file's contract rules out.
 //
 // Do not confuse this with the older, orthogonal marker `secret: true` on a state
 // property ([ADR-010] §7.4): that one says "this value LIVES in state, mask it on the
@@ -85,12 +93,53 @@ func EffectiveVaultMount(mount string) string {
 	return mount
 }
 
-// secretNodeKeys — the whole grammar of a `type: secret` node. A key outside it is an
-// author error rather than an extension point: a `minLength: 40` written next to
-// `type: secret` reads as enforced, and nothing enforces it — the value never passes
-// through state validation, because it is never in state. (Same reasoning as the policy
-// grammar tightening, [ADR-0083] §9.)
-var secretNodeKeys = map[string]bool{"type": true, "key": true, "label": true}
+// secretNodeForbidden — every key of the input dialect that a `type: secret` node may
+// NOT carry, with the predicate that reads it off the decoded schema. The whole grammar
+// of such a node is `type`/`key`/`label`; a key outside it is an author error rather
+// than an extension point: a `min_length: 40` written next to `type: secret` reads as
+// enforced, and nothing enforces it — the value never passes through state validation,
+// because it is never in state. (Same reasoning as the policy grammar tightening,
+// [ADR-0083] §9.)
+//
+// The list is kept in the YAML spelling and walked in order, so the message names the
+// keys the author wrote, in a fixed order. It is read off the DECODED schema rather
+// than the AST because the keeper resolves the same declarations at runtime, where
+// there is no AST — one implementation, or the two drift.
+//
+// One consequence of reading a decoded struct: a key written with its own zero value
+// (`secret: false`, `unique: false`) is indistinguishable from an absent one and
+// passes. That costs nothing — it constrains nothing either.
+var secretNodeForbidden = []struct {
+	key string
+	set func(*InputSchema) bool
+}{
+	{"$type", func(s *InputSchema) bool { return s.TypeRef != "" }},
+	{"additional_properties", func(s *InputSchema) bool { return s.AdditionalProperties != nil }},
+	{"allow_empty", func(s *InputSchema) bool { return s.AllowEmpty }},
+	{"default", func(s *InputSchema) bool { return s.Default != nil }},
+	{"description", func(s *InputSchema) bool { return s.Description != "" }},
+	{"enum", func(s *InputSchema) bool { return len(s.Enum) > 0 }},
+	{"exclusive_max", func(s *InputSchema) bool { return s.ExclusiveMax != nil }},
+	{"exclusive_min", func(s *InputSchema) bool { return s.ExclusiveMin != nil }},
+	{"format", func(s *InputSchema) bool { return s.Format != "" }},
+	{"items", func(s *InputSchema) bool { return s.Items != nil }},
+	{"max", func(s *InputSchema) bool { return s.Max != nil }},
+	{"max_items", func(s *InputSchema) bool { return s.MaxItems != nil }},
+	{"max_length", func(s *InputSchema) bool { return s.MaxLength != nil }},
+	{"min", func(s *InputSchema) bool { return s.Min != nil }},
+	{"min_items", func(s *InputSchema) bool { return s.MinItems != nil }},
+	{"min_length", func(s *InputSchema) bool { return s.MinLength != nil }},
+	{"pattern", func(s *InputSchema) bool { return s.Pattern != "" }},
+	{"prefill_from_state", func(s *InputSchema) bool { return s.PrefillFromState != "" }},
+	{"properties", func(s *InputSchema) bool { return len(s.Properties) > 0 }},
+	// `required` is NOT here. It is refused too, but for a different reason and under a
+	// different code — see [requiredOnSecretIssue], which runs ahead of this list.
+	{"required_when", func(s *InputSchema) bool { return s.RequiredWhen != "" }},
+	{"secret", func(s *InputSchema) bool { return s.Secret }},
+	{"source", func(s *InputSchema) bool { return s.Source != nil }},
+	{"unique", func(s *InputSchema) bool { return s.Unique }},
+	{"vault_scope", func(s *InputSchema) bool { return s.VaultScope != "" }},
+}
 
 // SecretField is one `type: secret` property declared in a service's `state_schema`.
 //
@@ -111,7 +160,7 @@ type SecretField struct {
 	// [ADR-0083] §2).
 	Label string
 	// Path is the YAML path of the declaration RELATIVE to the state_schema root
-	// (`.properties.redis_users.items.properties.password`). The caller prefixes its own
+	// (`.redis_users.items.properties.password`). The caller prefixes its own
 	// root to turn a rejected declaration into a positional diagnostic.
 	Path string
 }
@@ -217,25 +266,24 @@ type SecretFieldIssue struct {
 // whatever is left over is reported as an unsupported location. A shape this function
 // does not understand can therefore not slip through as "no secrets here" — which would
 // put a plaintext password in `incarnation.state` and mask nothing.
-func CollectSecretFields(schema map[string]any) ([]SecretField, []SecretFieldIssue) {
+func CollectSecretFields(schema InputSchemaMap) ([]SecretField, []SecretFieldIssue) {
 	if schema == nil {
 		return nil, nil
 	}
 	declared := map[string]bool{}
-	scanSecretNodes(schema, "", declared, false)
+	scanSecretNodes(schema, "", declared)
 
 	var fields []SecretField
 	var issues []SecretFieldIssue
 	claimed := map[string]bool{}
 
-	props, _ := schema["properties"].(map[string]any)
-	for _, name := range sortedMapKeys(props) {
-		node, ok := props[name].(map[string]any)
-		if !ok {
+	for _, name := range sortedMapKeys(schema) {
+		node := schema[name]
+		if node == nil {
 			continue
 		}
-		base := ".properties." + name
-		switch schemaNodeType(node) {
+		base := "." + name
+		switch node.Type {
 		case SecretTypeName:
 			claimed[base] = true
 			f, iss := scalarSecretField(name, node, base)
@@ -244,16 +292,24 @@ func CollectSecretFields(schema map[string]any) ([]SecretField, []SecretFieldIss
 				fields = append(fields, f)
 			}
 		case "array":
-			items, _ := node["items"].(map[string]any)
-			itemProps, _ := items["properties"].(map[string]any)
-			for _, prop := range sortedMapKeys(itemProps) {
-				pnode, ok := itemProps[prop].(map[string]any)
-				if !ok || schemaNodeType(pnode) != SecretTypeName {
+			items := node.Items
+			if items == nil || items.TypeRef != "" {
+				// An unresolved reference has no element shape yet, so a secret written
+				// beside it has no sibling to be keyed by and no properties to be
+				// unsupported in. Judging it here would report `key:` as naming no
+				// sibling for every correct declaration that uses a type. The schema is
+				// complete only after ResolveStateSchemaTypeRefs, which is where the
+				// caller runs [ValidateStateSchemaSecrets].
+				continue
+			}
+			for _, prop := range sortedMapKeys(items.Properties) {
+				pnode := items.Properties[prop]
+				if pnode == nil || pnode.Type != SecretTypeName {
 					continue
 				}
 				path := base + ".items.properties." + prop
 				claimed[path] = true
-				f, iss := collectionSecretField(name, prop, pnode, itemProps, items, path)
+				f, iss := collectionSecretField(name, prop, pnode, items, path)
 				issues = append(issues, iss...)
 				if len(iss) == 0 {
 					fields = append(fields, f)
@@ -292,9 +348,10 @@ func reservedStateFieldIssue(state, path string) []SecretFieldIssue {
 }
 
 // scalarSecretField builds the field for a top-level `type: secret` property.
-func scalarSecretField(name string, node map[string]any, path string) (SecretField, []SecretFieldIssue) {
-	issues := checkSecretNodeGrammar(node, path)
-	if _, has := node["key"]; has {
+func scalarSecretField(name string, node *InputSchema, path string) (SecretField, []SecretFieldIssue) {
+	issues := requiredOnSecretIssue(node, name, path)
+	issues = append(issues, checkSecretNodeGrammar(node, path)...)
+	if node.Key != "" {
 		issues = append(issues, SecretFieldIssue{
 			Path: path + ".key", Code: "secret_field_key_on_scalar",
 			Message: "key: is meaningless on a scalar secret — there is one value, not one per element",
@@ -309,15 +366,14 @@ func scalarSecretField(name string, node map[string]any, path string) (SecretFie
 		})
 	}
 	issues = append(issues, reservedStateFieldIssue(name, path)...)
-	label, labelIssue := secretNodeLabel(node, path)
-	issues = append(issues, labelIssue...)
-	return SecretField{State: name, Label: label, Path: path}, issues
+	return SecretField{State: name, Label: node.Label, Path: path}, issues
 }
 
 // collectionSecretField builds the field for a `type: secret` property inside the items
 // of a top-level array, and validates the `key:` that addresses one element.
-func collectionSecretField(state, prop string, node, itemProps, items map[string]any, path string) (SecretField, []SecretFieldIssue) {
-	issues := checkSecretNodeGrammar(node, path)
+func collectionSecretField(state, prop string, node, items *InputSchema, path string) (SecretField, []SecretFieldIssue) {
+	issues := requiredOnSecretIssue(node, prop, path)
+	issues = append(issues, checkSecretNodeGrammar(node, path)...)
 
 	for _, seg := range []struct{ kind, value string }{{"state field", state}, {"property", prop}} {
 		if !ValidVaultPathSegment(seg.value) {
@@ -330,67 +386,81 @@ func collectionSecretField(state, prop string, node, itemProps, items map[string
 	}
 	issues = append(issues, reservedStateFieldIssue(state, path)...)
 
-	key, _ := node["key"].(string)
-	switch {
-	case node["key"] == nil:
+	key := node.Key
+	switch sibling, known := items.Properties[key]; {
+	case key == "":
 		issues = append(issues, SecretFieldIssue{
 			Path: path, Code: "secret_field_key_required",
 			Message: "a secret inside a collection needs key: <sibling property> to address one element",
 			Hint:    "key: name — the sibling whose value becomes the path segment",
 		})
-	case key == "":
+	case !known || sibling == nil:
 		issues = append(issues, SecretFieldIssue{
-			Path: path + ".key", Code: "secret_field_key_invalid",
-			Message: fmt.Sprintf("key: must be the name of a sibling property, got %T", node["key"]),
+			Path: path + ".key", Code: "secret_field_key_unknown",
+			Message: fmt.Sprintf("key: %q names no sibling property of the element", key),
 		})
-	default:
-		sibling, ok := itemProps[key].(map[string]any)
-		switch {
-		case !ok:
-			issues = append(issues, SecretFieldIssue{
-				Path: path + ".key", Code: "secret_field_key_unknown",
-				Message: fmt.Sprintf("key: %q names no sibling property of the element", key),
-			})
-		case schemaNodeType(sibling) != "string":
-			issues = append(issues, SecretFieldIssue{
-				Path: path + ".key", Code: "secret_field_key_not_string",
-				Message: fmt.Sprintf("key: %q must name a string property, it is %q", key, schemaNodeType(sibling)),
-				Hint:    "the value becomes one segment of the Vault path",
-			})
-		}
+	case sibling.Type != "string":
+		issues = append(issues, SecretFieldIssue{
+			Path: path + ".key", Code: "secret_field_key_not_string",
+			Message: fmt.Sprintf("key: %q must name a string property, it is %q", key, sibling.Type),
+			Hint:    "the value becomes one segment of the Vault path",
+		})
 	}
 
-	// `required` naming the secret would make every element invalid: the value is in
-	// Vault, so it is never present in the state the schema describes.
-	for _, req := range stringSeq(items["required"]) {
-		if req == prop {
-			issues = append(issues, SecretFieldIssue{
-				Path: path, Code: "secret_field_required",
-				Message: fmt.Sprintf("%q is listed in required: — a secret never lives in state, so it can never satisfy it", prop),
-				Hint:    "remove it from required:",
-			})
-		}
-	}
-
-	label, labelIssue := secretNodeLabel(node, path)
-	issues = append(issues, labelIssue...)
-	return SecretField{State: state, Property: prop, Key: key, Label: label, Path: path}, issues
+	return SecretField{State: state, Property: prop, Key: key, Label: node.Label, Path: path}, issues
 }
 
-// checkSecretNodeGrammar rejects any key outside [secretNodeKeys]. Offenders are
-// reported in sorted order — map iteration is unordered, and an error text that varies
-// run to run on the same input is not diagnosable.
-func checkSecretNodeGrammar(node map[string]any, path string) []SecretFieldIssue {
+// checkSecretNodeGrammar rejects any key outside `type`/`key`/`label`, per
+// [secretNodeForbidden]. Offenders are reported in one message in the list's fixed
+// order — an error text that varied run to run on the same input would not be
+// diagnosable.
+// requiredOnSecretIssue refuses `required` on a `type: secret` node, and does it AHEAD
+// of the grammar check ([ADR-0086] §7).
+//
+// The ground is satisfiability, not vocabulary: the value lives in Vault, so no state
+// instance can ever contain it, so no state instance can ever satisfy the requirement.
+// That is the same ground [ADR-0083] refused it on when the requirement was written as
+// a list on the enclosing object.
+//
+// The ordering is the whole point. `required` is a key outside `type`/`key`/`label`, so
+// [checkSecretNodeGrammar] would otherwise claim it first and report
+// `secret_field_unknown_key` — "type: secret does not take required" — which is a
+// grammar complaint where the truth is a satisfiability one, and it points the author at
+// the wrong fix. The ADR names this trap explicitly because the obvious implementation
+// walks into it.
+func requiredOnSecretIssue(node *InputSchema, prop, path string) []SecretFieldIssue {
+	// `Required` first, `rawRequired` second. The decoded field is what the keeper has
+	// at runtime, where there is no AST — reading only the AST node would make this the
+	// one check in the file that cannot answer there, against the ground stated in
+	// [secretNodeForbidden]. The AST node adds the case the bool cannot express:
+	// `required: false`, written and refused, which a zero `Required` looks identical to.
+	if !node.Required && node.rawRequired == nil {
+		return nil
+	}
+	name := prop
+	if name == "" {
+		name = "this field"
+	}
+	// The message says "carries" rather than "is required": `required: false` is refused
+	// too — the key has no meaning here either way — and telling that author their field
+	// "is declared required" would be false.
+	return []SecretFieldIssue{{
+		Path: path + ".required", Code: "secret_field_required",
+		Message: fmt.Sprintf("%s carries required: — a secret never lives in state, so no state instance can ever satisfy it", name),
+		Hint:    "drop required: — the value is in Vault, and state carries only the key that addresses it",
+	}}
+}
+
+func checkSecretNodeGrammar(node *InputSchema, path string) []SecretFieldIssue {
 	var unknown []string
-	for k := range node {
-		if !secretNodeKeys[k] {
-			unknown = append(unknown, k)
+	for _, k := range secretNodeForbidden {
+		if k.set(node) {
+			unknown = append(unknown, k.key)
 		}
 	}
 	if len(unknown) == 0 {
 		return nil
 	}
-	sort.Strings(unknown)
 	return []SecretFieldIssue{{
 		Path: path, Code: "secret_field_unknown_key",
 		Message: fmt.Sprintf("type: secret does not take %s (want type/key/label)", strings.Join(unknown, ", ")),
@@ -398,83 +468,40 @@ func checkSecretNodeGrammar(node map[string]any, path string) []SecretFieldIssue
 	}}
 }
 
-// secretNodeLabel reads the optional UI caption.
-func secretNodeLabel(node map[string]any, path string) (string, []SecretFieldIssue) {
-	v, has := node["label"]
-	if !has || v == nil {
-		return "", nil
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", []SecretFieldIssue{{
-			Path: path + ".label", Code: "secret_field_label_not_string",
-			Message: fmt.Sprintf("label: must be a string, got %T", v),
-		}}
-	}
-	return s, nil
-}
-
-// scanSecretNodes records the relative path of EVERY `type: secret` node in the tree.
-// The walk is structural rather than schema-aware — every map and every sequence
-// element — so a position nobody anticipated is still found and reported instead of
-// passing as "no secrets here".
+// scanSecretNodes records the relative path of EVERY `type: secret` node in the map,
+// so that a declaration in a position nobody anticipated is found and reported as an
+// unsupported location instead of passing as "no secrets here".
 //
-// Subtrees holding DATA rather than schema nodes are skipped: a `default:` of
-// `{type: secret}` is a value that happens to look like a declaration, and scanning it
-// would reject a legal schema.
-//
-// inProps says the map being walked is a `properties`/`patternProperties` bag, whose
-// keys are FIELD NAMES chosen by the author. The skip set must not apply there: a
-// field legitimately named `default` or `enum` would take its whole subtree out of the
-// walk, and the declaration inside it would come back as "no secrets here" — the one
-// outcome this function's contract rules out. Skipping is a statement about schema
-// keywords, and a schema keyword is defined by its position, not by its spelling.
-func scanSecretNodes(node any, path string, out map[string]bool, inProps bool) {
-	switch n := node.(type) {
-	case map[string]any:
-		if schemaNodeType(n) == SecretTypeName && path != "" {
-			out[path] = true
-		}
-		for _, k := range sortedMapKeys(n) {
-			if !inProps && secretScanSkip[k] {
-				continue
-			}
-			scanSecretNodes(n[k], path+"."+k, out, !inProps && secretPropsBag[k])
-		}
-	case []any:
-		for i, v := range n {
-			scanSecretNodes(v, fmt.Sprintf("%s[%d]", path, i), out, false)
-		}
+// The walk follows the schema's own structure — items, properties,
+// additional_properties — and that is now the whole of it. When the schema was a raw
+// `map[string]any` the walk had to be structural, and had to carry a skip set so a
+// `default:` holding `{type: secret}` (a VALUE that looks like a declaration) was not
+// mistaken for one, plus an exception to the skip set for a field legitimately NAMED
+// `default`. Typed, none of that is expressible: `Default` is an `any` and can never
+// hold an [InputSchema], and a field named `default` is a key of `Properties` like any
+// other. The distinction the skip set approximated — a schema keyword is defined by
+// its position, not by its spelling — is what the type now states outright.
+func scanSecretNodes(m InputSchemaMap, path string, out map[string]bool) {
+	for _, name := range sortedMapKeys(m) {
+		scanSecretNode(m[name], path+"."+name, out)
 	}
 }
 
-// secretScanSkip — keys whose subtree is data, not schema nodes. Applied only outside
-// a properties bag (see scanSecretNodes).
-var secretScanSkip = map[string]bool{"default": true, "const": true, "enum": true, "examples": true}
-
-// secretPropsBag — keys whose VALUE is a map of author-chosen field names.
-var secretPropsBag = map[string]bool{"properties": true, "patternProperties": true}
-
-// schemaNodeType reads a JSON Schema node's `type`. "" when absent or non-string.
-func schemaNodeType(node map[string]any) string {
-	t, _ := node["type"].(string)
-	return t
-}
-
-// stringSeq reads a `required`-style sequence of strings; anything else yields nothing
-// (its own diagnostic is emitted by validateJSONSchemaNode).
-func stringSeq(v any) []string {
-	seq, ok := v.([]any)
-	if !ok {
-		return nil
+func scanSecretNode(s *InputSchema, path string, out map[string]bool) {
+	if s == nil || s.TypeRef != "" {
+		// Not descended into for the same reason the collection walk skips it: until the
+		// reference is resolved the node is not the shape the author wrote, and every
+		// position under it would be judged against half a schema.
+		return
 	}
-	out := make([]string, 0, len(seq))
-	for _, e := range seq {
-		if s, ok := e.(string); ok {
-			out = append(out, s)
-		}
+	if s.Type == SecretTypeName {
+		out[path] = true
 	}
-	return out
+	scanSecretNode(s.Items, path+".items", out)
+	scanSecretNodes(s.Properties, path+".properties", out)
+	if ap, ok := s.AdditionalProperties.(*InputSchema); ok {
+		scanSecretNode(ap, path+".additional_properties", out)
+	}
 }
 
 // sortedMapKeys returns a map's keys in sorted order — every walk over a schema must
@@ -503,7 +530,7 @@ func sortedMapKeys[T any](m map[string]T) []string {
 // that fails on a schema the loader accepted would take a run down for a reason the
 // operator cannot act on. What a torn schema costs here is a field not stripped —
 // and that field is masked by [audit.SecretPathSet] anyway.
-func StripDeclaredSecrets(state, schema map[string]any) {
+func StripDeclaredSecrets(state map[string]any, schema InputSchemaMap) {
 	if len(state) == 0 || len(schema) == 0 {
 		return
 	}

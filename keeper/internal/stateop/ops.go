@@ -49,7 +49,7 @@ import (
 //   - present: out[field] = value ONLY if the field is absent or null;
 //   - append:  append value to the list field, no identity check;
 //   - unset:   drop the field itself (`remove` drops elements inside it).
-func Merge(stateBefore map[string]any, ops []render.RenderedOp, schema map[string]any, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) (map[string]any, error) {
+func Merge(stateBefore map[string]any, ops []render.RenderedOp, schema config.InputSchemaMap, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) (map[string]any, error) {
 	out := deepCopyMap(stateBefore)
 	for i := range ops {
 		if err := applyOp(out, ops[i], schema, matchEval, opEval); err != nil {
@@ -70,7 +70,7 @@ func DeepCopy(v any) any { return deepCopyValue(v) }
 
 // applyOp applies one operation to out in place. The error carries verb+field
 // but no position — the caller owns the index, which the module path lacks.
-func applyOp(out map[string]any, op render.RenderedOp, schema map[string]any, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) error {
+func applyOp(out map[string]any, op render.RenderedOp, schema config.InputSchemaMap, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) error {
 	switch op.Verb {
 	case config.VerbSet:
 		out[op.Field] = op.Value
@@ -340,7 +340,7 @@ func checkExpect(op render.RenderedOp, matched int) error {
 // this verb is for a sequence where the same element may legitimately occur
 // twice. The kind lookup exists only to REJECT a map field — append has no
 // meaning there, and silently coercing one would lose data.
-func applyAppendOp(out map[string]any, op render.RenderedOp, schema map[string]any) error {
+func applyAppendOp(out map[string]any, op render.RenderedOp, schema config.InputSchemaMap) error {
 	switch existing := out[op.Field].(type) {
 	case []any:
 		out[op.Field] = append(existing, op.Value)
@@ -361,7 +361,7 @@ func applyAppendOp(out map[string]any, op render.RenderedOp, schema map[string]a
 // (mutates out in place — out is already a deep copy of the source state). The
 // out[field] collection is materialized when absent (type from schema), then
 // the element is added idempotently per the OnConflict policy.
-func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any, matchEval render.StateMatchFunc) error {
+func applyAddOp(out map[string]any, op render.RenderedOp, schema config.InputSchemaMap, matchEval render.StateMatchFunc) error {
 	existing, present := out[op.Field]
 	kind := collectionKind(existing, present, schema, op.Field)
 
@@ -467,7 +467,7 @@ const (
 // state value (authoritative — actual shape), and if absent, from state_schema
 // (`properties.<field>.type`: array→list, object→map). Unknown → collKindUnknown
 // (applyAddOp returns an error). ★ Logic identical to trial.collectionKind.
-func collectionKind(existing any, present bool, schema map[string]any, field string) collKind {
+func collectionKind(existing any, present bool, schema config.InputSchemaMap, field string) collKind {
 	if present {
 		switch existing.(type) {
 		case []any:
@@ -486,21 +486,16 @@ func collectionKind(existing any, present bool, schema map[string]any, field str
 	return collKindUnknown
 }
 
-// schemaFieldType extracts `state_schema.properties.<field>.type` from the
-// service's flat state_schema map (service.yml shape:
-// {type:object, properties:{...}}). "" if schema isn't declared or the field
-// isn't described. ★ Logic identical to trial.schemaFieldType.
-func schemaFieldType(schema map[string]any, field string) string {
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
+// schemaFieldType reads the declared `type:` of one top-level state field from the
+// service's state_schema — since [NIM-740] a map of state field → schema, so the
+// field IS the root key. "" if the schema isn't declared or the field isn't
+// described. ★ Logic identical to trial.schemaFieldType.
+func schemaFieldType(schema config.InputSchemaMap, field string) string {
+	s, ok := schema[field]
+	if !ok || s == nil {
 		return ""
 	}
-	fieldSchema, ok := props[field].(map[string]any)
-	if !ok {
-		return ""
-	}
-	t, _ := fieldSchema["type"].(string)
-	return t
+	return s.Type
 }
 
 // deepCopyMap deep-copies a map[string]any via a JSON round-trip (values are

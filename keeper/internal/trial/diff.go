@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -25,7 +26,7 @@ const (
 	collKindMap
 )
 
-func collectionKind(existing any, present bool, schema map[string]any, field string) collKind {
+func collectionKind(existing any, present bool, schema config.InputSchemaMap, field string) collKind {
 	if present {
 		switch existing.(type) {
 		case []any:
@@ -44,17 +45,12 @@ func collectionKind(existing any, present bool, schema map[string]any, field str
 	return collKindUnknown
 }
 
-func schemaFieldType(schema map[string]any, field string) string {
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
+func schemaFieldType(schema config.InputSchemaMap, field string) string {
+	s, ok := schema[field]
+	if !ok || s == nil {
 		return ""
 	}
-	fieldSchema, ok := props[field].(map[string]any)
-	if !ok {
-		return ""
-	}
-	t, _ := fieldSchema["type"].(string)
-	return t
+	return s.Type
 }
 
 // deepCopyState — deep-copy base state via JSON round-trip (expected result

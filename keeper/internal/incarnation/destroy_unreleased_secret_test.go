@@ -49,15 +49,9 @@ const canaryStateJSON = `{
 func canarySecretSchema(t *testing.T) audit.SecretSchema {
 	t.Helper()
 	art := &artifact.ServiceArtifact{Manifest: &config.ServiceManifest{
-		StateSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"provisioned_provider": map[string]any{"type": "string", "secret": true},
-				"provisioned_vm_ids": map[string]any{
-					"type":  "array",
-					"items": map[string]any{"type": "string"},
-				},
-			},
+		StateSchema: config.InputSchemaMap{
+			"provisioned_provider": {Type: "string", Secret: true},
+			"provisioned_vm_ids":   {Type: "array", Items: &config.InputSchema{Type: "string"}},
 		},
 	}}
 	s := StateSchemaSecrets(art)

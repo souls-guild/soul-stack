@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -148,8 +149,11 @@ required_modules: [acme.haproxy, acme.myapp, "bad-no-dot", "ns.UPPER"]
 	}
 }
 
-func TestLoadDestinyManifest_InputRequiredAmbiguity(t *testing.T) {
-	// Top-level param — required: true (bool).
+// `required` is a bool, on the field it belongs to, at every level ([ADR-0086] §2).
+// The list form — one statement about several properties, written beside them rather
+// than on them — is what let one record be described two ways at once.
+func TestLoadDestinyManifest_InputRequiredIsABool(t *testing.T) {
+	// Top-level param.
 	src1 := `name: x
 input:
   foo:
@@ -164,42 +168,61 @@ input:
 	if cfg.Input["foo"].Required != true {
 		t.Fatalf("required bool not decoded")
 	}
-	if len(cfg.Input["foo"].RequiredProps) != 0 {
-		t.Fatalf("RequiredProps must be empty for bool form")
-	}
 
-	// type=object — required: [name1, name2] (list).
+	// Inside an object: the same spelling, on each property.
 	src2 := `name: x
 input:
   o:
     type: object
     properties:
-      a: { type: string }
-      b: { type: string }
-    required: [a, b]
+      a: { type: string, required: true }
+      b: { type: string, required: true }
 `
 	cfg2, _, diags2, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src2), ValidateOptions{})
 	if diag.HasErrors(diags2) {
 		dump(t, diags2)
-		t.Fatalf("expected no errors for `required: [a, b]` on object param")
+		t.Fatalf("expected no errors for per-property `required: true`")
 	}
-	rp := cfg2.Input["o"].RequiredProps
-	if len(rp) != 2 || rp[0] != "a" || rp[1] != "b" {
-		t.Fatalf("RequiredProps not decoded: %#v", rp)
+	for _, name := range []string{"a", "b"} {
+		if !cfg2.Input["o"].Properties[name].Required {
+			t.Errorf("property %q did not decode its own required flag", name)
+		}
 	}
 }
 
-func TestLoadDestinyManifest_InputRequiredListOnNonObject(t *testing.T) {
-	src := `name: x
+// The list form is refused wherever it is written, and the refusal says where the
+// requiredness goes instead. Left merely undecoded it would be silent: a schema whose
+// `required: [a, b]` is ignored declares nothing required and loads clean.
+func TestLoadDestinyManifest_InputRequiredListIsRefused(t *testing.T) {
+	for name, src := range map[string]string{
+		"on a scalar": `name: x
 input:
   s:
     type: string
     required: [a, b]
-`
-	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
-	if !hasCode(diags, "input_key_invalid_for_type") {
-		dump(t, diags)
-		t.Fatalf("expected input_key_invalid_for_type when `required` is list on type=string")
+`,
+		"on an object": `name: x
+input:
+  o:
+    type: object
+    required: [a, b]
+    properties:
+      a: { type: string }
+      b: { type: string }
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
+			if !hasCode(diags, RequiredListRemovedCode) {
+				dump(t, diags)
+				t.Fatalf("expected input_required_value_invalid for the list form")
+			}
+			for _, d := range diags {
+				if d.Code == "input_required_value_invalid" && !strings.Contains(d.Hint, "required: true") {
+					t.Errorf("the refusal does not say what to write instead: %q", d.Hint)
+				}
+			}
+		})
 	}
 }
 
@@ -376,8 +399,9 @@ input:
 }
 
 func TestLoadDestinyManifest_RequiredBadValue(t *testing.T) {
-	// Bug 4: `required:` with a non-bool / non-sequence value must raise
-	// input_required_value_invalid.
+	// A scalar that is neither a bool nor the former list is a plain mistake, and keeps
+	// the generic code — the list gets its own ([RequiredListRemovedCode]) because it
+	// names a form that used to be correct.
 	src := `name: x
 input:
   s:

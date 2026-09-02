@@ -52,9 +52,9 @@ func writeServiceWithTypes(t *testing.T, mainYAML, typesYAML string) string {
 const typesAclUser = `types:
   AclUser:
     type: object
-    required: [name]
     properties:
       name:
+        required: true
         type: string
       read_only:
         type: boolean
@@ -156,12 +156,13 @@ tasks: []
 const typesAclUserPerms = `types:
   AclUser:
     type: object
-    required: [name, perms]
     properties:
       name:
+        required: true
         type: string
         pattern: "^[a-z][a-z0-9_-]*$"
       perms:
+        required: true
         type: string
         pattern: "^(?:(?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\))(?: (?:(?:on|off|nopass|resetpass|reset|clearselectors|sanitize-payload|skip-sanitize-payload|nosanitize-payload|allkeys|allchannels|allcommands|nocommands)|(?:%R~|%W~|%RW~|~)[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|&[A-Za-z0-9:_.*?\\[\\]{}\\\\-]+|[+-](?:@[a-z][a-z0-9-]*|[a-z][a-z0-9-]*(?:\\|[a-z][a-z0-9-]*)?)|[><][A-Za-z0-9:_.@%/+=-]+|[#!][0-9a-fA-F]{64}|\\([^()]*\\)))*)?$"
       state:

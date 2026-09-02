@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // sealSchemaHandler builds an IncarnationHandler with loader+services for the seal
@@ -21,11 +22,8 @@ func sealSchemaHandler(loader *fakeLoader) *IncarnationHandler {
 // secret + create-scenario input secret under input.<name>.
 func TestSecretSchemaForIncarnation_StateAndInput(t *testing.T) {
 	loader := &fakeLoader{
-		stateSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"admin_token": map[string]any{"type": "string", "secret": true},
-			},
+		stateSchema: config.InputSchemaMap{
+			"admin_token": {Type: "string", Secret: true},
 		},
 		// create-scenario with a secret input db_password.
 		scenarioYAML: "name: create\ninput:\n  db_password: { type: string, secret: true }\n  hostname: { type: string }\n",
@@ -71,14 +69,11 @@ func TestSecretSchemaForIncarnation_NilDeps(t *testing.T) {
 // (toIncarnationGetView via the service secret schema).
 func TestToIncarnationGetView_SchemaMasksDeclaredState(t *testing.T) {
 	loader := &fakeLoader{
-		stateSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				// Use a field name the name-based regex would NOT catch (no `secret`/`token`
-				// fragment), to prove the schema layer itself does the masking.
-				"join_value": map[string]any{"type": "string", "secret": true},
-				"replicas":   map[string]any{"type": "integer"},
-			},
+		stateSchema: config.InputSchemaMap{
+			// Use a field name the name-based regex would NOT catch (no `secret`/`token`
+			// fragment), to prove the schema layer itself does the masking.
+			"join_value": {Type: "string", Secret: true},
+			"replicas":   {Type: "integer"},
 		},
 	}
 	h := sealSchemaHandler(loader)
@@ -109,10 +104,7 @@ func TestToIncarnationGetView_SchemaMasksDeclaredState(t *testing.T) {
 // secret schema is empty.
 func TestToIncarnationGetView_GenericStateNotMasked(t *testing.T) {
 	loader := &fakeLoader{
-		stateSchema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"redis_config": map[string]any{"type": "object"}},
-		},
+		stateSchema: config.InputSchemaMap{"redis_config": {Type: "object"}},
 	}
 	h := sealSchemaHandler(loader)
 	inc := &incarnation.Incarnation{

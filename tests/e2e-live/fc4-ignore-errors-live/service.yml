@@ -14,6 +14,4 @@ description: >-
 
 # state_schema_version=1 -> the migrations/ folder is not mandatory (ADR-019).
 # Focus is the flow-control outcome of the run and register, not mutation of incarnation.state.
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}

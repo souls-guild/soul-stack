@@ -516,17 +516,18 @@ func TestParseTypeCatalog_NamePascalCase_OK(t *testing.T) {
 // --- NIM-72: overlay field-level required/required_when from a $type reference node ---
 
 // TestResolveTypeRefs_OverlayRequired — a field-level `required: true` on the
-// reference node is NOT lost when resolving $type; the type's object-level
-// required-children (RequiredProps) are preserved — they are DIFFERENT model fields.
+// reference node is NOT lost when resolving $type, and it does not disturb the
+// requiredness each of the type's own properties declares. Since [ADR-0086] §2 both
+// are the same spelling at different levels: the reference says "this FIELD is
+// mandatory", a property says "this PROPERTY is".
 func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
     type: object
     additional_properties: false
-    required: [name, perms]
     properties:
-      name:  { type: string }
-      perms: { type: string }
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
       state: { type: string, default: "on", enum: [on, off] }
 `))
 	if diag.HasErrors(diags) {
@@ -551,9 +552,14 @@ func TestResolveTypeRefs_OverlayRequired(t *testing.T) {
 	if u.Type != "object" || u.Properties["name"] == nil || u.Properties["perms"] == nil || u.Properties["state"] == nil {
 		t.Fatalf("user should carry the AclUser shape (object + name/perms/state), got %+v", u)
 	}
-	// (b) object-level required-children are preserved.
-	if len(u.RequiredProps) != 2 || u.RequiredProps[0] != "name" || u.RequiredProps[1] != "perms" {
-		t.Fatalf("object-level required [name perms] should be preserved, got %v", u.RequiredProps)
+	// (b) the type's own per-property requiredness is preserved.
+	for _, name := range []string{"name", "perms"} {
+		if !u.Properties[name].Required {
+			t.Errorf("property %q lost its own required flag through the resolve", name)
+		}
+	}
+	if u.Properties["state"].Required {
+		t.Error("property `state` gained a required flag it never declared")
 	}
 	// (c) field-mandatory carried over from the reference node.
 	if !u.Required {
@@ -573,10 +579,9 @@ func TestResolveTypeRefs_OverlayRequired_Enforced(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
     type: object
-    required: [name, perms]
     properties:
-      name:  { type: string }
-      perms: { type: string }
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)
@@ -648,10 +653,9 @@ func TestResolveTypeRefs_OverlayRequiredFalse(t *testing.T) {
 	cat, diags := ParseTypeCatalog("types.yml", []byte(`types:
   AclUser:
     type: object
-    required: [name, perms]
     properties:
-      name:  { type: string }
-      perms: { type: string }
+      name: { type: string, required: true }
+      perms: { type: string, required: true }
 `))
 	if diag.HasErrors(diags) {
 		dump(t, diags)

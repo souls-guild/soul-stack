@@ -57,14 +57,16 @@ input:
     properties: {}
     additional_properties:
       type: object
-      required: [perms, state, password]
       additional_properties: false
       properties:
         perms:
+          required: true
           type: string
         state:
+          required: true
           type: string
           enum: [on, off]
         password:
+          required: true
           type: string
           secret: true

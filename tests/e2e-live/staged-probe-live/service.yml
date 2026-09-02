@@ -10,6 +10,4 @@ description: >-
 # the scenario captures no state: the focus scenario proves Passage 1 targeting,
 # not incarnation.state mutation (commit state is a separate invariant, covered
 # by other L3a/L3b tests).
-state_schema:
-  type: object
-  properties: {}
+state_schema: {}

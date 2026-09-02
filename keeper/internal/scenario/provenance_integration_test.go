@@ -90,9 +90,7 @@ func compatServiceRepo(t *testing.T, compatBlock string) string {
 	}
 	write("service.yml", `state_schema_version: 1
 description: noop service for the engine-provenance integration test
-`+compatBlock+`state_schema:
-  type: object
-  properties: {}
+`+compatBlock+`state_schema: {}
 `)
 	write("scenario/create/main.yml", `name: create
 description: smoke core.exec.run

@@ -77,10 +77,8 @@ func stateServiceRepo(t *testing.T, scenarioMain string) string {
 	write("service.yml", `state_schema_version: 1
 description: noop service with a capturable field
 state_schema:
-  type: object
-  properties:
-    endpoint:
-      type: string
+  endpoint:
+    type: string
 `)
 	write("scenario/create/main.yml", scenarioMain)
 	wt, err := repo.Worktree()

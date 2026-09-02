@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // makeIncRowWithState — a pgx.Row stub for SelectByName with a controlled jsonb
@@ -38,7 +39,7 @@ func makeIncRowWithStateVersion(name, version string, state map[string]any) pgx.
 
 // formPrefillHandler assembles an IncarnationHandler with db (state row) + loader
 // (scenario YAML + state_schema for the secret exclusion) + services.
-func formPrefillHandler(state map[string]any, scenarioYAML string, stateSchema map[string]any) *IncarnationHandler {
+func formPrefillHandler(state map[string]any, scenarioYAML string, stateSchema config.InputSchemaMap) *IncarnationHandler {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowWithState(name, state) },
 	}
@@ -141,12 +142,9 @@ func TestFormPrefill_SecretExcluded(t *testing.T) {
 		"redis_version": "7.2.4",
 	}
 	// state_schema marks admin_token secret → secretSchemaForIncarnation.IsSecret("state.admin_token")=true.
-	stateSchema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"admin_token":   map[string]any{"type": "string", "secret": true},
-			"redis_version": map[string]any{"type": "string"},
-		},
+	stateSchema := config.InputSchemaMap{
+		"admin_token":   {Type: "string", Secret: true},
+		"redis_version": {Type: "string"},
 	}
 	h := formPrefillHandler(state, scenarioYAML, stateSchema)
 
@@ -221,10 +219,7 @@ func TestFormPrefill_SchemaPinnedToServiceVersion(t *testing.T) {
 	const wantVersion = "v2.0.0" // different from the fakeResolver default ("v1")
 	scenarioYAML := "name: update_config\ntasks: []\n" +
 		"input:\n  redis_version: { type: string, prefill_from_state: state.redis_version }\n"
-	stateSchema := map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"redis_version": map[string]any{"type": "string"}},
-	}
+	stateSchema := config.InputSchemaMap{"redis_version": {Type: "string"}}
 	state := map[string]any{"redis_version": "7.2.4"}
 
 	db := &fakeIncDB{
