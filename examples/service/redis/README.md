@@ -691,7 +691,7 @@ scenario-include resolves `scenario/<name>/<file>`, then falls back to
 `scenario/<file>` ([orchestration.md §6](../../../docs/scenario/orchestration.md)), so
 there is no duplicate.
 
-**Flow** (`redis-provision.yml`, all three steps `on: keeper`):
+**Flow** (`redis-provision.yml`, all three steps at keeper-side addresses):
 
 1. **(a) cloud-create** - `module: core.cloud.created` ([keeper-side core](../../../docs/keeper/cloud.md),
    ADR-017). Creates VMs via the `soul-cloud-<provider>` CloudDriver plugin. **The VM
@@ -937,7 +937,7 @@ editing of the **entire** operator-extra set is a separate scenario
 [`update_users`](#update_users-day-2-bulk-edit-the-set-of-acl-users)
 (bulk-replace). Three steps:
 
-0. **generate the password** (`core.vault.kv-present`, `on: keeper`) at
+0. **generate the password** (`core.vault.kv-present`, keeper-side) at
    `secret/redis/<incarnation>/{redis_users,system_acl_users}/<name>#password` - crypto-random, **only if
    absent** (details below).
 1. **re-render** `users.acl` to disk with the new set: the **system** service users

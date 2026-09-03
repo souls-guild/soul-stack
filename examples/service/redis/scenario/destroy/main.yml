@@ -37,7 +37,7 @@ tasks:
         - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
       message: "mismatch between provisioned_sids and provisioned_vm_ids in incarnation.state: cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — lengths must match (both sets are written by create with one guard from register.provision.hosts)"
 
-  # ── Tear down VMs + cascade keeper registries (core.cloud.destroyed, on: keeper) ───
+  # ── Tear down VMs + cascade keeper registries (core.cloud.destroyed, keeper-side) ──
   # * Address is EXACTLY core.cloud.destroyed (NOT provisioned): base
   # core.cloud + state destroyed (SplitModuleAddr), applyDestroyed →
   # PluginHost.Destroy(vm_ids) THEN cascade(sids). params are read from

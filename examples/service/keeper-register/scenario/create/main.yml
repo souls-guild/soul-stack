@@ -1,9 +1,10 @@
 name: create
 description: >-
   Binds a Coven label to the given Soul via the keeper-side core module
-  core.soul.registered (on: keeper). The step runs on the keeper instance: it
-  doesn't target hosts, doesn't read soulprint — it takes sid/coven from input. Proves
-  keeper-side dispatch (ADR-017, docs/keeper/modules.md).
+  core.soul.registered — the address routes it (NIM-747) and the task declares
+  nothing. The step runs on the keeper instance: it doesn't target hosts, doesn't
+  read soulprint — it takes sid/coven from input. Proves keeper-side dispatch
+  (ADR-017, docs/keeper/modules.md).
 
 # Typed input (docs/input.md).
 input:
@@ -24,8 +25,10 @@ input:
     description: Coven label added by the keeper-side step.
 
 tasks:
-  # Keeper-side step: binds coven to the Soul in the registry. on: keeper → runs on
-  # the keeper instance. mode: append — adds the label to the ones already bound (the root
+  # Keeper-side step: binds coven to the Soul in the registry. core.soul.registered
+  # is a keeper-side address → runs on the keeper instance, and the task declares
+  # nothing: the `on:` key here would be refused (`on_keeper_redundant`).
+  # mode: append — adds the label to the ones already bound (the root
   # coven incarnation, set during onboarding, is preserved).
   - name: Bind the coven label to the soul on the keeper
     module: core.soul.registered

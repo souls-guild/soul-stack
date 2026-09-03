@@ -43,7 +43,7 @@ fixtures:
 
 assert:
   task_present:
-    # core.cloud.destroyed (on: keeper): provider/vm_ids/sids taken from incarnation.state.
+    # core.cloud.destroyed (keeper-side): provider/vm_ids/sids taken from incarnation.state.
     # Address is EXACTLY destroyed (base core.cloud + state destroyed).
     - module: core.cloud.destroyed
       params_subset:

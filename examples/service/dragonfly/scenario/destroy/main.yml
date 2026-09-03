@@ -10,7 +10,7 @@ description: >-
   MODELED ON redis; provision is required in the base create — default-on): destroy carries BOTH branches.
     (1) CLOUD-CASCADE (symmetric with redis/destroy): when create PROVISIONED a VM (provisioned_vm_ids/
         sids in state — the default-on path), destroy tears down the cloud VMs (core.cloud.destroyed,
-        on: keeper) + cascades keeper registries (souls→destroyed/seeds→orphaned/tokens→burned).
+        keeper-side) + cascades keeper registries (souls→destroyed/seeds→orphaned/tokens→burned).
         Gate `when: size(provisioned_vm_ids) > 0` (static → group-drop) keeps this task ONLY
         on provisioned incarnations. Assert sids↔vm_ids pairing BEFORE destroy (like redis).
     (2) SOUL-SIDE teardown (the older DragonFly profile): when create ran against EXISTING
@@ -82,7 +82,7 @@ tasks:
         - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
       message: "provisioned_sids and provisioned_vm_ids in incarnation.state are mismatched: a cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — the lengths must match (both sets are written by create with a single guard from register.provision.hosts)"
 
-  # Removing VMs + cascading keeper registries (core.cloud.destroyed, on: keeper). ★ The address
+  # Removing VMs + cascading keeper registries (core.cloud.destroyed, keeper-side). ★ The address
   # is EXACTLY core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
   # PluginHost.Destroy(vm_ids) THEN cascade(sids). params come from incarnation.state (the keeper
   # task sees a pre-run snapshot). GROUP-DROP on non-provisioned: when is static

@@ -30,7 +30,7 @@ input:
   # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Option A) ─
   # ★ provision (FLAG section name, propose-and-wait): object-input "create machines".
   # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
-  # via core.cloud.created (on: keeper), (b) delivers a per-VM bootstrap token
+  # via core.cloud.created (keeper-side), (b) delivers a per-VM bootstrap token
   # (illustrative), (c) registers the created SIDs + BLOCKINGLY awaits onboarding
   # (core.soul.registered await_online + refresh_soulprint, ADR-061), after which the roster
   # is re-resolved and the cluster/sentinel branch rolls the redis role onto the now-online hosts.

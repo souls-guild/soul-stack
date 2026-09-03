@@ -9,7 +9,7 @@ description: >-
   binds no soulprint, targets no host and reads only the keeper register bucket
   ([ADR-056] slice 2), so `register.node_id` there is not "some host's value" -
   it is nothing at all. `register.hosts.node_id` is the one root that carries the
-  per-host set across that boundary, and it exists ONLY in an `on: keeper` task.
+  per-host set across that boundary, and it exists ONLY in a keeper-side task.
 
 tasks:
   # The probe. `on:` omitted = every host of the incarnation, so the register

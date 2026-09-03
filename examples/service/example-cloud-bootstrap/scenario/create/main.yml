@@ -62,7 +62,7 @@ input:
       only when self_onboard: false). Required in B-flat mode.
 
 tasks:
-  # Step 1: create count VMs via CloudDriver (on: keeper, ADR-017). The branch depends
+  # Step 1: create count VMs via CloudDriver (keeper-side, ADR-017). The branch depends
   # on self_onboard:
   #   - self_onboard=true:  self_onboard+name -> keeper predicts the FQDN and bakes
   #     per-VM tokens into userdata (the VM onboards itself). generate_userdata is not needed.

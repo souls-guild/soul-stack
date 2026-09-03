@@ -152,7 +152,7 @@ on **every** render, otherwise a re-render would wipe `replica`/`sentinel` and b
 [`scenario/create/main.yml`](scenario/create/main.yml) - a single mode, no dispatcher; the run
 body is inline. Steps:
 
-1. **generate-if-absent** (`core.vault.kv-present`, `on: keeper`) - create itself generates
+1. **generate-if-absent** (`core.vault.kv-present`, keeper-side) - create itself generates
    missing passwords cryptographically at random (32 characters from the default alphabet)
    for all system + operator-extra accounts. Ordering invariant: the write to Vault happens
    **before** the render phase of tasks that read the same secrets via `${ vault(...) }` (ADR-056);
@@ -181,7 +181,7 @@ body is inline. Steps:
 Option A): `input.provision` defaults to `{enabled: true}` - a single create run brings up VMs
 for the topology **and** deploys DragonFly. The shared body is
 [`scenario/dragonfly-provision.yml`](scenario/dragonfly-provision.yml): (a) cloud-create
-(`core.cloud.created`, `on: keeper`; the VM count is derived from the topology
+(`core.cloud.created`, keeper-side; the VM count is derived from the topology
 `1 + replicas_per_master`, there's no separate `node_count`), (b) delivering a per-VM bootstrap
 token over SSH (`core.bootstrap.delivered`,
 [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)), (c) a blocking wait for onboarding

@@ -54,7 +54,7 @@
       - "incarnation.name.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
     message: "incarnation name is not valid as a VM-name base for provisioning (needs ^[a-z][a-z0-9-]{0,48}[a-z0-9]$): a leading digit / trailing dash / length 51-63 pass create but fail in the CloudDriver — rename the incarnation or create with provision.enabled=false"
 
-# (a) Create VMs via CloudDriver (on: keeper, ADR-017). count = 1+replicas_per_master
+# (a) Create VMs via CloudDriver (keeper-side, ADR-017). count = 1+replicas_per_master
 #     (sentinel topology). generate_userdata: false: the VM is created WITHOUT cloud-init
 #     userdata (some cloud providers reject ci_user_data) → the VM auto-joins Teleport, and
 #     the whole setup (soul binary + CA + soul.yml + systemd unit) is installed by step (b)
@@ -121,7 +121,7 @@
     field: provisioned_provider
     value: "${ default(input.provision.provider, vars.provision_provider) }"
 
-# (b) Install soul + deliver the per-VM bootstrap token over SSH (on: keeper,
+# (b) Install soul + deliver the per-VM bootstrap token over SSH (keeper-side,
 #     core.bootstrap.delivered, ADR-063). Takes hosts from the previous step's register
 #     (each — {sid, primary_ip, bootstrap_token}). install: true → the VM arrived WITHOUT
 #     cloud-init (step (a) generate_userdata:false), so the entire setup is installed HERE
@@ -149,7 +149,7 @@
     - provision
 
 # (c) Register the created SIDs + a BLOCKING onboarding barrier + refresh_soulprint
-#     (on: keeper, core.soul.registered, ADR-061). sid — a LIST from register.provision.hosts
+#     (keeper-side, core.soul.registered, ADR-061). sid — a LIST from register.provision.hosts
 #     (h.sid of each created VM; the list comes via a CEL expression, list-SID ADR-061). The bind
 #     makes each SID a member of this incarnation implicitly (incarnation_membership, ADR-008
 #     amendment NIM-124) — no coven: needed (membership is not a coven value). await_online:true →

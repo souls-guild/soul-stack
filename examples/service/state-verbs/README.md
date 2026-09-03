@@ -56,7 +56,7 @@ Two things this file is written to show:
   `node_id`, not on `hosts` — which is what puts the capture in a **later
   Passage** than the probe, so the map is populated by the time it renders. A
   same-Passage capture would read an empty map.
-- **Outside `on: keeper` it is a compile error, not an empty map.** A host task's
+- **Outside a keeper-side task it is a compile error, not an empty map.** A host task's
   `register.<name>` is deliberately its own value ([ADR-0083](../../../docs/adr/0083-declared-secret-state-fields.md)
   §5), and an empty map would let `.size() == 0` and an empty `foreach` read as
   facts. `register: hosts` on a task is refused at parse
