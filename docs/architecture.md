@@ -93,7 +93,7 @@ Moved to [`docs/adr/0010-templating.md`](adr/0010-templating.md). Two engines wi
 
 ### [ADR-011. Go code layout: go.work with modules on the sides](adr/0011-go-layout.md)
 
-Moved to [`docs/adr/0011-go-layout.md`](adr/0011-go-layout.md). Option B - `go.work` with seven modules on the sides (`proto/` / `proto/plugin/` / `shared/` / `sdk/` / `keeper/` / `soul/` / `soul-lint/`); Soul isolation is guaranteed by the compiler (`soul/go.mod` does not require keeper); committed generated Go; shared semver tags; server-side drivers in `<binary>/internal/`, not in `shared/`. Amendment: abolition of `proto/operator/v1`. Operator API form - **Go-types huma code-first** ([ADR-054](adr/0054-openapi-code-first.md)), derivative spec; oapi-codegen-framework ([ADR-051](adr/0051-operator-api-codegen.md)) and package `keeper/internal/api/oapi/` demolished (2026-06-13).
+Moved to [`docs/adr/0011-go-layout.md`](adr/0011-go-layout.md). Option B - `go.work` with seven modules on the sides (`proto/` / `proto/plugin/` / `shared/` / `sdk/` / `keeper/` / `soul/` / `soul-lint/`); Soul isolation is guaranteed by the compiler (`soul/go.mod` does not require keeper); committed generated Go; shared semver tags; server-side drivers in `<binary>/internal/`, not in `shared/`. Amendment: abolition of `proto/operator/v1`. Operator API form - **Go-types huma code-first** ([ADR-054](adr/0054-openapi-code-first.md)), derivative spec; oapi-codegen-framework ([ADR-051](adr/0051-operator-api-codegen.md)) and package `keeper/internal/api/oapi/` demolished (2026-06-13). **Amendment 2026-09-01 (NIM-757): `proto/plugin/` loses a service contract and `sdk/` loses a subpackage** ([ADR-011 amendment](adr/0011-go-layout.md#amendment-2026-09-01-nim-757-protoplugin-loses-a-service-contract-and-sdk-loses-a-subpackage)) — CloudDriver is removed and a cloud driver becomes an ordinary `side: keeper` plugin, so `clouddriver.proto` + its committed generated Go and the whole `sdk/clouddriver/` module directory go, and `keeper/internal/` sheds `provider/` / `profile/` / `coremod/cloud/` / `pluginhost/clouddriver.go`. ⚠ Includes a **factual correction** to the ADR: `proto/plugin/v1/` carries **four** services today, not three — `SoulBeacon` was added as V5-2 by the [ADR-030 amendment 2026-05-26](adr/0030-vigil-oracle.md#amendment-2026-05-26-s5-closure) and never absorbed here — so the count after the cut is **three**. Design only, not implemented: NIM-761.
 
 ### [ADR-012. Keeper↔Soul gRPC contract: one EventStream with oneof, Keeper-side render, forward-compat only-add](adr/0012-keeper-soul-grpc.md)
 
@@ -109,7 +109,7 @@ Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). 
 
 ### [ADR-015. Core MVP modules: exact list](adr/0015-core-modules-mvp.md)
 
-Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 18 Soul-side core modules (`core.pkg`/`core.file`/`core.directory`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read`); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP). Amendment 2026-07-17: `core.file.directory` split out into the standalone `core.directory` (`present`/`absent`, hard rename); `core.service` gains `disabled`/`masked`.
+Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 18 Soul-side core modules (`core.pkg`/`core.file`/`core.directory`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read` — ⚠ `core.cloud` is **slated for removal**, NIM-757 epic, see the ADR-017 stub below); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP). Amendment 2026-07-17: `core.file.directory` split out into the standalone `core.directory` (`present`/`absent`, hard rename); `core.service` gains `disabled`/`masked`.
 
 ### [ADR-016. Parity strategy and Soul Stack license](adr/0016-parity-license.md)
 
@@ -117,7 +117,7 @@ Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). Licens
 
 ### [ADR-017. Keeper-side core modules expanded: `core.cloud.provisioned`, `core.vault.kv-read`](adr/0017-keeper-side-core.md)
 
-Moved to [`docs/adr/0017-keeper-side-core.md`](adr/0017-keeper-side-core.md). Two keeper-side core modules (`on: keeper`): `core.cloud.provisioned` (`created`/`destroyed` via `CloudDriver` plugin, cascade with destroy) replaces the "destiny `cloud-provision`" pattern; `core.vault.kv-read` (`read`) - explicit audit-accurate reading of Vault KV during rendering. Amendments: cloud credentials-flow (Variant A) + 6 implemented providers + cloud-init bootstrap.
+Moved to [`docs/adr/0017-keeper-side-core.md`](adr/0017-keeper-side-core.md). Two keeper-side core modules (`on: keeper`): `core.cloud.provisioned` (`created`/`destroyed` via `CloudDriver` plugin, cascade with destroy) replaces the "destiny `cloud-provision`" pattern; `core.vault.kv-read` (`read`) - explicit audit-accurate reading of Vault KV during rendering. Amendments: cloud credentials-flow (Variant A) + 6 implemented providers + cloud-init bootstrap. **Amendment 2026-09-01 (NIM-757): the separate CloudDriver contract is removed — every cloud driver is an ordinary SoulModule plugin declaring `side: keeper`** ([ADR-017 amendment](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)). Credentials stay Variant A but arrive as **ordinary step params**, so no cloud-specific credentials channel remains in keeper at all. `core.cloud` and all three of its states (`created` / `destroyed` / **`resized`**) go, together with the Provider and Profile registries, 8 RBAC permissions, 7 audit events, 10 MCP tools, 10 Operator-API operations and the six `soul-cloud-*` examples; the 2026-08-17 NIM-668 amendment is **annulled**. Order is forced — **NIM-758** (keeper learns to execute a keeper-side plugin) → **NIM-760** (`soul-cloud-wb` moves, verified live) → **NIM-761** (removal) → **NIM-762** (web UI); removal first would leave the platform unable to create a machine at all. Design only, not implemented.
 
 ### [ADR-018. Soulprint typed MVP scheme](adr/0018-soulprint-typed.md)
 
@@ -129,7 +129,7 @@ Moved to [`docs/adr/0019-state-migration-dsl.md`](adr/0019-state-migration-dsl.m
 
 ### [ADR-020. Plugin infrastructure: manifest, handshake, lifecycle format](adr/0020-plugin-infrastructure.md)
 
-Moved to [`docs/adr/0020-plugin-infrastructure.md`](adr/0020-plugin-infrastructure.md). A unified infrastructure of three kinds of plugins (`soul_module`/`cloud_driver`/`ssh_provider`): static `manifest.yaml` (offline validation `soul-lint`), JSON-handshake with a magic prefix → gRPC-over-unix-socket, `protocol_version` ↔ `proto/plugin/vN/`, one-shot lifecycle, closed-enum `required_capabilities` / `side_effects`, file-permissions instead of mTLS. Amendments: SDK Phase 2, SshProvider-set + credentials-flow.
+Moved to [`docs/adr/0020-plugin-infrastructure.md`](adr/0020-plugin-infrastructure.md). A unified infrastructure of three kinds of plugins (`soul_module`/`cloud_driver`/`ssh_provider`): static `manifest.yaml` (offline validation `soul-lint`), JSON-handshake with a magic prefix → gRPC-over-unix-socket, `protocol_version` ↔ `proto/plugin/vN/`, one-shot lifecycle, closed-enum `required_capabilities` / `side_effects`, file-permissions instead of mTLS. Amendments: SDK Phase 2, SshProvider-set + credentials-flow. **Amendment 2026-09-01 (NIM-757): `cloud_driver` is removed, and `side: keeper` is what replaces it** ([ADR-020 amendment](adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it)). ⚠ The count in the summary line above ("three kinds of plugins") is **stale independently of this change** — `soul_beacon` was added as V5-2 by the [ADR-030 amendment 2026-05-26](adr/0030-vigil-oracle.md#amendment-2026-05-26-s5-closure) and never absorbed into ADR-020's Context, so the real set is four and the cut leaves **three**, not two. The infrastructure this ADR fixes — one handshake, one socket, one one-shot lifecycle, one stamped schema document, one Sigil gate — is untouched, which is precisely why the separate contract was redundant. ⚠ The closed `kind:` enum lives in **`sdk/schema/`**, not in proto (`manifest.proto` is already a hand-synced dead document), so this is an `sdk/` change with a proto `reserved` as a footnote. The 2026-08-06 open item "the authoring form for `cloud_driver` / `ssh_provider` / `soul_beacon`" is **half-closed**: the cloud half by removal, the other two untouched. Design only, not implemented: NIM-758 / NIM-760 / NIM-761.
 ### [ADR-021. Hot-reload config with write-back YAML](adr/0021-hot-reload-config.md)
 
 Moved to [`docs/adr/0021-hot-reload-config.md`](adr/0021-hot-reload-config.md). Two ways of changing (file-edit `SIGHUP` / API-MCP with write-back YAML round-trip); validation-pipeline (parse→schema→semantic→atomic swap); per-host without cross-host; audit-events `config.reload_succeeded`/`config.reload_failed`; `shared/config` for three binaries; reload-able vs require-restart general principle.
@@ -618,7 +618,7 @@ Moved to [`docs/adr/0086-one-schema-dialect.md`](adr/0086-one-schema-dialect.md)
 | Contract | Who is the host | Who is the plugin | Destination |
 |---|---|---|---|
 | **`SoulModule`** | `soul`-binary | one executable in the alias-named slot | Implements Destiny steps: `Validate` / `Plan` / `Apply` (see Module Model). |
-| **`CloudDriver`** | `keeper` | `soul-cloud-<provider>` | Creates/deletes/polls VMs in the cloud: `Schema` / `Validate` / `Create` / `Destroy` / `Status` / `List`. |
+| **`CloudDriver`** ⚠ | `keeper` | `soul-cloud-<provider>` | Creates/deletes/polls VMs in the cloud: `Schema` / `Validate` / `Create` / `Destroy` / `Resize` / `Status` / `List`. **Slated for removal (NIM-757 epic, not implemented).** A cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper` — see the [ADR-020 amendment 2026-09-01](adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it). The contract, the six drivers and this row describe what ships today. |
 | **`SshProvider`** | `keeper` | `soul-ssh-<provider>` | Provides SSH credentials for `keeper.push`: `Sign` / `Authorize` (Vault SSH CA, static-key, Teleport - all fit into this contract). |
 
 ### Benefits of a single infrastructure
@@ -643,8 +643,8 @@ A clear boundary between **code** (static, versioned with git tags, reviewed via
 | **Service** | Definition (service type) | git, separate repo for the service | git tag → registry in master |
 | **Destiny** | Definition (atomic brick) | git, separate repo on destiny | git tag → transitively via service.yml |
 | **Module** (`soul-mod-*`, `soul-cloud-*`, `soul-ssh-*`) | Definition + binary | git sources + artifact-cache in master | release in git → master pulls binary |
-| **Profile** | Runtime config | **Postgres** | API/MCP CRUD |
-| **Provider** | Runtime config | **Postgres** | API/MCP CRUD |
+| **Profile** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
+| **Provider** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
 | **Coven** | Runtime state | **Postgres** | API/MCP, or synchronized from incarnation |
 | **Incarnation** | Runtime state (spec + state + status) | **Postgres** | API/MCP CRUD |
 | **Soul** | Runtime state | **Postgres** | bootstrap via CSR, lifecycle via scenario |
@@ -1209,6 +1209,17 @@ After a successful upgrade, the scenarios continue to work with the new schema. 
 The scenario is tied to the **service version** under which it is launched. After upgrade incarnation to a new service-version, old scenarios are no longer called - the operator works with new ones. This is intentional: mixing scenarios of different versions is the way to drift.
 
 ## Cloud integration via `keeper.cloud`
+
+> ⚠ **The whole of this section is slated for removal — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> The separate CloudDriver contract goes away: every cloud driver is in fact a plugin, so it becomes
+> an **ordinary SoulModule plugin declaring `side: keeper`**, its credentials arrive as ordinary step
+> params, and `keeper.cloud` / `core.cloud` / the Provider and Profile registries cease to exist.
+> Full decision, named losses and the forced ticket order (**NIM-758** keeper learns to execute a
+> keeper-side plugin → **NIM-760** `soul-cloud-wb` moves and is verified live → **NIM-761** removal →
+> **NIM-762** web UI) — [ADR-017 amendment 2026-09-01](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin),
+> [ADR-020 amendment 2026-09-01](adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it),
+> [ADR-011 amendment 2026-09-01](adr/0011-go-layout.md#amendment-2026-09-01-nim-757-protoplugin-loses-a-service-contract-and-sdk-loses-a-subpackage).
+> **Everything below describes the engine that ships today** and stays accurate until NIM-761.
 
 Dynamic VM creation is implemented as a **cloud-create-scenario step** with `on: keeper` via the CloudDriver plugin. Service does not know the specifics of clouds - it knows "the step of creating a VM with parameters is needed," Keeper selects a driver and executes it.
 

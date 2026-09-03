@@ -1,5 +1,15 @@
 # Cloud integration (`keeper.cloud`)
 
+> ⚠ **This whole document specifies a thing that is being removed — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> The separate CloudDriver contract goes away: every cloud driver already *is* a plugin, so it becomes an
+> **ordinary SoulModule plugin declaring `side: keeper`**, its credentials arrive as ordinary step params, and
+> `keeper.cloud` / `core.cloud` / the Provider and Profile registries cease to exist.
+> Forced ticket order: **NIM-758** (keeper learns to execute a keeper-side plugin) → **NIM-760**
+> (`soul-cloud-wb` moves and VM creation is verified live) → **NIM-761** (removal) → **NIM-762** (web UI).
+> Removal first would leave the platform unable to create a machine at all. Decision, named losses and the
+> RBAC/proto consequences — [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
+> **Everything below describes the engine that ships today** and stays accurate until NIM-761.
+
 Module inside the `keeper` binary, responsible for cloud operations (creating / deleting / polling VMs). Dynamic VM creation is implemented as a **script step with `on: keeper`** via the CloudDriver plugin ([plugins.md](plugins.md)). Service does not know the specifics of clouds - it knows "the step of creating a VM with parameters is needed"; Keeper selects the driver and executes.
 
 ## Provider and Profile in Postgres
@@ -85,6 +95,13 @@ What `core.cloud` (state `created`) does:
 Steps 4-5 - **B-flat (default)** mode. With `self_onboard: true`, the order is different: tokens are issued **BEFORE** create and baked in userdata - VM onboards itself, the delivery step is not needed (see Self-onboard "Option T").
 
 ### Two sources for the driver: registry or inline
+
+> ⚠ **NIM-668 is ANNULLED (NIM-757, decided 2026-09-01, NOT implemented).** This section is the NIM-668 text.
+> NIM-668 was the additive first step of "cloud stops being an entity of its own"; the 2026-09-01 decision goes
+> past it — there is no `core.cloud` step left for a second source to parametrise, so both sources go, not just
+> the registry one. Named by number so it is not chased as live:
+> [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
+> **Both sources work exactly as described below until NIM-761.**
 
 The step gets its CloudDriver from **exactly one** of two sources (NIM-668). Both end up as the same tuple - driver alias, credentials, region, fqdn_suffix - so the driver, the audit event and the step output cannot tell them apart.
 

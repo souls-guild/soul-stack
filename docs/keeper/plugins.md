@@ -10,10 +10,21 @@ Normative specification of the **schema document**, handshake strings, plugin li
 
 The document covers **all kinds of plugins** (the schema-document format is the same, [ADR-020(e)](../adr/0020-plugin-infrastructure.md)):
 
+> ⚠ **`cloud_driver` is being removed from this table — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> Every CloudDriver already *is* a plugin, so the separate contract was a duplicated abstraction: a cloud driver
+> becomes an ordinary **`soul_module`** artifact declaring **`side: keeper`**, and the kind leaves the closed enum
+> in `sdk/schema/` (the proto contribution is `reserved 2`, which is the never-reuse rule, not backward
+> compatibility). The infrastructure this page specifies — handshake, socket, one-shot lifecycle, stamped schema
+> document, Sigil gate — is untouched, which is exactly why the contract was redundant. Order: **NIM-758**
+> (keeper learns to execute a keeper-side plugin; `side: keeper` on a plugin is accepted-and-inert until then)
+> → **NIM-760** → **NIM-761** (removal). See
+> [ADR-020 amendment 2026-09-01](../adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it).
+> **The kind, its `profile_schema` root field and the `CloudDriver` contract below all ship today.**
+
 | Kind | Host | Destination |
 |---|---|---|
 | `soul_module` | `soul` (agent or push) | Implements Destiny steps: [`SoulModule`](#service-contract-soulmodule). Also see [`../soul/modules.md`](../soul/modules.md). |
-| `cloud_driver` | `keeper` (module `keeper.cloud`) | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). |
+| `cloud_driver` ⚠ | `keeper` (module `keeper.cloud`) | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). **Slated for removal — see the note above.** |
 | `ssh_provider` | `keeper` (module `keeper.push`) | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
 | `soul_beacon` | `soul` | Read-only host observation for Vigil: [ADR-030 V5-2](../adr/0030-vigil-oracle.md). |
 
@@ -599,6 +610,17 @@ There is **no `Manifest()` RPC**, and now there is a second reason for it. The o
 Destiny step addressing is `<namespace>.<name>.<state>` (see [`../soul/modules.md`](../soul/modules.md), [naming-rules.md → Destiny Modules](../naming-rules.md)).
 
 ## Service contract `CloudDriver`
+
+> ⚠ **This contract is being deleted — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> `proto/plugin/v1/clouddriver.proto`, its committed generated Go and the `sdk/clouddriver/` module directory go
+> (Option A — no backward-compatibility branch, no `proto/plugin/v2`: nothing is changing shape, it is going
+> away). An already-built third-party driver binary is not broken — the wire is untouched — it simply stops
+> being called once `keeper/internal/pluginhost/clouddriver.go` goes; what breaks is a **rebuild** against a
+> newer tag. A cloud driver's replacement is an ordinary SoulModule plugin declaring `side: keeper`
+> ([ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
+> **The contract below is live and the six official drivers implement it.** (⚠ The method table is also short one
+> row: `service CloudDriver` carries **seven** RPCs — `Resize` is missing here. Left as-is deliberately; the
+> contract is going away and a correction would be churn.)
 
 Host - `keeper` (module `keeper.cloud`, see [`cloud.md`](cloud.md)). The artifact is the single executable in `dist/`; repositories conventionally name it `soul-cloud-<provider>`, and nothing reads that name.
 

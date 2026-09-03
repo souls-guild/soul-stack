@@ -1,5 +1,15 @@
 # core.cloud
 
+> ⚠ **This module is being removed — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> Every CloudDriver already *is* a plugin, so the separate contract is a duplicated abstraction: a cloud driver
+> becomes an **ordinary SoulModule plugin declaring `side: keeper`**, its credentials arrive as ordinary step
+> params, and `core.cloud` — all three states, `created` / `destroyed` / **`resized`** — goes with the Provider
+> and Profile registries. Forced order (a SoulModule runs on a host; a VM is created when no hosts exist yet):
+> **NIM-758** (keeper learns to execute a keeper-side plugin) → **NIM-760** (`soul-cloud-wb` moves, verified
+> live) → **NIM-761** (removal). Decision and named losses —
+> [ADR-017 amendment 2026-09-01](../../../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
+> **Everything below describes the module that ships today** and stays accurate until NIM-761.
+
 Creating / deleting cloud instances via the CloudDriver plugin (`soul-cloud-*`).
 **Keeper-side**, dispatcher `on: keeper` - the step is executed on the Keeper itself, not
 on the host (as opposed to Soul-side core). Starting without `on: keeper` is an error

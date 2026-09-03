@@ -13,6 +13,8 @@ Addressing (`<namespace>.<module>.<state>`) and SoulModule contract are the same
 
 **The side is the module's, and a task does not restate it** (NIM-747). The seven keeper-side core base addresses - `core.bootstrap` / `core.cert` / `core.choir` / `core.cloud` / `core.soul` / `core.state` / `core.vault` - are disjoint from the twenty-one Soul-side ones, so the address alone routes the step. `on: keeper` on one of them is a validation error (`on_keeper_redundant`), and a Soul-side address is a host task however it is written. The catalog is one list, `shared/coremanifest`, read by both `soul-lint` and the render pipeline; a plugin declares its own side in its schema document (`side: keeper | soul`, default `soul`), which the Keeper cannot yet route by (NIM-688) - so `on: keeper` on a PLUGIN address stays legal.
 
+⚠ **`core.cloud` is leaving this list, and `side: keeper` is what replaces it** (epic NIM-757, decided 2026-09-01, **not implemented**). Every CloudDriver already *is* a plugin, so the separate contract is removed and a cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper` - which is exactly the field above, once the Keeper can route by it. That is the precondition, and it is tracked as **NIM-758** (epic NIM-757) and, earlier, as **NIM-688** — the same gap under two numbers, the older of which the paragraph above cites. Today `applyKeeperTask` resolves against the `coremod.Registry` only and answers `unknown keeper-side module` on a plugin address; and even once the lookup finds one, `Host.Spawn` refuses to start anything that is not `cloud_driver`/`ssh_provider`, so the missing half is permission to spawn, not discovery. Order is forced (a SoulModule runs on a host; a VM is created when no hosts exist yet, which is why `core.cloud` was made keeper-side at all): **NIM-758** → **NIM-760** (`soul-cloud-wb` moves, verified live) → **NIM-761** (removal). Full decision - [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin). Until NIM-761 the keeper-side bases below still number seven, `core.cloud` included.
+
 ## Registration and dispatch at (`base` + `state`)
 
 Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.state`, `core.cert`. State comes from the last segment of the task address.
@@ -267,6 +269,15 @@ Complete per-module reference - [docs/module/core/choir/README.md](../module/cor
 
 ## `core.cloud.created` / `core.cloud.destroyed`
 
+> ⚠ **This module is being removed — epic NIM-757, decided 2026-09-01, NOT implemented.** All three states go
+> (`created` / `destroyed` / **`resized`**), together with the Provider and Profile registries the parameter
+> tables below reference. A cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper`, and its
+> credentials become ordinary step params - **no cloud-specific credentials channel remains in keeper**. The
+> **NIM-668 two-source seam described below is annulled** with it: there is no `core.cloud` step left for a
+> second source to parametrise. Order: **NIM-758** → **NIM-760** → **NIM-761**. See
+> [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
+> **Everything in this section describes the module that ships today.**
+
 Creating/deleting VMs via CloudDriver plugin ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.cloud`; state (`created` / `destroyed`, also `resized`) comes from the address suffix. Implementation - [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Full flow (Provider/Profile-resolve, credentials Option A, userdata-render, guard-rails destroy) - [cloud.md](cloud.md); per-module reference - [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
 
 **Two sources for the driver tuple** ([ADR-017 amendment 2026-08-17](../adr/0017-keeper-side-core.md), NIM-668), for all three states: the **registry** (`provider:` = a row name, keeper resolves driver + credentials + region + fqdn_suffix out of it) or **inline** (`driver` + `credentials` + `region` / `fqdn_suffix` written in the step, `profile` as the VM spec object). One or the other - naming both is a `Validate` error, not a silent preference. The registries stay supported and simply stop being mandatory; a service can now provision with zero rows in Postgres. Comparison table and rules - [cloud.md → Two sources for the driver](cloud.md#two-sources-for-the-driver-registry-or-inline).
@@ -510,6 +521,6 @@ The step itself `core.module.installed` - **Soul-side** (delivery of the SoulMod
 - [architecture.md → Module addressing](../architecture.md) - format `<namespace>.<module>.<state>`.
 - [scenario/orchestration.md §3](../scenario/orchestration.md) - `on:`, step manager between the Soul side and the Keeper side.
 - [storage.md](storage.md) - `souls` tables, coven binding.
-- [cloud.md](cloud.md) - `core.cloud.provisioned` and a border with coven binding (`core.soul.registered` is a separate step).
+- [cloud.md](cloud.md) - `core.cloud.provisioned` and a border with coven binding (`core.soul.registered` is a separate step). ⚠ That document specifies a thing slated for removal (epic NIM-757, not implemented).
 - [soul/modules.md](../soul/modules.md) — host side of `core.module.installed`: delivery, verify, cache of custom modules.
 - [naming-rules.md → Destiny Modules](../naming-rules.md) - a dictionary of names.

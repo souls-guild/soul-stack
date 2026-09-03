@@ -262,3 +262,99 @@ stated because an unenforced declaration that reads like a control is exactly th
 
 Rollout is **souls first, then keeper, then re-stamp artifacts**: decoding is strict, so a document
 carrying `side:` fails to parse on an older `soul`, which reads the document at install.
+
+## Amendment 2026-09-01 (NIM-757): `cloud_driver` is removed, and `side: keeper` is what replaces it
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-758 /
+NIM-760 / NIM-761. Everything above still describes the artifacts that ship. Written under NIM-759.
+
+The heading deliberately carries **no count of kinds**. The arithmetic in this ADR has been wrong
+since 2026-05-26 (see (t)), and a heading that states a number is a heading that can be wrong about
+one — and whose anchor then has to be re-slugged to fix it.
+
+This amendment continues the block above rather than opening a second story. That block added
+`side: keeper | soul` and closed with the warning that on a plugin the field is **accepted and
+inert**, because `applyKeeperTask` resolves against a `coremod.Registry` only. The user's decision
+of 2026-09-01 is what makes the field load-bearing: **a CloudDriver is not a kind of plugin, it is
+a `side: keeper` SoulModule plugin**, and the separate contract is deleted.
+
+**(t) The premise of (a) — "three categories of plugins with different service contracts" — was
+already wrong before this ticket, and the cut leaves three.** (a) opens on `SoulModule` /
+`CloudDriver` / `SshProvider`, but V5-2 of the
+[ADR-030 amendment 2026-05-26](0030-vigil-oracle.md#amendment-2026-05-26-s5-closure) added a
+**fourth**, `soul_beacon` (`proto/plugin/v1/beacon.proto:28`) — note the origin is ADR-030, not
+this ADR's own 2026-05-26 amendment, which is the SshProvider MVP set — and (a) was never updated
+to absorb it — the
+count in the Context has been stale for months. This ADR's own text already knows better in one
+place: the 2026-08-06 amendment above counts "the three kinds that carry no `modules[]` at all
+(`cloud_driver`, `ssh_provider`, `soul_beacon`)", which only adds up against a total of four. So
+the honest arithmetic is **four minus the cloud arm = three**, not three minus one = two. It is
+recorded rather than silently corrected, because a reader tracing the Context will otherwise meet
+the stale three and take it for the pre-cut baseline.
+
+What goes is the cloud arm specifically: the `kind:` discriminator of (e) carries `cloud_driver`,
+(e) gives it `spec.profile_schema`, (e)'s `sdk/handshake` type gives it a `CloudDriverSpec` `oneof`
+arm, and (e)'s binary-name convention gave it `soul-cloud-*`. The *infrastructure* this ADR fixes —
+one handshake, one socket, one one-shot lifecycle, one stamped schema document, one Sigil gate — is
+untouched, which is the whole reason the separate contract was redundant: a cloud driver already
+used every part of it.
+
+**(u) `kind: cloud_driver` leaves the closed enum, and the enum is not in proto.** The
+authoritative list is `sdk/schema/schema.go:34-45` (`KindCloudDriver Kind = "cloud_driver"`,
+`:42`), re-exported at `shared/plugin/document.go:66` and enforced at `sdk/schema/validate.go`
+(`:112-119` the enum itself, `:143-152` the `profile_schema`-required rule, `:192-196` the
+`profile_schema`-only-for-cloud rule). ⚠ The (f)/(g) sentence *"extending the list is done via a
+PR to `proto/plugin/vN/manifest.proto`"* — echoed in
+[`docs/naming-rules.md`](../naming-rules.md) — is **stale**: `pluginv1.Manifest`,
+`CloudDriverSpec`, `SoulModuleSpec` and `SshProviderSpec` have zero non-test Go references in this
+tree, so `manifest.proto` is a hand-synced dead document and has been for some time. Removing a
+kind is therefore an **`sdk/` change**. The proto side contributes one line:
+`KIND_CLOUD_DRIVER = 2` in `proto/plugin/v1/common.proto:15` becomes
+`reserved 2; reserved "KIND_CLOUD_DRIVER";` — **never-reuse per (c), not backward compatibility**,
+the same treatment the `PluginSigil` fields got. The enum that remains is
+`{soul_module, ssh_provider, soul_beacon}`.
+
+★ An old artifact still declaring the kind fails at **schema-document validation** — not at build,
+and not at handshake. `sdk/schema/validate.go` reaches its `default:` arm and emits an error-level
+`kind_invalid` (`kind=%q is not in {soul_module,cloud_driver,ssh_provider,soul_beacon}`), and
+`keeper/internal/pluginhost/slot.go:100-102` runs `ParseDocument` + `FirstError` and returns
+`pluginhost: invalid schema document in %q` **before the plugin is ever spawned**. No process
+starts, so nothing is SIGTERMed. The kind-drift comparison at `shared/pluginhost/handshake.go:84`
+(an unknown kind decodes to `KIND_UNSPECIFIED` and the comparison drifts) is a real second gate,
+but for this case it is unreachable — the slot is refused first. Worth stating precisely, because
+the refusal an operator will actually see, and the one NIM-761 has to word, is the slot-load one.
+
+**(v) The service contract is deleted outright — Option A, no compatibility branch.**
+`proto/plugin/v1/clouddriver.proto` (`service CloudDriver`, 7 RPCs, `:17-49`) and its messages
+go, with the committed `proto/plugin/gen/go/v1/clouddriver.pb.go` and `clouddriver_grpc.pb.go`
+and the `sdk/clouddriver/` module directory. `proto/plugin/v2` was considered and rejected: v2 is
+the [ADR-012](0012-keeper-soul-grpc.md) escape hatch for a contract that changes *shape*, and this
+one is not changing shape, it is going away. ⚠ **`make check-gen` does not catch the orphan.**
+`Makefile:22` enumerates the inputs with `find` over `proto/plugin/v1` and protoc never deletes
+stale outputs, so a removed
+`.proto` beside a surviving committed `.pb.go` yields an **empty diff and a green gate** — the two
+generated files are deleted by hand in the same commit (NIM-761). An already-built third-party
+driver binary is not broken by any of this (the wire is untouched); it merely stops being called,
+once `keeper/internal/pluginhost/clouddriver.go` goes. What breaks is the **rebuild** against a
+newer tag.
+
+**(w) The open item at (s)'s consequences is half-closed.** The 2026-08-06 amendment left "the
+authoring form for `cloud_driver` / `ssh_provider` / `soul_beacon`" explicitly **not settled** —
+the Go-side generator was specified for SoulModule bundles only, and what replaces the authored
+`spec.profile_schema` / `spec.provider_kind` for the other kinds was open. The **cloud half of
+that question is now closed by removal**: there is no `cloud_driver` authoring form to design,
+because a cloud driver authors itself as a `module.Def` like any other SoulModule, and its VM
+profile is an ordinary `Def.Input` schema. `ssh_provider` and `soul_beacon` remain open exactly
+as they were — this decision says nothing about them.
+
+**Until the executing half lands, `side: keeper` on a plugin stays accepted and inert**, exactly as
+the block above states, and `cloud_driver` remains a live kind with a live contract, a live
+`profile_schema` root field and six live drivers. That gap is tracked as **NIM-758** (epic NIM-757)
+and, earlier, as **NIM-688** — the same gap under two numbers; the block above cites the older one.
+
+⚠ One hedge above has gone stale and is corrected here rather than rewritten in place: the 2026-08-06
+block says the `side:` work "is NIM-749 / NIM-750". **NIM-749 has since landed** the declaring half —
+the per-module `Side` field is in the schema (`sdk/schema/schema.go:147`, with
+`Side`/`SideSoul`/`SideKeeper` at `:102-121`). **NIM-750** — `on: keeper` ceasing to be required —
+**has not.** The full decision, the named losses and the ordering constraint are in
+[ADR-017 amendment 2026-09-01](0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).

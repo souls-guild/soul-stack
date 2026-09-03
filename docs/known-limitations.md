@@ -13,6 +13,12 @@ Beta works with **existing hosts**: the operator himself picks up the VM/hardwar
 
 If you want dynamic provisioning, this is post-beta. Now: Create a host outside of Soul Stack, then `POST /v1/souls` + `soul init`.
 
+### Keeper cannot execute a keeper-side plugin
+
+A plugin may **declare** where it runs — `side: keeper | soul` in its schema document, default `soul` ([ADR-020 amendment 2026-09-01 / NIM-748](adr/0020-plugin-infrastructure.md)) — but the Keeper cannot route by it. `applyKeeperTask` resolves a keeper-side address against the built-in `coremod.Registry` only, so a `side: keeper` plugin step fails with **`unknown keeper-side module`**. Loudly, never as a silent skip: the declaration is accepted and inert, which is stated deliberately so an unenforced key is not mistaken for a control.
+
+This is the **precondition** for the direction fixed by epic NIM-757 (decided 2026-09-01, not implemented): the separate CloudDriver contract is removed and a cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper`. The gap is tracked as **NIM-758** (epic NIM-757) and, earlier, as **NIM-688** — the same gap under two numbers. It must be closed before anything is deleted — a SoulModule runs on a host, a VM is created when no hosts exist yet, and removal-first would leave the platform unable to create a machine at all ([ADR-017 amendment 2026-09-01](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
+
 ## MCP does not cover all domains
 
 The primary operator interface is REST (OpenAPI) and MCP. But MCP symmetry with REST is incomplete - some domains are accessible **only through REST/UI**:

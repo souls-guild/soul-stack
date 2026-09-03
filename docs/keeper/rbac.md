@@ -892,6 +892,30 @@ Read-only access to the audit event feed (`audit_log`) via `GET /v1/audit` (UI i
 
 ### Cloud (8) — [cloud.md](cloud.md)
 
+> ⚠ **All eight permissions in this section are slated for removal — epic NIM-757, decided 2026-09-01, NOT
+> implemented.** The Provider and Profile registries go with the CloudDriver contract; a cloud driver becomes an
+> ordinary SoulModule plugin declaring `side: keeper`
+> ([ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
+>
+> ★ **Removing a permission is a breaking change whose shape is worse than "a lost grant".** The catalog is a
+> closed enum: `ParsePermission` rejects an unknown name, `NewEnforcerFromSnapshot` returns on the **first**
+> unparseable string in the whole snapshot, and the daemon turns that into a start-up refusal. So ONE surviving
+> `provider.create` row on one obscure role does not degrade one grant — it prevents the enforcer from being
+> built, keeper does not start, and the `role.*` API that could delete the row is not serving: a cluster-wide
+> authorization lockout with no in-band remedy. A running cluster hides it, because a failed TTL-refresh logs
+> and keeps serving on the previous enforcer, so the fault surfaces at the next restart. Grants live in Postgres
+> (`rbac_role_permissions`), **not** in `keeper.yml` — the `rbac:` key was hard-cut by ADR-028(g).
+>
+> The procedure is settled by precedent: `keeper/migrations/109_drop_permission_update_hosts.up.sql` (NIM-330).
+> Catalog entries and the data migration ship in the **same change**; the DELETE matches **both** the bare and
+> the scoped form (` on ` is the pinned separator — migration 095 matched only the bare form and would have
+> missed every scoped grant); a role emptied to zero permissions is **kept, not dropped** (it may carry
+> memberships or be a derived role's parent); `provider.*` / `profile.*` **wildcard** grants need no fix, since
+> a wildcard expands over whatever the catalog holds at load time.
+>
+> **The rows below are live and mirror the catalog** — `catalog.go` still counts them and so does
+> `catalog_total_test.go`.
+
 CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017). Full surface **implemented** (REST `/v1/providers*` + `/v1/profiles*` and MCP `keeper.provider.*` / `keeper.profile.*`). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `push-provider.*` / `service.*`). **`update`-permission NO** - Provider/Profile are immutable (change parameters = `delete` + `create`); read-visibility (list + get) gates one permission `*.read` (pattern `operator.list`↔`read`). Those who mutate write audit, read-only - no.
 
 | Permission | Semantics | Audit-event |

@@ -169,3 +169,226 @@ and `core.bootstrap`.
 
 Until NIM-749 / NIM-750 land, `on: keeper` remains required and everything above describes the
 engine that ships.
+
+## Amendment 2026-09-01 (NIM-757): the CloudDriver contract is removed — a cloud driver is an ordinary plugin
+
+**Not implemented.** Recorded here because the decision is accepted; the code is NIM-758 /
+NIM-760 / NIM-761 / NIM-762. The tree still ships CloudDriver in full — the contract, the
+registries, the module, the six drivers. Written under NIM-759.
+
+### Why the contract was redundant
+
+Every CloudDriver already **is** a plugin. It is discovered by the same `keeper.yml::plugins`
+catalog entry, resolved by the same git resolver, approved by the same Sigil flow, spawned by
+the same gRPC-over-stdio handshake and killed by the same SIGTERM. What the separate service
+contract added on top of that was a second way to say the same thing: a second `.proto`
+service, a second SDK module directory, a second `kind:` value, a second host adapter, a second
+declaration shape for the same artifact. None of it bought a capability the SoulModule contract
+lacks — `Create` is an Apply, `Destroy` is an Apply, `Resize` is an Apply, and the profile
+schema is an input schema.
+
+The user's decision of 2026-09-01: **a cloud driver becomes an ordinary SoulModule plugin
+declaring `side: keeper`** in its schema document ([ADR-020](0020-plugin-infrastructure.md)
+amendment 2026-09-01, NIM-748). Nothing is added to the platform to make that possible except
+the ability to *execute* a keeper-side plugin, which the declaring half already anticipates.
+
+### Credentials reach the plugin as input, and that is what makes the excision complete
+
+Variant A of amendment (d) above is preserved in substance: **the plugin does not talk to
+Vault.** Keeper resolves the secret with its own token and hands the plaintext to the plugin.
+That much is a coincidence of shape with what ships today.
+
+The consequence matters more than the coincidence. Once the driver is a SoulModule, its
+credentials are **ordinary step params**, resolved by the same render machinery that serves any
+other module — the `vault:` reference in `params` walked by `resolveVaultRefs` before the CEL
+phase, masked on output by the same `sensitiveKeyRe`. So **no cloud-specific credentials channel
+remains in keeper at all.** `keeper/internal/coremod/cloud/credentials.go:12-38` —
+`ResolvedProvider{Driver, Credentials, FQDNSuffix}`, with `region` folded into the credentials
+map under `regionKey` (`:39`) — is exactly the thing that goes away, and with it the
+`ProviderResolver`, the Provider→Vault lookup and the `CreateRequest.credentials` /
+`DestroyRequest.credentials` fields that carried its output. What remains is a plugin reading a
+param, which is not a cloud mechanism.
+
+This is the difference between an excision and a half-done one. If Keeper kept a resolver that
+knew what a cloud credential is, the removal would leave the abstraction alive under a different
+name; it does not.
+
+### The order cannot be permuted, and the reason is structural
+
+A SoulModule executes **on a host**. A VM is created when **no hosts exist yet** — that is why
+`core.cloud` was made keeper-side in the first place (the original Decision above). So the
+sequence is forced:
+
+1. **NIM-758 — keeper learns to execute a keeper-side plugin.** This is more than a dispatcher
+   patch; there are **three** places that refuse, and only the first is a lookup:
+   - `Runner.applyKeeperTask` (`keeper/internal/scenario/keeper_dispatch.go:274-276`) resolves the
+     address against `r.keeperModules` — a `coremod.Registry` — and nowhere else; a miss is
+     `unknown keeper-side module`.
+   - `coremod.Default` (`keeper/internal/coremod/registry.go:200`, the hardcoded map at `:209`)
+     builds that registry from in-tree core modules only; a plugin has no way into it.
+   - ★ `Host.Spawn` (`keeper/internal/pluginhost/pluginhost.go:117-121`) **refuses** anything that
+     is not `cloud_driver` or `ssh_provider` (`pluginhost: expected kind=cloud_driver|ssh_provider,
+     got %q`) — even though keeper already discovers and caches `soul_module` plugins, but only to
+     hand them to Souls, never to run them itself. The missing half is not discovery, it is
+     permission to spawn.
+
+   NIM-749 already landed `side: keeper | soul` in the schema (`sdk/schema/schema.go:147`, with
+   `Side`/`SideSoul`/`SideKeeper` at `:102-121`), so the **declaring** half exists and the
+   **executing** half does not. ⚠ The hedge in the NIM-748 amendment above ("the code is NIM-749 /
+   NIM-750") is stale on its first number: NIM-749 has landed, NIM-750 — `on: keeper` ceasing to be
+   required — has not. This gap is tracked as **NIM-758** (epic NIM-757) and, earlier, as
+   **NIM-688** — the same gap under two numbers.
+2. **NIM-760 — `soul-cloud-wb` moves to an ordinary plugin with `side: keeper`,** and VM creation
+   is verified live against a real provider before anything is deleted.
+3. **NIM-761 — removal.** The contract, the registries, the module, the SDK directory, the proto.
+
+Removal first would leave the platform with **no way to create a machine at all** — the old path
+deleted and the new path not yet executable. The live verification in step 2 is what makes step 3
+a deletion rather than a bet.
+
+### The losses, named — this is an accepted price, not a side effect
+
+**Eight RBAC permissions** leave the catalog (`keeper/internal/rbac/catalog.go:431-436` and
+`:460-461`): `provider.create`, `provider.read`, `provider.delete`, `profile.create`,
+`profile.read`, `profile.delete`, `provider.label-set`, `profile.label-set`.
+
+**Seven audit events** leave `shared/audit/event_types.go`: `cloud.provisioned` (`:392`, the one
+event covering create *and* destroy through a payload `action`), `provider.created` (`:1177`),
+`provider.deleted` (`:1182`), `profile.created` (`:1190`), `profile.deleted` (`:1195`),
+`provider.label_changed` (`:1295`), `profile.label_changed` (`:1296`). Note that
+`shared/audit/event_types_gen.go` is **derived** (`make gen-audit-catalog`) and feeds the OpenAPI
+`AuditEvent.type` enum — the catalog edit propagates into the served spec without a hand edit.
+
+**Two Postgres registries** — Provider and Profile: migrations `019_create_providers`,
+`020_create_profiles`, `094_add_providers_fqdn_suffix`, and the FK
+`profiles.provider → providers(name) ON DELETE RESTRICT` that ties them.
+
+Also going, named so the scope is not underestimated: **10 MCP tools**
+(`keeper/internal/mcp/provider.go`, `keeper/internal/mcp/profile.go`); **10 Operator-API
+operations over 6 path items** (`/v1/providers*`, `/v1/profiles*`) — the spec is *derived* from
+the huma operations, so `docs/keeper/openapi.yaml` follows the Go edit and is never hand-edited;
+`shared/coremanifest/mod_cloud.go` **in full**; `keeper/internal/provider/`,
+`keeper/internal/profile/`, `keeper/internal/coremod/cloud/`,
+`keeper/internal/pluginhost/clouddriver.go`, `sdk/clouddriver/`; the six
+`examples/module/soul-cloud-*`; and the Provider / Profile screens in `soul-stack-web`
+(**NIM-762**).
+
+**`core.cloud` covers three states — `created` / `destroyed` / `resized` — and all three go.**
+`resized` is missing from this ADR's own framing: the original Decision (a) names
+`created`/`destroyed`, and `resized` is named only in amendments (u) of 2026-06-26 — in passing,
+while correcting the address spelling — and (zz) of 2026-08-17, which does treat it as a first-class
+state ("across all three states", "`destroyed` and `resized` resolve through the same seam as
+`created`"). Never in the Decision. It is nonetheless a live state with its own RPC
+(`CloudDriver.Resize`), its own capability marker (`Resizable`) and its own param set
+(`allow_downtime` / `desired`), declared in `shared/coremanifest/mod_cloud.go`. Saying so here is
+part of stating the price honestly.
+
+### Removing a permission is a breaking change, and its shape is worse than "a lost grant"
+
+The catalog is a **closed enum**. `ParsePermission`
+(`keeper/internal/rbac/parser.go:98-100`) rejects an unknown name with `unknown_permission`.
+`NewEnforcerFromSnapshot` (`keeper/internal/rbac/enforcer.go:127-130`) returns on the **first**
+unparseable string in the whole snapshot, and `keeper/cmd/keeper/daemon.go:833-837` turns that
+error into a start-up refusal. So one surviving `provider.create` row on one obscure role does
+not degrade one grant: it prevents the enforcer from being built, which means keeper does not
+start, which means the `role.*` API that could delete the row is not serving. That is a
+**cluster-wide authorization lockout with no in-band remedy**.
+
+There is a silent window in between. `keeper/internal/rbac/holder.go:265-272` logs a failed
+TTL-refresh and keeps serving on the previous enforcer, so a running cluster hides the fault
+until its next restart — the failure surfaces at the least convenient moment rather than at the
+moment it is introduced.
+
+⚠ Where the grants live: **Postgres (`rbac_role_permissions`), not `keeper.yml`.** The `rbac:`
+key was hard-cut by [ADR-028(g)](0028-rbac-storage.md). The doc comments at
+`keeper/internal/rbac/catalog.go:4-6` and `keeper/internal/rbac/parser.go:37-38` still say
+"loading `keeper.yml` fails"; that is stale prose describing the right failure at the wrong
+source. Recorded, not fixed — a Go comment is a `developer` change and out of this ticket's
+scope.
+
+**The procedure is settled by precedent, not open.**
+`keeper/migrations/109_drop_permission_update_hosts.up.sql` (NIM-330) removed a permission and
+documents the rule verbatim. Cite it as the template:
+
+- The **catalog entries and the data migration deleting the rows ship in the same change.** A
+  catalog edit without the migration is the lockout above.
+- The DELETE matches **both** the bare and the scoped form (`permission IN (…)` **or**
+  `permission LIKE 'X on %'`). The ` on ` separator is pinned by `parser.go:48`, so the two
+  patterns are exhaustive. Migration 095 matched only the bare form for its own rename and would
+  have missed every scoped grant — that is the bug not to repeat.
+- A role emptied to **zero** permissions is **kept, not dropped**: it may carry
+  `rbac_role_operators` memberships or be a derived role's parent, and dropping it cascades far
+  beyond this change. 109 reports such roles with a `RAISE NOTICE` instead.
+- `provider.*` / `profile.*` **wildcard** grants need no fix — a wildcard expands over whatever
+  the catalog holds at load time, and after this change that expansion is simply shorter.
+
+⚠ Also recorded without fixing: `catalog.go:48-50` states the opposite policy in prose — *"Names
+are never removed (operator roles in `keeper.yml` may hold historical names; removal would break
+existing installations)."* Its stated **reason** is dead (roles are not in `keeper.yml`); its
+**rule** is live for exactly the enum reason above; and NIM-330 already broke it once, with a
+migration, deliberately. Flagged so the next reader does not read it as a blocker on this work.
+
+### `proto/plugin` — Option A, no backward compatibility
+
+Decided by the user: `proto/plugin/v1/clouddriver.proto` (`service CloudDriver`, 7 RPCs,
+`:17-49`) and its messages are **deleted**, together with the committed generated Go
+`proto/plugin/gen/go/v1/clouddriver.pb.go` and `clouddriver_grpc.pb.go`, and the
+`sdk/clouddriver/` module directory. The price, stated honestly:
+
+- **An already-built third-party plugin binary does not break.** The wire is untouched; the
+  binary keeps serving `soulstack.plugin.v1.CloudDriver` on its socket. It simply stops being
+  called, because NIM-761 deletes `keeper/internal/pluginhost/clouddriver.go`. What breaks is the
+  **rebuild against a newer tag**: `pluginv1.RegisterCloudDriverServer` and
+  `pluginv1.NewCloudDriverClient` become undefined, and `sdk/clouddriver` disappears as a
+  separate module breakage.
+- ⚠ **`make check-gen` will NOT catch an orphaned generated file.** `Makefile:22` enumerates the
+  inputs with `find` over `proto/plugin/v1`, and protoc does not delete stale outputs. Removing the `.proto`
+  while leaving the committed `.pb.go` produces an empty `git diff` and a **green** gate. The two
+  `.pb.go` files must be deleted **by hand in the same commit** (NIM-761).
+- **`KIND_CLOUD_DRIVER = 2`** in `proto/plugin/v1/common.proto:15` goes with the contract, as
+  `reserved 2; reserved "KIND_CLOUD_DRIVER";`. **`reserved` here is not backward compatibility** —
+  it is the never-reuse rule of [ADR-020(c)](0020-plugin-infrastructure.md), which stays in force
+  (precedent: the reserved `PluginSigil` fields). Removing an enum **value** is the one part of
+  this that the only-add rule covers literally. ★ An old plugin then fails at **schema-document
+  validation** — not at build, and not at handshake. `sdk/schema/validate.go` reaches its
+  `default:` arm and emits an error-level `kind_invalid`, and
+  `keeper/internal/pluginhost/slot.go:100-102` (`ParseDocument` + `FirstError`) returns
+  `pluginhost: invalid schema document in %q` **before the plugin is spawned** — no process starts,
+  so nothing is SIGTERMed. The kind-drift check at `shared/pluginhost/handshake.go:84`
+  (`ProtoKind` → `KIND_UNSPECIFIED` → drift → SIGTERM) is a real second gate but is unreachable
+  here, the slot having been refused first. The distinction matters to whoever words NIM-761's
+  error message: the refusal an operator sees is the slot-load one.
+- **`proto/plugin/v2` was considered and rejected.** It is the escape hatch
+  [ADR-012](0012-keeper-soul-grpc.md) names for breaking changes, but nothing about CloudDriver is
+  changing *shape* — it is going away, so there is no second version to carry.
+- ⚠ **Correction, because it changes where the work lands.** The closed `kind:` enum that
+  [ADR-020(e)](0020-plugin-infrastructure.md) describes lives in **`sdk/schema/schema.go:34-45`**
+  (`KindCloudDriver Kind = "cloud_driver"`, `:42`), re-exported at `shared/plugin/document.go:66`
+  and validated at `sdk/schema/validate.go:112-119`, `:143-152`, `:192-196` — **not in proto**.
+  `pluginv1.Manifest` / `CloudDriverSpec` / `SoulModuleSpec` / `SshProviderSpec` have **zero
+  non-test Go references** in this tree: `manifest.proto` is already a hand-synced dead document,
+  and ADR-020's "expansion via PR in `proto/plugin/vN/manifest.proto`" (echoed at
+  [`docs/naming-rules.md`](../naming-rules.md)) is stale. So *"`kind: cloud_driver` leaves the
+  closed enum"* is an **`sdk/` change**, with the proto `reserved` as a footnote.
+
+### NIM-668 is annulled
+
+The amendment of 2026-08-17 above (NIM-668 — the second source for the driver tuple: `driver` /
+`credentials` / `region` / `fqdn_suffix` / `profile` as an inline object) is **annulled**. It was
+the additive first step of the 2026-08-09 decision "cloud stops being an entity of its own"; the
+2026-09-01 decision goes past it. There is no `core.cloud` step left for it to parametrise, so
+the second source has nothing to be a second source *of*.
+
+Named by number so a reader does not chase it as live. Its live traces, which go with it:
+`shared/coremanifest/mod_cloud.go:5-36`, [`docs/keeper/cloud.md`](../keeper/cloud.md) §"Two
+sources for the driver: registry or inline", and the ADR-017 index row in
+[`docs/adr/README.md`](README.md).
+
+### What still ships until then
+
+Until NIM-758 / NIM-760 / NIM-761 land, **everything above this amendment describes the engine
+that runs**: the `CloudDriver` service contract, the Provider and Profile registries with their
+REST and MCP surfaces, the eight permissions, the seven audit events, `core.cloud.created` /
+`core.cloud.destroyed` / `core.cloud.resized`, the NIM-668 two-source seam and the six official
+`soul-cloud-*` drivers. A keeper-side plugin cannot be executed at all
+(`unknown keeper-side module`), so there is no second path to migrate to yet.
