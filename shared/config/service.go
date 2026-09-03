@@ -67,9 +67,12 @@ type ServiceManifest struct {
 	// flag are treated as true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
 
-	// CertificateRotation — optional auto-rotation policy for the service's TLS certs
-	// (NIM-99). nil = rotation off; enable:false/omitted = the section is inert.
-	CertificateRotation *CertificateRotationConfig `yaml:"certificate_rotation,omitempty"`
+	// Certificate — optional TLS-certificate policy for the service (NIM-99,
+	// nested by NIM-745). `pki_role` is what this service's certs are ISSUED
+	// with — at first issue (`core.cert.issued`) as much as at rotation — so it
+	// hangs off the section itself; `rotate:` is the auto-rotation policy layered
+	// on top. nil = neither declared.
+	Certificate *CertificateConfig `yaml:"certificate,omitempty"`
 
 	// Telemetry — optional host-vitals telemetry policy (ADR-072, NIM-87).
 	// Absence of the block (nil) = default: enabled, interval 30s, all collectors.
@@ -118,15 +121,36 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 	return *l.AutoDestroy
 }
 
-// CertificateRotationConfig — the `certificate_rotation:` manifest block (NIM-99):
-// whether the service supports auto-rotation of TLS certs, with which operational
-// scenario, and which Vault PKI role. No section (nil) → rotation off. `enable:false`/omitted →
-// the section is inert (explicit opt-in, security-first).
-type CertificateRotationConfig struct {
+// CertificateConfig — the `certificate:` manifest block (NIM-99, nested by NIM-745).
+// Holds what the service's TLS certs are issued with, and — optionally, under
+// `rotate:` — whether they are auto-rotated.
+//
+// `pki_role` sits here rather than inside `rotate:` because the role is what a cert
+// is ISSUED with, and issuance is not only rotation: `core.cert.issued` mints the
+// first cert with it too. While the key lived under `certificate_rotation:` it was
+// required only when `enable: true`, so a service that wanted its own PKI role
+// without auto-rotation had no way to say so. `certificate: { pki_role: X }` with no
+// `rotate:` block is that way, and is a complete section.
+type CertificateConfig struct {
+	// PKIRole — the Vault PKI role that signs THIS service's certs. Read
+	// keeper-side on issuance (`core.cert.issued`) and on the Reaper's re-sign.
+	// Required when rotation is enabled; legal on its own.
+	PKIRole string `yaml:"pki_role,omitempty"`
+
+	// Rotate — the auto-rotation policy. No block (nil) → rotation off, and
+	// nothing else in the section is affected.
+	Rotate *CertificateRotateConfig `yaml:"rotate,omitempty"`
+}
+
+// CertificateRotateConfig — the `certificate.rotate:` block: whether the service
+// supports auto-rotation of its TLS certs and with which operational scenario.
+// `enable:false`/omitted → the block is inert (explicit opt-in, security-first);
+// keeping `scenario`/`threshold` beside a `false` is how rotation is switched off
+// without losing the configuration.
+type CertificateRotateConfig struct {
 	Enable    bool   `yaml:"enable"`              // enables auto-rotation of the service's certs
 	Scenario  string `yaml:"scenario,omitempty"`  // rotation scenario; required when enable:true
 	Threshold string `yaml:"threshold,omitempty"` // margin before expiry (`30d`); default, currently informational
-	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI role for signing; required when enable:true
 }
 
 // KnownCollectors — the closed set of host-vitals collectors (ADR-072, NIM-87;
@@ -233,6 +257,10 @@ var deprecatedServiceKeys = map[string]string{
 	"steps":     "tasks live in scenario/<name>/main.yml (auto-discover); service.yml is manifest-only",
 	"input":     "input lives in scenario/<name>/main.yml (input:-block per docs/input.md), not service.yml",
 	"scenarios": "scenarios are auto-discovered from scenario/<name>/ directory; do not enumerate them in service.yml",
+	"certificate_rotation": "certificate_rotation: renamed (NIM-745); the block is now `certificate:` with the rotation " +
+		"policy nested under `rotate:` — `certificate: { pki_role: <role>, rotate: { enable: true, scenario: <name>, " +
+		"threshold: 30d } }`. `pki_role` moved up a level because the role is what a cert is ISSUED with and issuance " +
+		"is not only rotation, so `certificate: { pki_role: <role> }` with no `rotate:` block is now a legal section",
 	"revealable_secrets": "revealable_secrets: removed (ADR-0083 §1); declare the secret as a `state_schema` field with `type: secret` " +
 		"(plus `key:` inside `items` for a collection, and the optional `label:`) — the Vault path is derived from " +
 		"(service, incarnation, field, key), so there is none left to write. Reveal, the `incarnation.view-secrets` right " +
@@ -323,8 +351,8 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		aliasRef[alias], aliasAt[alias] = dep.Ref, i
 	}
 
-	// 7) certificate_rotation — optional rotation policy (NIM-99).
-	out = append(out, validateCertificateRotation(root, m.CertificateRotation)...)
+	// 7) certificate — optional cert policy, with rotation nested (NIM-99, NIM-745).
+	out = append(out, validateCertificate(root, m.Certificate)...)
 
 	// 8) telemetry — optional host-vitals policy (ADR-072, NIM-87). A nil block
 	// is skipped (backcompat). Enabled is not validated; there are no cross-field invariants.
@@ -364,47 +392,55 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	return out
 }
 
-// validateCertificateRotation — validation of the optional `certificate_rotation:` section
-// (NIM-99): when enable:true, scenario (snake/kebab, folder
-// scenario/<name>/) and pki_role are required; threshold — per the `duration` convention. A nil
-// section = rotation off, valid.
-func validateCertificateRotation(root *ast.MappingNode, crt *CertificateRotationConfig) []diag.Diagnostic {
-	if crt == nil {
+// validateCertificate — validation of the optional `certificate:` section (NIM-99,
+// nested by NIM-745).
+//
+// `pki_role` alone is a complete section and is checked for nothing: it names the
+// Vault role this service's certs are signed with, which is meaningful without any
+// rotation policy. Everything below is about `rotate:`, so a section with no
+// `rotate:` block has nothing left to validate. When `rotate.enable: true`,
+// `rotate.scenario` (snake/kebab, folder scenario/<name>/) and `pki_role` are
+// required — the latter reported against its own path a level up, where it is
+// written. `rotate.threshold` follows the `duration` convention. A nil section is
+// valid.
+func validateCertificate(root *ast.MappingNode, crt *CertificateConfig) []diag.Diagnostic {
+	if crt == nil || crt.Rotate == nil {
 		return nil
 	}
+	rot := crt.Rotate
 	var out []diag.Diagnostic
-	base := "$.certificate_rotation"
+	base := "$.certificate.rotate"
 
-	if crt.Enable && crt.Scenario == "" {
+	if rot.Enable && rot.Scenario == "" {
 		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "missing_required_field",
-			Message: "certificate_rotation.scenario is required when enable: true",
+			Message: "certificate.rotate.scenario is required when enable: true",
 			Hint:    "declare scenario: <name> matching scenario/<name>/main.yml",
 		}))
 	}
-	if crt.Enable && crt.PKIRole == "" {
-		out = append(out, atPath(root, base+".pki_role", diag.Diagnostic{
+	if rot.Enable && crt.PKIRole == "" {
+		out = append(out, atPath(root, "$.certificate.pki_role", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "missing_required_field",
-			Message: "certificate_rotation.pki_role is required when enable: true",
-			Hint:    "declare pki_role: <vault-pki-role> used to sign this service's certs",
+			Message: "certificate.pki_role is required when certificate.rotate.enable: true",
+			Hint:    "declare pki_role: <vault-pki-role> used to sign this service's certs, beside rotate: (NOT inside it)",
 		}))
 	}
-	if crt.Scenario != "" && !reScenarioName.MatchString(crt.Scenario) {
+	if rot.Scenario != "" && !reScenarioName.MatchString(rot.Scenario) {
 		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "name_invalid_format",
-			Message: fmt.Sprintf("certificate_rotation.scenario %q does not match %s", crt.Scenario, reScenarioName),
+			Message: fmt.Sprintf("certificate.rotate.scenario %q does not match %s", rot.Scenario, reScenarioName),
 			Hint:    "snake_case or kebab-case: lowercase letters/digits with _/- separators; must start with letter",
 		}))
 	}
-	if crt.Threshold != "" {
-		if _, err := ParseDuration(crt.Threshold); err != nil {
+	if rot.Threshold != "" {
+		if _, err := ParseDuration(rot.Threshold); err != nil {
 			out = append(out, atPath(root, base+".threshold", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "duration_invalid",
-				Message: fmt.Sprintf("certificate_rotation.threshold %q is not a valid duration: %v", crt.Threshold, err),
+				Message: fmt.Sprintf("certificate.rotate.threshold %q is not a valid duration: %v", rot.Threshold, err),
 				Hint:    "use convention like 30d, 720h",
 			}))
 		}

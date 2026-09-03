@@ -52,7 +52,10 @@ func (f *fakeCertPolicyLister) ListCertPolicy(_ context.Context, name, _, ref st
 
 func sampleCertPolicy() *artifact.CertPolicyInfo {
 	return &artifact.CertPolicyInfo{
-		Rotation:  &config.CertificateRotationConfig{Enable: true, Scenario: "rotate_tls", PKIRole: "redis"},
+		Certificate: &config.CertificateConfig{
+			PKIRole: "redis",
+			Rotate:  &config.CertificateRotateConfig{Enable: true, Scenario: "rotate_tls"},
+		},
 		Scenarios: []string{"create", "rotate_tls"},
 		SHA1:      "abc123",
 	}
@@ -211,9 +214,12 @@ func TestCertPolicyCache_ClonesOnReturn(t *testing.T) {
 	}
 }
 
-// TestCertPolicyCache_ClonesRotation — review M5: mutating the returned .Rotation must
-// not leak into the cached entry (deep-copy the pointer, not a shared *Rotation).
-func TestCertPolicyCache_ClonesRotation(t *testing.T) {
+// TestCertPolicyCache_ClonesCertificate — review M5: mutating the returned
+// .Certificate must not leak into the cached entry (deep-copy the pointer, not a
+// shared one). Since NIM-745 the section NESTS, so both levels are checked here:
+// copying only the outer struct leaves every caller holding the same *Rotate, and
+// the outer-level assertions would still pass.
+func TestCertPolicyCache_ClonesCertificate(t *testing.T) {
 	lister := newFakeCertPolicyLister()
 	lister.info = sampleCertPolicy()
 	c := NewCertPolicyCache(lister, time.Hour)
@@ -222,20 +228,27 @@ func TestCertPolicyCache_ClonesRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCertPolicy: %v", err)
 	}
-	if got.Rotation == nil {
-		t.Fatal("Rotation should not be nil in the sample")
+	if got.Certificate == nil || got.Certificate.Rotate == nil {
+		t.Fatal("Certificate/Rotate should not be nil in the sample")
 	}
-	got.Rotation.Scenario = "MUTATED"
+	got.Certificate.PKIRole = "MUTATED"
+	got.Certificate.Rotate.Scenario = "MUTATED"
 
 	got2, err := c.ListCertPolicy(context.Background(), "redis", "g", "v1")
 	if err != nil {
 		t.Fatalf("ListCertPolicy #2: %v", err)
 	}
-	if got2.Rotation == got.Rotation {
-		t.Error("every return must hand back a separate *Rotation")
+	if got2.Certificate == got.Certificate {
+		t.Error("every return must hand back a separate *CertificateConfig")
 	}
-	if got2.Rotation.Scenario == "MUTATED" {
-		t.Errorf("cache does not clone Rotation: repeat returned %q", got2.Rotation.Scenario)
+	if got2.Certificate.Rotate == got.Certificate.Rotate {
+		t.Error("every return must hand back a separate *CertificateRotateConfig (the NESTED level)")
+	}
+	if got2.Certificate.PKIRole == "MUTATED" {
+		t.Errorf("cache does not clone Certificate: repeat returned %q", got2.Certificate.PKIRole)
+	}
+	if got2.Certificate.Rotate.Scenario == "MUTATED" {
+		t.Errorf("cache does not clone Certificate.Rotate: repeat returned %q", got2.Certificate.Rotate.Scenario)
 	}
 }
 

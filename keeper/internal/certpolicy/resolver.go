@@ -1,7 +1,7 @@
-// Package certpolicy resolves the effective TLS-cert auto-rotation policy of an
-// incarnation (NIM-99): reads incarnation -> its pinned service snapshot -> the
-// manifest's `certificate_rotation:` section. Common input for the reaper (who to
-// rotate) and the UI/coremod (whether the service's rotator is visible and enabled).
+// Package certpolicy resolves the effective TLS-cert policy of an incarnation
+// (NIM-99): reads incarnation -> its pinned service snapshot -> the manifest's
+// `certificate:` section. Common input for the reaper (who to rotate) and the
+// UI/coremod (whether the service's rotator is visible and enabled).
 package certpolicy
 
 import (
@@ -17,10 +17,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Policy — the effective cert-rotation policy of an incarnation. Present — whether
-// the manifest has a `certificate_rotation:` section; Enabled — whether it's on
-// (enable:true). KnownScenarios — the scenario/ names of the snapshot (for
-// validating Scenario by the resolver/UI).
+// Policy — the effective cert policy of an incarnation. Present — whether the
+// manifest declares ROTATION, i.e. carries a `certificate.rotate:` block; Enabled —
+// whether that block is on (enable:true). KnownScenarios — the scenario/ names of
+// the snapshot (for validating Scenario by the resolver/UI).
+//
+// PKIRole is read from `certificate.pki_role`, which sits a level above `rotate:`
+// and is therefore populated for a service that declares a role and no rotation
+// (NIM-745) — Present/Enabled stay false there, so every rotation gate still reads
+// the same as before.
 type Policy struct {
 	Service        string
 	Present        bool
@@ -67,9 +72,10 @@ func NewResolver(db IncarnationReader, services ServiceRefResolver, lister Polic
 // Resolve returns the cert-rotation policy of incarnationName.
 //
 // SelectByName -> services.Resolve -> pin ref to inc.ServiceVersion (not the
-// registry ref) -> ListCertPolicy. No section (Rotation==nil) -> Present/Enabled
-// false, no error. A Threshold parse error is swallowed as 0 (the threshold is
-// currently informational, not critical).
+// registry ref) -> ListCertPolicy. No section (Certificate==nil) -> Present/Enabled
+// false and an empty PKIRole, no error; a section with no `rotate:` block -> the
+// PKI role only, still Present/Enabled false. A Threshold parse error is swallowed
+// as 0 (the threshold is currently informational, not critical).
 func (r *Resolver) Resolve(ctx context.Context, incarnationName string) (Policy, error) {
 	inc, err := incarnation.SelectByName(ctx, r.db, incarnationName)
 	if err != nil {
@@ -88,15 +94,19 @@ func (r *Resolver) Resolve(ctx context.Context, incarnationName string) (Policy,
 	}
 
 	p := Policy{Service: inc.Service, KnownScenarios: info.Scenarios}
-	if info.Rotation == nil {
+	if info.Certificate == nil {
+		return p, nil
+	}
+	p.PKIRole = info.Certificate.PKIRole
+	rot := info.Certificate.Rotate
+	if rot == nil {
 		return p, nil
 	}
 	p.Present = true
-	p.Enabled = info.Rotation.Enable
-	p.Scenario = info.Rotation.Scenario
-	p.PKIRole = info.Rotation.PKIRole
-	if info.Rotation.Threshold != "" {
-		if d, perr := config.ParseDuration(info.Rotation.Threshold); perr == nil {
+	p.Enabled = rot.Enable
+	p.Scenario = rot.Scenario
+	if rot.Threshold != "" {
+		if d, perr := config.ParseDuration(rot.Threshold); perr == nil {
 			p.Threshold = d
 		}
 	}

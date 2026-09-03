@@ -265,10 +265,45 @@ func TestApplyIssued_PolicyDisabled(t *testing.T) {
 	stream := runIssued(t, m, map[string]any{"incarnation": "redis-prod"})
 
 	if !stream.Last().Failed {
-		t.Fatal("expected failed when certificate_rotation is disabled")
+		t.Fatal("expected failed when certificate.rotate is disabled")
+	}
+	if got := stream.Last().Message; !strings.Contains(got, "certificate.rotate missing/disabled") {
+		t.Errorf("refused by the wrong gate: %q", got)
 	}
 	if len(fs.registered) != 0 {
 		t.Errorf("no RegisterActive expected when disabled, got %d", len(fs.registered))
+	}
+}
+
+// TestApplyIssued_PKIRoleWithoutRotate — GUARD (NIM-745): a manifest declaring
+// `certificate.pki_role` and NO `rotate:` block resolves to a role with
+// Present/Enabled false, and issuance still refuses. The role alone became a legal
+// manifest form with the nesting, so this is the shape that did not exist before and
+// the one a reader of the ADR amendment would expect to have changed. It has not:
+// `issued.go` gates on Enabled, and loosening that is a separate decision — the
+// fail-fast below it exists because a cert enrolled with auto_rotate:true and no
+// reachable rotation scenario expires in silence, so letting a role-only service
+// issue needs the auto_rotate:false path designed first. This test is what makes the
+// present-tense claim in ADR-017's 2026-09-03 amendment checkable.
+func TestApplyIssued_PKIRoleWithoutRotate(t *testing.T) {
+	fs := &fakeStore{}
+	pol := certpolicy.Policy{Service: "redis", Present: false, Enabled: false, PKIRole: "redis-server"}
+	m := newIssuedModule(fs, &fakeAudit{}, &fakeSigner{}, &fakeVaultWriter{}, &fakePolicyResolver{pol: pol})
+
+	stream := runIssued(t, m, map[string]any{"incarnation": "redis-prod"})
+
+	if !stream.Last().Failed {
+		t.Fatal("expected failed: a pki_role without a rotate: block does not enable issuance")
+	}
+	// Assert WHICH gate refused. Without this the test passes even with the rotation
+	// gate removed, because a role-only policy carries no Scenario either and the
+	// fail-fast below would refuse it anyway — green for a reason that is not the
+	// invariant being pinned.
+	if got := stream.Last().Message; !strings.Contains(got, "certificate.rotate missing/disabled") {
+		t.Errorf("refused by the wrong gate: %q", got)
+	}
+	if len(fs.registered) != 0 {
+		t.Errorf("no RegisterActive expected, got %d", len(fs.registered))
 	}
 }
 

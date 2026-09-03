@@ -33,7 +33,7 @@ func dueCertFor(certID, incarnation string) dueCert {
 }
 
 // TestCertRotator_Policy_Disabled_SkipsNoFail — GUARD (NIM-99 Slice B): no
-// certificate_rotation section / enable:false → rotateOne skips WITHOUT fallback to
+// certificate.rotate block / enable:false → rotateOne skips WITHOUT fallback to
 // rotate_tls: Voyage is not inserted, markFailed is NOT called, the cert stays active
 // (casCalls==0 <=> neither CAS active->rotating nor CAS rotating->failed happened).
 func TestCertRotator_Policy_Disabled_SkipsNoFail(t *testing.T) {

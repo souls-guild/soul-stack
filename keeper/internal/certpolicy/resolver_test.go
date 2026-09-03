@@ -124,8 +124,9 @@ func TestResolve_EnabledSection(t *testing.T) {
 	db := &fakeDB{row: incRow("redis", "v9-pinned")}
 	services := &fakeServices{ref: artifact.ServiceRef{Name: "redis", Git: "git://redis", Ref: "registry-ref"}, ok: true}
 	lister := &fakeLister{info: &artifact.CertPolicyInfo{
-		Rotation: &config.CertificateRotationConfig{
-			Enable: true, Scenario: "rotate_tls", PKIRole: "redis-server", Threshold: "30d",
+		Certificate: &config.CertificateConfig{
+			PKIRole: "redis-server",
+			Rotate:  &config.CertificateRotateConfig{Enable: true, Scenario: "rotate_tls", Threshold: "30d"},
 		},
 		Scenarios: []string{"create", "rotate_tls"},
 	}}
@@ -159,10 +160,10 @@ func TestResolve_EnabledSection(t *testing.T) {
 	}
 }
 
-func TestResolve_NoRotationSection(t *testing.T) {
+func TestResolve_NoCertificateSection(t *testing.T) {
 	db := &fakeDB{row: incRow("redis", "v1")}
 	services := &fakeServices{ref: artifact.ServiceRef{Name: "redis", Git: "g"}, ok: true}
-	lister := &fakeLister{info: &artifact.CertPolicyInfo{Rotation: nil, Scenarios: []string{"create"}}}
+	lister := &fakeLister{info: &artifact.CertPolicyInfo{Certificate: nil, Scenarios: []string{"create"}}}
 	r := NewResolver(db, services, lister)
 
 	p, err := r.Resolve(context.Background(), "redis-prod")
@@ -181,7 +182,10 @@ func TestResolve_SectionDisabled(t *testing.T) {
 	db := &fakeDB{row: incRow("redis", "v1")}
 	services := &fakeServices{ref: artifact.ServiceRef{Name: "redis"}, ok: true}
 	lister := &fakeLister{info: &artifact.CertPolicyInfo{
-		Rotation: &config.CertificateRotationConfig{Enable: false, Scenario: "rotate_tls", PKIRole: "r"},
+		Certificate: &config.CertificateConfig{
+			PKIRole: "r",
+			Rotate:  &config.CertificateRotateConfig{Enable: false, Scenario: "rotate_tls"},
+		},
 	}}
 	r := NewResolver(db, services, lister)
 
@@ -194,6 +198,36 @@ func TestResolve_SectionDisabled(t *testing.T) {
 	}
 	if p.Enabled {
 		t.Errorf("Enabled = true, want false (enable:false)")
+	}
+}
+
+// TestResolve_PKIRoleWithoutRotate — GUARD (NIM-745): `certificate.pki_role` sits a
+// level ABOVE `rotate:`, so a service that names its signing role and asks for no
+// auto-rotation resolves to the role with Present/Enabled false. That is the shape
+// the old flat key could not express — pki_role lived inside the rotation block and
+// was validated only when it was on. Every rotation gate reads Present/Enabled, so
+// this manifest is still excluded from the Reaper's scan.
+func TestResolve_PKIRoleWithoutRotate(t *testing.T) {
+	db := &fakeDB{row: incRow("redis", "v1")}
+	services := &fakeServices{ref: artifact.ServiceRef{Name: "redis"}, ok: true}
+	lister := &fakeLister{info: &artifact.CertPolicyInfo{
+		Certificate: &config.CertificateConfig{PKIRole: "redis-server"},
+		Scenarios:   []string{"create"},
+	}}
+	r := NewResolver(db, services, lister)
+
+	p, err := r.Resolve(context.Background(), "redis-prod")
+	if err != nil {
+		t.Fatalf("Resolve: %v (a role without rotation is not an error)", err)
+	}
+	if p.PKIRole != "redis-server" {
+		t.Errorf("PKIRole = %q, want redis-server (read from certificate.pki_role, not from rotate:)", p.PKIRole)
+	}
+	if p.Present || p.Enabled {
+		t.Errorf("Present/Enabled = %v/%v, want false/false (no rotate: block)", p.Present, p.Enabled)
+	}
+	if p.Scenario != "" || p.Threshold != 0 {
+		t.Errorf("Scenario/Threshold = %q/%v, want empty (nothing to read them from)", p.Scenario, p.Threshold)
 	}
 }
 

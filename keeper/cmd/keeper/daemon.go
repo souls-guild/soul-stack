@@ -203,14 +203,14 @@ type daemon struct {
 	// catalog (parity with serviceDependencies).
 	serviceDirectives *serviceregistry.DirectivesCache
 
-	// serviceCertPolicy — TTL cache of the `certificate_rotation:` section of the
+	// serviceCertPolicy — TTL cache of the `certificate:` section of the
 	// Service manifest (parity with serviceStateSchema); feeds certPolicyResolver.
 	// Per-keeper, read-only.
 	serviceCertPolicy *serviceregistry.CertPolicyCache
 
 	// certPolicyResolver — resolver of the effective cert-rotation policy of an
-	// incarnation (incarnation → pinned service snapshot → certificate_rotation
-	// section). Shared input for reaper.CertRotator (who to rotate) and
+	// incarnation (incarnation → pinned service snapshot → certificate.rotate
+	// block). Shared input for reaper.CertRotator (who to rotate) and
 	// core.cert.issued (signing role).
 	certPolicyResolver *certpolicy.Resolver
 
@@ -1690,7 +1690,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	d.serviceRegistry = scenario.NewServiceRegistry(d.serviceHolder)
 	// serviceCertPolicy + certPolicyResolver (NIM-99): TTL cache of the
-	// certificate_rotation manifest section (parity with the other service*
+	// `certificate:` manifest section (parity with the other service*
 	// caches) and the resolver of the effective incarnation policy. Feed
 	// reaper.CertRotator (who to rotate) and core.cert.issued (PKI signing role
 	// from the manifest).

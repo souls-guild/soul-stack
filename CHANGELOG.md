@@ -61,6 +61,29 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **`certificate_rotation:` is now `certificate:` with the rotation policy nested
+  under `rotate:`, and `pki_role` sits a level above it**
+  ([ADR-017 amendment 2026-09-03](docs/adr/0017-keeper-side-core.md), NIM-745). The
+  PKI role is what a service's certs are *issued* with — `core.cert.issued` mints
+  the first one with it and the Reaper re-signs with the same one — so it was never
+  a property of the rotation policy. Under the flat key it was required only when
+  `enable: true`, which made "these certs are signed by role X, and no, do not
+  auto-rotate them" inexpressible: an author had to switch rotation on to be allowed
+  to name the role. `certificate: { pki_role: X }` with **no** `rotate:` block is now
+  a complete section, which is what the nesting buys. Everything else about rotation
+  is unchanged — the three gates (now `certificate.rotate.enable` × per-cert
+  `auto_rotate` × `keeper.yml::reaper.rules.rotate_due_certs.enabled`), the Warrant
+  schema, and the `rotate_tls` contract key. A section carrying only `pki_role`
+  resolves to the role with `Present`/`Enabled` false, so the Reaper's scan excludes
+  it for the same reason it excluded a service with no section at all.
+  **No transition window**: the old key is refused (`unknown_key`) with a hint
+  carrying the new form, because the three manifests in the world that carried it
+  were all ours (`examples/service/dragonfly`, `examples/service/redis`, and the WB
+  redis service, whose `enable: false` section — inert by contract — was already
+  deleted). Refusing beats reading it for a release: a rotation policy the engine
+  silently ignores is the worse of the two failures. `core.cert.issued` still
+  requires rotation to be enabled, unchanged by this and a separate decision — it
+  needs the `auto_rotate: false` path thought through first.
 - **A secret is a declared state field; the author never writes a Vault path**
   ([ADR-0083](docs/adr/0083-declared-secret-state-fields.md), NIM-698). A
   `state_schema` field carries `type: secret` — on the field for a scalar, or on

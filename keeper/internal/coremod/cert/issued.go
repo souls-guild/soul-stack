@@ -47,15 +47,15 @@ func applyIssued(m *Module, req *pluginv1.ApplyRequest, stream grpc.ServerStream
 		return util.SendFailed(stream, err.Error())
 	}
 	if !pol.Enabled {
-		return util.SendFailed(stream, "certificate_rotation missing/disabled for the service - issuance not possible")
+		return util.SendFailed(stream, "certificate.rotate missing/disabled for the service - issuance not possible")
 	}
 	if pol.PKIRole == "" {
-		return util.SendFailed(stream, "certificate_rotation: pki_role not set in the manifest - issuance not possible")
+		return util.SendFailed(stream, "certificate.pki_role not set in the manifest - issuance not possible")
 	}
 	// Fail-fast on a nonexistent scenario (mirrors the reaper membership check): otherwise
 	// the cert enrolls with auto_rotate=true, and the rotator silently skips it -> silent expiry.
 	if pol.Scenario == "" || !scenarioKnown(pol.Scenario, pol.KnownScenarios) {
-		return util.SendFailed(stream, fmt.Sprintf("core.cert.issued: rotation scenario %q not found in the service (declare scenario/%s/ or fix certificate_rotation.scenario)", pol.Scenario, pol.Scenario))
+		return util.SendFailed(stream, fmt.Sprintf("core.cert.issued: rotation scenario %q not found in the service (declare scenario/%s/ or fix certificate.rotate.scenario)", pol.Scenario, pol.Scenario))
 	}
 
 	mount := m.PKIMount()

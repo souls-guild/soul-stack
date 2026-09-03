@@ -10,12 +10,12 @@ import (
 
 // CertPolicyTTL — the validity window of a cached cert-policy response for one
 // Service (paired with the [StateSchemaTTL] choice: the same balance between
-// "hammering the remote repo" vs. freshness of a certificate_rotation section
+// "hammering the remote repo" vs. freshness of a `certificate:` section
 // that landed in the manifest a minute ago).
 const CertPolicyTTL = 60 * time.Second
 
-// CertPolicyLister — the listing surface for cert-rotation policy
-// (`certificate_rotation:` + scenario/ names) from a locally materialized
+// CertPolicyLister — the listing surface for cert policy
+// (`certificate:` + scenario/ names) from a locally materialized
 // snapshot of the Service repo. Interface — for swapping with a fake in tests;
 // production — [artifact.ServiceLoader.LoadCertPolicy].
 //
@@ -129,8 +129,10 @@ func (c *CertPolicyCache) entryFor(key certPolicyKey) *certPolicyEntry {
 }
 
 // cloneCertPolicyInfo — a copy so the caller can't mutate the cached entry:
-// Scenarios — a slice copy, Rotation — a deep copy of the pointer (otherwise a
-// shared *Rotation is a latent race if a writer ever appears).
+// Scenarios — a slice copy, Certificate — a deep copy of the pointer, and
+// Certificate.Rotate with it (otherwise a shared pointer is a latent race if a
+// writer ever appears). Since NIM-745 the section nests, so copying one level is
+// not enough: `out.Certificate = &c` still hands every caller the same *Rotate.
 func cloneCertPolicyInfo(in *artifact.CertPolicyInfo) *artifact.CertPolicyInfo {
 	if in == nil {
 		return nil
@@ -140,9 +142,13 @@ func cloneCertPolicyInfo(in *artifact.CertPolicyInfo) *artifact.CertPolicyInfo {
 		out.Scenarios = make([]string, len(in.Scenarios))
 		copy(out.Scenarios, in.Scenarios)
 	}
-	if in.Rotation != nil {
-		r := *in.Rotation
-		out.Rotation = &r
+	if in.Certificate != nil {
+		c := *in.Certificate
+		if in.Certificate.Rotate != nil {
+			r := *in.Certificate.Rotate
+			c.Rotate = &r
+		}
+		out.Certificate = &c
 	}
 	return &out
 }

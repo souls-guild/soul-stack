@@ -201,17 +201,18 @@ func (l *ServiceLoader) ListUpgrades(art *ServiceArtifact) ([]Scenario, error) {
 	return ListUpgrades(art.LocalDir, l.snap.logger)
 }
 
-// CertPolicyInfo — projection of the cert-rotation policy of a Service-repo snapshot (NIM-99):
-// the manifest's `certificate_rotation:` section (nil = rotation not declared) +
-// the snapshot's scenario/ names (for validating Rotation.Scenario via resolver/UI) + snapshot
-// SHA1 (diagnostics for "which commit").
+// CertPolicyInfo — projection of the cert policy of a Service-repo snapshot (NIM-99,
+// NIM-745): the manifest's `certificate:` section (nil = nothing declared; a section
+// with no `rotate:` block declares the PKI role and no rotation) + the snapshot's
+// scenario/ names (for validating Certificate.Rotate.Scenario via resolver/UI) +
+// snapshot SHA1 (diagnostics for "which commit").
 type CertPolicyInfo struct {
-	Rotation  *config.CertificateRotationConfig
-	Scenarios []string
-	SHA1      string
+	Certificate *config.CertificateConfig
+	Scenarios   []string
+	SHA1        string
 }
 
-// LoadCertPolicy materializes the service ref snapshot and extracts the cert-rotation
+// LoadCertPolicy materializes the service ref snapshot and extracts the `certificate:`
 // section of the manifest + the scenario/ names. Pattern — [ListUpgrades]: delegates the
 // scan to the batch [ListScenarios] with the snapshot's localDir and the loader's logger.
 func (l *ServiceLoader) LoadCertPolicy(ctx context.Context, ref ServiceRef) (*CertPolicyInfo, error) {
@@ -228,9 +229,9 @@ func (l *ServiceLoader) LoadCertPolicy(ctx context.Context, ref ServiceRef) (*Ce
 		names = append(names, scns[i].Name)
 	}
 	return &CertPolicyInfo{
-		Rotation:  art.Manifest.CertificateRotation,
-		Scenarios: names,
-		SHA1:      art.SHA1,
+		Certificate: art.Manifest.Certificate,
+		Scenarios:   names,
+		SHA1:        art.SHA1,
 	}, nil
 }
 
