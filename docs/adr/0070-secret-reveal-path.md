@@ -88,7 +88,7 @@ The service manifest is **not a trusted** input in the reveal threat model: the 
 ## Deferred (post-MVP, without breaking changes)
 
 - **Singleton secrets without `enumerate`** — a single secret per incarnation (e.g. an admin password `secret/{service}/{incarnation}#password`), where there is nothing to enumerate (no array, `key` not needed). The MVP requires `enumerate` (a collection form); singletons are an additive extension (`enumerate` optional + reveal without `key`; `{service}`/`{incarnation}` remain mandatory) upon a real request.
-- **The live manifest `community.redis`** carrying a `revealable_secrets` section — a change in the module's repository (a follow-up outside the core repo).
+- **The live manifest `community.redis`** ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** carrying a `revealable_secrets` section — a change in the module's repository (a follow-up outside the core repo).
 - **Threading config-extra-deny into the reveal handler.** Currently the floor is only the system floor (`DeniedByVaultFloor(logical, nil)`); the operator's `keeper.yml → vault.input_deny_paths` (additional deny prefixes, already in effect for the `input_vault` channel) is NOT yet threaded into reveal — a follow-up.
 - **Auditing RBAC-403 at the gate level.** Denied branches are audited by the handler AFTER resolving the incarnation; a rejection at the middleware gate (`incarnation.view-secrets` not held at all → `403` BEFORE the handler) is not audited by this event — cross-cutting, common to all routes; a follow-up by a separate decision.
 

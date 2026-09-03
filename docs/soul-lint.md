@@ -312,7 +312,8 @@ the one who knows which alias their cluster used.
 It goes on the flag rather than being read off the directory because directory naming
 was already rejected once, for the manifest form, and every reason still holds: a
 checkout is named after its binary, or after whatever `git clone` produced, while a
-task addresses `community.redis`. Infer the alias from the path and a definition's
+task addresses `community.redis` ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships
+today)**. Infer the alias from the path and a definition's
 address starts depending on where a file happens to sit — **rename the folder and the
 same definition starts or stops validating, with nothing in the definition changed.**
 You write the same `redis` the task writes in `redis.acl.present`, and it means the
@@ -348,6 +349,11 @@ tree to be partially readable: there are only bindings the author wrote down.
 main.yml:223:13: hint: [plugin_params_unchecked] params of community.redis were not
 checked: no module manifests were supplied
 ```
+
+> ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today).** The address in the sample
+> output is the shipped form. The diagnostic itself does not read the words: it keys on whether a
+> schema document resolved, so it behaves identically once the address becomes
+> `<plugin>.<object>.<action>` ([address rule](naming-rules.md#the-discipline-binding-the-three-levels)).
 
 Its job is to keep "checked and clean" from looking identical to "never looked", which
 is how the drift in NIM-206 survived long enough to be found by hand. A definition's

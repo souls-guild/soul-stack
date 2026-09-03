@@ -1,5 +1,14 @@
 # community.mongo
 
+> ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today).** Every address on this
+> page — `community.mongo.<state>` — is the **old form**, and it is what a cluster resolves right
+> now: the artifact registers under the alias `community` and serves one module named `mongo`.
+> Under the [address rule](../../../naming-rules.md#the-discipline-binding-the-three-levels) a
+> plugin step is `<plugin-name>.<object>.<action>`, so this plugin converts to
+> `mongo.<object>.<action>` — **NIM-769**, a sibling of the redis conversion under epic NIM-764.
+> Until it lands the new form resolves nowhere and must not be written into a scenario. This
+> document and its directory move with the artifact, not before it.
+
 MAIN interface to **live MongoDB** (PILOT slice, role-based concept): service scenario orchestrates order/targeting/health-gate, and plugin
 performs **one** operation on one `mongod` instance. Custom plugin
 `kind: soul_module` (namespace `community`, name `mongo`), binary
@@ -13,7 +22,7 @@ Backend — [`go.mongodb.org/mongo-driver`](https://go.mongodb.org/mongo-driver)
 the plugin itself connects to `mongod` via TCP (`host:port`, usually `127.0.0.1:27017`).
 Work is carried out **through the driver, and not `core.exec` + `mongosh`** (the password in `argv` is
 IS risk, fragile output parsing; the same path `shell -> plugin` took
-[`community.redis`](../redis/README.md)). Compliance with core modules
+[`community.redis`](../redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766)**). Compliance with core modules
 (`core.pkg`/`core.file`/`core.service`/`core.sysctl`) - for everything that is NOT
 mongo-specific(installation, render `mongod.conf`, systemd, host-tuning); himself
 MongoDB runtime is this plugin.
@@ -32,7 +41,7 @@ MongoDB runtime is this plugin.
 The plugin remains at `module.BaseModule` - **doesn't** implement `PlanReadSafe`
 ([ADR-031](../../../adr/0031-scry-drift.md)) and `ErrandReadSafe`
 ([ADR-033](../../../adr/0033-errand.md)). This is a conscious choice (parallel
-`community.redis`): on `dry_run` host (Soul) applies **default-deny** - task
+`community.redis` ⚠ **LEAVING THE DICTIONARY (NIM-766)**): on `dry_run` host (Soul) applies **default-deny** - task
 gets the honest "drift not supported" rather than the false "no drift".
 
 ## States
@@ -44,7 +53,7 @@ imperative-upsert `user` (createUser/dropUser), imperative `command`.
 |---|---|---|
 | `pinged` | Health-probe via go-mongo-driver `Ping` (primary). Read-only. Replaces idiom `command { ping: 1 }` - health-gate in scripts (`retry`/`until`/`failed_when` by `register.self.ok`). | `false` **constructive** (probe, not change). |
 | `user` | `createUser`/`dropUser` (upsert). MongoDB users live in `admin.system.users` (imperative), **NOT** in the config file (unlike redis `users.acl`) - therefore verb-state, not render. `state: present` creates (if not present), `absent` deletes (if present). Idempotent by `usersInfo`. ★ the first admin is created via **localhost-exception** (see below). | `true` with real create/drop; `false` (no-op), if the user is already in the desired state (present+is / absent+no). |
-| `command` | Raw `db.runCommand` (imperative verb-state, precedent `community.redis.command`/`core.exec.run`). | `false` default (probe); `changed: true` in params - for actually mutating commands (the operator is responsible for idempotency). |
+| `command` | Raw `db.runCommand` (imperative verb-state, precedent `community.redis.command` ⚠ **LEAVING THE DICTIONARY (NIM-766)**/`core.exec.run`). | `false` default (probe); `changed: true` in params - for actually mutating commands (the operator is responsible for idempotency). |
 
 ## pinged — params
 
@@ -111,7 +120,7 @@ whether no-auth localhost path (only on `present`).
 ## command — params
 
 Raw `db.runCommand` to MongoDB (imperative verb-state, use case
-`community.redis.command`/`core.exec.run`). Default `changed=false` (probe);
+`community.redis.command` ⚠ **LEAVING THE DICTIONARY (NIM-766)**/`core.exec.run`). Default `changed=false` (probe);
 operator is responsible for idempotency. For pilot - single-field command
 (`{ serverStatus: 1 }`, `{ collStats: "events" }`).
 
@@ -188,6 +197,9 @@ goes through go-mongo-driver, not through `mongosh` - and does not write to FS).
   `mongod`.
 
 ## Example call from scenario
+
+⚠ The addresses below are the shipped `community.mongo.*` form (NIM-769 — see the banner at the
+top of this page); the task shape is unaffected by the rename.
 
 ```yaml
 # Health-gate: wait for mongod to respond to ping BEFORE bootstrap admin.

@@ -1,5 +1,11 @@
 # official.postgres-user
 
+> ⚠ **`official.*` is the OLD address form (NIM-765) — and it is what ships today.** The
+> origin-grouping level of a plugin address is removed: a plugin step is
+> `<plugin-name>.<object>.<action>` ([address rule](../../../naming-rules.md#the-discipline-binding-the-three-levels)),
+> and `official` named this plugin's origin, not what it manages. **No follow-up ticket** — the
+> artifact lives in the companion repo `soul-stack-plugins`, which this repository cannot edit.
+
 Idempotent management of PostgreSQL ROLE (CREATE / ALTER / DROP).
 
 Full documentation of the module (params, state table, output circuit, test coverage, assembly) - [`soul-mod-official-postgres-user/README.md`](https://github.com/souls-guild/soul-stack-plugins/blob/main/soul-mod-official-postgres-user/README.md) in the companion repo.

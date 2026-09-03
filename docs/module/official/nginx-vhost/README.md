@@ -1,5 +1,11 @@
 # official.nginx-vhost
 
+> ⚠ **`official.*` is the OLD address form (NIM-765) — and it is what ships today.** The
+> origin-grouping level of a plugin address is removed: a plugin step is
+> `<plugin-name>.<object>.<action>` ([address rule](../../../naming-rules.md#the-discipline-binding-the-three-levels)),
+> and `official` named this plugin's origin, not what it manages. **No follow-up ticket** — the
+> artifact lives in the companion repo `soul-stack-plugins`, which this repository cannot edit.
+
 Idempotent control nginx vhost: render config + `nginx -t` validate BEFORE write + symlink `sites-enabled/` + `nginx -s reload`.
 
 Full documentation - [`soul-mod-official-nginx-vhost/README.md`](https://github.com/souls-guild/soul-stack-plugins/blob/main/soul-mod-official-nginx-vhost/README.md) in the companion repo.

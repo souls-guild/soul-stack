@@ -416,7 +416,7 @@ make e2e-live-gate
 
 Target itself collects native `keeper` (`make build` - harness launches Keeper on
 host) and linux-`soul` (`make build-linux` - mount to container); plugin
-`community.redis` collects the test itself. `E2E_KEEPER_HOST` (IP on which
+`community.redis` ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** collects the test itself. `E2E_KEEPER_HOST` (IP on which
 soul-container calls Keeper-on-host) **auto-detected by target** via
 `hostname -I`. On **WSL2** this matters: the container cannot reach `localhost`,
 so a LAN IP is required. Override manually - `make e2e-live-gate E2E_KEEPER_HOST=<ip>`.

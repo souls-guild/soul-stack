@@ -546,6 +546,8 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
 }
 ```
 
+> ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today).** The `community.redis.present` in the sample `notices[]` entry is the old address form, kept so the sample matches what a cluster emits now. Under the [address rule](../naming-rules.md#the-discipline-binding-the-three-levels) a plugin address is `<plugin>.<object>.<action>`. The payload shape is unaffected — `module` carries whatever address the task named.
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `task_idx` | integer (≥0) | yes | The task index in the `RenderedTask[]` apply-run. |

@@ -216,6 +216,11 @@ main.yml:223:13: hint: [plugin_params_unchecked] params of community.redis were 
 checked: no module manifests were supplied
 ```
 
+> ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today).** The address in the sample
+> output is the shipped form; a plugin address becomes `<plugin>.<object>.<action>`
+> ([address rule](../naming-rules.md#the-discipline-binding-the-three-levels)). The diagnostic is
+> unchanged either way — it keys on whether a schema document resolved, not on the words.
+
 The same check runs inside Keeper, resolving from the plugins the cluster has
 allow-listed - so a definition linted here and a definition rendered there are held
 to the same manifest. An undeclared key fails the task on the host either way

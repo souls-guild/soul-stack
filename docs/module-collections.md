@@ -32,7 +32,9 @@ Signing and verification occurs at the collection level, not each module. One pu
 
 ### 3. RBAC and allow-list
 
-"The role `app-team` can only call `core.*` and `acme.*`", "production-destinies cannot use `community.*`." In the reality of a large fleet of operators, this is almost always necessary.
+"The role `app-team` can only call `core.*` and `acme.*`", "a production destiny may use only the artifacts this fleet approved." In the reality of a large fleet of operators, some such narrowing is almost always necessary.
+
+> **No origin-keyed RBAC narrowing exists in the code.** Nothing anywhere keys on `community.*` or `official.*`, and no policy narrows a role by where a plugin came from. The module gates that do exist are the [SDK marker interfaces](naming-rules.md#sdk-marker-interfaces) (`PlanReadSafe` / `ErrandReadSafe`, default-deny per module) and, for the console/Errand shell gate, a set of **full core addresses**: the closed verb-shell set the console gate reads, plus — on the Errand path only — the exact admit `core.http.probe` and a `core.http.` prefix reject (`soul/internal/runtime/errandrunner/whitelist.go:73,84,87`). Those last two are prefix/exact matches on an address, so the flat "no glob anywhere" is not the claim; what *is* the claim is that all of them sit inside `core.`, a [reserved](naming-rules.md#reserved-namespace-names) level 1 no plugin can claim, and none of them reads a plugin's level 1 at all. A rule phrased "production cannot use `community.*`" would also have nothing stable to bind to: level 1 is the local operator's [registration alias](naming-rules.md#plugin-manifest-and-handshake), so the same bytes registered under another name walk straight past it. What such a policy has to key on is the same pair the rest of this document keeps arriving at — the **alias** an operator declared, and the artifact **`source`** behind it — which is also what the Sigil allow-list already keys on ([ADR-026(a)](adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations)). The origin-grouping level itself is removed ([ADR-020 amendment 2026-09-02](adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed), NIM-765), so `community.*` is not a prefix a future rule could be written against either.
 
 ### 4. Consistent versioning
 
@@ -50,9 +52,11 @@ The architecture already describes the `/var/lib/soul-stack/modules/` SHA-256 ca
 
 ### 7. Visual clue about origin
 
-From the line `core.pkg.installed` you can immediately see: built-in, without network dependencies. From `community.kubernetes.deployed` - third-party collection, installation required. This solves the "it's not clear where core / where custom" is where the conversation started.
+From the line `core.pkg.installed` you can immediately see: built-in, without network dependencies. From a non-`core` level 1 — third-party artifact, installation required. This solves the "it's not clear where core / where custom" is where the conversation started, **and that is the whole of what it solves.**
 
-> **Weaker since NIM-377, in one direction only.** `core` is still a reliable signal — it is [reserved](naming-rules.md#reserved-namespace-names) and cannot be claimed by a plugin, so "not `core`" still means "delivered, installation required". What a non-`core` level 1 no longer tells you is *whose* it is: `community.` means whatever the local operator meant by it. Origin is answered by the catalog entry's `source`, which is also what the allow-list keys on.
+> **Weaker since NIM-377, in one direction only.** `core` is still a reliable signal — it is [reserved](naming-rules.md#reserved-namespace-names) and cannot be claimed by a plugin, so "not `core`" still means "delivered, installation required". What a non-`core` level 1 no longer tells you is *whose* it is: it means whatever the local operator meant by it. Origin is answered by the catalog entry's `source`, which is also what the allow-list keys on.
+>
+> **And since 2026-09-02 the address does not group by origin at all.** Level 1 is the plugin's name and level 2 the object it manages, so an example of the `community.kubernetes.deployed` form — origin at level 1, subject at level 2 — is not a clue that got weaker, it is a spelling that is removed ([ADR-020 amendment 2026-09-02](adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed), NIM-765). The `core` / not-`core` signal above is untouched by that: it rests on `core` being reserved, not on level 1 naming an origin.
 
 ## What needs to be decided before implementation (open Q)
 

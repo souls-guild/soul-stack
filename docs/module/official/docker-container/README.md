@@ -1,5 +1,11 @@
 # official.docker-container
 
+> ⚠ **`official.*` is the OLD address form (NIM-765) — and it is what ships today.** The
+> origin-grouping level of a plugin address is removed: a plugin step is
+> `<plugin-name>.<object>.<action>` ([address rule](../../../naming-rules.md#the-discipline-binding-the-three-levels)),
+> and `official` named this plugin's origin, not what it manages. **No follow-up ticket** — the
+> artifact lives in the companion repo `soul-stack-plugins`, which this repository cannot edit.
+
 Idempotent docker container management via docker-CLI: create / start / stop / rm + drift-detect by image/env/ports/volumes/networks/restart_policy.
 
 Full documentation - [`soul-mod-official-docker-container/README.md`](https://github.com/souls-guild/soul-stack-plugins/blob/main/soul-mod-official-docker-container/README.md) in the companion repo.

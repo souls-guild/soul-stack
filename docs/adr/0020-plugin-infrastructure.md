@@ -358,3 +358,114 @@ the per-module `Side` field is in the schema (`sdk/schema/schema.go:147`, with
 `Side`/`SideSoul`/`SideKeeper` at `:102-121`). **NIM-750** — `on: keeper` ceasing to be required —
 **has not.** The full decision, the named losses and the ordering constraint are in
 [ADR-017 amendment 2026-09-01](0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
+
+## Amendment 2026-09-02 (NIM-764 / NIM-765): a plugin address is `<plugin>.<object>.<action>`, and the origin-grouping level is removed
+
+**Not implemented** for the artifacts. What lands here is the **rule**; the artifacts still ship in
+the old form, and everything above still describes them. Written under NIM-765. The redis
+re-layout is **NIM-766**, `redis.user.present` is **NIM-767**, and the WB redis service moving off
+`redis-cli` is **NIM-768**.
+
+**The decision** — the user's, of 2026-09-02. A plugin step's address is
+**`<plugin-name>.<object>.<action>`**, for example `redis.user.present`. Level 1 is the plugin's
+name, given by the operator at registration; level 2 is the **object** the module manages; level 3
+is the **action**. The origin-grouping level is **removed**: it named where a plugin came from, not
+what it manages.
+
+**The argument is a fact about the corpus, not a preference.** Core already speaks this grammar —
+`core.user.present`, `core.file.rendered`, `core.state.set` are all `<namespace>.<object>.<action>`.
+The plugin was the outlier. `community.redis.acl` put the plugin's own **subject** at level 2, which
+left level 3 with nothing to name but a second subject, and the twelve shipped states show the
+result: nouns and adjectives mixed in one slot — `acl`, `pinged`, `role`, `detached`,
+`offset-synced`.
+
+**Nothing in the engine changes.** This paragraph is load-bearing: it exists so that NIM-766 /
+NIM-767 do not go looking for work in the grammar that is not there.
+
+- `splitModuleAddress` (`shared/config/module_params.go:354-362`) is a **positional** split on `.`
+  into exactly three segments. It reads no word at any level.
+- `reModuleAddress` (`shared/config/scenario_task.go:305-308`) accepts three kebab-case segments.
+  `redis.user.present` matches **today**.
+- `plugin.AliasPattern` and the closed reserved list (`shared/plugin/reserved.go:35,42,61,93`)
+  contain neither `redis` nor `community`, so **changing level 1 is a config edit** —
+  `keeper.yml::plugins.*[].name`. (p) above already put level 1 entirely in the registration alias;
+  this amendment only says what to write there.
+- `Modules []Module` (`sdk/schema/schema.go:73-92,135-159`, validated at
+  `sdk/schema/validate.go:209-254`) already admits **several objects per artifact** — at least one
+  required, kebab-case, `schema` reserved as a module name, duplicates refused. One artifact serving
+  `user` *and* `instance` *and* `replica` needs no schema change.
+- `SideOf` (`shared/coremanifest/side.go:43-65`) is a table of **core** base addresses only; every
+  plugin address in *that table's* terms answers `SideSoul` and is unaffected by any rename.
+  ★ That is not the same as "plugin modules are soul-side": the same file says so at `:56-59` — a
+  plugin's own declaration is read **from its manifest, not from here** — and the NIM-757 amendment
+  above *decides* that `modules[].side` (`sdk/schema/schema.go:147`) becomes load-bearing for
+  plugins. ⚠ That is the decision and not yet the code: a keeper-side plugin is **not executable**
+  (NIM-688), which the field's own doc states in as many words (`sdk/schema/schema.go:143-146`), so
+  today `side:` is the declaration surface a plugin *will* be routed by, not a switch that already
+  routes — the routing is NIM-758. `SideOf` is the fallback for an address it does not know, not a
+  ruling about plugins.
+- The `soul-lint` diagnostics do not read the words either: `plugin_params_unchecked` keys on
+  whether a schema document resolved for `<alias>.<name>` — the resolver contract is
+  `ResolveModule(alias, name)` (`shared/config/module_params_plugin.go:30-37`, code at `:47`) — and
+  `module_install_name_not_an_alias` refuses a **dotted** `params.name`: the predicate is
+  `plugin.ValidAlias(v)` at `shared/config/module_params.go:132`, with the dotted-hint branch at
+  `:141` (`:152-158` is only the diagnostic literal). `redis` passes exactly as `community` did.
+
+**The boundary: level 3 is the same mechanism it always was.** `<action>` remains a *state* in
+SoulModule terms — the value that travels as `ApplyRequest.state` and is dispatched inside the
+module. What changes is the discipline about which word goes there, not the mechanism that carries
+it.
+
+**Both grouping levels go, not just one.** `community.*` and `official.*` carry the identical
+defect. [`docs/module/official/README.md`](../module/official/README.md) defined `official.*` as
+"the namespace for plugins that are supplied and maintained by the Soul Stack team" — which is
+**origin**, not subject, and so fails the same test that removes `community.*`. **Origin is still
+answerable, just not from the address:** it is the catalog entry's `source` in
+`keeper.yml::plugins.*[]`, plus the Sigil allow-list of which digests may run, which keys on the
+artifact source rather than on any declaration
+([ADR-026(a)](0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations)).
+No follow-up ticket is filed for the `official.*` artifacts: they live in the companion repo
+`soul-stack-plugins`, which this repository cannot edit.
+
+**The imperative carve-out, and its bound.** A non-stateful object keeps the verb form at level 3 —
+`run`, `shell`, `probe` — as `core.exec.run` and `core.cmd.shell` already do. The bound is what
+makes the carve-out safe: ★ **an object that takes the verb form takes exactly one verb; two
+operations are two objects.** Without that clause a level 2 spelled `command` simply re-admits
+`acl` / `role` / `offset-synced` at level 3 under a different roof, and the defect this amendment
+removes returns intact.
+
+⚠ **No gate follows from a word in a plugin's address, and this must not be read as one.** The
+gates are not the same shape, and only some of them read a closed set:
+
+- The [ADR-0074](0074-interactive-console-pty.md) console gate (`keeper/internal/shellgate`) reads
+  the **closed set of full core addresses** and nothing else. `Required`
+  (`keeper/internal/shellgate/shellgate.go:131`) is a thin alias over `coremanifest.IsVerbShell`, an
+  exact map lookup over `core.cmd.shell` and `core.exec.run`
+  (`shared/coremanifest/verbshell.go:29-32,36-39`), and `Authorize` returns immediately for anything
+  else (`:145-148`).
+- The keeper-side dry-run check `ValidateDryRunModule`
+  (`keeper/internal/errand/dryrunshell.go:92`, NIM-489) reads that **same** closed set and can only
+  *reject* with it. It changes nothing in the conclusion; it is listed because it is a third
+  production consumer of `coremanifest.IsVerbShell`, and "the two gates" was not a complete list.
+- The Errand allow-list has **five** arms on its non-dry-run path, not one (`IsAllowed`,
+  `soul/internal/runtime/errandrunner/whitelist.go:62-94`): `coremanifest.IsVerbShell` — the closed
+  set — at `:73`; a defensive `mod == nil` *reject* at `:76`; the exact address `core.http.probe` at
+  `:84`, which is **not** in `verbshell.go`; a `core.http.` **prefix** match at `:87`, the one arm
+  that reads part of an address rather than all of it, and which also produces a *reject*; and the
+  `sdkmodule.ErrandReadSafe` marker at `:90`, which reads no address at all and is the arm that
+  decides for a plugin.
+
+Treat neither count as exhaustive on this page's word: re-derive them from the call sites of
+`coremanifest.IsVerbShell` and from the body of `IsAllowed` before a ticket rests on one.
+
+**The conclusion comes out stronger, not weaker.** Three of the Errand allow-list's five arms key on
+`core.` addresses, and `core` is a reserved level 1 no plugin can claim
+(`shared/plugin/reserved.go:61-63`, tier 1) — so a plugin address reaches none of the three,
+prefix match included. What decides for a plugin is the marker interface, and it is
+**default-deny**: `BaseModule` implements neither `ErrandReadSafe` nor `PlanReadSafe`
+(`sdk/module/module.go:118-119,133-134`), so a plugin built on it is refused unless its author
+declared otherwise. A plugin object named `command` therefore gets **no** gate from its name **and
+no admission either** — naming it that grants nothing and restricts nothing.
+
+The normative statement of the rule lives in
+[naming-rules.md → The discipline binding the three levels](../naming-rules.md#the-discipline-binding-the-three-levels).

@@ -157,11 +157,69 @@ Modules are addressed in the three-level form `<alias>.<module>.<state>`:
 
 | Level | Role |
 |---|---|
-| **alias** (collection) | **The registration alias — the operator's choice**, not the publisher's ([ADR-020(p)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). `core` for built-ins; for plugins, whatever the operator wrote in `keeper.yml::plugins.*[].name` — `redis`, `acme`, `community`. The artifact carries **no name of its own**, so the same bytes registered under two aliases answer at two addresses. Reserved names — [below](#reserved-namespace-names). The entity name in the Soul Stack dictionary is still open ([module-collections.md](module-collections.md)); we use the neutral "collection / alias". |
-| **module** | Control object - `pkg`, `file`, `service`, `user`, `exec`, `template`, `http`, `haproxy`, ... |
+| **alias** (collection) | **The registration alias — the operator's choice**, not the publisher's ([ADR-020(p)](adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). `core` for built-ins; for plugins, whatever the operator wrote in `keeper.yml::plugins.*[].name` — `redis`, `acme`. The artifact carries **no name of its own**, so the same bytes registered under two aliases answer at two addresses. Reserved names — [below](#reserved-namespace-names). The entity name in the Soul Stack dictionary is still open ([module-collections.md](module-collections.md)); we use the neutral "collection / alias". |
+| **module** | Control object - `pkg`, `file`, `service`, `user`, `exec`, `http`, ... |
 | **state** | Desired object state (declarative): `installed`, `absent`, `latest`, `present`, `running`, `stopped`, `restarted`, `enabled`. For non-stateful (read-probe / imperative) modules - verb form (`run`, `shell`, `probe`). |
 
-Related terms:
+### The discipline binding the three levels
+
+The table above states the **grammar**. What follows is the **discipline** that keeps the three
+levels meaning what the table says they mean — the user's decision of 2026-09-02, recorded in
+[ADR-020 amendment 2026-09-02](adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed)
+(NIM-764 / NIM-765).
+
+⚠ **Not implemented — the form is the rule, and no artifact serves it yet.** Every shipped plugin
+address is still in the old form, and the conversions are **NIM-766** (redis) and **NIM-769**
+(mongo). This section says what an author should write, not what the catalog answers to today.
+
+A plugin step's address is **`<plugin-name>.<object>.<action>`** — `redis.user.present`. That is
+the grammar core has spoken all along (`core.user.present`, `core.file.rendered`,
+`core.state.set`); the plugin was the outlier.
+
+- **Level 2 is the object the module manages** — a noun: `user`, `file`, `service`, `instance`,
+  `replica`, `cluster`. It is **not** the plugin's own subject and **not** its origin.
+  `community.redis.acl` put the subject at level 2, which left level 3 with nothing to name but a
+  second subject.
+- **Level 3 is the action** — the state the object is left in (`present`, `absent`, `pinged`,
+  `rendered`, `synced`), or, when the object is non-stateful, the single verb naming the operation
+  (`run`, `shell`, `probe`). It is never the name of a subject. ★ **An object that takes the verb
+  form takes exactly one: two operations are two objects.** That clause is the point — without it a
+  level 2 spelled `command` re-admits `acl` / `role` / `offset-synced` at level 3 under a different
+  roof.
+- **The grouping level is not written.** `community.*` and `official.*` named a plugin's *origin*
+  rather than its subject, and both are removed on the same rule. Origin is still answerable — it
+  is the catalog entry's `source` in `keeper.yml::plugins.*[]`, plus the Sigil allow-list of which
+  digests may run ([ADR-026(a)](adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations))
+  — but it is not answerable from address level 1. See
+  [module-collections.md](module-collections.md).
+- **This is a naming discipline, not a mechanism.** The engine reads no word at any level: it splits
+  the address positionally into exactly three segments
+  ([`splitModuleAddress`](../shared/config/module_params.go)) and accepts three kebab-case segments
+  ([`reModuleAddress`](../shared/config/scenario_task.go)). Nothing checks that level 2 is a noun or
+  that level 3 is a state, and an address that violates this section loads and runs. `redis.user.present`
+  matches the pattern today, and changing level 1 is a config edit: the alias *shape*
+  (`plugin.AliasPattern`) admits both words, and *reservation* is the separate closed list
+  (`reservedAliases` / `plugin.IsReserved`, [`shared/plugin/reserved.go`](../shared/plugin/reserved.go))
+  — which holds neither `redis` nor `community`. See [reserved names](#reserved-namespace-names).
+- ⚠ **No gate follows from a word in a plugin's address.** The gates are not the same shape.
+  The [ADR-0074](adr/0074-interactive-console-pty.md) console gate
+  (`keeper/internal/shellgate`) reads a **closed set of full core addresses** and nothing else —
+  `coremanifest.IsVerbShell`, an exact lookup over `core.cmd.shell` and `core.exec.run`
+  ([`shared/coremanifest/verbshell.go`](../shared/coremanifest/verbshell.go)); the keeper-side
+  dry-run check ([`ValidateDryRunModule`](../keeper/internal/errand/dryrunshell.go)) is a second
+  reader of that same set and can only reject with it. The Errand allow-list
+  ([`IsAllowed`](../soul/internal/runtime/errandrunner/whitelist.go)) is the one that is not a closed
+  set: **five** arms on its non-dry-run path — that same closed set, a defensive `mod == nil`
+  reject, the exact address `core.http.probe`, a `core.http.` **prefix** match that also rejects,
+  and the `sdkmodule.ErrandReadSafe` marker. Three of the five key on
+  `core.` addresses, and `core` is [reserved](#reserved-namespace-names) — no plugin can claim it,
+  so a plugin address reaches none of them, prefix arm included. What decides for a plugin is the
+  marker, and it is **default-deny** (`BaseModule` implements neither `ErrandReadSafe` nor
+  `PlanReadSafe`). A plugin object named `command` therefore gets **no** gate from its name **and no
+  admission either**. Neither count above is a list to trust unchecked — re-derive it from the call
+  sites before a ticket rests on it.
+
+### Related terms
 
 | Name | Role |
 |---|---|
@@ -557,11 +615,11 @@ Standard regex for the kebab-case identifiers of module addressing `<alias>.<mod
 | Field | Regex | Meaning |
 |---|---|---|
 | **registration alias** | `^[a-z][a-z0-9-]{0,62}$` ([`plugin.AliasPattern`](../shared/plugin/reserved.go)) | Address level 1, chosen by the **operator** in `keeper.yml::plugins.*[].name` and on `soul-lint --modules <alias>=<path>`. Must not be a [reserved name](#reserved-namespace-names). The charset is the intersection of what a path segment and an address segment may hold: **no dots** (they separate address levels), no slashes or `..` (traversal), no uppercase (a case-insensitive filesystem would fold two registrations into one slot). |
-| **`modules[].name`** | `^[a-z][a-z0-9-]{0,62}$` | Address level 2 — the module inside the artifact (`acl`, `config`, `info`). Also the subcommand the host passes; `schema` is reserved. |
+| **`modules[].name`** | `^[a-z][a-z0-9-]{0,62}$` | Address level 2 — **the object the module manages** (`user`, `instance`, `replica`), one entry per object; see [the discipline binding the three levels](#the-discipline-binding-the-three-levels). Also the subcommand the host passes; `schema` is reserved, and several objects in one artifact are already legal (`Modules []Module`, at least one required, duplicates refused). |
 | **`<state-name>`** | `^[a-z][a-z0-9-]{0,30}$` | Address level 3 (`installed` / `running` / `restarted` / …). |
 | ~~binary-name~~ | — | **REMOVED (NIM-377).** `soul-mod-<namespace>-<name>` / `soul-cloud-<provider_kind>` / `soul-ssh-<short>` / `soul-beacon-<name>` is no longer a convention or a contract: `dist/` holds exactly one executable and the host takes it, whatever it is called. The [ADR-016 amendment 2026-05-27](adr/0016-parity-license.md) that put the namespace into the SoulModule binary name is moot, and so is NIM-423. |
 
-Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but in `docs/module/<namespace>/`: implemented [`community.redis`](module/community/redis/README.md) (interface to live Redis, `soul-mod-community-redis`) and [`community.mongo`](module/community/mongo/README.md) (interface to live MongoDB, `soul-mod-community-mongo`, PILOT standalone).
+Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but under `docs/module/`: implemented [`community.redis`](module/community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** (interface to live Redis, `soul-mod-community-redis`) and [`community.mongo`](module/community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** (interface to live MongoDB, `soul-mod-community-mongo`, PILOT standalone). The directories keep their present paths until each artifact is re-laid-out.
 
 ### Reserved namespace names
 

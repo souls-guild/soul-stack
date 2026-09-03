@@ -357,7 +357,7 @@ In addition to the built-in `core.beacon.*`, the operator can add his own beacon
 - SDK - [`sdk/beacon`](../../../../sdk/beacon/beacon.go), `Beacon` interface with two RPCs:
   - `Validate(params) → ok+errors[]` — runtime checks `params` Vigil (what is not expressed in the JSON Schema manifest);
   - `Check(params, state_cookie) → state + payload + state_cookie + error` - one poll tick.
-- Vigil addressing - `<namespace>.<name>` (for example `community.zfs-degraded`); The Soul-side dispatcher distinguishes built-in `core.beacon.*` from plugin-beacon by namespace.
+- Vigil addressing - `<namespace>.<name>` (for example `community.zfs-degraded` ⚠ **LEAVING THE DICTIONARY (NIM-770)** — `community` is the origin-grouping spelling that is being removed ([ADR-020 amendment 2026-09-02](../../../adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed)); how a Vigil is addressed is itself open under **NIM-770**, and that ticket settles it — the amendment rules on a plugin **step**'s address, not on this one); The Soul-side dispatcher distinguishes built-in `core.beacon.*` from plugin-beacon by namespace.
 - lifecycle — **one-shot per Spawn** ([ADR-020(d)](../../../adr/0020-plugin-infrastructure.md)): scheduler makes Spawn → Check → Close on every tick; for frequent ticks, the plugin can save in-memory state via `state_cookie` (passback).
 - security - fail-closed Sigil-verify before Spawn ([ADR-026](../../../adr/0026-sigil.md)): without active permission (`keeper.plugin.allow ns=<ns> name=<name> ref=<ref>`) the plugin will NOT run.
 

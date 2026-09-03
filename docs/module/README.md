@@ -12,11 +12,20 @@ core), [ADR-017](../adr/0017-keeper-side-core.md)
 (Keeper-side core), [ADR-010](../adr/0010-templating.md)
 (render `core.file.rendered`).
 
-The directory covers **core modules** (`core.*`, built into the binary). Plugins -
-individual namespace directories: [official/README.md](official/README.md) (`official.*`)
-and [community/README.md](community/README.md) (`community.*`, incl.
-[`community.redis`](community/redis/README.md) and
-[`community.mongo`](community/mongo/README.md)).
+The directory covers **core modules** (`core.*`, built into the binary). Plugins live in their
+own directories beside it: [official/README.md](official/README.md) and
+[community/README.md](community/README.md) (incl.
+[`community.redis`](community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not
+implemented — ships today)** and
+[`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not
+implemented — ships today)**).
+
+> ⚠ **`official` and `community` are no longer namespaces.** The origin-grouping level of a plugin
+> address is **removed** ([ADR-020 amendment 2026-09-02](../adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed),
+> NIM-765): a plugin step is addressed `<plugin-name>.<object>.<action>`, and origin is answered by
+> the catalog entry's `source` plus the Sigil allow-list instead. `core.*` is untouched — it is
+> [reserved](../naming-rules.md#reserved-namespace-names) and real. The two directories keep their
+> present paths and names; they group *documents*, not addresses.
 
 Related documents (intentionally not duplicated here):
 
@@ -101,12 +110,16 @@ Per-beacon reference - [`core/beacon/README.md`](core/beacon/README.md).
 
 In addition to the built-in `core.*`, destiny steps can address plugins via
 SoulModule-contract ([ADR-020](../adr/0020-plugin-infrastructure.md),
-gRPC-over-stdio). Each namespace has its own per-module directory:
+gRPC-over-stdio). A plugin step is addressed `<plugin-name>.<object>.<action>`
+([address rule](../naming-rules.md#the-discipline-binding-the-three-levels)) — level 1 is the
+alias the operator chose at registration, and there is **no origin-grouping level**. The two
+directories below group documents by where a plugin came from; that grouping does **not** appear
+in an address:
 
-| Namespace | Index | What is this |
+| Directory | Index | What is this |
 |---|---|---|
-| `official.*` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. |
-| `community.*` | [community/README.md](community/README.md) | Third-party plugins (`soul-mod-community-*`). Implemented [`community.redis`](community/redis/README.md) - interface to live Redis (12 states) and [`community.mongo`](community/mongo/README.md) - interface to live MongoDB (3 states, PILOT standalone). |
+| `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
+| `community/` | [community/README.md](community/README.md) | Third-party plugins (`soul-mod-community-*`). Implemented [`community.redis`](community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** - interface to live Redis (12 states) and [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** - interface to live MongoDB (3 states, PILOT standalone). |
 
 ## Catalog status
 

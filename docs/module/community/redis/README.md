@@ -1,5 +1,15 @@
 # community.redis
 
+> ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today).** Every address on this
+> page — `community.redis.<state>` — is the **old form**, and it is what a cluster resolves right
+> now: the artifact registers under the alias `community` and serves one module named `redis`.
+> Under the [address rule](../../../naming-rules.md#the-discipline-binding-the-three-levels) a
+> plugin step is `<plugin-name>.<object>.<action>`, so level 2 becomes the object this plugin
+> manages and level 3 the action — `redis.user.present` rather than `community.redis.acl`. That
+> re-layout is **NIM-766**, and the addresses it produces are **NIM-767**; until both land,
+> `redis.user.present` resolves nowhere and must not be written into a scenario. This document and
+> its directory move with the artifact, not before it.
+
 MAIN interface to **live Redis** in redis consolidation (role-based concept): the service scenario orchestrates the order/targeting/rolling, and the plugin
 performs **one** operation on one Redis instance. Custom plugin
 `kind: soul_module` (namespace `community`, name `redis`), binary
@@ -624,6 +634,9 @@ external source for TLS migration puts scenario via `core.file.rendered`).
 by the redis service.
 
 ## Example call from scenario
+
+⚠ The addresses below are the shipped `community.redis.*` form (NIM-766 / NIM-767 — see the banner
+at the top of this page); the task shape is unaffected by the rename.
 
 ```yaml
 # Apply the final redis_config to live Redis after render redis.conf destiny.

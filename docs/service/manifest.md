@@ -231,7 +231,7 @@ Each record is an object:
 
 **Level 1 is a registration alias, not a namespace.** Since [NIM-377](../adr/0065-core-module-installed.md) an artifact carries no name of its own: the operator picks the alias when they register it (`keeper.plugin.allow alias=…`), and that alias names the host-cache slot and address level 1. A service declaring `modules:` is therefore asserting *which alias its scenarios address*, and a cluster that registered the same artifact under a different one will not resolve those tasks. Reserved names (`core`, `keeper`, `soul`, the Soul Stack dictionary — see [`shared/plugin/reserved.go`](../../shared/plugin/reserved.go)) are rejected here as well as at registration.
 
-Several entries **may** share an alias — that is one artifact serving several modules (`community.redis` + `community.sentinel`). They must then agree on `ref`: one alias is one slot holding one artifact, and two refs for it is `conflicting_module_ref`.
+Several entries **may** share an alias — that is one artifact serving several modules (`community.redis` + `community.sentinel` ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)**; under the [address rule](../naming-rules.md#the-discipline-binding-the-three-levels) the shared alias is the plugin's name and each entry names an **object** it manages). They must then agree on `ref`: one alias is one slot holding one artifact, and two refs for it is `conflicting_module_ref`.
 
 **Hybrid of destiny source** (how Keeper outputs git-URL for dependency):
 - entry **without** `git:` → standard path: git-URL = `default_destiny_source` (keeper.yml) with `{name}` substitution;
@@ -248,7 +248,7 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 `params.name` of the synthesized step is the **alias alone** — address level 1, not the whole `modules[].name`. `core.module.installed` installs an artifact into the slot the alias names, and it rejects a dotted value outright; passing the entry through verbatim is what made every service declaring `modules:` fail at apply on every host between NIM-377 and NIM-524.
 
 - **A module without consumer tasks is not synthesized in the script.**
-- **One install per alias.** Two entries of one artifact (`community.redis`, `community.sentinel`) produce a single step, before the earlier of their consumers.
+- **One install per alias.** Two entries of one artifact (`community.redis`, `community.sentinel` ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)**) produce a single step, before the earlier of their consumers.
 - **Takeover:** an explicit step `core.module.installed` naming that slot disables synthesis for it - the operator itself controls the position, `ref` and `when:`. The comparison is on address level 1 at both ends, so a step written `name: community.redis` still takes over `community` (NIM-543) - though the spelling itself is an error, reported as `module_install_name_not_an_alias`.
 - `ref` records go into the params of the synthesis step as **pin-verification**: the active Sigil tolerance must be on this ref.
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
@@ -374,6 +374,9 @@ destiny:
 # params.name of that step is level 1 alone - `community`, the slot the alias names -
 # because a slot holds an artifact, and level 2 addresses a module inside it (NIM-524).
 modules:
+  # LEAVING THE DICTIONARY (NIM-766, not implemented - this is what ships today).
+  # The artifact registers under the alias `community` and serves one module named
+  # `redis`; `redis.user.present` resolves nowhere until the re-layout lands.
   - { name: community.redis, ref: v1.0.0 }  # live Redis runtime (CONFIG SET, ACL, cluster, sentinel)
 ```
 
