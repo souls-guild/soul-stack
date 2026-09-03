@@ -73,7 +73,7 @@ plugins:
   cloud_drivers:
     - { name: example, source: "file:///dev/null/soul-cloud-example-manual-slot", ref: "manual-0001" }
   soul_modules:
-    - { name: redis, source: "file:///dev/null/community-redis-manual-slot", ref: "manual-0001" }
+    - { name: redis, source: "file:///dev/null/redis-manual-slot", ref: "manual-0001" }
 
 plugin_runtime:
   socket_dir: /tmp/keeper-dev/plugin-sockets-demo

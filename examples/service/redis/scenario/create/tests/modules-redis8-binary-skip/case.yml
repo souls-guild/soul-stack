@@ -181,7 +181,7 @@ assert:
           role: ""
 
     # standalone-PING: cluster/sentinel branches - placeholder-skip; disambiguator addr/args.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

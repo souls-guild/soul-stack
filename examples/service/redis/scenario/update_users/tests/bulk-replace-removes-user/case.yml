@@ -92,9 +92,9 @@ assert:
               arch: amd64
           role: ""
 
-    # 2. HOT-RELOAD ACL: community.redis.acl against a live plain instance.
+    # 2. HOT-RELOAD ACL: redis.acl.reloaded against a live plain instance.
     #    * default_admin REDESIGN: AUTH under default_admin (username + its Vault password).
-    - module: community.redis.acl
+    - module: redis.acl.reloaded
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

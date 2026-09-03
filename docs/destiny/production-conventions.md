@@ -162,13 +162,11 @@ This narrows the previous formulation of "restart reactively to a config/drop-in
 
 Illustrations - day-2-scenarios of the service [`redis`](../../examples/service/redis/) (next to `restart`, which remains behind the unit level, §3a / §7a):
 
-- [`update_config`](../../examples/service/redis/scenario/update_config/main.yml) — `community.redis.config` (CONFIG SET hot-settable + CONFIG REWRITE);
-- [`add_user`](../../examples/service/redis/scenario/add_user/main.yml) — `community.redis.acl` (ACL LOAD rereads `aclfile`, without restart);
+- [`update_config`](../../examples/service/redis/scenario/update_config/main.yml) — `redis.instance.configured` (CONFIG SET hot-settable + CONFIG REWRITE);
+- [`add_user`](../../examples/service/redis/scenario/add_user/main.yml) — `redis.acl.reloaded` (ACL LOAD rereads `aclfile`, without restart);
 - [`rotate_tls`](../../examples/service/redis/scenario/rotate_tls/main.yml) - CONFIG SET `tls-*-file` (Redis 6.2+ rereads cert/key/CA live).
 
-> ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today).** The two `community.redis.*` addresses above are the shipped form: the artifact registers under the alias `community` and serves one module named `redis`. Under the [address rule](../naming-rules.md#the-discipline-binding-the-three-levels) they become `<plugin>.<object>.<action>`; the scenarios and the conventions they illustrate are unaffected.
-
-At the same time, the destiny rendering of these files itself remains idempotent according to §6 (the same ref/content → no-op), and the "already applied" attribute of the hot-reload step gives a comparison live ↔ the desired one in the plugin itself (honest diff `CONFIG GET` / `ACL LIST`), and not `onchanges` (see. [`docs/module/community/redis/README.md`](../module/community/redis/README.md)). The exception is an action operation like `rotate_tls` (force re-read SSL_CTX): it is non-idempotent **by design**, just like exec-style `reshard`.
+At the same time, the destiny rendering of these files itself remains idempotent according to §6 (the same ref/content → no-op), and the "already applied" attribute of the hot-reload step gives a comparison live ↔ the desired one in the plugin itself (honest diff `CONFIG GET` / `ACL LIST`), and not `onchanges` (see. [`docs/module/redis/README.md`](../module/redis/README.md)). The exception is an action operation like `rotate_tls` (force re-read SSL_CTX): it is non-idempotent **by design**, just like exec-style `reshard`.
 
 ## 7. Supply-chain
 

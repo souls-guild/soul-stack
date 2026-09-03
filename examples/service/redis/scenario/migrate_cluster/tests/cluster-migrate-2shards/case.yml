@@ -9,7 +9,7 @@
 # group-drop (statically-false when), cluster.yml is expanded. cluster.yml: size-guard
 # assert (does NOT emit a RenderedTask) → include redis-deploy-cluster-joinable.yml
 # (joinable deploy of new nodes WITHOUT building its own cluster) → 3 steps of the
-# community.redis.cluster plugin (join-external → failover-takeover → forget-external,
+# redis.cluster.* plugin (join-external → failover-takeover → forget-external,
 # run_once on hosts[0]).
 #
 # ★ make trial may fail on this case UNTIL S4-2 merges the failover-takeover/
@@ -21,13 +21,13 @@
 #   1. JOINABLE DEPLOY (from redis-deploy-cluster-joinable.yml): redis.conf render with
 #      cluster directives (cluster-enabled yes / cluster-config-file nodes.conf /
 #      cluster-node-timeout) — new nodes come up in cluster-mode, but WITHOUT CLUSTER MEET/
-#      ADDSLOTS (no building of its own cluster — presence of community.redis.cluster
-#      action:create is ABSENT, verified separately by the plan containing only join/
+#      ADDSLOTS (no building of its own cluster — presence of redis.cluster.*
+#      redis.cluster.created is ABSENT, verified separately by the plan containing only join/
 #      failover/forget actions).
-#   2. ★ JOIN: community.redis.cluster action:join-external, nodes-MAP is deterministic
+#   2. ★ JOIN: redis.cluster.external-joined, nodes-MAP is deterministic
 #      (SID→{addr:primary_ip+":6379"}), shards_dest=2, source_nodes=external source.
-#   3. ★ FAILOVER: community.redis.cluster action:failover-takeover, same nodes-MAP.
-#   4. ★ FORGET: community.redis.cluster action:forget-external, nodes-MAP + source_nodes.
+#   3. ★ FAILOVER: redis.cluster.failed-over, same nodes-MAP.
+#   4. ★ FORGET: redis.cluster.external-forgotten, nodes-MAP + source_nodes.
 #   5. state_after: create-set (cluster) + seeded_from {source_endpoints:[source],
 #      detached:TRUE} — cluster B3 is atomic, forget happens in the migrate phase →
 #      detached is immediately true (unlike sentinel, where detached:false and detach is
@@ -179,13 +179,12 @@ assert:
               arch: amd64
           role: ""
 
-    # ── JOIN: community.redis.cluster action:join-external ───────────────────────
+    # ── JOIN: redis.cluster.external-joined ───────────────────────
     # nodes-MAP is deterministic (key=SID, addr=primary_ip+":6379"), shards_dest=2,
     # source_nodes=external source (both seeds). password=shared (aligned old==new).
     # Disambiguator from failover/forget (same module) — action.
-    - module: community.redis.cluster
+    - module: redis.cluster.external-joined
       params_subset:
-        action: join-external
         shards_dest: 2
         # ★ default_admin REDESIGN: a single username/password for the new nodes AND the
         # source seed (migrate.go). The old primary secret is DROPPED — password from
@@ -199,24 +198,22 @@ assert:
           node-1.example.com: { addr: "10.0.0.1:6379" }
           node-2.example.com: { addr: "10.0.0.2:6379" }
 
-    # ── FAILOVER: community.redis.cluster action:failover-takeover ───────────────
+    # ── FAILOVER: redis.cluster.failed-over ───────────────
     # same nodes-MAP. source_nodes is NOT needed by the plugin (it operates on already-
     # joined nodes). Disambiguator from join/forget — action.
-    - module: community.redis.cluster
+    - module: redis.cluster.failed-over
       params_subset:
-        action: failover-takeover
         username: default_admin
         password: default-admin-secret-pass
         nodes:
           node-1.example.com: { addr: "10.0.0.1:6379" }
           node-2.example.com: { addr: "10.0.0.2:6379" }
 
-    # ── FORGET: community.redis.cluster action:forget-external ───────────────────
+    # ── FORGET: redis.cluster.external-forgotten ───────────────────
     # nodes-MAP + source_nodes (which old nodes to drop). Disambiguator from join/
     # failover — action.
-    - module: community.redis.cluster
+    - module: redis.cluster.external-forgotten
       params_subset:
-        action: forget-external
         username: default_admin
         password: default-admin-secret-pass
         source_nodes:

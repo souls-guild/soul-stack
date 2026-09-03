@@ -1,6 +1,6 @@
 # L0 test for rotate_tls: TLS material rotation WITHOUT a restart. The operator supplies
 # NEW Vault refs cert/key/ca; the scenario re-renders PEM into ${conf_dir}/tls/ from the
-# new refs and sends three CONFIG SET tls-*-file via community.redis.command under an
+# new refs and sends three CONFIG SET tls-*-file via redis.command.run under an
 # onchanges gate (Redis 6.2+ recreates SSL_CTX and re-reads live). Render-only,
 # hermetic. The instance is ALREADY on TLS (state.tls.enable=true; rotate is TLS-only).
 #
@@ -17,7 +17,7 @@
 #      tls_certs). This is the onchanges-gate anchor; without it onchanges:[tls_certs]
 #      would fail with ErrOnChangesUnknownRegister (there was a force changed:true
 #      workaround before 52b16ed).
-#   3. the reload re-read (three community.redis.command): addr 127.0.0.1:7379 (TLS port),
+#   3. the reload re-read (three redis.command.run): addr 127.0.0.1:7379 (TLS port),
 #      ★ username=default_admin + its password (connect as the system default_admin,
 #      requirepass dropped), tls=true, tls_ca = a BUNDLE of the old+new CA (CA rollover),
 #      args = CONFIG SET tls-cert-file/tls-key-file/tls-ca-cert-file on paths under
@@ -273,13 +273,13 @@ assert:
     - module: core.noop.run
       id: tls_certs
 
-    # 3. RE-READ UNDER THE onchanges GATE: three community.redis.command calls (CONFIG
+    # 3. RE-READ UNDER THE onchanges GATE: three redis.command.run calls (CONFIG
     #    SET tls-*-file), addr on the tls port, tls=true, tls_ca = a BUNDLE of the
     #    old+new CA (rollover), args on paths under /etc/redis/tls/. changed=true
     #    (force) REMOVED; gating is now onchanges:[tls_certs] (see task_absent below:
     #    a regression back to force is caught). Args is the disambiguator across the
     #    three calls.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -287,7 +287,7 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -295,7 +295,7 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -305,21 +305,21 @@ assert:
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]
 
   # ★ Idempotency GUARD (render level): force changed:true was REMOVED from the reload
-  #    tasks. Any community.redis.command CONFIG SET-tls with changed:true → a
+  #    tasks. Any redis.command.run CONFIG SET-tls with changed:true → a
   #    regression back to the non-idempotent force path (re-read on EVERY run,
   #    bypassing onchanges). task_absent catches it: ≥1 match → fail. ALL THREE reload
   #    tasks are covered (cert/key/ca); otherwise a partial force regression on one of
   #    them would slip through unnoticed. Args disambiguator.
   task_absent:
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]

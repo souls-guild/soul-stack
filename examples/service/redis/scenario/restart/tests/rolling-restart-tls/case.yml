@@ -18,10 +18,10 @@
 # The source is the NAMED state.tls.ca_ref (current after rotate_tls), NOT a service-vars default.
 #
 # What we assert (acceptance criterion for the TLS branch of the gate):
-#   1. probe (community.redis.role): tls=true, addr 127.0.0.1:7379 (NOT plain 6379),
+#   1. probe (redis.instance.role-probed): tls=true, addr 127.0.0.1:7379 (NOT plain 6379),
 #      tls_ca = PEM CA from Vault.
 #   2. block child 1: Restart redis-server (core.service.restarted).
-#   3. block child 2: health-gate (community.redis.replica-synced) with the same
+#   3. block child 2: health-gate (redis.replica.synced) with the same
 #      TLS params (tls=true, addr on the tls-port, tls_ca = PEM).
 #
 # NOTE L0 limitation: mocks.register - a SINGLE payload for the entire roster (as in
@@ -98,10 +98,10 @@ mocks:
 
 assert:
   task_present:
-    # ── probe (community.redis.role): OVER TLS (tls-port from state.tls.port) ──
-    # The only community.redis.role in the plan. The main TLS guard of this case: probe
+    # ── probe (redis.instance.role-probed): OVER TLS (tls-port from state.tls.port) ──
+    # The only redis.instance.role-probed in the plan. The main TLS guard of this case: probe
     # connects over TLS to the tls port.
-    - module: community.redis.role
+    - module: redis.instance.role-probed
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -109,12 +109,12 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 
-    # ── slave-health-gate (community.redis.replica-synced) OVER TLS ────────────
-    # The only community.redis.replica-synced. The second TLS guard: the resync gate is also
+    # ── slave-health-gate (redis.replica.synced) OVER TLS ────────────
+    # The only redis.replica.synced. The second TLS guard: the resync gate is also
     # over TLS. A bare core.service.restarted (block restart) is presence-indistinguishable from
     # the master restart (see the observation in the report) → not asserted separately; the presence
     # of this gate inside the slave block proves the block fan-out renders.
-    - module: community.redis.replica-synced
+    - module: redis.replica.synced
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin

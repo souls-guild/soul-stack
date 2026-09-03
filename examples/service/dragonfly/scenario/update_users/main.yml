@@ -21,7 +21,7 @@ description: >-
   Each user's password is NOT part of the input contract: it lives in Vault by convention
   secret/dragonfly/<incarnation>/{df_users,system_acl_users}/<name>#password (same as create/add_user), resolved
   keeper-side via vault() in the render phase. The scenario renders the FULL users.acl to disk
-  (system + the new operator-extra set) and REVIVES it via community.redis.acl (ACL LOAD).
+  (system + the new operator-extra set) and REVIVES it via redis.acl.reloaded (ACL LOAD).
 
   Idempotency: ACL LOAD is idempotent BY CONSTRUCTION; the plugin does an honest diff of ACL LIST
   before/after (changed=false on match). The users.acl render is deterministic. Day-2: the instance is ALREADY
@@ -181,12 +181,12 @@ tasks:
                }))
              ) }
 
-  # 2. HOT-RELOAD ACL: community.redis.acl sends ACL LOAD — the live instance re-reads the aclfile
+  # 2. HOT-RELOAD ACL: redis.acl.reloaded sends ACL LOAD — the live instance re-reads the aclfile
   #    (rendered in step 1) entirely. Users removed from the set disappear from ACL LIST once the
   #    file reload happens (ACL LOAD brings the instance in line with the file). Idempotent by construction;
   #    the plugin diffs ACL LIST before/after. addr/TLS discriminator — from state.tls (compute.tls_*).
   - name: Hot-reload ACL on the live instance (ACL LOAD)
-    module: community.redis.acl
+    module: redis.acl.reloaded
     params:
       addr:     "${ compute.local_addr }"
       # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). username + its

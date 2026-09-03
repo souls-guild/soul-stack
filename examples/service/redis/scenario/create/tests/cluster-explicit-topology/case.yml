@@ -11,7 +11,7 @@
 #
 # What we assert (slice acceptance criterion):
 #   1. size-guard PASS on the sum form (4 hosts == sum(len of shards)) → cluster-build is in place.
-#   2. cluster-build (community.redis.cluster action create) carries the param `topology` =
+#   2. cluster-build (redis.cluster.created carries the param `topology` =
 #      EXACTLY the passed list of lists of SIDs (deepEqual, not a subset) + a nodes-MAP of all
 #      4 hosts (deterministic by SID) + replicas_per_shard=1 (size check of composition).
 name: cluster create with explicit topology forwards declared shard layout to the plugin
@@ -106,10 +106,9 @@ assert:
   task_present:
     # cluster-build: the topology arrives via param `topology` (deepEqual of the whole list),
     # nodes-MAP of all 4 hosts, replicas_per_shard=1 (size check of composition). The only
-    # community.redis.cluster in the plan → no disambiguator needed.
-    - module: community.redis.cluster
+    # redis.cluster.* in the plan → no disambiguator needed.
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 1
         # ★ REDESIGN default_admin: connects as default_admin (username → AUTH). The former
         # main secret is DROPPED — password comes from the users/default_admin branch.

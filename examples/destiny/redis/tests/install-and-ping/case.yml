@@ -6,7 +6,7 @@ description: |
     1. apply destiny redis  — install redis-server and bring up the service with
        the rendered redis.conf (TCP 6379 + opt. unix socket, requirepass).
     2. ping                 — make sure it responds PONG (via redis-cli or
-       community.redis.command — the latter in the service scenario).
+       redis.command.run — the latter in the service scenario).
 
   The test runs on an ephemeral stand (see the `stand:` block below), which has
   neither a redis-server nor configs. After the run the stand is destroyed.

@@ -67,7 +67,7 @@ func TestRequiredModules_ReservedBeatsFormatDiagnostic(t *testing.T) {
 // An ordinary third-party address is untouched — the check must not have widened into
 // "two-level names are suspicious".
 func TestRequiredModules_OrdinaryAddressIsAccepted(t *testing.T) {
-	diags := destinyDiags(t, "name: x\nrequired_modules: [acme.haproxy, community.redis]\n")
+	diags := destinyDiags(t, "name: x\nrequired_modules: [acme.haproxy, redis.instance]\n")
 	if diag.HasErrors(diags) {
 		t.Errorf("a plain plugin address was rejected: %v", diags)
 	}

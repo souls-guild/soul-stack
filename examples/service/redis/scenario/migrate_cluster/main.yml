@@ -203,7 +203,7 @@ validate:
   # create/create_from_souls for an explicit operator shard layout), migrate inherits it
   # via `extends: covenant` → the effective migrate input ACCEPTS the field per the
   # schema. BUT the cluster branch of migration (cluster.yml includes
-  # redis-deploy-cluster-joinable.yml + the community.redis.cluster plugin's join-external
+  # redis-deploy-cluster-joinable.yml + the redis.cluster.* plugin's join-external
   # action) does NOT read cluster_topology: the B3-pilot moves ONLY the masters onto a
   # ready roster (the replica-guard replicas_per_master==0 — a topology with an explicit
   # master/replica layout only makes sense with replicas, and those aren't supported here),

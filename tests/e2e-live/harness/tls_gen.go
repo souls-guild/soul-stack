@@ -19,7 +19,7 @@ import (
 // by it (all three as PEM). Called TWICE (CA1, CA2 - independent) for the
 // rotate_tls CA-rollover rotation (finding #4).
 //
-// * The server cert carries IPAddresses=[127.0.0.1] (SAN): the community.redis
+// * The server cert carries IPAddresses=[127.0.0.1] (SAN): the redis
 // plugin and the create health-probe connect via go-tls to 127.0.0.1:<tls_port>,
 // and go-tls by default validates ServerName against SAN - without an IP SAN for
 // 127.0.0.1 the connection would fail with "certificate is valid for ... not

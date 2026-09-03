@@ -104,7 +104,7 @@ assert:
           role: ""
 
     # ★ default_admin REDESIGN: AUTH as default_admin (username + its Vault password).
-    - module: community.redis.acl
+    - module: redis.acl.reloaded
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

@@ -4,7 +4,7 @@
 # branch (cluster/sentinel/sentinel_only are group-dropped by static-when), which expands the
 # mode-agnostic destiny `redis`: apt redis-server + render redis.conf
 # (merged config) + render users.acl + systemd hardening drop-in. Live
-# health-gate PING — via the community.redis.command plugin.
+# health-gate PING — via the redis.command.run plugin.
 #
 # Exporters (redis_exporter/node_exporter) are MOVED OUT of service/redis: monitoring is
 # a separate entity (redis consolidation .pm/tasks/2026-06-22-redis-consolidation).

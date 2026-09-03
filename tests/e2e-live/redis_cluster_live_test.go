@@ -7,7 +7,7 @@
 // Previous self-contained redis-cluster-live service (core modules + redis-cli
 // --cluster create, proven by live mega-test on 2026-05-25) was removed: cluster
 // flow is absorbed by cluster mode of consolidated redis, which forms the cluster
-// ENTIRELY through community.redis.cluster plugin (CLUSTER MEET/ADDSLOTS/REPLICATE
+// ENTIRELY through redis.cluster.* plugin (CLUSTER MEET/ADDSLOTS/REPLICATE
 // through go-redis), not redis-cli --cluster create.
 //
 // Body below is retargeted to consolidated redis (redis_type=cluster, shards=3,
@@ -15,7 +15,7 @@
 // on a 3-node stand). Stack starts three privileged Debian-12 systemd-PID-1
 // containers (soul-live-a/-b/-c.example.com) with real CSR handshake.
 //
-// t.Skip: cluster-create through community.redis.cluster is not yet proven live
+// t.Skip: cluster-create through redis.cluster.* is not yet proven live
 // end-to-end (render is checked at L0 - scenario/create/tests/cluster-*, but
 // container bootstrap of cluster through plugin on top of soul containers was not
 // run: harness has no wrapper to wait for cluster_state:ok through plugin path).
@@ -34,7 +34,7 @@ import (
 )
 
 func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
-	t.Skip("backlog (redis consolidation): cluster-create through community.redis.cluster is not proven live end-to-end (render is checked at L0 scenario/create/tests/cluster-*, but plugin cluster bootstrap on top of soul containers is not wrapped by harness - no helper waits for cluster_state:ok through plugin path). Symmetric with redis_cluster_remove_node_lossless_test.go::t.Skip. Reactivate with harness cluster-bootstrap/verify helpers - .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("backlog (redis consolidation): cluster-create through redis.cluster.* is not proven live end-to-end (render is checked at L0 scenario/create/tests/cluster-*, but plugin cluster bootstrap on top of soul containers is not wrapped by harness - no helper waits for cluster_state:ok through plugin path). Symmetric with redis_cluster_remove_node_lossless_test.go::t.Skip. Reactivate with harness cluster-bootstrap/verify helpers - .pm/tasks/2026-06-22-redis-consolidation")
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
@@ -78,7 +78,7 @@ func TestL3bRedisClusterCreate_ThreeNode(t *testing.T) {
 	})
 
 	// 600 s: apt-get install redis x 3 + render config + start + plugin
-	// community.redis.cluster bootstrap (CLUSTER MEET/ADDSLOTS).
+	// redis.cluster.* bootstrap (CLUSTER MEET/ADDSLOTS).
 	stack.WaitApplySuccess(t, applyID, 600)
 	stack.WaitIncarnationReady(t, inc, 30)
 

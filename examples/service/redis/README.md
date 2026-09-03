@@ -61,8 +61,8 @@ Division of responsibilities (architect B-hybrid, ADR-009):
 - **service scenario** - translation of simple input into `redis_config` (via
   `merge()`) + orchestration (step order, targeting, health-gate, unrolling the
   cluster topology into a `nodes` MAP; in future batches - rolling-restart, day-2).
-- **plugin [`community.redis`](../../../docs/module/community/redis/README.md)**
-  (binary `soul-mod-community-redis`) - the **primary interface** to a **live** Redis
+- **plugin [`redis`](../../../docs/module/redis/README.md)**
+  (binary `soul-mod-redis`) - the **primary interface** to a **live** Redis
   (`CONFIG SET`, ACL, cluster, sentinel, failover, raw commands). Wired in via
   [`service.yml → modules[]`](service.yml).
 
@@ -563,7 +563,7 @@ Deploy-body steps:
    `size(soulprint.hosts) == shards * (1 + replicas_per_master)`. The predicate is
    evaluated **keeper-side at render time** (`soulprint.hosts` is available there, not
    on Soul); `false` aborts the render with a clear `message` **BEFORE any dispatch** -
-   otherwise the `community.redis.cluster` plugin would have derived the shard count
+   otherwise the `redis.cluster.*` plugin would have derived the shard count
    from the node count and **silently** ignored the declared `shards` (a silent
    declared↔actual desync). Case
    [`cluster-size-guard-mismatch`](scenario/create/tests/cluster-size-guard-mismatch/case.yml).
@@ -582,9 +582,9 @@ Deploy-body steps:
    gated on `cluster-enabled` - NOT through the merged config: it's host-invariant
    (like `bind`), and passing it through the config map would have pinned the first
    node's IP for everyone.
-2. **health-gate PING** (`community.redis.command`, `retry`) - every node must respond
+2. **health-gate PING** (`redis.command.run`, `retry`) - every node must respond
    to `PING` BEFORE the cluster is assembled.
-3. **cluster-build** (`community.redis.cluster`, `action: create`, `run_once` on the
+3. **cluster-build** (`redis.cluster.created`, `run_once` on the
    bootstrap node) - assembles the cluster. The scenario builds a deterministic
    `nodes` MAP from the run's roster (`soulprint.hosts`): key = `SID` (stable and
    sortable), value = `{addr: "<primary_ip>:6379"}`, and passes it to the plugin
@@ -594,7 +594,7 @@ Deploy-body steps:
    slots deterministically by sorting keys - the scenario does NOT translate the
    topology, it passes a ready-made one (otherwise the two layouts would desync).
    Plugin state - in its per-module doc
-   [`docs/module/community/redis/README.md`](../../../docs/module/community/redis/README.md).
+   [`docs/module/redis/README.md`](../../../docs/module/redis/README.md).
 
 #### `create` (sentinel mode)
 
@@ -625,14 +625,14 @@ possible at create - redis isn't up yet), the first host by SID = master
    correctly passed via `apply.input`. `sentinel.master_name` - from
    `vars.sentinel_master_name` (default `master`). `announce-ip` - rendered
    per-host in `sentinel.conf.tmpl` from `.self.network.primary_ip`.
-2. **health-gate PING** (`community.redis.command`, `retry`) - every node must respond
+2. **health-gate PING** (`redis.command.run`, `retry`) - every node must respond
    to `PING` on `:6379` BEFORE binding replicas/configuring sentinel.
-3. **REPLICAOF** (`community.redis.replica`, on the replicas - `where:` excludes the
+3. **REPLICAOF** (`redis.replica.present`, on the replicas - `where:` excludes the
    elected master by SID) - replicas follow the elected master. `master_addr` - the
    host-invariant address (`soulprint.hosts[0]`); `where:` guarantees the task isn't
    rendered on the master itself (a plugin guard `addr == master_addr` remains as
    defense-in-depth).
-4. **SENTINEL MONITOR reconcile** (`community.redis.sentinel`, on **every** host) -
+4. **SENTINEL MONITOR reconcile** (`redis.sentinel.monitored`, on **every** host) -
    every sentinel daemon monitors the master. `monitor.ip` - host-invariant (master
    election); `quorum` - the **auto** majority `size(hosts)/2+1` (there is no operator
    `sentinel_quorum` field). `auth_pass` - resolved keeper-side via `vault()` (masked).
@@ -644,14 +644,14 @@ possible at create - redis isn't up yet), the first host by SID = master
    MONITOR would trigger a failover → split-brain; there MONITOR is **deferred** and
    executed in `detach_source` after `REPLICAOF NO ONE` (see
    [`migrate_cluster`](#migrate_cluster-day-2-migrate-from-an-external-cluster)).
-5. **health-gate PONG** (`community.redis.command`, `:26379`) - every sentinel daemon
+5. **health-gate PONG** (`redis.command.run`, `:26379`) - every sentinel daemon
    must respond with `PONG`. **Strictly same-task** `register.self` (NOT cross-pass
    flow-control, ADR-056): "wait for N sentinels" isn't expressible - only this host's
    local sentinel is checked (`retry`/`until` + `failed_when` on
    `register.self.result == 'PONG'`).
 
 Plugin state (states `replica` / `sentinel`, their params and idempotency) - in its
-per-module doc [`docs/module/community/redis/README.md`](../../../docs/module/community/redis/README.md).
+per-module doc [`docs/module/redis/README.md`](../../../docs/module/redis/README.md).
 
 > **The thin sentinel layer over an external master (`sentinel_only`)** has been
 > removed from the service as a distinct mode. The ability to deploy **only** a
@@ -780,8 +780,8 @@ on the host.
 
 [`scenario/add_node/main.yml`](scenario/add_node/main.yml) - join **one** new node to
 an already-formed Redis cluster (`redis_type=cluster` mode). The analog of
-`redis-cli --cluster add-node`, but entirely through the `community.redis.cluster`
-plugin (`action: add-node`) - no `redis-cli`/shell. The new node must already be
+`redis-cli --cluster add-node`, but entirely through the `redis.cluster.*`
+plugin (`redis.cluster.node-added`) - no `redis-cli`/shell. The new node must already be
 bound to the incarnation as a Soul (onboarding is outside the scenario); targeting is
 by stable SID via `where:`. The run is called against the whole incarnation: the
 roster (`soulprint.hosts`) contains both existing nodes and the newcomer - endpoints
@@ -798,7 +798,7 @@ are built from it. Four steps:
    without the system `replica` user, the node won't be able to `PSYNC` and the
    cluster won't accept it as a replica (see [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)).
 3. **health-gate PING** on the new node - it must respond BEFORE joining the cluster.
-4. **add-node** (`community.redis.cluster`, `action: add-node`, `run_once`) - the
+4. **add-node** (`redis.cluster.node-added`, `run_once`) - the
    `new_node`/`seed`/`master` endpoints are built from the roster by SID. The plugin
    sends `CLUSTER MEET` via `seed` + `REPLICATE` (for `role: replica`), or adds an
    empty master (for `role: master`; it does not move slots - that's a separate
@@ -807,20 +807,20 @@ are built from it. Four steps:
    balancing). `incarnation.state` is **not mutated** by this scenario in the current
    slice (the exact role of each SID isn't written to state - populating
    `redis_hosts` is a follow-up). `add-node` state params - in the
-   [per-module doc](../../../docs/module/community/redis/README.md).
+   [per-module doc](../../../docs/module/redis/README.md).
 
 ### `remove_node` (day-2: evict a node from the cluster)
 
 [`scenario/remove_node/main.yml`](scenario/remove_node/main.yml) - evict **one** node
 from an already-formed Redis cluster (`redis_type=cluster` mode). The analog of
-`redis-cli --cluster del-node`, but entirely through the `community.redis.cluster`
-plugin (`action: remove-node`) - no `redis-cli`/shell. The evicted node and the
+`redis-cli --cluster del-node`, but entirely through the `redis.cluster.*`
+plugin (`redis.cluster.node-removed`) - no `redis-cli`/shell. The evicted node and the
 `seed` must be in the run's roster (`soulprint.hosts`); targeting is by stable SID.
 Two steps:
 
 1. **guard** (`core.cmd.shell`, `run_once`) - `remove_node_sid` and `seed_sid` must
    be distinct members of the roster (keeper-side, symmetric with `add_node`).
-2. **remove-node** (`community.redis.cluster`, `action: remove-node`, `run_once`) -
+2. **remove-node** (`redis.cluster.node-removed`, `run_once`) -
    the `node`/`seed` endpoints are built from the roster by SID. The plugin reads
    `CLUSTER NODES` from `seed` and branches: a master with slots → **slot
    migration** to the remaining masters (`SETSLOT`/`MIGRATE`/`SETSLOT NODE`, online -
@@ -829,21 +829,21 @@ Two steps:
    the host itself (stopping redis, cleaning up `nodes.conf`, removing the Soul) is
    **outside** the scenario; `incarnation.state` is not mutated (symmetric with
    `add_node`). `remove-node` state params - in the
-   [per-module doc](../../../docs/module/community/redis/README.md).
+   [per-module doc](../../../docs/module/redis/README.md).
 
 ### `reshard` (day-2: move N slots between masters)
 
 [`scenario/reshard/main.yml`](scenario/reshard/main.yml) - move **N** hash slots from
 one master (`from_sid`) to another (`to_sid`) in an already-formed cluster
 (`redis_type=cluster` mode). The analog of `redis-cli --cluster reshard`, entirely
-through the `community.redis.cluster` plugin (`action: reshard`) - no
+through the `redis.cluster.resharded` step - no
 `redis-cli`/shell. Both masters must be in the run's roster (`soulprint.hosts`);
 targeting is by stable SID. Two steps:
 
 1. **guard** (`assert:`, keeper-side at render) - `from_sid` and `to_sid` must be
    distinct members of the roster; `false` aborts the render with a `message` BEFORE
    dispatch.
-2. **reshard** (`community.redis.cluster`, `action: reshard`, `run_once`) - the
+2. **reshard** (`redis.cluster.resharded`, `run_once`) - the
    `from`/`to` endpoints are built from the roster by SID. The plugin reads
    `CLUSTER NODES` from `from`, takes the first `slots` slots of the source in
    ascending order and migrates each one (`SETSLOT`/`MIGRATE`/`SETSLOT NODE`, online).
@@ -852,19 +852,19 @@ targeting is by stable SID. Two steps:
 > will move **another** `slots` slots from `from` to `to`. The operator calls it
 > **explicitly**, exactly as many times as transfers are needed - this is **not** part
 > of converge. Partial-failure semantics (no auto-rollback) - in the
-> [per-module doc](../../../docs/module/community/redis/README.md).
+> [per-module doc](../../../docs/module/redis/README.md).
 
 ### `restart` (day-2: safe rolling-restart)
 
 [`scenario/restart/main.yml`](scenario/restart/main.yml) - rolling-restart Redis
 without changing the config (sentinel/cluster modes). Each host's actual role is
 **volatile** (after a possible failover, the `create`-declared role is already
-stale), so the role is taken via a **live probe** (`community.redis.role`, `INFO
+stale), so the role is taken via a **live probe** (`redis.instance.role-probed`, `INFO
 replication`) immediately before targeting, not from `incarnation.state` (ADR-008).
 Replicas are restarted **one at a time** (`block` + `serial: 1`: a wave = {restart,
 health-gate}), the master - as a **separate task after all replicas** (the
 rolling invariant "master last"). Replica health-gate -
-`community.redis.replica-synced` (a strict resync check `master_link_status:up`, not
+`redis.replica.synced` (a strict resync check `master_link_status:up`, not
 just `PONG`); restarting the daemon itself - `core.service.restarted`. `state` is
 unchanged - only a record in `state_history`.
 
@@ -909,7 +909,7 @@ Two steps:
    `vars.system_acl_users` on top of `state.redis_users` - otherwise the
    hot-reload pass would wipe out the service users (see
    [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)).
-2. **hot-reload** (`community.redis.config`, `CONFIG SET` + `CONFIG REWRITE`): the
+2. **hot-reload** (`redis.instance.configured`, `CONFIG SET` + `CONFIG REWRITE`): the
    **whole** `compute.redis_config` is passed, the plugin itself skips
    startup-only directives via a denylist (`port`/`dir`/`aclfile`/…) and applies only
    the hot-settable ones. Idempotent - an honest `CONFIG GET` diff in the plugin →
@@ -918,7 +918,7 @@ Two steps:
 `validate` requires at least one changed field. TLS material and ACL are **not**
 touched (separate scenarios exist for those). `state` records the new
 `redis_config` + the changed namedfields. `config` state params (incl. the denylist)
-- in the [per-module doc](../../../docs/module/community/redis/README.md#config--params).
+- in the [per-module doc](../../../docs/module/redis/README.md#instanceconfigured--params).
 
 ### `add_user` (day-2: add an ACL user via `ACL LOAD`)
 
@@ -948,7 +948,7 @@ editing of the **entire** operator-extra set is a separate scenario
    [★ Re-merging on day-2](#-re-merging-on-day-2-invariant)). Per-user passwords come from
    Vault, the `.tmpl` writes the hash, not plaintext. `input.username` ∈ the reserved
    names is rejected by [`validate:`](scenario/add_user/main.yml) (422).
-2. **hot-reload ACL** (`community.redis.acl`, `ACL LOAD`): the live instance
+2. **hot-reload ACL** (`redis.acl.reloaded`, `ACL LOAD`): the live instance
    re-reads the entire `aclfile`. Idempotent by construction; the plugin diffs
    `ACL LIST` before/after (`changed=false` on a match).
 
@@ -956,7 +956,7 @@ editing of the **entire** operator-extra set is a separate scenario
 (`[{name, perms, state}]`, **upserted** by the `name` field, **without** the
 password - security; the type is from [`types.yml`](types.yml), ADR-062). One user
 per run (an atomic operation). `acl` state params - in the
-[per-module doc](../../../docs/module/community/redis/README.md#acl--params).
+[per-module doc](../../../docs/module/redis/README.md#aclreloaded--params).
 
 #### ★ Password generation and re-runs
 
@@ -1019,11 +1019,11 @@ The same three steps as `add_user`: **generate** the missing passwords
 (`core.vault.kv-present`, see [★ Password generation and re-runs](#-password-generation-and-re-runs))
 + **re-render** the full `users.acl` (system users from service vars +
 operator-extra = `input.users` entirely, per-user passwords from Vault) + **hot-reload**
-(`community.redis.acl`, `ACL LOAD` - the live instance re-reads `aclfile`; users removed from
+(`redis.acl.reloaded`, `ACL LOAD` - the live instance re-reads `aclfile`; users removed from
 the set disappear from `ACL LIST`). `state.redis_users` is mutated **entirely**
 (`set: redis_users` = `input.users`, **without** the password - security). The connection's
 TLS discriminator - from `state.tls` (like `add_user`/`restart`). `acl` state params - in
-[per-module doc](../../../docs/module/community/redis/README.md#acl--params).
+[per-module doc](../../../docs/module/redis/README.md#aclreloaded--params).
 
 Generation differs from `add_user` in two ways: targets fan out over the **whole**
 `input.users` array (a user already in the set keeps their password - generate-**if-absent**;
@@ -1048,7 +1048,7 @@ unset one keeps the current value from `state.tls`). Three steps:
    `register: tls_certs` - an applier-register (orchestration.md §2.1.1): the engine emits
    a synthetic `core.noop.run` with an aggregate `changed = OR(child.changed)` over the
    child `core.file.present` tasks (`redis.crt`/`redis.key`/`ca.crt`).
-3. **re-read under `onchanges`** - three `community.redis.command` tasks (`CONFIG SET
+3. **re-read under `onchanges`** - three `redis.command.run` tasks (`CONFIG SET
    tls-cert-file` / `tls-key-file` / `tls-ca-cert-file`) recreate the SSL_CTX on the live
    instance, **gated on `onchanges: [tls_certs]`**: they run only when at least one PEM
    actually changed.
@@ -1057,7 +1057,7 @@ unset one keeps the current value from `state.tls`). Three steps:
 > `onchanges: [tls_certs]` (the applier-register of step 2), **not** `changed: true`. Redis
 > 6.2+ recreates the SSL_CTX on `CONFIG SET tls-*-file` even when the path is unchanged, and
 > re-reads the PEM from disk - which is why **`command`** (a raw verb) is used rather than
-> the `config` state: an honest-diff `community.redis.config` would consider `CONFIG SET
+> `redis.instance.configured`: its honest diff would consider `CONFIG SET
 > tls-*-file` a no-op at the same path and **not** fire the command. The `onchanges` gate
 > gives converge semantics: a new ref → a new PEM → `core.file.present` `changed` → the
 > `tls_certs.changed=true` aggregate → re-read. A repeated run with the same material →
@@ -1085,8 +1085,8 @@ branches are implemented via conditional-include:
   (1) `include redis-deploy-sentinel.yml` (the same shared service-level deploy body as
   `create/sentinel.yml` - stand up the new cluster; **SENTINEL MONITOR is deferred**,
   `sentinel_monitor_now: false`, see below); (2) the fresh master replicates the
-  **external** source (`community.redis.replica` with `source_external: true`); (3) an
-  **offset-lag gate** (`community.redis.offset-synced`, `retry`/`until`) - blocks until
+  **external** source (`redis.replica.present` with `source_external: true`); (3) an
+  **offset-lag gate** (`redis.replica.offset-synced`, `retry`/`until`) - blocks until
   the new master catches up with the source within `lag_threshold`. After this,
   `seeded_from.detached: false` (the source is still connected - `detach_source` is
   needed);
@@ -1132,7 +1132,7 @@ L0 cases - [`migrate_cluster/tests/`](scenario/migrate_cluster/tests/):
 (provision + migration in a single run),
 [`cluster-migrate-replicas-rejected`](scenario/migrate_cluster/tests/cluster-migrate-replicas-rejected/case.yml).
 Plugin state (`replica` `source_external`, `offset-synced`) - in the
-[per-module doc](../../../docs/module/community/redis/README.md).
+[per-module doc](../../../docs/module/redis/README.md).
 
 ### `detach_source` (day-2: detach the external source)
 
@@ -1168,7 +1168,7 @@ is atomic within the migrate phase, so it needs no separate detach.
   index-out-of-bounds.
 - **Idempotency:** detaching an already-detached incarnation
   (`seeded_from.detached == true`) - `REPLICAOF NO ONE` on an already-standalone master
-  is a no-op (the `community.redis.detached` plugin state is idempotent).
+  is a no-op (the `redis.replica.detached` plugin state is idempotent).
 
 L0 cases - [`detach_source/tests/`](scenario/detach_source/tests/):
 [`sentinel-detach-source`](scenario/detach_source/tests/sentinel-detach-source/case.yml),
@@ -1234,7 +1234,7 @@ Soul vault client is never pulled in (ADR-012). Git holds neither the value nor 
 operator pointer to the secret. In `users.acl` **and** `sentinel-users.acl` the
 password is written as a **hash** (`#<sha256>`) - plaintext never reaches the file.
 Both files are `mode 0640`, owner/group `redis` (readable only by the service). The
-`community.redis` plugin does not log `params["password"]` (ADR-010).
+`redis` plugin does not log `params["password"]` (ADR-010).
 
 > **★ Exception: `sentinel auth-pass` in `sentinel.conf` - plaintext on disk.**
 > The password the sentinel daemon uses to authenticate to the monitored master
@@ -1288,7 +1288,7 @@ go run ./cmd/soul-trial run ../examples/service/redis/scenario/update_users/test
 checks the sentinel single-host plan (`replicas_per_master: 0` - the standalone
 equivalent): destiny `redis` tasks (install + render `users.acl` + render `redis.conf`
 + `sentinel.conf` + systemd hardening drop-in + running + restarted) + the
-`community.redis.command` task (`PING`). There's no manual `daemon-reload` step in the
+`redis.command.run` task (`PING`). There's no manual `daemon-reload` step in the
 plan: `core.service` (`daemon_reload: auto`, default) reloads the systemd
 configuration itself when the unit file changes, before start/restart. The slice's
 main guard is that the computed `maxmemory` (`768mb`), the persistence preset, last-wins
@@ -1306,7 +1306,7 @@ Cluster cases under [`scenario/create/tests/`](scenario/create/tests/):
   - `shards=3`, `replicas_per_master=0` (3 hosts): checks the cluster directives in the
   rendered `redis.conf` (`cluster-enabled`/`cluster-config-file`/
   `cluster-node-timeout`/`cluster-announce-ip`), the deterministic `nodes` MAP by SID,
-  and the presence of `community.redis.cluster` (`action: create`) in the plan; the
+  and the presence of `redis.cluster.created` in the plan; the
   sentinel branch is suppressed by a placeholder-skip.
 - [`cluster-create-2shards-1replica`](scenario/create/tests/cluster-create-2shards-1replica/case.yml)
   - `shards=2`, `replicas_per_master=1` (4 hosts): non-zero replicas in the `nodes` MAP;
@@ -1316,8 +1316,8 @@ Sentinel cases under [`scenario/create/tests/`](scenario/create/tests/):
 
 - [`sentinel-create-1master-2replica`](scenario/create/tests/sentinel-create-1master-2replica/case.yml)
   - `replicas_per_master=2` (3 hosts): master election (the first by SID = master),
-  `community.redis.replica` (`master_addr` is host-invariant),
-  `community.redis.sentinel` (`monitor.ip` is host-invariant, `quorum` auto
+  `redis.replica.present` (`master_addr` is host-invariant),
+  `redis.sentinel.monitored` (`monitor.ip` is host-invariant, `quorum` auto
   `size/2+1`), `redis_sentinel` in state.
 - [`sentinel-no-replicas-auto-quorum`](scenario/create/tests/sentinel-no-replicas-auto-quorum/case.yml)
   - `replicas_per_master=0` (standalone equivalent, a single host): auto-quorum
@@ -1389,9 +1389,8 @@ redis-consolidation epic (**not yet implemented** in this service):
 
 - day-2 sentinel: failover (switchover) and other day-2 operations for the sentinel
   topology;
-- the plugin state `community.redis.failover` (`command` / `pinged` / `role` /
-  `replica-synced` / `config` / `acl` / `cluster` (create/add-node/remove-node/
-  reshard) / `replica` / `sentinel` already exist);
+- a plugin failover action (`redis.<object>.<action>`, not implemented; the objects
+  `command` / `instance` / `acl` / `replica` / `cluster` / `sentinel` already exist);
 - TLS for the sentinel daemon (`:26379`): the redis-server TLS data plane is already
   implemented (operator enum `connection_mode` ∈ `tls`/`tls_plain`/`plain`; technical
   parameters live in service vars), TLS for the sentinel daemon is a follow-up;
@@ -1407,5 +1406,5 @@ redis-consolidation epic (**not yet implemented** in this service):
 - **a version-aware `redis_settings` validator in day-2 `update_config`** - so far only
   present in `create` (see ["Directive-name validator"](#redis_settings-directive-name-validator)).
 
-Plugin state for `community.redis` (which states are implemented) - in its per-module
-doc [`docs/module/community/redis/README.md`](../../../docs/module/community/redis/README.md).
+The objects and actions `redis` implements - in its per-module
+doc [`docs/module/redis/README.md`](../../../docs/module/redis/README.md).

@@ -14,11 +14,11 @@
 #      SENTINEL MONITOR + health-gates). THE SAME shared service-level deploy body that
 #      create/sentinel.yml shares (see scenario/redis-deploy-sentinel.yml; no
 #      duplication). Migration differs from create ONLY in loading data from outside (steps 2-3 below).
-#   2. the fresh master replicates the EXTERNAL source (community.redis.replica,
+#   2. the fresh master replicates the EXTERNAL source (redis.replica.present,
 #      source_external: true) — native Redis replication pulls the dataset from the old
 #      cluster. run_once on hosts[0] (the same first-by-SID as master-election
 #      in create/sentinel: the master of the new cluster).
-#   3. offset-lag gate (community.redis.offset-synced, retry/until) — BLOCKING wait
+#   3. offset-lag gate (redis.replica.offset-synced, retry/until) — BLOCKING wait
 #      until the new master catches up with the source by replication offset. fail-closed: if the gate
 #      doesn't pass within the retry window → step failed → state NOT committed → error_locked.
 
@@ -34,7 +34,7 @@
 - include: redis-deploy-sentinel.yml
 
 # 2. The fresh master replicates the EXTERNAL source (REPLICAOF against the old cluster).
-#    community.redis.replica with source_external: true — NOT the intra-cluster attachment
+#    redis.replica.present with source_external: true — NOT the intra-cluster attachment
 #    (that's already done by the shared deploy body redis-deploy-sentinel.yml above), but a connection to a
 #    FOREIGN master to load the dataset. run_once on hosts[0] (first by SID = master
 #    of the new cluster, the same master-election as in the deploy body) — replicates the source
@@ -49,7 +49,7 @@
 #    PKI) and toward the source (its CA) — deliberately kept separate.
 - name: Replicate the external source cluster from the fresh master (REPLICAOF external)
   run_once: true
-  module: community.redis.replica
+  module: redis.replica.present
   params:
     addr:            "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr:     "${ compute.source_master }"
@@ -67,7 +67,7 @@
     master_tls_ca:   "${ compute.source_tls_ca }"
 
 # 3. OFFSET-LAG GATE — BLOCKING wait until the new master catches up with the source by
-#    replication offset (within lag_threshold). community.redis.offset-synced
+#    replication offset (within lag_threshold). redis.replica.offset-synced
 #    compares master_repl_offset of the source and the replica (optional dataset checksum).
 #    run_once on hosts[0] (the same master that replicates the source). changed_when: false
 #    — this is a PROBE/gate, not a change (idempotent poll). retry/until spins the probe until
@@ -80,7 +80,7 @@
 #    (compute.source_password). lag_threshold/skip_checksum — from input.verify (default()).
 - name: Wait until the fresh master catches up with the external source (offset gate)
   run_once: true
-  module: community.redis.offset-synced
+  module: redis.replica.offset-synced
   changed_when: false
   retry:
     count: 60

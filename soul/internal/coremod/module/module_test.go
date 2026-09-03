@@ -198,7 +198,7 @@ func TestValidate(t *testing.T) {
 		{"valid", "installed", map[string]any{"name": "redis"}, true},
 		{"valid with ref", "installed", map[string]any{"name": "redis", "ref": "v1.2.0"}, true},
 		{"missing name", "installed", map[string]any{}, false},
-		{"name is an address, not an alias", "installed", map[string]any{"name": "community.redis"}, false},
+		{"name is an address, not an alias", "installed", map[string]any{"name": "redis.instance"}, false},
 		{"name uppercase", "installed", map[string]any{"name": "Redis"}, false},
 		{"name with state suffix", "installed", map[string]any{"name": "redis.acl.present"}, false},
 		{"name not a string", "installed", map[string]any{"name": 7}, false},

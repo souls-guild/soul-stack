@@ -36,11 +36,11 @@ func TestIntegration_RunNotices(t *testing.T) {
 	}
 
 	deprecatedAddress := RunNotice{
-		Code: "deprecated_param", Module: "community.redis.present", Param: "address",
+		Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address",
 		Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
 	}
 	deprecatedTLSCA := RunNotice{
-		Code: "deprecated_param", Module: "community.redis.present", Param: "tls_ca",
+		Code: "deprecated_param", Module: "redis.instance.pinged", Param: "tls_ca",
 		Message: `param "tls_ca" is deprecated since 0.4.0 and stops working in 0.6.0`,
 	}
 

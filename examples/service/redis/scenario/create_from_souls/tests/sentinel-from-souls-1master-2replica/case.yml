@@ -151,11 +151,11 @@ assert:
               arch: amd64
           role: ""
 
-    # -- REPLICAOF for replicas (community.redis.replica) --------------------
+    # -- REPLICAOF for replicas (redis.replica.present) --------------------
     # addr=127.0.0.1:6379 (per-host local invariant), master_addr — master election
     # (first by SID = node-1 = 10.0.0.1). The task carries where (renders only on
     # replicas, master does NOT carry it).
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
@@ -163,10 +163,10 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
 
-    # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
+    # -- SENTINEL MONITOR reconcile (redis.sentinel.monitored) ---------------
     # monitor.ip — HOST-INVARIANT master address (master election node-1). quorum=2
     # (AUTO: size(3)/2+1). master_name=master (service vars default).
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

@@ -130,7 +130,7 @@ func TestSurvey_PluginModuleBecomesACoverageGap(t *testing.T) {
 		"create": `name: create
 tasks:
   - name: configure redis
-    module: community.redis.present
+    module: redis.instance.pinged
     params:
       address: 10.0.0.1
 `,
@@ -206,8 +206,8 @@ func TestFlattenUsages_OrdersByDeadline(t *testing.T) {
 // (resolve that manifest), affecting several places.
 func TestAddGap_MergesAndListsAffectedIncarnations(t *testing.T) {
 	gaps := map[string]*DeprecationGap{}
-	addGap(gaps, "module", "community.redis.present", "plugin_namespace", "", []string{"b", "a"})
-	addGap(gaps, "module", "community.redis.present", "plugin_namespace", "", []string{"a", "c"})
+	addGap(gaps, "module", "redis.instance.pinged", "plugin_namespace", "", []string{"b", "a"})
+	addGap(gaps, "module", "redis.instance.pinged", "plugin_namespace", "", []string{"a", "c"})
 
 	if len(gaps) != 1 {
 		t.Fatalf("gaps = %d, want 1 merged", len(gaps))
@@ -248,16 +248,16 @@ func TestSurvey_ResolvesPluginDeprecationThroughTheCatalog(t *testing.T) {
 		"create": `name: create
 tasks:
   - name: configure redis
-    module: community.redis.present
+    module: redis.instance.pinged
     params:
       address: 10.0.0.1
 `,
 	})
 	catalog := pluginCatalog{
-		"community.redis": {
-			Name: "redis",
+		"redis.instance": {
+			Name: "instance",
 			States: map[string]plugin.StateDef{
-				"present": {Input: plugin.Input{
+				"pinged": {Input: plugin.Input{
 					"addr": {Type: "string"},
 					"address": {Type: "string", Deprecated: &plugin.DeprecatedDef{
 						Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
@@ -282,8 +282,8 @@ tasks:
 		t.Fatalf("findings = %d, want the deprecated plugin param: %+v", len(byParam), byParam)
 	}
 	for _, u := range byParam {
-		if u.Module != "community.redis.present" || u.Param != "address" {
-			t.Errorf("finding = %s/%s, want community.redis.present/address", u.Module, u.Param)
+		if u.Module != "redis.instance.pinged" || u.Param != "address" {
+			t.Errorf("finding = %s/%s, want redis.instance.pinged/address", u.Module, u.Param)
 		}
 		// Both incarnations of that service are on the hook: the survey exists to
 		// answer "who do I have to fix", and one site per definition would hide

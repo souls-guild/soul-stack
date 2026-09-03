@@ -156,7 +156,7 @@ input:
     min: 3
     description: >-
       Number of Redis Cluster master shards (mode cluster). 16384 hash slots are
-      split evenly across the shards masters (the community.redis.cluster plugin
+      split evenly across the shards masters (the redis.cluster.* plugin
       does the layout deterministically). min:3 - the lower bound for an honest
       Redis Cluster (a cluster of <3 masters doesn't form). The run's roster size
       must be shards*(1+replicas_per_master) - otherwise the size-guard fails the
@@ -179,7 +179,7 @@ input:
   # [master_sid, replica_sid, ...], the FIRST SID of a shard is the master, the rest
   # are its replicas. This lets the operator spread VMs across zones and encode
   # anti-affinity directly in the list (a shard's master and replica in different
-  # zones). The community.redis.cluster plugin (action create) assembles the cluster
+  # zones). The redis.cluster.created step assembles the cluster
   # FROM IT (buildClusterPlanExplicit - a mirror of the auto-layout: the same 16384
   # slots split evenly across masters, the same CLUSTER MEET/ADDSLOTS/REPLICATE
   # sequence).
@@ -231,7 +231,7 @@ input:
   # `down-after-milliseconds`/`failover-timeout`/`parallel-syncs`; the value is a
   # string. compute.sentinel_directives merges the service vars defaults + this dict and
   # expands them into `sentinel <opt> <master>` directives (sentinel.conf + the
-  # community.redis.sentinel plugin's SENTINEL SET). UI - a KEY->VALUE editor. No
+  # redis.sentinel.monitored plugin's SENTINEL SET). UI - a KEY->VALUE editor. No
   # version validation (there's no sentinel catalog - passthrough).
   sentinel_master_settings:
     type: object
@@ -460,7 +460,7 @@ compute:
   # name, used for ALL in-cluster authentication (masterauth replication, cluster
   # MEET, sentinel monitor/auth, health-PING) - replacing the former requirepass user
   # default. Every deploy body (redis-deploy-{sentinel,cluster,
-  # cluster-joinable}.yml) reads compute.admin_user in the community.redis.* plugin
+  # cluster-joinable}.yml) reads compute.admin_user in the redis.* plugin
   # calls (params.username/master_username/auth_user) and in its password's Vault
   # path - they DON'T hardcode 'default_admin' in dozens of places. A literal (not
   # from input/service vars): the system user's name is a service invariant, not an
@@ -532,7 +532,7 @@ compute:
   # failover-timeout=60000 - the removed fields' defaults moved there). merge() gives
   # the effective options map (last-wins, operator over service vars), then .map() expands
   # EVERY `k:v` pair into a directive `sentinel <k> <master> → string(v)` (the form
-  # sentinel.conf.tmpl prints AND the community.redis.sentinel plugin's
+  # sentinel.conf.tmpl prints AND the redis.sentinel.monitored plugin's
   # classifyConfig classifies → SENTINEL SET). master_name - from service vars (default 'master'). ONE
   # source of truth: both the initial sentinel.conf and live-reconcile read this same map.
   # value is already a string (additional_properties:{type:string}) + service vars defaults are strings;
@@ -646,7 +646,7 @@ compute:
          default(input.redis_settings, {})
        ) }
   # ── redis_config_tls: the SHARED TLS block of redis.conf for both branches (R3, dedup) ───────
-  # tls-auth-clients:no - server-only TLS: community.redis connects without a client cert
+  # tls-auth-clients:no - server-only TLS: redis connects without a client cert
   # (we don't issue mTLS, NIM-53 finding #3; otherwise redis's default `yes` → certificate required).
   # ★ R3: 6 shared TLS directives + the port guard, identical in the cluster and sentinel branches
   # (previously duplicated). The cluster branch ADDS its own tls-cluster:yes on top (see

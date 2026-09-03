@@ -22,7 +22,7 @@ import (
 
 func TestToDeprecationUsageViews_CarriesEveryField(t *testing.T) {
 	in := []scenario.DeprecationUsage{{
-		Module:     "community.redis",
+		Module:     "redis.instance",
 		Param:      "address",
 		Deprecated: plugin.DeprecatedDef{Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr"},
 		Sites: []scenario.DeprecationSite{{
@@ -40,7 +40,7 @@ func TestToDeprecationUsageViews_CarriesEveryField(t *testing.T) {
 	}
 	u := got[0]
 	for _, c := range []struct{ field, got, want string }{
-		{"Module", u.Module, "community.redis"},
+		{"Module", u.Module, "redis.instance"},
 		{"Param", u.Param, "address"},
 		{"Since", u.Since, "0.4.0"},
 		{"RemovedIn", u.RemovedIn, "0.6.0"},

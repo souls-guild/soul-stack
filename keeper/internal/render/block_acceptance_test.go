@@ -59,7 +59,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 		t.Fatalf("Stratify: %v", err)
 	}
 
-	// The health-gate block child (community.redis.replica-synced) + restart-master
+	// The health-gate block child (redis.replica.synced) + restart-master
 	// read the default_admin password from register.system_acl_users.effective
 	// ([ADR-0083] §4) — the scenario authors no Vault path any more, so no fixture
 	// KVReader is needed for the password. service vars are not set →
@@ -98,9 +98,9 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 				map[string]any{"name": "default_admin", "password": "fixture-admin-pass-16+"},
 			}},
 		},
-		// Per-host register from Passage 0 (probe redis_role via community.redis.role):
+		// Per-host register from Passage 0 (probe redis_role via redis.instance.role-probed):
 		// a=master, b/c=slave. Field register.redis_role.role (plugin Output), NOT
-		// .stdout (the shell probe was replaced by community.redis.role, go-redis INFO replication).
+		// .stdout (the shell probe was replaced by redis.instance.role-probed, go-redis INFO replication).
 		RegisterByHost: map[string]map[string]any{
 			"a.example.com": {"redis_role": map[string]any{"role": "master"}},
 			"b.example.com": {"redis_role": map[string]any{"role": "slave"}},
@@ -223,7 +223,7 @@ func (redisSentinelResolver) Resolve(_ context.Context, name string) (*ResolvedD
 // `where: soulprint.self.sid != soulprint.hosts[0].sid` on the REPLICAOF task.
 //
 // Proves it on a REAL combination (masked by a unit test with addr==master_addr,
-// which doesn't occur in prod): the rendered community.redis.replica task targets
+// which doesn't occur in prod): the rendered redis.replica.present task targets
 // ONLY the replicas (node-2/node-3), and is ABSENT for the elected master (node-1,
 // first by SID) — DispatchPlan.TargetSIDs doesn't contain it.
 func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
@@ -339,12 +339,12 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 	}
 	var replicaPlan *DispatchPlan
 	for i := range plans {
-		if tk := byIndex[plans[i].TaskIndex]; tk != nil && tk.Module == "community.redis.replica" {
+		if tk := byIndex[plans[i].TaskIndex]; tk != nil && tk.Module == "redis.replica.present" {
 			replicaPlan = &plans[i]
 		}
 	}
 	if replicaPlan == nil {
-		t.Fatal("REPLICAOF task (community.redis.replica) not found in the rendered plan")
+		t.Fatal("REPLICAOF task (redis.replica.present) not found in the rendered plan")
 	}
 
 	// master is NOT in the target: where excluded node-1 (first by SID).

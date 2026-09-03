@@ -168,18 +168,21 @@ levels meaning what the table says they mean — the user's decision of 2026-09-
 [ADR-020 amendment 2026-09-02](adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed)
 (NIM-764 / NIM-765).
 
-⚠ **Not implemented — the form is the rule, and no artifact serves it yet.** Every shipped plugin
-address is still in the old form, and the conversions are **NIM-766** (redis) and **NIM-769**
-(mongo). This section says what an author should write, not what the catalog answers to today.
+★ **Served by `redis`** (NIM-766): the artifact registers under the alias `redis` and serves six
+objects — `acl`, `cluster`, `command`, `instance`, `replica`, `sentinel` — so
+`redis.instance.pinged` and `redis.cluster.created` are what the catalog answers to today
+([`docs/module/redis/`](module/redis/README.md)). ⚠ `redis.user.present` is **NIM-767** and
+resolves nowhere yet; `community.mongo` is still in the old form and its conversion is
+**NIM-769**.
 
-A plugin step's address is **`<plugin-name>.<object>.<action>`** — `redis.user.present`. That is
+A plugin step's address is **`<plugin-name>.<object>.<action>`** — `redis.instance.pinged`. That is
 the grammar core has spoken all along (`core.user.present`, `core.file.rendered`,
 `core.state.set`); the plugin was the outlier.
 
 - **Level 2 is the object the module manages** — a noun: `user`, `file`, `service`, `instance`,
   `replica`, `cluster`. It is **not** the plugin's own subject and **not** its origin.
-  `community.redis.acl` put the subject at level 2, which left level 3 with nothing to name but a
-  second subject.
+  The old `community.redis.acl` put the plugin's own subject at level 2, which left level 3 with
+  nothing to name but a second subject.
 - **Level 3 is the action** — the state the object is left in (`present`, `absent`, `pinged`,
   `rendered`, `synced`), or, when the object is non-stateful, the single verb naming the operation
   (`run`, `shell`, `probe`). It is never the name of a subject. ★ **An object that takes the verb
@@ -619,7 +622,7 @@ Standard regex for the kebab-case identifiers of module addressing `<alias>.<mod
 | **`<state-name>`** | `^[a-z][a-z0-9-]{0,30}$` | Address level 3 (`installed` / `running` / `restarted` / …). |
 | ~~binary-name~~ | — | **REMOVED (NIM-377).** `soul-mod-<namespace>-<name>` / `soul-cloud-<provider_kind>` / `soul-ssh-<short>` / `soul-beacon-<name>` is no longer a convention or a contract: `dist/` holds exactly one executable and the host takes it, whatever it is called. The [ADR-016 amendment 2026-05-27](adr/0016-parity-license.md) that put the namespace into the SoulModule binary name is moot, and so is NIM-423. |
 
-Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but under `docs/module/`: implemented [`community.redis`](module/community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** (interface to live Redis, `soul-mod-community-redis`) and [`community.mongo`](module/community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** (interface to live MongoDB, `soul-mod-community-mongo`, PILOT standalone). The directories keep their present paths until each artifact is re-laid-out.
+Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but under `docs/module/`: implemented [`redis`](module/redis/README.md) (interface to live Redis, `soul-mod-redis`, six objects — re-laid-out and moved out of the origin-grouping directory by NIM-766) and [`community.mongo`](module/community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** (interface to live MongoDB, `soul-mod-community-mongo`, PILOT standalone), whose directory keeps its present path until that artifact is re-laid-out.
 
 ### Reserved namespace names
 

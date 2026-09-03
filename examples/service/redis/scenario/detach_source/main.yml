@@ -54,7 +54,7 @@ compute:
   #     to create/main.yml::compute.sentinel_directives (the classifyConfig plugin lays out
   #     per-master). The default()-guard on redis_sentinel — the object is guaranteed on a v9 incarnation,
   #     but the defaults (5000/60000/'master') protect legacy/incomplete state.
-  #   - redis_version — for the community.redis.sentinel plugin (command version-gating), from
+  #   - redis_version — for the redis.sentinel.monitored plugin (command version-gating), from
   #     state.redis_version (written by create/migrate).
   sentinel_master_name: "${ default(default(incarnation.state.redis_sentinel, {}).master_name, 'master') }"
   redis_version:        "${ default(incarnation.state.redis_version, '') }"

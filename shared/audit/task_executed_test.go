@@ -129,7 +129,7 @@ func TestBuildTaskExecutedPayload_NoParamsKey(t *testing.T) {
 			RegisterData: `{"password":"` + MaskedValue + `"}`},
 		{SID: "h", ApplyID: "a", TaskIdx: 3, Status: "TASK_STATUS_CHANGED",
 			Notices: []TaskExecutedNotice{{
-				Code: "deprecated_param", Module: "community.redis.present",
+				Code: "deprecated_param", Module: "redis.instance.pinged",
 				Param: "address", Message: `param "address" is deprecated`,
 			}}},
 	}
@@ -197,7 +197,7 @@ func TestBuildTaskExecutedPayload_NoticesTravelWithMaskedOutput(t *testing.T) {
 		SID: "h", ApplyID: "a", TaskIdx: 0, Status: "TASK_STATUS_CHANGED",
 		RegisterData: `{"password":"` + MaskedValue + `"}`,
 		Notices: []TaskExecutedNotice{{
-			Code: "deprecated_param", Module: "community.redis.present",
+			Code: "deprecated_param", Module: "redis.instance.pinged",
 			Param: "address", Message: `param "address" stops working in 0.6.0`,
 		}},
 	})

@@ -75,9 +75,9 @@ assert:
               arch: amd64
           role: ""
 
-    # HOT-RELOAD ACL: community.redis.acl over a LOCAL UNIX socket (ACL LOAD brings the instance
+    # HOT-RELOAD ACL: redis.acl.reloaded over a LOCAL UNIX socket (ACL LOAD brings the instance
     # to an empty operator set). AUTH as default_admin (requirepass removed).
-    - module: community.redis.acl
+    - module: redis.acl.reloaded
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin

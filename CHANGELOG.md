@@ -61,6 +61,40 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **The redis plugin is laid out by OBJECT, and its addresses lose the
+  origin-grouping level** ([ADR-020 amendment 2026-09-02](docs/adr/0020-plugin-infrastructure.md),
+  NIM-766, closing NIM-525). `soul-mod-community-redis` is **`soul-mod-redis`**,
+  registered under the alias **`redis`**, and serves **six modules** — one per object
+  it manages: `acl`, `cluster`, `command`, `instance`, `replica`, `sentinel`. Every
+  address moves from `community.redis.<state>` to `redis.<object>.<action>`
+  (`community.redis.pinged` → `redis.instance.pinged`, `community.redis.acl` →
+  `redis.acl.reloaded`, `community.redis.config` → `redis.instance.configured`,
+  `community.redis.replica` → `redis.replica.present`,
+  `community.redis.replica-synced` → `redis.replica.synced`,
+  `community.redis.sentinel` → `redis.sentinel.monitored`). **This is a breaking
+  change for any definition addressing the plugin**, and the alias is a config edit:
+  `keeper.yml::plugins.*[].name` goes from `community` to `redis`.
+  ★ **`params.action` is gone from the cluster object.** Its seven operations are
+  seven actions at address level 3 — `redis.cluster.created` / `.node-added` /
+  `.node-removed` / `.resharded` / `.external-joined` / `.failed-over` /
+  `.external-forgotten` — which is what lets each declare only the params it reads.
+  Before, all seven shared ONE declared input of fifteen keys, so param strictness
+  had no contract to hold any of them to: `created` was promised `slots` and
+  `resharded` was promised `topology`. The Redis behaviour itself is untouched —
+  the dispatch key moved, the ~12k lines behind it did not.
+  Each module now declares **`side: soul`** explicitly (the field has worked since
+  NIM-749) and its own `side_effects`, so `sentinel` discloses `redis-sentinel`
+  rather than inheriting the artifact-wide `redis-server`.
+- **The redis artifact is served through `module.ServeBundle`, and its schema
+  document is generated** (NIM-525, closed with the above). It called the
+  single-module `module.Serve`, so it had no `schema` subcommand — `soul-mod stamp`
+  and `soul-mod verify` were inapplicable to the one public Apache-2.0 example a
+  plugin author copies, and its `schema.json` sat beside the code rather than being
+  derived from it. It is now rendered from six `module.Def` values, and the new
+  `make check-plugin-schema` (in `make check`) builds the artifact, stamps it with
+  the real `soul-mod`, verifies it and diffs the result against the committed
+  `schema.json`. The e2e-live harness stamps with `soul-mod stamp` too, instead of
+  reproducing the trailer format itself.
 - **`certificate_rotation:` is now `certificate:` with the rotation policy nested
   under `rotate:`, and `pki_role` sits a level above it**
   ([ADR-017 amendment 2026-09-03](docs/adr/0017-keeper-side-core.md), NIM-745). The

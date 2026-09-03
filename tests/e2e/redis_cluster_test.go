@@ -87,7 +87,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
 	// Three live streams. All tasks of the cluster branch arrive over the
-	// wire; cluster-build (community.redis.cluster, run_once) lands on the
+	// wire; cluster-build (redis.cluster.*, run_once) lands on the
 	// bootstrap node. default-success (LoadApplyScript) covers all tasks of
 	// each stream -- at L3a per-task realism is not checked, what matters is
 	// the apply_runs success lifecycle.
@@ -151,7 +151,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 // redisClusterCreateTasks -- scripted success by task-name for the key tasks
 // of the cluster create branch: install redis (destiny redis), render
 // redis.conf (cluster directives), health-gate PING, cluster-build
-// (community.redis.cluster). default-success (LoadApplyScript) covers the
+// (redis.cluster.*). default-success (LoadApplyScript) covers the
 // remaining destiny tasks and the when:-suppressed standalone/sentinel/
 // sentinel_only branches.
 func redisClusterCreateTasks() []harness.TaskResponse {

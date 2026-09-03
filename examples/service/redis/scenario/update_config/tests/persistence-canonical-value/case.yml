@@ -113,7 +113,7 @@ assert:
               arch: amd64
           role: ""
 
-    - module: community.redis.config
+    - module: redis.instance.configured
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

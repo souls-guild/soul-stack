@@ -10,7 +10,7 @@
 # CLUSTER MEET/ADDSLOTS/REPLICATE live in the shared scenario/redis-deploy-cluster.yml and
 # are included FROM HERE by file name (scenario-include falls back to scenario/<name>/<file> →
 # scenario/<file>, orchestration.md §6). The layout of master/replica roles and slots is done
-# by the PLUGIN (community.redis.cluster action create) deterministically by sorting the node
+# by the PLUGIN (redis.cluster.created deterministically by sorting the node
 # keys — the scenario only builds the topology MAP (SID→addr) and calls the plugin run_once.
 #
 # ★ INVARIANT (see the header of redis-deploy-cluster.yml): the including file MUST declare in its
@@ -20,7 +20,7 @@
 
 # ── 0. SIZE GUARD (topology) — keeper-side render-time assert ─────────────────────
 # The roster size MUST be exactly shards*(1+replicas_per_master) (cluster masters +
-# replicas per shard) — otherwise the plugin community.redis.cluster (action create) would derive
+# replicas per shard) — otherwise the plugin redis.cluster.created would derive
 # the shard count FROM the node count and SILENTLY ignore the declared input.shards (a silent mismatch
 # between declared↔actual). Same mechanism as the size guard in migrate_cluster/cluster.yml (assert:,
 # ADR-009 amendment 2026-06-23): the predicate is computed KEEPER-SIDE at RENDER time — that's where

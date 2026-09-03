@@ -17,8 +17,8 @@ package validate
 //
 // The alias goes on the flag rather than being taken from the directory. Directory
 // naming was already rejected once for the manifest form, and every reason still holds:
-// a plugin checkout is named after its binary (`soul-mod-community-redis`) or after
-// whatever `git clone` produced, while a task addresses `community.redis`. Reading the
+// a plugin checkout is named after its binary (`soul-mod-redis`) or after
+// whatever `git clone` produced, while a task addresses `redis.instance`. Reading the
 // alias off the path would make a definition's address depend on where a file happens
 // to sit — rename the folder and the same definition stops or starts validating, with
 // nothing in the definition changed. `<alias>=<path>` keeps the address a STATED

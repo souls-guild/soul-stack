@@ -13,11 +13,10 @@ core), [ADR-017](../adr/0017-keeper-side-core.md)
 (render `core.file.rendered`).
 
 The directory covers **core modules** (`core.*`, built into the binary). Plugins live in their
-own directories beside it: [official/README.md](official/README.md) and
-[community/README.md](community/README.md) (incl.
-[`community.redis`](community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not
-implemented — ships today)** and
-[`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not
+own directories beside it: [`redis`](redis/README.md) — re-laid-out onto
+`redis.<object>.<action>` by NIM-766, so it no longer sits under an origin-grouping directory —
+plus [official/README.md](official/README.md) and [community/README.md](community/README.md)
+(incl. [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not
 implemented — ships today)**).
 
 > ⚠ **`official` and `community` are no longer namespaces.** The origin-grouping level of a plugin
@@ -119,7 +118,8 @@ in an address:
 | Directory | Index | What is this |
 |---|---|---|
 | `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
-| `community/` | [community/README.md](community/README.md) | Third-party plugins (`soul-mod-community-*`). Implemented [`community.redis`](community/redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766, not implemented — ships today)** - interface to live Redis (12 states) and [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** - interface to live MongoDB (3 states, PILOT standalone). |
+| `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, six objects / seventeen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. |
+| `community/` | [community/README.md](community/README.md) | Third-party plugins still on the old grouping. Implemented [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** - interface to live MongoDB (3 states, PILOT standalone). |
 
 ## Catalog status
 

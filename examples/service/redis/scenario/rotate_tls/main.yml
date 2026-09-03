@@ -208,18 +208,18 @@ tasks:
                  : {}
              ) }
 
-  # 3. HOT-RELOAD CERT: three community.redis.command steps (CONFIG SET tls-cert-file /
+  # 3. HOT-RELOAD CERT: three redis.command.run steps (CONFIG SET tls-cert-file /
   #    tls-key-file / tls-ca-cert-file) recreate the SSL_CTX on the live instance. Redis 6.2+
   #    RECREATES the SSL_CTX on CONFIG SET tls-*-file even when the path is unchanged -> it reads
   #    a fresh PEM from disk. command (raw verb-state) bypasses the diff-skip of
-  #    community.redis.config (which would compare CONFIG GET values, treat it as a no-op with the same
+  #    redis.instance.configured (which would compare CONFIG GET values, treat it as a no-op with the same
   #    path, and never fire CONFIG SET) - a raw CONFIG SET is needed to make the re-read happen.
   #    Gate - onchanges:[tls_certs] (idempotency via onchanges, orchestration.md §2.1.1): one command = one
   #    verb -> three steps, all on the same gate. PEM paths - from conf_dir (that's where destiny put
   #    the material in step 2). addr/TLS-discriminator/password - from state.tls (compute.tls_*) +
   #    vault(), connect over TLS (rotate only on a TLS instance).
   - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls-cert-file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
@@ -230,7 +230,7 @@ tasks:
       args:     ["CONFIG", "SET", "tls-cert-file", "${ compute.conf_dir + '/tls/redis.crt' }"]
 
   - name: Re-read the rotated TLS key when it changed (CONFIG SET tls-key-file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"
@@ -241,7 +241,7 @@ tasks:
       args:     ["CONFIG", "SET", "tls-key-file", "${ compute.conf_dir + '/tls/redis.key' }"]
 
   - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls-ca-cert-file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "127.0.0.1:${ compute.tls_port }"

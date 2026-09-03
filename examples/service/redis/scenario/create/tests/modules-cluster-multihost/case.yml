@@ -196,10 +196,9 @@ assert:
         owner: redis
         group: redis
 
-    # cluster-build: the only community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # cluster-build: the only redis.cluster.* in the plan.
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 0
         # ★ default_admin REDESIGN: connect as default_admin (username → AUTH). The previous
         # master secret is DROPPED — password comes from the users/default_admin branch.

@@ -3,9 +3,9 @@
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 # Bring-up of cluster-mode nodes that DO NOT FORM THEIR OWN CLUSTER: per-host install +
 # render redis.conf (with cluster directives, cluster-enabled yes) / users.acl + systemd +
-# PING-gate — AND THAT'S IT. ★ The CLUSTER MEET/ADDSLOTS/REPLICATE step (plugin community.redis.cluster
+# PING-gate — AND THAT'S IT. ★ The CLUSTER MEET/ADDSLOTS/REPLICATE step (plugin redis.cluster.*
 # action create) IS DELIBERATELY ABSENT: the nodes do NOT form their own cluster — they
-# WILL JOIN the OLD one via `cluster action: join-external` (a separate plugin step in
+# WILL JOIN the OLD one via `redis.cluster.external-joined` (a separate plugin step in
 # migrate_cluster/cluster.yml). This way the cluster-mode migration attaches new nodes to
 # the existing cluster instead of spawning a second, empty one.
 #
@@ -156,19 +156,19 @@
         ca_ref:   "${ compute.tls_ca_ref }"
 
 # 2. Per-host health-gate: PING a live Redis after startup (each node must respond BEFORE
-#    joining the cluster). community.redis.command, retry/until via retry. addr —
+#    joining the cluster). redis.command.run, retry/until via retry. addr —
 #    localhost (the plugin runs on the redis host), password — keeper-side vault() resolve.
 #    ★ Security (anti-downgrade): tls/tls_ca/port are gated on compute.tls_on (TLS ENABLED), NOT
 #    tls_only (TLS enabled → the plugin MUST use TLS; when tls_only_on=false plain is still open,
 #    but an AUTH password over plaintext is unacceptable). addr uses compute.tls_port + tls_ca (CA PEM,
 #    vault(ref) during the scenario pass, sealed by the vault layer).
 - name: Wait for each cluster node to answer PING
-  module: community.redis.command
+  module: redis.command.run
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     # ★ REDESIGN default_admin: AUTH via default_admin (requirepass removed). username +
-    # its password from the new Vault branch. The community.redis plugin passes username in AUTH.
+    # its password from the new Vault branch. The redis plugin passes username in AUTH.
     username: "${ compute.admin_user }"
     password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
@@ -176,8 +176,8 @@
     args:     ["PING"]
 
 # ★ THERE IS NO CLUSTER-BUILD STEP HERE (deliberately). In redis-deploy-cluster.yml step 3
-#   is community.redis.cluster action:create (run_once on the bootstrap node, builds the nodes MAP from
+#   is redis.cluster.created (run_once on the bootstrap node, builds the nodes MAP from
 #   soulprint.hosts and sends CLUSTER MEET/ADDSLOTS/REPLICATE). In the joinable body it is ABSENT:
 #   the nodes do NOT form their own cluster. Their joining the OLD cluster is done by a SEPARATE
-#   plugin step `cluster action: join-external` in migrate_cluster/cluster.yml (S4-3b) — that step
+#   plugin step `redis.cluster.external-joined` in migrate_cluster/cluster.yml (S4-3b) — that step
 #   also passes the address of the existing cluster and the slot-aware layout. Here — only bring-up.

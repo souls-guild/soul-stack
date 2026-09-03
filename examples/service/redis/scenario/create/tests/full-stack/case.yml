@@ -5,7 +5,7 @@
 # users.acl with full ACL strings.
 #
 # Render-only, hermetic. Plan = destiny `redis` tasks (isolated
-# render pass, ADR-009; including sentinel.conf/daemon) + community.redis.command
+# render pass, ADR-009; including sentinel.conf/daemon) + redis.command.run
 # (PING health-gate). Isolation is visible from destiny params being assembled from its
 # own apply.input, not from scenario-scope.
 #
@@ -268,11 +268,11 @@ assert:
       params_subset:
         name: redis-server
 
-    # ── community.redis.command (PING health-gate) ──────────────────────────
+    # ── redis.command.run (PING health-gate) ──────────────────────────
     # addr localhost, password — the same requirepass vault() resolve, args [PID]. the cluster
     # PING branch — placeholder-skip (no params), disambiguator — args/addr in
     # params_subset. (sentinel PING on :26379 is a separate task, not matched by this addr.)
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

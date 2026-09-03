@@ -137,7 +137,7 @@ assert:
           role: ""
 
     # hot-reload ACL LOAD - plain instance. * default_admin REDESIGN: AUTH uses default_admin.
-    - module: community.redis.acl
+    - module: redis.acl.reloaded
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

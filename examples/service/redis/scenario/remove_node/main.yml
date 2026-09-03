@@ -73,9 +73,8 @@ tasks:
   #    is masked). The scenario body (outside covenant) hardcodes 'default_admin' directly.
   - name: Remove the node from the cluster (slot-migration + CLUSTER FORGET)
     run_once: true
-    module: community.redis.cluster
+    module: redis.cluster.node-removed
     params:
-      action:   remove-node
       username: default_admin
       password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
       node:

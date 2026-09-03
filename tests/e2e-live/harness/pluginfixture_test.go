@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
@@ -28,10 +30,10 @@ import (
 // on agreeing with the old model after the product has left it — which is the
 // shape of the bug, not a check for it.
 func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
-	dir := filepath.Join(repoRoot(t), communityRedisPluginDir)
+	dir := filepath.Join(repoRoot(t), redisPluginDir)
 
 	// (1) The document the builder stamps into the fixture is published where the
-	// builder looks for it. Absent, and BuildCommunityRedisPlugin dies before the
+	// builder looks for it. Absent, and BuildRedisPlugin dies before the
 	// product is reached at all.
 	document, err := os.ReadFile(filepath.Join(dir, schema.SchemaFileName))
 	if err != nil {
@@ -43,7 +45,7 @@ func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
 	// are live at once, which is how the disagreement lasted a whole release.
 	if _, err := os.Stat(filepath.Join(dir, "manifest.yaml")); err == nil {
 		t.Errorf("%s/manifest.yaml exists — NIM-377 replaced it with the generated %s, and the slot holds the artifact and nothing else (ADR-065(g))",
-			communityRedisPluginDir, schema.SchemaFileName)
+			redisPluginDir, schema.SchemaFileName)
 	}
 
 	// (3) Canonical, because the signature is over these exact bytes (ADR-026): a
@@ -67,19 +69,27 @@ func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
 		t.Fatalf("the trailer round-trip changed the document: %d bytes in, %d out", len(document), len(got))
 	}
 
-	// (5) The address the fixtures write resolves. The registry key is
+	// (5) The addresses the fixtures write resolve. The registry key is
 	// `<alias>.<module>`, and since NIM-524 its two halves come from different
 	// people: the alias is the operator's at registration, the module is the
 	// author's, inside the artifact. The harness supplies the first; this is the
 	// only place the second is checked, because everything that writes
-	// `community.redis` is YAML.
+	// `redis.<object>.<action>` is YAML.
+	//
+	// Since NIM-766 there are SIX of them, one per object, so the set is checked
+	// in both directions: an object the artifact stopped serving would leave the
+	// scenarios addressing nothing, and one it started serving without a row here
+	// would go unexercised by the live suite.
 	var doc schema.Document
 	if err := json.Unmarshal(document, &doc); err != nil {
 		t.Fatalf("the published %s does not decode as a schema.Document: %v", schema.SchemaFileName, err)
 	}
 	names := doc.ModuleNames()
-	if len(names) != 1 || names[0] != communityRedisModule {
-		t.Fatalf("the artifact declares modules %v, this package says its one module is %q, so the address the harness can resolve is %q — the fixtures write `community.redis` and one of those two is wrong",
-			names, communityRedisModule, CommunityRedisAlias+"."+communityRedisModule)
+	sort.Strings(names)
+	want := append([]string(nil), redisObjects...)
+	sort.Strings(want)
+	if !slices.Equal(names, want) {
+		t.Fatalf("the artifact declares modules %v, this package says they are %v — the fixtures write `%s.<object>.<action>` and one of those two is wrong",
+			names, want, RedisAlias)
 	}
 }

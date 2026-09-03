@@ -11,7 +11,7 @@ package trial
 //     the scenario itself.
 //  2. SCOPE — the mint requests a NEW secret for exactly the accounts the run is meant to
 //     create and for no other. Requesting one for an already-deployed account hands the live
-//     instance a credential nothing else knows (community.redis.acl AUTHs as default_admin
+//     instance a credential nothing else knows (redis.acl.reloaded AUTHs as default_admin
 //     BEFORE ACL LOAD applies the new file) and silently rotates a working client's password.
 //     Checked on the RENDERED plan via the `__secret_request` envelope, not on source text.
 //  3. COVERAGE — every account the plan looks up BY LITERAL NAME out of a resolved register
@@ -378,7 +378,7 @@ func TestRedisAddUser_MintsOnlyTheNewUser(t *testing.T) {
 		t.Fatalf("the system set is empty — add_user resolves no service account at all")
 	}
 	for _, name := range requestedNames(system) {
-		t.Errorf("add_user requests a NEW secret for the service's own account %q — the live instance authenticates with it (community.redis.acl AUTHs as default_admin BEFORE ACL LOAD)", name)
+		t.Errorf("add_user requests a NEW secret for the service's own account %q — the live instance authenticates with it (redis.acl.reloaded AUTHs as default_admin BEFORE ACL LOAD)", name)
 	}
 }
 

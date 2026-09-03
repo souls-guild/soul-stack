@@ -118,7 +118,7 @@ assert:
 
     # ── 2 (BLOCKER #2): health-gate PING — addr is the LOCAL UNIX socket (NOT 127.0.0.1:7379) ──
     # AUTH under default_admin (requirepass removed). UDS without tls/tls_ca.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
@@ -127,7 +127,7 @@ assert:
 
     # ── 3 (BLOCKER #1+#2): REPLICAOF of the replica — its own addr is a unix socket; master_addr is on the MAIN
     #    port 6379 (NOT the tls port 7379, it doesn't exist). where excludes master → node-2. AUTH under default_admin. ──
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.1:6379"

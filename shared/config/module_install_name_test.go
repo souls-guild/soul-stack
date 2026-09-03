@@ -14,7 +14,7 @@ import (
 // rejected with a line and a column instead of on a host.
 //
 // The class this closes: `params.name` is a free string in the schema, so the
-// pre-NIM-377 two-level spelling (`name: community.redis` — still what an author
+// pre-NIM-377 two-level spelling (`name: redis.instance` — still what an author
 // finds in older material) parsed clean, linted clean, passed `service.yml`
 // validation, and failed on every host at apply. Nothing offline could see it.
 
@@ -36,24 +36,24 @@ func installNameDiag(t *testing.T, src string) diag.Diagnostic {
 	return found
 }
 
-// TestInstallName_DottedAddressRejected — the ticket's subject. `community.redis` is
+// TestInstallName_DottedAddressRejected — the ticket's subject. `redis.instance` is
 // the `modules[]` entry's spelling, not the step's: the step installs the artifact
-// into the slot `community` names, and the Soul refuses a dotted value outright.
+// into the slot `redis` names, and the Soul refuses a dotted value outright.
 //
 // The hint must name the alias the author meant, because "that is not an alias" on
 // its own leaves them guessing which half to delete.
 func TestInstallName_DottedAddressRejected(t *testing.T) {
-	d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: community.redis\n    ref: v1.0.0\n")
+	d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: redis.instance\n    ref: v1.0.0\n")
 	if d.Code == "" {
 		t.Fatal("a dotted params.name produced no diagnostic — the author learns on a host, from a failed event (NIM-543)")
 	}
 	if d.Level != diag.LevelError {
 		t.Errorf("level = %q, want error: the value cannot be applied on any host", d.Level)
 	}
-	if !strings.Contains(d.Message, "community.redis") {
+	if !strings.Contains(d.Message, "redis.instance") {
 		t.Errorf("message %q does not quote the offending value", d.Message)
 	}
-	if !strings.Contains(d.Hint, "name: community") {
+	if !strings.Contains(d.Hint, "name: redis") {
 		t.Errorf("hint %q does not name the alias the author meant", d.Hint)
 	}
 	if d.YAMLPath != "$[0].params.name" {
@@ -67,7 +67,7 @@ func TestInstallName_DottedAddressRejected(t *testing.T) {
 // TestInstallName_AliasAccepted — the correct form stays silent. Paired with the
 // test above: a check that rejects everything would pass that one on its own.
 func TestInstallName_AliasAccepted(t *testing.T) {
-	src := "- name: t\n  module: core.module.installed\n  params:\n    name: community\n    ref: v1.0.0\n"
+	src := "- name: t\n  module: core.module.installed\n  params:\n    name: redis\n    ref: v1.0.0\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		t.Fatalf("the documented form produced errors: %v", diags)
@@ -76,11 +76,11 @@ func TestInstallName_AliasAccepted(t *testing.T) {
 
 // TestInstallName_MalformedAliasRejected — the predicate is [plugin.ValidAlias], the
 // same rule the Soul and a registration apply, so a name that is not an address but
-// is not a legal alias either is caught too. `Community` on a case-insensitive
+// is not a legal alias either is caught too. `Redis` on a case-insensitive
 // filesystem would fold onto another registration's slot, which is why the alias
 // grammar excludes it and why this check must not narrow to "contains a dot".
 func TestInstallName_MalformedAliasRejected(t *testing.T) {
-	for _, name := range []string{"Community", "1community", "community_redis", "community/redis", ""} {
+	for _, name := range []string{"Redis", "1redis", "redis_instance", "redis/instance", ""} {
 		d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: \""+name+"\"\n")
 		if d.Code == "" {
 			t.Errorf("params.name %q accepted offline; the Soul rejects it before it does any work", name)
@@ -100,10 +100,10 @@ func TestInstallName_MalformedAliasRejected(t *testing.T) {
 // trimming implementation — the shape that pins nothing.
 func TestInstallName_ReadRaw(t *testing.T) {
 	for _, src := range []string{
-		"- name: t\n  module: core.module.installed\n  params:\n    name: \"  community  \"\n",
-		"- name: t\n  module: core.module.installed\n  params:\n    name: \"community \"\n",
-		"- name: t\n  module: core.module.installed\n  params:\n    name: >\n      community\n",
-		"- name: t\n  module: core.module.installed\n  params:\n    name: |\n      community\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: \"  redis  \"\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: \"redis \"\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: >\n      redis\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: |\n      redis\n",
 	} {
 		if d := installNameDiag(t, src); d.Code == "" {
 			t.Errorf("a value the Soul refuses passed offline:\n%s", src)
@@ -116,15 +116,15 @@ func TestInstallName_ReadRaw(t *testing.T) {
 // this spelling rejected on a host and silent offline.
 func TestInstallName_BlockScalarRead(t *testing.T) {
 	for _, src := range []string{
-		"- name: t\n  module: core.module.installed\n  params:\n    name: >-\n      community.redis\n",
-		"- name: t\n  module: core.module.installed\n  params:\n    name: |-\n      community.redis\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: >-\n      redis.instance\n",
+		"- name: t\n  module: core.module.installed\n  params:\n    name: |-\n      redis.instance\n",
 	} {
 		d := installNameDiag(t, src)
 		if d.Code == "" {
 			t.Errorf("a block-scalar params.name was not read:\n%s", src)
 			continue
 		}
-		if !strings.Contains(d.Hint, "name: community") {
+		if !strings.Contains(d.Hint, "name: redis") {
 			t.Errorf("hint %q does not name the alias the author meant", d.Hint)
 		}
 	}
@@ -163,12 +163,12 @@ func TestInstallName_CELNameSkipped(t *testing.T) {
 }
 
 // TestInstallName_HintNeverTeachesAnIllegalValue — the hint that names the alias the
-// author meant only fires when that alias is one. `Community.redis` reduces to
-// `Community`, which the Soul refuses just as flatly; answering with
-// "write `name: Community`" costs the author a second round trip, and a hint teaching
+// author meant only fires when that alias is one. `Redis.instance` reduces to
+// `Redis`, which the Soul refuses just as flatly; answering with
+// "write `name: Redis`" costs the author a second round trip, and a hint teaching
 // a value the runtime rejects is this ticket's own defect written in prose.
 func TestInstallName_HintNeverTeachesAnIllegalValue(t *testing.T) {
-	for _, name := range []string{"Community.redis", " community.redis", "community_x.redis", "1community.redis"} {
+	for _, name := range []string{"Redis.instance", " redis.instance", "redis_x.instance", "1redis.instance"} {
 		d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: \""+name+"\"\n")
 		if d.Code == "" {
 			t.Errorf("%q produced no diagnostic at all", name)
@@ -180,8 +180,8 @@ func TestInstallName_HintNeverTeachesAnIllegalValue(t *testing.T) {
 	}
 	// The good case still gets the specific hint — a check that dropped it entirely
 	// would pass the loop above.
-	d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: community.redis\n")
-	if !strings.Contains(d.Hint, "write `name: community`") {
+	d := installNameDiag(t, "- name: t\n  module: core.module.installed\n  params:\n    name: redis.instance\n")
+	if !strings.Contains(d.Hint, "write `name: redis`") {
 		t.Errorf("a reducible dotted value lost its hint: %s", d.Hint)
 	}
 }
@@ -200,8 +200,8 @@ func TestInstallName_CELPredicateIsShared(t *testing.T) {
 		name    string
 		literal bool // the takeover half reads it as a literal claim on a slot
 	}{
-		{"community", true},
-		{"community.redis", true},
+		{"redis", true},
+		{"redis.instance", true},
 		{"${ input.plugin }", false},
 		{"acme-${ vars.env }", false},
 		{"${ vars.a }-${ vars.b }", false},

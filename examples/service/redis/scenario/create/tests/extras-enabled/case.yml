@@ -151,7 +151,7 @@ assert:
 
     # standalone PING: cluster/sentinel PING branches are placeholder-skip (without params);
     # disambiguator - addr/args in params_subset.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

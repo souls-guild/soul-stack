@@ -133,9 +133,9 @@ func checkInstallAliasParam(paramsNode *ast.MappingNode, pathPrefix string) []di
 			return nil
 		}
 		hint := "the alias is " + plugin.AliasPattern + " - lowercase kebab-case, starting with a letter"
-		// Only when level 1 is itself a legal alias: `Community.redis` or a padded
-		// `" community.redis"` would otherwise be answered with `name: Community` /
-		// `name:  community`, and an author copying the hint earns a second error.
+		// Only when level 1 is itself a legal alias: `Redis.instance` or a padded
+		// `" redis.instance"` would otherwise be answered with `name: Redis` /
+		// `name:  redis`, and an author copying the hint earns a second error.
 		// A hint that teaches a value the runtime refuses is this ticket's own defect
 		// in prose form.
 		if alias, dotted := ModuleAlias(v); dotted && plugin.ValidAlias(alias) {

@@ -3,7 +3,7 @@
 # match the declared topology: shards=3, replicas_per_master=0 → expects exactly
 # 3*(1+0)=3 hosts, but fixtures.hosts has 4. The size-guard in create/cluster.yml (assert,
 # keeper-side render-time, ADR-009 amendment 2026-06-23) must ABORT render BEFORE any
-# dispatch — otherwise the community.redis.cluster plugin (action create) would derive shard count from
+# dispatch — otherwise the redis.cluster.created step would derive shard count from
 # node count (4 → a different slot split) and SILENTLY ignore the declared shards=3.
 #
 # Paired with cluster-create-3shards (there roster==topology → render passes, cluster-build

@@ -6,7 +6,7 @@
 #
 # ★ DragonFly vs redis: DF carries ONLY the data plane (a single dragonfly binary). DF does
 #   NOT ship redis-cli → we install the distro package redis-tools (redis-cli for the health-gate
-#   PING / REPLICAOF via the community.redis plugin against the DragonFly socket).
+#   PING / REPLICAOF via the redis plugin against the DragonFly socket).
 #
 # ★ SENTINEL DAEMON — NOT HERE (refactor "sentinel out of destiny redis"): this destiny no
 #   longer installs the redis-server package (which carries redis-sentinel) — the sentinel
@@ -23,7 +23,7 @@
 
 # ── redis-tools (BOTH branches, UNCONDITIONALLY) ────────────────────────────────
 # DF doesn't carry redis-cli → we install it as the distro package redis-tools in either
-# mode. redis-cli is needed by the community.redis plugin's health-gate PING / REPLICAOF
+# mode. redis-cli is needed by the redis plugin's health-gate PING / REPLICAOF
 # (connecting to the DragonFly socket). We do NOT pin the distro package's version (it's a
 # utility tool; the DF version pin lives in binary.version/distro-deb dragonfly, not here).
 # retry — against a flaky mirror.

@@ -20,9 +20,9 @@
 #      the window → step fails → state is NOT committed → error_locked (detached is
 #      NOT set, the source stays attached — safer than detaching a lagging replica
 #      and losing the tail).
-#   2. REPLICAOF NO ONE (community.redis.detached) — switch the new master into
+#   2. REPLICAOF NO ONE (redis.replica.detached) — switch the new master into
 #      standalone mode. AFTER this the source can be decommissioned (operator side).
-#   3. SENTINEL MONITOR (community.redis.sentinel) — ★ MOVED HERE from the shared
+#   3. SENTINEL MONITOR (redis.sentinel.monitored) — ★ MOVED HERE from the shared
 #      deploy body (redis-deploy-sentinel.yml step 4) as a split-brain prod fix.
 #      During migration sentinel does NOT monitor the master while it replicates
 #      from the external source (on the replica role:slave > down-after →
@@ -31,7 +31,7 @@
 #      detach removes that gate via step 2 (REPLICAOF NO ONE) — the master is
 #      AUTONOMOUS AGAIN, and ONLY NOW do the sentinel daemons get told to monitor
 #      the real master. The task shape is a 1:1 copy of deploy-body step 4
-#      (community.redis.sentinel, monitor.ip=master-election, quorum=majority,
+#      (redis.sentinel.monitored, monitor.ip=master-election, quorum=majority,
 #      timings from compute.sentinel_directives); sources are adapted to state
 #      (master_name/timings/version from incarnation.state, see compute main.yml).
 #      Runs AFTER step 2 — we monitor the now-autonomous master, not a replica.
@@ -50,7 +50,7 @@
       - "size(default(incarnation.state.seeded_from.source_endpoints, [])) >= 1"
     message: "incarnation was never seeded by migrate_cluster — seeded_from is empty, nothing to detach"
 
-# 1. FINAL offset-lag gate BEFORE detach. Same community.redis.offset-synced as
+# 1. FINAL offset-lag gate BEFORE detach. Same redis.replica.offset-synced as
 #    migrate_cluster step 3, but the source comes from incarnation.state.seeded_from
 #    (compute.source_master), not from input. run_once on hosts[0] (the new master).
 #    changed_when: false (probe/gate). retry/until spins until caught_up;
@@ -71,7 +71,7 @@
 #    as before.
 - name: Final offset gate before detach (master must be fully in sync with the source)
   run_once: true
-  module: community.redis.offset-synced
+  module: redis.replica.offset-synced
   changed_when: false
   retry:
     count: 60
@@ -93,7 +93,7 @@
     lag_threshold:   "${ 0 }"
     skip_checksum:   false
 
-# 2. REPLICAOF NO ONE — detach the new master from the source (community.redis.detached).
+# 2. REPLICAOF NO ONE — detach the new master from the source (redis.replica.detached).
 #    run_once on hosts[0] (the same new master that replicated the source in
 #    migrate_cluster). Idempotent: already a standalone master (role:master, no
 #    master_host) → no-op. addr is the local new master (compute.tls_*); password
@@ -101,7 +101,7 @@
 #    seeded_from.detached=true (main.yml).
 - name: Detach the fresh master from the external source (REPLICAOF NO ONE)
   run_once: true
-  module: community.redis.detached
+  module: redis.replica.detached
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
     # ★ default_admin REDESIGN: LOCAL connection as default_admin (hardcoded name — outside the covenant).
@@ -118,7 +118,7 @@
 #    master. If MONITOR had been given during seeding (master in role:slave on the
 #    replica > down-after 5s), sentinel would have triggered a failover → split-brain.
 #
-#    The shape is a 1:1 copy of redis-deploy-sentinel.yml step 4 (community.redis.sentinel
+#    The shape is a 1:1 copy of redis-deploy-sentinel.yml step 4 (redis.sentinel.monitored
 #    on EVERY host; addr — local sentinel 127.0.0.1:26379; monitor.ip — the
 #    HOST-INVARIANT master from master-election soulprint.hosts[0]; quorum —
 #    majority size/2+1; auth_pass — keeper-side vault() resolve). The difference —
@@ -129,7 +129,7 @@
 #    master (soulprint.hosts[0] = itself), MONITOR sets up monitoring of the
 #    now-autonomous master.
 - name: Configure each sentinel to monitor the now-standalone master (SENTINEL MONITOR)
-  module: community.redis.sentinel
+  module: redis.sentinel.monitored
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ compute.sentinel_master_name }"

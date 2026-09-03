@@ -64,10 +64,9 @@ assert:
   # GUARD - assert: (not emitted into the plan).
   task_present:
     # ADD-NODE: master.addr = primary_ip of host node-2 (explicit master_sid).
-    # The only community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # The only redis.cluster.* in the plan.
+    - module: redis.cluster.node-added
       params_subset:
-        action: add-node
         role: replica
         username: default_admin
         password: default-admin-secret-pass

@@ -156,10 +156,9 @@ assert:
 
     # cluster-build: nodes-MAP of all 4 hosts (deterministic by SID). plugin param
     # replicas_per_shard=1 (from input.replicas_per_master) goes into the plugin. The only
-    # community.redis.cluster in the plan — no disambiguator needed.
-    - module: community.redis.cluster
+    # redis.cluster.* in the plan — no disambiguator needed.
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 1
         # * default_admin REDESIGN: connects to each node as default_admin (username ->
         # AUTH). The former main secret is DROPPED — password comes from the users/default_admin branch.

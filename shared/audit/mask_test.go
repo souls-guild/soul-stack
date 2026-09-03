@@ -255,7 +255,7 @@ func TestMaskSecrets_SubstringKeys(t *testing.T) {
 }
 
 func TestMaskSecrets_TLSPEMKeys(t *testing.T) {
-	// Redis-consolidation TLS (community.redis): connection PEM material arrives in
+	// Redis-consolidation TLS (redis.instance): connection PEM material arrives in
 	// params under keys tls_key / tls_cert / tls_ca. The bare fragment key/cert/ca
 	// is not in the catalog, so tls[_-]?(key|cert|ca) was added — otherwise a whole
 	// private key would leak plaintext into logs/OTel/RunResult (the masking model
@@ -343,7 +343,7 @@ func TestMaskSecrets_RedisRenderContextTLSVars(t *testing.T) {
 }
 
 // TestMaskSecrets_MigrateClusterSecrets — security blocker of the migrate_cluster
-// S1 pilot (community.redis): the migration task receives secret fields of the
+// S1 pilot (redis.instance): the migration task receives secret fields of the
 // source/master (master_*/source_*) that land in the connection task's params and
 // through RunResult/audit-payload would leak plaintext into logs/OTel/UI. The names
 // carry password / tls_(key|cert|ca) fragments, so they are caught by the substring
@@ -398,7 +398,7 @@ func TestMaskSecrets_MigrateClusterRunResultShape(t *testing.T) {
 	const pemCA = "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
 	payload := map[string]any{
 		"task":   "migrate from source cluster",
-		"module": "community.redis.migrate_cluster",
+		"module": "redis.cluster.external-joined",
 		"params": map[string]any{
 			"master_username": "admin",
 			"master_password": "m-p4ss",

@@ -15,9 +15,9 @@
 #      apply.input).
 #   3. ANTI-TILING: master_addr (REPLICAOF) and monitor.ip (SENTINEL MONITOR) — HOST-
 #      INVARIANT, both = primary_ip of the SID-first host (node-1 = 10.0.0.1).
-#   4. plugin community.redis.replica: addr=unix socket (per-host local),
+#   4. plugin redis.replica.present: addr=unix socket (per-host local),
 #      master_addr=10.0.0.1:6379 (master-election). where excludes master (replica only).
-#   5. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (AUTO size(2)/2+1=2).
+#   5. plugin redis.sentinel.monitored: monitor.ip=10.0.0.1, quorum=2 (AUTO size(2)/2+1=2).
 #   6. ★ SENTINEL PLANE via destiny `redis` (sentinel_only): install redis-server
 #      (distro-pin R4) + sentinel.conf in /etc/redis (owner redis) present in the plan.
 #   7. ★ DUPLICATE REMOVED: dragonfly-destiny NO LONGER renders /etc/dragonfly/sentinel.conf
@@ -102,22 +102,22 @@ assert:
         owner: dragonfly
         group: dragonfly
 
-    # ── REPLICAOF for replicas (community.redis.replica) ──
+    # ── REPLICAOF for replicas (redis.replica.present) ──
     # addr — LOCAL UNIX socket (DF does not listen on 127.0.0.1 with --bind=primary_ip);
     # master_addr — EXTERNAL master-election address (node-1, primary_ip:6379). where excludes
     # master → node-2. AUTH under default_admin (requirepass removed).
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.1:6379"
         username: default_admin
         password: dfadmin-create-pass
 
-    # ── SENTINEL MONITOR reconcile (community.redis.sentinel) ──
+    # ── SENTINEL MONITOR reconcile (redis.sentinel.monitored) ──
     # monitor.ip — HOST-INVARIANT master address (node-1). quorum=2 (AUTO size(2)/2+1).
     # redis_version — the sentinel DAEMON version (vars.sentinel_redis_version, default
     # 7.2.4), NOT df_version (1.39.0). Gates version-aware sentinel plugin features.
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

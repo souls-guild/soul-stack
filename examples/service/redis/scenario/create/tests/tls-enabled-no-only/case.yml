@@ -159,7 +159,7 @@ assert:
     # tls_port 7379 (NOT plain 6379), tls_ca = CA-PEM. Under the previous gate (tls_only)
     # this would have been tls=false, addr=6379 → plaintext AUTH. cluster/sentinel PING —
     # placeholder-skip; disambiguator addr/args.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin

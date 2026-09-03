@@ -83,9 +83,8 @@ assert:
         path: /var/lib/redis
     # ADD-NODE plugin: empty master_sid → master.addr empty (role=master). Endpoints
     # from the roster. Proves the re-run reached the end (render didn't abort).
-    - module: community.redis.cluster
+    - module: redis.cluster.node-added
       params_subset:
-        action: add-node
         role: master
         username: default_admin
         password: default-admin-secret-pass

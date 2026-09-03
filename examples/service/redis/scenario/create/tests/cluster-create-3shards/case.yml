@@ -20,7 +20,7 @@
 #   index 2  — cluster destiny: core.pkg.installed (redis-server) — BEFORE the binary sub-branch,
 #              +2 does not affect it;
 #   index 18 — cluster destiny: redis.conf (core.file.rendered, cluster directives);
-#   index 33 — cluster-build (community.redis.cluster action create, nodes MAP).
+#   index 33 — cluster-build (redis.cluster.created, nodes MAP).
 #
 # What we assert (slice acceptance criteria):
 #   1. size-guard PASS: assert that[0] (size(hosts)==shards*(1+replicas), 3==3*(1+0))
@@ -32,7 +32,7 @@
 #      destiny_redis_tmpl_test.go, see below).
 #   3. nodes MAP is deterministic: key=SID (sorted in the plugin), addr=primary_ip
 #      of each host + ":6379". Form merge(soulprint.hosts.map(...)).
-#   4. plugin community.redis.cluster is in the plan (action create, replicas_per_shard).
+#   4. plugin redis.cluster.created is in the plan (replicas_per_shard).
 #
 # NOTE the L0 limitation: apply.input is host-invariant in the pilot (resolved on the
 # FIRST targeted host, resolveApplyInput) → render_context here carries self of the
@@ -205,12 +205,11 @@ assert:
               arch: amd64
           role: ""
 
-    # ── cluster-build (community.redis.cluster) ─────────────────────────────
+    # ── cluster-build (redis.cluster.*) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.
-    # The only community.redis.cluster in the plan → no disambiguator needed.
-    - module: community.redis.cluster
+    # The only redis.cluster.* in the plan → no disambiguator needed.
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 0
         # ★ REDESIGN default_admin: connect to each node as the ACL user default_admin
         # (username → AUTH). The former main secret was DROPPED — the password comes from the

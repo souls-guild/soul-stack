@@ -328,7 +328,7 @@ func TestIncarnationsRunDetailCarriesNotices(t *testing.T) {
 						"sid": "host-a", "status": "success", "passage": 0, "attempt": 1,
 						"cancel_requested": false,
 						"notices": []map[string]any{{
-							"code": "deprecated_param", "module": "community.redis.present",
+							"code": "deprecated_param", "module": "redis.instance.pinged",
 							"param":   "address",
 							"message": `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
 						}},
@@ -379,7 +379,7 @@ func TestPrintRunDetailShowsNoticesOnASuccessfulRun(t *testing.T) {
 		StartedAt: "2026-05-26T12:00:00Z",
 		Hosts: []client.RunHostStatus{
 			{SID: "host-a", Status: "success", Notices: []client.RunNotice{{
-				Code: "deprecated_param", Module: "community.redis.present", Param: "address",
+				Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address",
 				Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
 			}}},
 			{SID: "host-b", Status: "success"},
@@ -389,7 +389,7 @@ func TestPrintRunDetailShowsNoticesOnASuccessfulRun(t *testing.T) {
 		t.Fatalf("printRunDetail: %v", err)
 	}
 	got := buf.String()
-	for _, want := range []string{"notices", "host-a", "community.redis.present", "0.6.0", `use "addr"`} {
+	for _, want := range []string{"notices", "host-a", "redis.instance.pinged", "0.6.0", `use "addr"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output is missing %q:\n%s", want, got)
 		}

@@ -1,7 +1,7 @@
 # L0 trial for add_user: operational addition of an ACL user WITHOUT a restart (ACL LOAD).
 # The operator adds user alice; the scenario merges it into the DEPLOYED state.df_users, renders
 # the FULL users.acl (alice + previously deployed bob) through the `dragonfly` destiny and RELOADS via
-# community.redis.acl (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
+# redis.acl.reloaded (ACL LOAD). Render-only, hermetic. Plaintext (addr 6379).
 #
 # vars.system_acl_users is NOT set → system top-up = default({}) → vars.users carries
 # ONLY operator-extra (alice+bob) — a clean assert of the operator layer. (System top-up
@@ -11,7 +11,7 @@
 #   1. users.acl (core.file.rendered, path /etc/dragonfly/users.acl): vars.users carries BOTH
 #      users (alice new + bob preserved) with per-user passwords from Vault (convention
 #      secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password). The password is hashed in .tmpl (outside L0).
-#   2. hot-reload (community.redis.acl): addr 127.0.0.1:6379 (plain), tls=false, password from vault.
+#   2. hot-reload (redis.acl.reloaded): addr 127.0.0.1:6379 (plain), tls=false, password from vault.
 #   3. state_after: df_users carries bob+alice (AclUser array, WITHOUT the password — write-model).
 name: add_user merges new ACL user and hot-reloads via ACL LOAD (plaintext)
 
@@ -92,9 +92,9 @@ assert:
               arch: amd64
           role: ""
 
-    # 2. HOT-RELOAD ACL: community.redis.acl to the live instance over a LOCAL UNIX socket
+    # 2. HOT-RELOAD ACL: redis.acl.reloaded to the live instance over a LOCAL UNIX socket
     #    (WITHOUT tls/tls_ca — UDS is not a network path). AUTH as default_admin (requirepass removed).
-    - module: community.redis.acl
+    - module: redis.acl.reloaded
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin

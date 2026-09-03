@@ -658,7 +658,7 @@ func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr st
 }
 
 // AssertRedisACLUser checks that a user is visible in the LIVE redis via
-// redis-cli ACL LIST (AUTH admin) — a live effect of community.redis.acl,
+// redis-cli ACL LIST (AUTH admin) — a live effect of redis.acl.reloaded,
 // not just state.
 func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port int, adminUser, adminPass, wantUser string) {
 	t.Helper()
@@ -677,7 +677,7 @@ func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port 
 		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): exec: %v\noutput=%s", soulIdx, wantUser, err, out)
 	}
 	if code != 0 {
-		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): not in the live ACL LIST (redis-cli|grep exit=%d) — did community.redis.acl fail to apply the user?\noutput=%s",
+		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): not in the live ACL LIST (redis-cli|grep exit=%d) — did redis.acl.reloaded fail to apply the user?\noutput=%s",
 			soulIdx, wantUser, code, out)
 	}
 }
@@ -782,7 +782,7 @@ func (s *Stack) AssertRedisConfigGet(t *testing.T, c RedisConn, param, want stri
 
 // AssertRedisConfFileDirective reads redis.conf in the container (cat <confPath>)
 // and checks for a line `<directive> <want>`. For startup-only directives
-// (io-threads etc — community.redis startupOnlyDirectives), which are only
+// (io-threads etc — redis startupOnlyDirectives), which are only
 // visible ON DISK, not through CONFIG GET. confPath is usually /etc/redis/redis.conf.
 func (s *Stack) AssertRedisConfFileDirective(t *testing.T, soulIdx int, confPath, directive, want string) {
 	t.Helper()

@@ -9,7 +9,7 @@
 # dragonfly.conf render at-create (source of truth).
 
 # Logical name of the monitored master in Sentinel (directive sentinel.conf SENTINEL MONITOR +
-# community.redis.sentinel master_name). author-context — a fleet that names its master
+# redis.sentinel.monitored master_name). author-context — a fleet that names its master
 # differently forks this repo and edits it here. Default `master`.
 sentinel_master_name: master
 
@@ -126,14 +126,14 @@ tls_ca_ref:   "secret/services/dragonfly/tls#ca"
 
 # ── Sentinel failover timings (defaults) ───────────────────────────────────────
 # Translated into per-master sentinel.conf directives `sentinel down-after-milliseconds
-# <master>` and `sentinel failover-timeout <master>` AND into the community.redis.sentinel config.
+# <master>` and `sentinel failover-timeout <master>` AND into the redis.sentinel.monitored config.
 # Operator may override in the create input (sentinel_down_after_ms/
 # sentinel_failover_timeout_ms).
 sentinel_down_after_ms:       5000
 sentinel_failover_timeout_ms: 60000
 
 # Version of the sentinel DAEMON (distro redis-sentinel — a SEPARATE product from DragonFly). Gates
-# version-aware sentinel features of the community.redis.sentinel plugin (param redis_version →
+# version-aware sentinel features of the redis.sentinel.monitored plugin (param redis_version →
 # versionGE 7.0.0 for global SENTINEL directives). ★ This is NOT the DragonFly version: DF is
 # the data plane, the sentinel daemon is distro redis-server. ★ And NOT a distro package pin: this is
 # SEMVER (X.Y.Z) for the plugin version-gate, not the apt form with epoch/revision. Default — the distro-
@@ -168,7 +168,7 @@ sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 # full rights `~* &* +@all`, added ALWAYS (like replica/monitoring) — into BOTH sets.
 # Replaced the former "default under requirepass" model: requirepass is DEPRECATED and removed from the flagfile,
 # all authentication (incl. internal: replication/sentinel/health-PING) goes under default_admin.
-# The community.redis plugin connects with username=default_admin (see create/day-2 deploy bodies).
+# The redis plugin connects with username=default_admin (see create/day-2 deploy bodies).
 # DragonFly carries a full redis-compatible ACL (SETUSER/aclfile with #<sha256>/masteruser/
 # masterauth — acl/user.cc, tls_helpers.cc), so the model transfers without adaptation.
 #

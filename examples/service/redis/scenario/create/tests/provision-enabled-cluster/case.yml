@@ -152,17 +152,16 @@ assert:
         refresh_soulprint: true
         await_timeout: "5m"
 
-    # (d) core.module.installed: delivers the community.redis SoulModule plugin to the
-    # created hosts BEFORE the first community.redis.* task of the deploy branch (ADR-065).
+    # (d) core.module.installed: delivers the redis SoulModule plugin to the
+    # created hosts BEFORE the first redis.* task of the deploy branch (ADR-065).
     # params.name is address level 1 — the alias the artifact installs under (NIM-524).
     - module: core.module.installed
       params_subset:
-        name: community
+        name: redis
 
     # cluster-build rolls out after provision (nodes-MAP of all 4 hosts).
-    - module: community.redis.cluster
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 1
 
   state_after:

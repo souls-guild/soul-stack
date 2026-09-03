@@ -121,7 +121,7 @@ assert:
 
     # health-gate on the new node: PING a live Redis before adding it to the cluster.
     # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin
@@ -130,10 +130,9 @@ assert:
 
     # ADD-NODE run_once: endpoints from the roster by SID. master.addr is empty
     # (auto-selecting the least loaded master is done by the plugin — the scenario doesn't relay it).
-    # The single community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # The single redis.cluster.* in the plan.
+    - module: redis.cluster.node-added
       params_subset:
-        action: add-node
         role: replica
         username: default_admin
         password: default-admin-secret-pass

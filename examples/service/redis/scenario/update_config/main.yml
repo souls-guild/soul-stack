@@ -101,7 +101,7 @@ compute:
   # -- admin_user: name of the SYSTEM ACL user for intra-cluster AUTH (default_admin) --
   # * default_admin REDESIGN (2026-06-30): the scenario body has NO extends: covenant (no shared
   # compute), so the system admin username is declared as a LOCAL literal - a single
-  # source within the scenario (the plugin connect community.redis.config + masterauth topup in
+  # source within the scenario (the plugin connect redis.instance.configured + masterauth topup in
   # apply.input.config + the Vault password path all read compute.admin_user, not hardcoding
   # 'default_admin' in each place). Symmetric with covenant.compute.admin_user of deploy bodies.
   admin_user: "${ 'default_admin' }"
@@ -300,12 +300,12 @@ tasks:
   #    (compute.tls_*), same as restart. changed_when is NOT suppressed here: a real change
   #    (an applied directive) must be reflected in RunResult.
   - name: Hot-reload changed config directives on the live instance (CONFIG SET)
-    module: community.redis.config
+    module: redis.instance.configured
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # * default_admin REDESIGN (2026-06-30): AUTH under the system default_admin (requirepass
       # dropped). username + its password come from the branch secret/redis/<inc>/system_acl_users/default_admin#password.
-      # The community.redis plugin passes username in AUTH (parseConnConfig).
+      # The redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
       password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"

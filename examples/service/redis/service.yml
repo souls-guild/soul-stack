@@ -2,7 +2,7 @@ description: >-
   Redis following a unified-service concept: ONE service for deployment modes
   (redis_type ∈ sentinel/cluster). Per-host install + rendering redis.conf is done by
   destiny `redis` (mode-agnostic brick, ADR-009 B-hybrid); the LIVE Redis runtime
-  (CONFIG SET, ACL, cluster, sentinel, failover) goes through the `community.redis` plugin;
+  (CONFIG SET, ACL, cluster, sentinel, failover) goes through the `redis` plugin;
   orchestration (order/targeting/rolling/health-gate) is in the service's scenario.
 
   Status (2026-06-25): the `create` scenario is implemented for TWO service modes —
@@ -15,7 +15,7 @@ description: >-
   (systemd-unit level), `add_node`/`remove_node`/`reshard` (cluster).
   Production convention: for config/acl/tls — hot-reload (no restart),
   restart only at the systemd-unit level (hardening drop-in). Backlog:
-  failover scenario, plugin state community.redis.failover, install from
+  failover scenario, a plugin failover action (`redis.<object>.<action>`, not implemented), install from
   a binary distribution (Step B parked)
   (redis consolidation .pm/tasks/2026-06-22-redis-consolidation).
 
@@ -129,7 +129,7 @@ state_schema:
   redis_version:
     type: string
   # The final redis.conf config (merged default→preset→user from service vars). Goes both
-  # into the `redis` destiny render, and into community.redis.config (CONFIG SET to a live Redis).
+  # into the `redis` destiny render, and into redis.instance.configured (CONFIG SET to a live Redis).
   redis_config:
     type: object
     required: true
@@ -405,12 +405,18 @@ destiny:
 
 # Custom modules for the service. The two-level form <alias>.<module> (kebab-case) is
 # mandatory (docs/service/manifest.md → modules[]). Level 1 is the REGISTRATION ALIAS
-# the operator gives the artifact — the scenarios here address community.redis.*, so a
-# cluster running this service registers soul-mod-community-redis as `community`.
-# That artifact is the MAIN interface to a live Redis
-# (examples/module/soul-mod-community-redis/).
+# the operator gives the artifact — the scenarios here address redis.*, so a cluster
+# running this service registers soul-mod-redis as `redis`. That artifact is the MAIN
+# interface to a live Redis (examples/module/soul-mod-redis/), and level 2 is the
+# OBJECT it manages: one artifact, six objects, ONE install (they collapse to a single
+# core.module.installed on the shared alias).
 modules:
-  - { name: community.redis, ref: v1.0.0 }
+  - { name: redis.acl, ref: v1.0.0 }
+  - { name: redis.cluster, ref: v1.0.0 }
+  - { name: redis.command, ref: v1.0.0 }
+  - { name: redis.instance, ref: v1.0.0 }
+  - { name: redis.replica, ref: v1.0.0 }
+  - { name: redis.sentinel, ref: v1.0.0 }
 
 # Server TLS (NIM-99). pki_role is what these certs are ISSUED with, at first issue
 # as much as at rotation, so it sits on the section; rotate: is the auto-rotation

@@ -39,7 +39,7 @@ assert against them):
 | [`extras.yml`](tasks/extras.yml) | host-tuning, **unconditional** (a Redis recommendation / hardening, not an operator choice): disabling THP (oneshot unit) / logrotate / sysctl kernel parameters | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
 | [`modules.yml`](tasks/modules.yml) | `.so` directory + fetching Redis modules (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom). The whole file is gated (`vars.redis_modules_enabled`): enabled when the data plane is on **AND** Redis < 8 **AND** `modules_base_url` is NON-EMPTY; otherwise a group-drop — an empty `modules_base_url` gives **vanilla** redis (no `loadmodule`/fetch) | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
 
-All core modules — no `required_modules:` at all ([`community.redis`](../../../docs/module/community/redis/README.md)
+All core modules — no `required_modules:` at all ([`redis`](../../../docs/module/redis/README.md)
 is called from the service scenario, not from this destiny).
 
 Mode gates are implemented via static-skip ([ADR-009](../../../docs/adr/0009-scenario-dsl.md)
@@ -154,7 +154,7 @@ service**. There is no `state_schema`, no migrations, no simple-input operator
 `redis_config`, no orchestration and no operational scenarios — all of that lives in
 the service wrapper [`examples/service/redis/`](../../service/redis/README.md).
 The destiny does not decide which mode is deployed and does not call the
-[`community.redis`](../../../docs/module/community/redis/README.md) plugin (a live
+[`redis`](../../../docs/module/redis/README.md) plugin (a live
 Redis is the service scenario's territory).
 
 ## References

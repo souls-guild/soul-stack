@@ -13,7 +13,7 @@
 # cluster branch renders. The size guard is an assert: (keeper-side render-time
 # precondition, ADR-009), it does not emit a RenderedTask. The deploy body
 # (redis-deploy-cluster.yml) is service-level, same as for create. The PLUGIN
-# (community.redis.cluster action create) deterministically assigns master/replica
+# (redis.cluster.created deterministically assigns master/replica
 # roles and slots by sorted SID; the scenario builds the topology MAP (SID -> addr).
 name: cluster deploy on existing roster without provision
 
@@ -161,11 +161,10 @@ assert:
               arch: amd64
           role: ""
 
-    # ── cluster-build (community.redis.cluster) ─────────────────────────────
+    # ── cluster-build (redis.cluster.*) ─────────────────────────────
     # nodes MAP: key=SID, addr=primary_ip+":6379". Deterministic by SID.
-    - module: community.redis.cluster
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 0
         # ★ default_admin REDESIGN: connects to each node as the ACL user default_admin
         # (username -> AUTH). The former main secret is DROPPED; password comes from the

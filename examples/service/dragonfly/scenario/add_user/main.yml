@@ -12,7 +12,7 @@ description: >-
   secret/dragonfly/<incarnation>/{df_users,system_acl_users}/<name>#password (like create), resolved keeper-side
   via vault() in the render phase. The scenario merges the new user into the EXPANDED
   incarnation.state.df_users, renders the FULL users.acl to disk (destiny `dragonfly`, the same
-  brick as create) and REACTIVATES it via community.redis.acl (ACL LOAD).
+  brick as create) and REACTIVATES it via redis.acl.reloaded (ACL LOAD).
 
   ★ Boundary with rotate_tls: add_user touches ONLY the ACL (users.acl + ACL LOAD), it does not
   meaningfully re-render dragonfly.conf or TLS material (destiny renders the whole brick, but we only
@@ -183,11 +183,11 @@ tasks:
                }))
              ) }
 
-  # 2. HOT-RELOAD ACL: community.redis.acl sends ACL LOAD — the live instance re-reads the aclfile
+  # 2. HOT-RELOAD ACL: redis.acl.reloaded sends ACL LOAD — the live instance re-reads the aclfile
   #    (rendered in step 1) in full. Idempotent by construction; the plugin does an ACL LIST diff
   #    before/after (changed=false when they match). addr/TLS discriminator — from state.tls (compute.tls_*).
   - name: Hot-reload ACL on the live instance (ACL LOAD)
-    module: community.redis.acl
+    module: redis.acl.reloaded
     params:
       addr:     "${ compute.local_addr }"
       # ★ default_admin redesign: AUTH as default_admin (requirepass removed). username + its

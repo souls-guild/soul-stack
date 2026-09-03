@@ -30,7 +30,7 @@ const MaskedValue = maskedValue
 // strict sense; cert/ca are masked too (marked `secret: true` in the schema and
 // may carry private material in a combined PEM). The boundary is exact:
 // `certificate`/`cacheable` does NOT match (needs the `tls` prefix + separator).
-// Source: redis TLS consolidation (community.redis: PEM in connect params;
+// Source: redis TLS consolidation (redis.instance: PEM in connect params;
 // BLOCKER masking-guard).
 //
 // Extend the catalog with an ordinary PR to this regex when a new sensitive area

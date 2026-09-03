@@ -17,13 +17,13 @@ func (f fakeManifests) ResolveModule(ns, name string) (plugin.ModuleDef, bool) {
 	return m, ok
 }
 
-// redisManifest — a minimal `community.redis` with one state, enough to exercise
+// redisManifest — a minimal `redis.instance` with one state, enough to exercise
 // all four checks.
 func redisManifest() fakeManifests {
-	return fakeManifests{"community.redis": {
-		Name: "redis",
+	return fakeManifests{"redis.instance": {
+		Name: "instance",
 		States: map[string]plugin.StateDef{
-			"config": {Input: map[string]plugin.InputParamDef{
+			"configured": {Input: map[string]plugin.InputParamDef{
 				"addr":    {Type: "string", Required: true},
 				"config":  {Type: "map"},
 				"rewrite": {Type: "bool"},
@@ -45,7 +45,7 @@ func firstWithCode(ds []diag.Diagnostic, code string) *diag.Diagnostic {
 // with a position, before the run — not a module.unknown_param discovered on the
 // host after NIM-204 made the runtime gate enforce plugins too.
 func TestPluginParams_UnknownParamIsRejected(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    addr: 127.0.0.1:6379\n    confgi: {}\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    addr: 127.0.0.1:6379\n    confgi: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 
@@ -62,7 +62,7 @@ func TestPluginParams_UnknownParamIsRejected(t *testing.T) {
 }
 
 func TestPluginParams_MissingRequiredIsRejected(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    rewrite: true\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    rewrite: true\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "missing_required_param") {
@@ -71,7 +71,7 @@ func TestPluginParams_MissingRequiredIsRejected(t *testing.T) {
 }
 
 func TestPluginParams_TypeMismatchIsRejected(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    addr: 127.0.0.1:6379\n    rewrite: \"yes\"\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    addr: 127.0.0.1:6379\n    rewrite: \"yes\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "param_type_mismatch") {
@@ -80,7 +80,7 @@ func TestPluginParams_TypeMismatchIsRejected(t *testing.T) {
 }
 
 func TestPluginParams_UnknownStateIsRejected(t *testing.T) {
-	src := "- name: t\n  module: community.redis.confgi\n  params:\n    addr: 127.0.0.1:6379\n"
+	src := "- name: t\n  module: redis.instance.configurd\n  params:\n    addr: 127.0.0.1:6379\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "module_state_unknown") {
@@ -89,7 +89,7 @@ func TestPluginParams_UnknownStateIsRejected(t *testing.T) {
 }
 
 func TestPluginParams_ValidTaskIsClean(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    addr: 127.0.0.1:6379\n    config: {maxmemory: 1gb}\n    rewrite: true\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    addr: 127.0.0.1:6379\n    config: {maxmemory: 1gb}\n    rewrite: true\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if diag.HasErrors(diags) {
@@ -103,7 +103,7 @@ func TestPluginParams_ValidTaskIsClean(t *testing.T) {
 // The other half of the ticket: where the manifest does NOT resolve, say so.
 // Before this, "checked and clean" and "never checked" were the same output.
 func TestPluginParams_NoResolverSaysSoInsteadOfPassing(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    confgi: {}\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    confgi: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 
 	d := firstWithCode(diags, "plugin_params_unchecked")
@@ -136,8 +136,8 @@ func TestPluginParams_ResolverMissIsAlsoReported(t *testing.T) {
 // module twenty times has one thing to fix, and twenty identical hints would
 // train the reader to skip them.
 func TestPluginParams_UncheckedNoticeIsPerModuleNotPerTask(t *testing.T) {
-	src := "- name: a\n  module: community.redis.config\n  params: {}\n" +
-		"- name: b\n  module: community.redis.config\n  params: {}\n" +
+	src := "- name: a\n  module: redis.instance.configured\n  params: {}\n" +
+		"- name: b\n  module: redis.instance.configured\n  params: {}\n" +
 		"- name: c\n  module: community.mongo.config\n  params: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "plugin_params_unchecked"); got != 2 {
@@ -163,7 +163,7 @@ func TestPluginParams_CoreIsUnaffected(t *testing.T) {
 // grammar's nesting rules, or a param check would quietly stop at the first
 // construct someone adds.
 func TestPluginParams_ReachesTasksInsideBlock(t *testing.T) {
-	src := "- name: outer\n  block:\n    - name: inner\n      module: community.redis.config\n      params:\n        addr: x\n        confgi: {}\n"
+	src := "- name: outer\n  block:\n    - name: inner\n      module: redis.instance.configured\n      params:\n        addr: x\n        confgi: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "unknown_param") {
@@ -279,7 +279,7 @@ func TestPluginParams_UnknownBuiltinIsReportedAsUnchecked(t *testing.T) {
 // A CEL-wrapped value has no static type, exactly as on core — the rule is the
 // module's, not the namespace's.
 func TestPluginParams_CELValueSkipsTypeCheck(t *testing.T) {
-	src := "- name: t\n  module: community.redis.config\n  params:\n    addr: 127.0.0.1:6379\n    rewrite: \"${ input.rewrite }\"\n"
+	src := "- name: t\n  module: redis.instance.configured\n  params:\n    addr: 127.0.0.1:6379\n    rewrite: \"${ input.rewrite }\"\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if hasCodeP(diags, "param_type_mismatch") {

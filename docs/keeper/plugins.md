@@ -142,10 +142,10 @@ The artifact has no name of its own, so **address level 1 comes entirely from re
 
 | The operator registers the artifact as… | …and the destiny step is |
 |---|---|
-| `redis` | `redis.acl.present` |
-| `redis-community` | `redis-community.acl.present` |
+| `redis` | `redis.acl.reloaded` |
+| `redis-community` | `redis-community.acl.reloaded` |
 
-**Same artifact, same bytes, same digest — no rebuild.** This is what removes the collision that `namespace:` never actually prevented: two publishers both shipping something that calls itself `community.redis` used to fight over one identity, and which one an operator got depended on resolution order. Now the operator names both, because the operator is the one who knows which is which.
+**Same artifact, same bytes, same digest — no rebuild.** This is what removes the collision that `namespace:` never actually prevented: two publishers both shipping something that calls itself `redis` used to fight over one identity, and which one an operator got depended on resolution order. Now the operator names both, because the operator is the one who knows which is which.
 
 The alias also names the **host slot** (`<cache_root>/<alias>/…`, `<paths.modules>/<alias>/`) and, in destiny, the level-1 component of `required_modules:`. It is **not** the Sigil registry key — that keys on the artifact source ([ADR-026(a)](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations) as amended); registering one artifact under two aliases is one trust decision, not two.
 
@@ -997,7 +997,7 @@ plugins:
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
 
   soul_modules:                     # SoulModule plugins (ADR-065): resolved by the same resolver, allowed by the same Sigil flow
-    - { name: redis, source: "git@github.com:souls-guild/soul-mod-community-redis.git", ref: v1.2.0 }
+    - { name: redis, source: "git@github.com:souls-guild/soul-mod-redis.git", ref: v1.2.0 }
 ```
 
 Plugin version is **git ref** (tag or branch) according to [ADR-007](../adr/0007-versioning-git-ref.md). No semver-range.

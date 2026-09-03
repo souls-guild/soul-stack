@@ -1,15 +1,15 @@
 # migrate_cluster dispatcher branch — cluster mode (B3 flow, S4-3b). Migrates an honest
 # hash-slot Redis Cluster from the OLD (external) cluster onto a NEW cluster of the same
 # topology. Unlike the sentinel branch (native REPLICAOF master→master + offset-gate), cluster
-# migrates SLOT-AWARE through four atomic steps of the community.redis.cluster plugin:
+# migrates SLOT-AWARE through four atomic steps of the redis.cluster.* plugin:
 #   1. include redis-deploy-cluster-joinable.yml (S4-3a) — bring up the NEW cluster-mode
 #      nodes WITHOUT assembling their own cluster (cluster-enabled yes, but without CLUSTER MEET/ADDSLOTS).
-#   2. JOIN (action: join-external)   — merge new nodes into the OLD cluster as replicas of its
+#   2. JOIN (redis.cluster.external-joined) — merge new nodes into the OLD cluster as replicas of its
 #      masters 1:1 (MEET old-seed → REPLICATE), the new ones catch up with the old ones' data.
-#   3. FAILOVER (action: failover-takeover) — graceful promotion of the new nodes to masters
+#   3. FAILOVER (redis.cluster.failed-over) — graceful promotion of the new nodes to masters
 #      (CLUSTER FAILOVER): slots move from the old masters to the new ones without losing the tail,
 #      WHILE the old master is alive.
-#   4. FORGET (action: forget-external) — throw the old nodes out of the cluster (CLUSTER
+#   4. FORGET (redis.cluster.external-forgotten) — throw the old nodes out of the cluster (CLUSTER
 #      FORGET on all new ones) — migration is complete, only the new cluster remains.
 # All four — in the migrate phase of ONE run → the migration is atomic (state is committed
 # only after FORGET succeeds; any fail → state is NOT committed → error_locked).
@@ -110,9 +110,9 @@
 - include: redis-deploy-cluster-joinable.yml
 
 # ── 2. JOIN: merge the new nodes into the old cluster as 1:1 replicas (join-external) ──
-# community.redis.cluster action: join-external, run_once on hosts[0] (the first by SID =
+# redis.cluster.external-joined, run_once on hosts[0] (the first by SID =
 # the run's bootstrap node, same as cluster-build create). The nodes-MAP is built EXACTLY
-# like redis-deploy-cluster.yml in action:create - merge(soulprint.hosts.map(h,
+# like redis-deploy-cluster.yml in redis.cluster.created - merge(soulprint.hosts.map(h,
 # {SID: {addr}})): key = SID (sorted inside the plugin → deterministic 1:1 mapping
 # new-node↔old-master), addr = primary_ip + port (the TLS port when tls_on, otherwise
 # 6379). source_nodes are the seed nodes of the OLD cluster (input.source.hosts,
@@ -129,10 +129,9 @@
 # addresses use compute.tls_port + tls_ca.
 - name: Join new nodes into the source cluster as replicas (CLUSTER MEET/REPLICATE)
   run_once: true
-  module: community.redis.cluster
+  module: redis.cluster.external-joined
   register: joined
   params:
-    action:       join-external
     nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     shards_dest:  "${ int(input.shards) }"
     source_nodes: "${ input.source.hosts }"
@@ -142,7 +141,7 @@
     tls_ca:       "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
 # ── 3. FAILOVER: promote the new nodes to masters (failover-takeover) ─────────────────
-# community.redis.cluster action: failover-takeover, run_once on hosts[0], require:
+# redis.cluster.failed-over, run_once on hosts[0], require:
 # [joined] (order: failover ONLY after a successful join - otherwise the candidates
 # haven't finished replicating data yet). register: failed_over. nodes/password/tls/
 # tls_ca are the same as JOIN (same cluster, same anti-downgrade gate on
@@ -152,11 +151,10 @@
 # source_nodes at this step (failover operates on cluster nodes already joined).
 - name: Promote the new nodes to masters taking over the slots (CLUSTER FAILOVER)
   run_once: true
-  module: community.redis.cluster
+  module: redis.cluster.failed-over
   require: [joined]
   register: failed_over
   params:
-    action:   failover-takeover
     nodes:    "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     username: "${ compute.admin_user }"
     password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
@@ -164,7 +162,7 @@
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
 # ── 4. FORGET: drop the old nodes from the cluster (forget-external) ──────────────────
-# community.redis.cluster action: forget-external, run_once on hosts[0], require:
+# redis.cluster.external-forgotten, run_once on hosts[0], require:
 # [failed_over] (order: forget ONLY after the new nodes have become masters -
 # otherwise we'd be kicking out the slot holders). register: forgotten. nodes are the
 # new nodes (CLUSTER FORGET for the old ones is sent to them). source_nodes
@@ -175,11 +173,10 @@
 # redis_type).
 - name: Forget the old source nodes from the cluster (CLUSTER FORGET)
   run_once: true
-  module: community.redis.cluster
+  module: redis.cluster.external-forgotten
   require: [failed_over]
   register: forgotten
   params:
-    action:       forget-external
     nodes:        "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
     source_nodes: "${ input.source.hosts }"
     username:     "${ compute.admin_user }"

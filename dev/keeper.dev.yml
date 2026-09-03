@@ -111,12 +111,13 @@ plugins:
   # available for Sigil-allow (POST /v1/plugins/sigils) and routine redis operations.
   #
   # `name` is the REGISTRATION ALIAS - address level 1, chosen here and nowhere else,
-  # since the artifact declares no name of its own. It has to be `community`: the
-  # artifact declares ONE module named `redis`, the registry key is `<alias>.<module>`,
-  # and the scenarios address `community.redis.<state>`. Registering it as `redis` would
-  # key it `redis.redis` and nothing would resolve (NIM-524).
+  # since the artifact declares no name of its own. It has to be `redis`: the
+  # artifact declares SIX modules — one per object it manages — the registry key is
+  # `<alias>.<module>`, and the scenarios address `redis.<object>.<action>`
+  # (NIM-766). The alias used to be `community`, which named where the plugin came
+  # from rather than what it manages (ADR-020 amendment 2026-09-02, NIM-765).
   soul_modules:
-    - { name: community, source: "file:///tmp/keeper-dev/plugin-repos/community-redis", ref: "v1.0.0" }
+    - { name: redis, source: "file:///tmp/keeper-dev/plugin-repos/redis", ref: "v1.0.0" }
 
 plugin_runtime:
   socket_dir: /tmp/keeper-dev/plugin-sockets

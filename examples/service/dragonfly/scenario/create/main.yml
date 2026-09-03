@@ -18,7 +18,7 @@ description: >-
   body is shared by ≥2 scenarios, as with redis create+migrate_cluster).
 
   ★ DragonFly vs redis: the data plane is rendered by destiny `dragonfly` (flagfile instead of
-  redis.conf); the LIVE runtime is community.redis (DragonFly is redis-compatible: PING/REPLICAOF/
+  redis.conf); the LIVE runtime is redis (DragonFly is redis-compatible: PING/REPLICAOF/
   SENTINEL MONITOR/INFO replication work — the plugin needs NO changes). No redis modules (.so),
   no cluster directives, no persistence presets (DF persistence — snapshot_cron, deferred).
 
@@ -298,7 +298,7 @@ compute:
   # ★ default_admin REDESIGN (symmetric with redis 2026-06-30): a SINGLE source for the admin user's name,
   # under which ALL intra-cluster authentication runs (replication masterauth, sentinel
   # monitor/auth, health-PING) — replaced the former DragonFly requirepass. The deploy body reads
-  # compute.admin_user in community.redis.* plugin calls (username/auth_user) and in the Vault path
+  # compute.admin_user in redis.* plugin calls (username/auth_user) and in the Vault path
   # for its password. A literal (not from input/service vars): the system user's name is a service invariant, not
   # an operator choice. default_admin's password — secret/dragonfly/<inc>/system_acl_users/default_admin#password.
   admin_user: "${ 'default_admin' }"
@@ -316,7 +316,7 @@ compute:
   # binary → vars.binary_version. Declared ONCE (state + plugin read it).
   df_version: "${ input.install_method == 'binary' ? default(vars.binary_version, '') : (has(input.version) ? input.version : '') }"
   # Version of the sentinel DAEMON (distro redis-sentinel, NOT DragonFly) for the plugin's version gate
-  # community.redis.sentinel. SEMVER (X.Y.Z) — versionGE 7.0.0. service vars-pinned (sentinel —
+  # redis.sentinel.monitored. SEMVER (X.Y.Z) — versionGE 7.0.0. service vars-pinned (sentinel —
   # a separate product, its version doesn't depend on df_version). default catches an absent leaf.
   sentinel_redis_version: "${ default(vars.sentinel_redis_version, '7.2.4') }"
   # Distro pin of the redis-server PACKAGE (carries redis-sentinel), goes into apply.input.version
@@ -326,7 +326,7 @@ compute:
   # an absent leaf (back-compat with old-ref service vars).
   sentinel_redis_package_version: "${ default(vars.sentinel_redis_package_version, '5:7.0.15-1~deb12u7') }"
   # Per-master sentinel directives (failover timings): map `sentinel <opt> <master>` →
-  # value. The sentinel.conf.tmpl template ranges over it, the plugin community.redis.sentinel classifyConfig
+  # value. The sentinel.conf.tmpl template ranges over it, the plugin redis.sentinel.monitored classifyConfig
   # expands per-master → SENTINEL SET. A SINGLE source of truth (starting config + live).
   sentinel_directives: >-
     ${ {
@@ -351,7 +351,7 @@ compute:
   # ★ The instance's LOCAL address is a UNIX SOCKET (NOT 127.0.0.1:port). DF with --bind=primary_ip does NOT
   # listen on loopback, local plugin calls (health-gate, REPLICAOF's own addr, ACL LOAD)
   # go to the socket ${run_dir}/dragonfly.sock (the same path as the --unixsocket flag in the template).
-  # The community.redis plugin understands the unix: address prefix. run_dir is a host invariant (destiny vars;
+  # The redis plugin understands the unix: address prefix. run_dir is a host invariant (destiny vars;
   # the default duplicates the default /var/run/dragonfly — the scenario doesn't see destiny vars). The socket is
   # WITHOUT TLS (local UDS) → for local calls we do NOT set tls/tls_ca even on a TLS instance.
   local_addr:  "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
@@ -499,7 +499,7 @@ tasks:
         #
         # ★ default_admin REDESIGN: STATIC replica→master AUTH in the flagfile — masteruser/
         # masterauth are ADDED into config as ORDINARY flags (on top of compute.df_config). CRITICAL
-        # for PERSISTENCE across a restart: the community.redis.replica plugin (step 3) sets them
+        # for PERSISTENCE across a restart: the redis.replica.present plugin (step 3) sets them
         # via CONFIG SET at runtime, but CONFIG SET is NOT persisted → on restart DragonFly
         # would come up without masterauth → replica master_link_status:DOWN. A static flag in
         # the flagfile survives a restart. The directives are HOST-INVARIANT (one default_admin per
@@ -556,13 +556,13 @@ tasks:
         # AFTER the DF health-gate). This apply now installs ONLY the DragonFly data plane.
 
   # ── 2. Health-gate per-host: PING a live DragonFly after startup ───────────────
-  # community.redis.command (DragonFly is redis-compatible). Every node must respond BEFORE
+  # redis.command.run (DragonFly is redis-compatible). Every node must respond BEFORE
   # replica binding/sentinel setup. ★ LOCAL connect — via a UNIX SOCKET
   # (compute.local_addr): DF with --bind=primary_ip does NOT listen on 127.0.0.1, the socket is a separate
   # UDS listener (always available locally). UDS without TLS (anti-downgrade doesn't apply — this is not a
   # network path, the AUTH password never goes over the network): tls/tls_ca are NOT set even on a TLS instance.
   - name: Wait for each dragonfly node to answer PING
-    module: community.redis.command
+    module: redis.command.run
     retry: { count: 10, delay: 3s }
     params:
       addr:     "${ compute.local_addr }"
@@ -640,7 +640,7 @@ tasks:
                }
              })) }
 
-  # ── 3. REPLICAOF for replicas: community.redis.replica ONLY on replicas ───────────
+  # ── 3. REPLICAOF for replicas: redis.replica.present ONLY on replicas ───────────
   # addr — the LOCAL instance via a UNIX SOCKET (compute.local_addr); master_addr — the HOST-
   # INVARIANT EXTERNAL address of the master (master-election soulprint.hosts[0]). ★ master_addr
   # stays TCP primary_ip:6379 (the external replica→master link): DragonFly TLS is on the MAIN
@@ -657,21 +657,21 @@ tasks:
   # secret/dragonfly/<inc>/system_acl_users/default_admin#password (the same branch as health-PING).
   - name: Make replicas follow the elected master (REPLICAOF)
     where: "soulprint.self.sid != soulprint.hosts[0].sid"
-    module: community.redis.replica
+    module: redis.replica.present
     params:
       addr:        "${ compute.local_addr }"
       master_addr: "${ soulprint.hosts[0].network.primary_ip + ':6379' }"
       username:    "${ compute.admin_user }"
       password:    "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
 
-  # ── 4. SENTINEL MONITOR reconcile: community.redis.sentinel on EVERY host ────
+  # ── 4. SENTINEL MONITOR reconcile: redis.sentinel.monitored on EVERY host ────
   # addr — the local sentinel (127.0.0.1:26379); monitor.ip — the HOST-INVARIANT address of the
   # master. quorum — majority size/2+1. auth_pass — keeper-side vault() resolve. config — the same
   # per-master timings (compute.sentinel_directives). ★ PILOT: on create we monitor the master
   # IMMEDIATELY (node-1 is the real master; the redis contract flag sentinel_monitor_now is only needed by
   # migrate_cluster — not present here, MONITOR is unconditional).
   - name: Configure each sentinel to monitor the elected master (SENTINEL MONITOR)
-    module: community.redis.sentinel
+    module: redis.sentinel.monitored
     params:
       addr:        "127.0.0.1:26379"
       master_name: "${ default(vars.sentinel_master_name, 'master') }"
@@ -699,7 +699,7 @@ tasks:
   # sentinels" is NOT expressible — we check ONLY our own local sentinel. retry/until +
   # failed_when on register.self.result of the same task.
   - name: Wait until each sentinel answers PONG on :26379
-    module: community.redis.command
+    module: redis.command.run
     changed_when: false
     retry:
       count: 12

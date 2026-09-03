@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/schema"
 )
 
-// devProvisionScript builds the community.redis plugin for a dev stand the way
+// devProvisionScript builds the redis plugin for a dev stand the way
 // plugin.go builds it for L3b. Two implementations of one thing, and only one of
 // them is in the gate — so these guards hold the other one against it.
 const devProvisionScript = "dev/provision.sh"
@@ -22,11 +22,11 @@ const devProvisionScript = "dev/provision.sh"
 // has left it.
 const devProvisionStamper = "dev/stamp-artifact.go"
 
-// communityRedisProvisionFunc is the step itself — the shell function these guards
+// redisProvisionFunc is the step itself — the shell function these guards
 // read, and the line at the bottom of the script that runs it.
-const communityRedisProvisionFunc = "provision_community_redis_plugin"
+const redisProvisionFunc = "provision_redis_plugin"
 
-// TestDevProvisionReadsOnlyFilesThatExist — every file the community.redis step
+// TestDevProvisionReadsOnlyFilesThatExist — every file the redis step
 // reads out of the plugin's source directory is a file that is there.
 //
 // This is the whole of NIM-516. NIM-377 deleted manifest.yaml and moved the
@@ -40,8 +40,8 @@ const communityRedisProvisionFunc = "provision_community_redis_plugin"
 // The check costs a stat per referenced file and would have failed on the NIM-377
 // commit itself.
 func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
-	code := communityRedisProvisionStep(t)
-	dir := filepath.Join(repoRoot(t), communityRedisPluginDir)
+	code := redisProvisionStep(t)
+	dir := filepath.Join(repoRoot(t), redisPluginDir)
 
 	for _, name := range pluginDirReferences(t, code) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -49,7 +49,7 @@ func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 				"\tthe step calls `fail` on it, so `make dev-provision` stops and no stand comes up at all — "+
 				"fix the step to read what the plugin publishes now, do not soften the fail to a warn "+
 				"(the plugin would then silently not arrive and the failure would move into a scenario run)",
-				devProvisionScript, communityRedisPluginDir, name, err)
+				devProvisionScript, redisPluginDir, name, err)
 		}
 	}
 
@@ -61,7 +61,7 @@ func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 	if strings.Contains(code, "manifest.yaml") {
 		t.Errorf("%s still names manifest.yaml — NIM-377 replaced it with the generated %s, "+
 			"and %s asserts it stays deleted",
-			devProvisionScript, schema.SchemaFileName, communityRedisPluginDir)
+			devProvisionScript, schema.SchemaFileName, redisPluginDir)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 // the tag, so a plain substring match stays green while the write it describes is
 // deleted — a guard that reports what the script SAYS it did.
 func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
-	code := communityRedisProvisionStep(t)
+	code := redisProvisionStep(t)
 
 	// (1) It stamps. An artifact with no trailer has no disclosure, plugingit fails
 	// that entry closed, and the stand comes up looking healthy with the plugin
@@ -87,7 +87,7 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	stamps := regexp.MustCompile(`go run[^\n]*` + regexp.QuoteMeta(filepath.Base(devProvisionStamper)))
 	if !stamps.MatchString(code) {
 		t.Errorf("%s never runs %s: the artifact it commits carries no schema trailer, "+
-			"so plugingit rejects the entry and community.redis never arrives on the stand",
+			"so plugingit rejects the entry and redis never arrives on the stand",
 			devProvisionScript, devProvisionStamper)
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot(t), devProvisionStamper)); err != nil {
@@ -111,14 +111,14 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	// The name alone is not evidence: `local bin="soul-mod-redis"` satisfies a substring
 	// match on its own, so deleting the copy left every other assertion in this test
 	// green while dist/ held nothing but the document — no executable, ErrArtifactNotFound,
-	// a per-entry warning, and a stand that comes up healthy with community.redis absent.
+	// a per-entry warning, and a stand that comes up healthy with redis absent.
 	// That is the failure this whole file exists to make impossible.
-	binVar := communityRedisBinaryVar(t, code)
+	binVar := redisBinaryVar(t, code)
 	installs := regexp.MustCompile(`(?m)^[[:space:]]*(cp|install)[[:space:]][^\n]*dist/(` +
-		regexp.QuoteMeta(communityRedisBinaryName) + `|\$\{` + binVar + `\})"`)
+		regexp.QuoteMeta(redisBinaryName) + `|\$\{` + binVar + `\})"`)
 	if !installs.MatchString(code) {
 		t.Errorf("%s never copies the built artifact into dist/ — the slot would hold the document and "+
-			"no executable, plugingit fails that entry closed, and the stand comes up with community.redis missing",
+			"no executable, plugingit fails that entry closed, and the stand comes up with redis missing",
 			devProvisionScript)
 	}
 
@@ -130,7 +130,7 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	if stampAt, installAt := stamps.FindStringIndex(code), installs.FindStringIndex(code); stampAt != nil &&
 		installAt != nil && stampAt[0] > installAt[0] {
 		t.Errorf("%s stamps the artifact AFTER copying it into dist/ — the published copy is the unstamped "+
-			"one, carries no schema trailer, and community.redis never arrives", devProvisionScript)
+			"one, carries no schema trailer, and redis never arrives", devProvisionScript)
 	}
 
 	// (5) dist/ ends up holding exactly one executable, which is what the resolver
@@ -138,7 +138,7 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	// ErrArtifactNotFound, a per-entry warning, a green stand with no plugin — and both
 	// are one chmod away. The step asserts the recorded modes at provisioning time; this
 	// holds the chmods themselves, so the two layers fail on different mistakes.
-	artifact := `dist/(` + regexp.QuoteMeta(communityRedisBinaryName) + `|\$\{` + binVar + `\})"`
+	artifact := `dist/(` + regexp.QuoteMeta(redisBinaryName) + `|\$\{` + binVar + `\})"`
 	for _, m := range []struct{ perm, path, why string }{
 		{"0755", artifact, "the resolver takes the one EXECUTABLE in dist/, so a non-executable artifact is no artifact"},
 		{"0644", regexp.QuoteMeta("dist/"+schema.SchemaFileName) + `"`, "an executable document makes TWO executables in dist/ and the resolver cannot tell which one is the artifact"},
@@ -153,9 +153,9 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	// (6) Both producers build reproducibly, with the same flags. A Sigil grant is keyed
 	// on the artifact's sha256: producers that disagree here build two different plugins,
 	// and a repeat provision invalidates a grant the operator already issued.
-	for _, flag := range communityRedisBuildFlags {
+	for _, flag := range redisBuildFlags {
 		if !strings.Contains(code, flag) {
-			t.Errorf("%s does not pass %s to `go build` — plugin.go does (communityRedisBuildFlags), "+
+			t.Errorf("%s does not pass %s to `go build` — plugin.go does (redisBuildFlags), "+
 				"so the same sources would give the stand and this fixture different bytes",
 				devProvisionScript, flag)
 		}
@@ -164,10 +164,10 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	// (7) The tag is the half that matters at resolve time: dev/keeper.dev.yml asks for
 	// it by name, and a tag that moved leaves the entry unresolvable.
 	tags := regexp.MustCompile(`(?m)^[[:space:]]*git[^\n]*[[:space:]]tag[[:space:]][^\n]*` +
-		regexp.QuoteMeta(CommunityRedisPluginRef))
+		regexp.QuoteMeta(RedisPluginRef))
 	if !tags.MatchString(code) {
 		t.Errorf("%s does not tag the snapshot %s — the catalog entry asks for that ref and would resolve to nothing",
-			devProvisionScript, CommunityRedisPluginRef)
+			devProvisionScript, RedisPluginRef)
 	}
 
 	// (8) And the step is actually CALLED. Everything above reads the inside of a shell
@@ -176,25 +176,25 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	// is not there (ErrSourceUnavailable), and the entry closes into the same warning.
 	// Deleting one line at the bottom of the step is the cheapest way to reintroduce
 	// NIM-516, and it is the one thing a guard reading only the body cannot see.
-	calls := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(communityRedisProvisionFunc) + `[[:space:]]*$`)
+	calls := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(redisProvisionFunc) + `[[:space:]]*$`)
 	if !calls.MatchString(provisionScriptSource(t)) {
 		t.Errorf("%s defines %s but never calls it — no plugin repo is built, the catalog's file:// source "+
-			"does not exist, and community.redis silently never arrives",
-			devProvisionScript, communityRedisProvisionFunc)
+			"does not exist, and redis silently never arrives",
+			devProvisionScript, redisProvisionFunc)
 	}
 }
 
-// communityRedisProvisionStep returns the CODE of provision.sh's
-// provision_community_redis_plugin function — its body with comment lines dropped.
+// redisProvisionStep returns the CODE of provision.sh's
+// provision_redis_plugin function — its body with comment lines dropped.
 //
 // Scoped to the function because `src` is a local: provision_git_repo above it uses
 // the same name for a different directory, and a guard reading the whole file would
 // check the wrong paths. Comments are dropped because they are not acts: a comment
 // saying the step no longer touches manifest.yaml would otherwise fail the guard
 // that says exactly the same thing.
-func communityRedisProvisionStep(t *testing.T) string {
+func redisProvisionStep(t *testing.T) string {
 	t.Helper()
-	return provisionShellFunction(t, communityRedisProvisionFunc)
+	return provisionShellFunction(t, redisProvisionFunc)
 }
 
 // provisionShellFunction returns the text of one function of dev/provision.sh, comments
@@ -259,18 +259,18 @@ func provisionScriptSource(t *testing.T) string {
 	return string(raw)
 }
 
-// communityRedisBinaryVar returns the name of the local holding the artifact's
+// redisBinaryVar returns the name of the local holding the artifact's
 // filename, so an assertion can anchor on the copy that writes it rather than on the
 // name appearing anywhere in the step. Resolved, not assumed: renaming the local is
 // allowed, renaming the artifact on one side only is not.
-func communityRedisBinaryVar(t *testing.T, code string) string {
+func redisBinaryVar(t *testing.T, code string) string {
 	t.Helper()
 	assign := regexp.MustCompile(`local[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)="` +
-		regexp.QuoteMeta(communityRedisBinaryName) + `"`)
+		regexp.QuoteMeta(redisBinaryName) + `"`)
 	m := assign.FindStringSubmatch(code)
 	if m == nil {
-		t.Fatalf("the community.redis step in %s no longer builds %q, which is the artifact this package "+
-			"names — one of the two was renamed alone", devProvisionScript, communityRedisBinaryName)
+		t.Fatalf("the redis step in %s no longer builds %q, which is the artifact this package "+
+			"names — one of the two was renamed alone", devProvisionScript, redisBinaryName)
 	}
 	return m[1]
 }
@@ -285,18 +285,18 @@ func pluginDirReferences(t *testing.T, code string) []string {
 	// EXAMPLES is ${REPO_ROOT}/examples, so the shell literal is the tail of the
 	// path this package names. Derived, so renaming the directory on one side only
 	// is a failure here instead of a silent no-op.
-	rel := strings.TrimPrefix(communityRedisPluginDir, "examples/")
+	rel := strings.TrimPrefix(redisPluginDir, "examples/")
 	assign := regexp.MustCompile(`local[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)="\$\{EXAMPLES\}/` + regexp.QuoteMeta(rel) + `"`)
 	m := assign.FindStringSubmatch(code)
 	if m == nil {
-		t.Fatalf("the community.redis step in %s no longer takes its sources from ${EXAMPLES}/%s — "+
+		t.Fatalf("the redis step in %s no longer takes its sources from ${EXAMPLES}/%s — "+
 			"this package says that is where the plugin lives (%s)",
-			devProvisionScript, rel, communityRedisPluginDir)
+			devProvisionScript, rel, redisPluginDir)
 	}
 	// Only literals can be stat'ed, and an indirect read is precisely the one this
 	// guard would miss — NIM-516 was a read of a file that was not there.
 	if strings.Contains(code, "${"+m[1]+"}/${") {
-		t.Errorf("the community.redis step in %s builds a path under ${%s} out of another variable — "+
+		t.Errorf("the redis step in %s builds a path under ${%s} out of another variable — "+
 			"this guard can only check literal filenames, so inline it rather than leaving the read unheld",
 			devProvisionScript, m[1])
 	}
@@ -306,12 +306,12 @@ func pluginDirReferences(t *testing.T, code string) []string {
 		seen[g[1]] = true
 	}
 	if !seen[schema.SchemaFileName] {
-		t.Errorf("the community.redis step in %s never reads %s — that document IS the module's contract "+
+		t.Errorf("the redis step in %s never reads %s — that document IS the module's contract "+
 			"since NIM-377, and it is what gets stamped into the artifact and published beside it",
 			devProvisionScript, schema.SchemaFileName)
 	}
 	if len(seen) == 0 {
-		t.Fatalf("the community.redis step in %s reads no file out of ${%s} — either it stopped using the "+
+		t.Fatalf("the redis step in %s reads no file out of ${%s} — either it stopped using the "+
 			"plugin's sources or this guard stopped matching them", devProvisionScript, m[1])
 	}
 	out := make([]string, 0, len(seen))

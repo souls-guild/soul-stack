@@ -22,14 +22,14 @@ import (
 )
 
 func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
-	repoURL := harness.BuildCommunityRedisPlugin(t)
+	repoURL := harness.BuildRedisPlugin(t)
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.RedisAlias, Source: repoURL, Ref: harness.RedisPluginRef},
 		},
 	})
 	defer stack.Cleanup()
@@ -58,7 +58,7 @@ func TestL3bRedisLive_Day2RotateTls(t *testing.T) {
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+adminUser, map[string]any{"password": adminPass})
 
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
-	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.RedisAlias, repoURL, harness.RedisPluginRef)
 
 	// Create TLS instance: connection_mode=tls (TLS-only, plain port closed). cert/key/ca
 	// come from the default essence Vault paths (secret/services/redis/tls#{cert,key,ca}) -

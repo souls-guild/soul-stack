@@ -20,7 +20,7 @@ description: >-
   vault() in the content cell of the destiny, seal masking). Scenario: (1) destiny `dragonfly`
   re-renders the PEM into ${conf_dir}/tls/{dragonfly.crt,dragonfly.key,ca.crt} from the NEW refs
   (apply: register: tls_certs — aggregate changed over the child core.file.present); (2) three
-  community.redis.command CONFIG SET tls_cert_file / tls_key_file / tls_ca_cert_file UNDER
+  redis.command.run CONFIG SET tls_cert_file / tls_key_file / tls_ca_cert_file UNDER
   onchanges:[tls_certs] — DragonFly RECREATES the SSL_CTX and re-reads the PEM live, but ONLY
   when the PEM actually changed (one command = one command → three steps, all on the same onchanges gate).
 
@@ -200,10 +200,10 @@ tasks:
                  : {}
              ) }
 
-  # 3. HOT-RELOAD CERT: three community.redis.command (CONFIG SET tls_cert_file / tls_key_file /
+  # 3. HOT-RELOAD CERT: three redis.command.run (CONFIG SET tls_cert_file / tls_key_file /
   #    tls_ca_cert_file — UNDERSCORE, the DragonFly form) recreate the SSL_CTX on the live instance.
   #    DragonFly RECREATES the SSL_CTX on CONFIG SET tls_*_file (RegisterMutable) → reads the fresh
-  #    PEM from disk. command (raw verb-state) bypasses the diff-skip of community.redis.config (which would
+  #    PEM from disk. command (raw verb-state) bypasses the diff-skip of redis.instance.configured (which would
   #    compare CONFIG GET values, consider it a no-op with the same path and not fire CONFIG SET) — raw
   #    CONFIG SET is needed for the re-read to happen. Gate — onchanges:[tls_certs] (idempotency): one
   #    command = one verb → three steps on the same gate. PEM paths — from conf_dir (where destiny put
@@ -211,7 +211,7 @@ tasks:
   #    (compute.local_addr); tls/tls_ca of the connection are NOT needed (UDS is not a network path — the client↔
   #    server handshake is not TLS). CONFIG SET tls_*_file still replaces the SERVER material live.
   - name: Re-read the rotated TLS cert when it changed (CONFIG SET tls_cert_file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"
@@ -221,7 +221,7 @@ tasks:
       args:     ["CONFIG", "SET", "tls_cert_file", "${ compute.conf_dir + '/tls/dragonfly.crt' }"]
 
   - name: Re-read the rotated TLS key when it changed (CONFIG SET tls_key_file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"
@@ -231,7 +231,7 @@ tasks:
       args:     ["CONFIG", "SET", "tls_key_file", "${ compute.conf_dir + '/tls/dragonfly.key' }"]
 
   - name: Re-read the rotated TLS CA cert when it changed (CONFIG SET tls_ca_cert_file)
-    module: community.redis.command
+    module: redis.command.run
     onchanges: [tls_certs]
     params:
       addr:     "${ compute.local_addr }"

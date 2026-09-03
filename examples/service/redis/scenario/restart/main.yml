@@ -68,7 +68,7 @@ tasks:
       # the live instance being handed a freshly generated one it does not know.
       value: "${ default(incarnation.state.system_acl_users, []) }"
 
-  # Probe: the actual role of each host via the community.redis.role plugin
+  # Probe: the actual role of each host via the redis.instance.role-probed plugin
   # (go-redis INFO replication, without redis-cli). The actual role is volatile, taken by a
   # live probe right before targeting (concept.md, ADR-008). Probe
   # completeness is guaranteed by the fail-stop barrier (ADR-056 §5): a failed probe on any
@@ -86,7 +86,7 @@ tasks:
   # compute.tls_on/tls_port: TLS enabled → '127.0.0.1:' + tls-port (string(state.tls.port),
   # INTEGER in v3), otherwise plaintext 6379.
   - name: Detect actual redis role per host
-    module: community.redis.role
+    module: redis.instance.role-probed
     register: redis_role
     changed_when: false
     params:
@@ -113,14 +113,14 @@ tasks:
         params:
           name: redis-server
       # Health-gate: wait until the restarted replica has RESYNCED with the master
-      # (master_link_status:up), not just brought the daemon up. community.redis.replica-synced
+      # (master_link_status:up), not just brought the daemon up. redis.replica.synced
       # (INFO replication), NOT raw redis-cli and NOT pinged (PONG is weak — the daemon is alive, but
       # may not yet have caught up with master after a restart; rolling must not move to the next
       # replica until the current one has caught up). Time budget and condition — the standard
       # retry:+until: (count × delay = budget, until: = condition). register.self.synced
       # — the step's own result (bool).
       - name: Wait until replica resynced with master
-        module: community.redis.replica-synced
+        module: redis.replica.synced
         changed_when: false
         retry:
           count: 12

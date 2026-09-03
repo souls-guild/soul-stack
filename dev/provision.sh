@@ -567,10 +567,10 @@ provision_git_repo() {
 if ! command -v git >/dev/null 2>&1; then
     fail "git CLI not found in PATH - needed to materialize service/destiny repos"
 fi
-# go is needed to build the community.redis plugin (step 9b) - plugingit F-fetch expects
+# go is needed to build the redis plugin (step 9b) - plugingit F-fetch expects
 # a BUILT binary in dist/, Keeper does not compile (ADR-026).
 if ! command -v go >/dev/null 2>&1; then
-    fail "go CLI not found in PATH - needed to build the community.redis plugin"
+    fail "go CLI not found in PATH - needed to build the redis plugin"
 fi
 
 EXAMPLES="${REPO_ROOT}/examples"
@@ -613,7 +613,7 @@ provision_git_repo \
     "${KEEPER_DEV_DIR}/destiny/vector" \
     v1.0.0 "destiny vector"
 
-# 9b. community.redis plugin (SoulModule) - materializing the STAMPED artifact into a git repo.
+# 9b. redis plugin (SoulModule) - materializing the STAMPED artifact into a git repo.
 #
 # Unlike service/destiny (provision_git_repo commits SOURCES), the plugingit resolver
 # (ADR-026 F-fetch) on Keeper neither compiles nor executes: it takes the one executable
@@ -623,7 +623,7 @@ provision_git_repo \
 # publishes what a plugin author publishes: build, stamp the document into the binary,
 # put the same bytes beside it as schema.json.
 #
-# Parity with tests/e2e-live/harness/plugin.go (BuildCommunityRedisPlugin), which builds
+# Parity with tests/e2e-live/harness/plugin.go (BuildRedisPlugin), which builds
 # the same fixture for L3b, and with plugingit/resolver_test.go fixtureRepo. Held by
 # tests/e2e-live/harness/devprovision_test.go: the two must not drift, or a stand stops
 # being able to reproduce what the gate sees. This step read manifest.yaml for a whole
@@ -635,26 +635,26 @@ provision_git_repo \
 # a reproducible sha256: otherwise a repeat provision changes the binary → invalidates an
 # already-issued Sigil grant. Stamping keeps that property: the same binary and the same
 # document append the same bytes.
-provision_community_redis_plugin() {
-    local src="${EXAMPLES}/module/soul-mod-community-redis"
-    local dest="${KEEPER_DEV_DIR}/plugin-repos/community-redis"
+provision_redis_plugin() {
+    local src="${EXAMPLES}/module/soul-mod-redis"
+    local dest="${KEEPER_DEV_DIR}/plugin-repos/redis"
     local bin="soul-mod-redis"
     # The document IS the module's contract now, and it is read without running the
     # artifact (at plugin.allow the binary is not approved yet). Absent, there is nothing
     # to stamp - and an unstamped artifact is one plugingit rejects per-entry, so the
-    # stand would come up looking healthy and the first scenario touching community.redis
+    # stand would come up looking healthy and the first scenario touching redis
     # would fail at runtime, where the cause costs far more to find.
     if [ ! -f "${src}/schema.json" ]; then
-        fail "community.redis plugin schema document not found: ${src}/schema.json"
+        fail "redis plugin schema document not found: ${src}/schema.json"
     fi
 
-    log "building community.redis plugin (${bin}, linux/amd64, reproducible)"
+    log "building redis plugin (${bin}, linux/amd64, reproducible)"
     local tmp
     tmp="$(mktemp -d)"
     if ! ( cd "${src}" && GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -trimpath -ldflags "-buildid=" -o "${tmp}/${bin}" . ); then
         rm -rf "${tmp}"
-        fail "go build of the community.redis plugin failed (${src})"
+        fail "go build of the redis plugin failed (${src})"
     fi
     # cwd=REPO_ROOT so `go run` finds go.work and resolves sdk/schema - the trailer format
     # is defined there and nowhere else (see dev/stamp-artifact.go).
@@ -662,7 +662,7 @@ provision_community_redis_plugin() {
     # is outside every module and resolves sdk/schema only through the workspace.
     if ! ( cd "${REPO_ROOT}" && GOWORK= go run ./dev/stamp-artifact.go "${tmp}/${bin}" "${src}/schema.json" ); then
         rm -rf "${tmp}"
-        fail "stamping the schema document into the community.redis artifact failed"
+        fail "stamping the schema document into the redis artifact failed"
     fi
 
     # Rebuild from scratch: deterministic commit (GIT_* above) → same SHA for an
@@ -690,17 +690,17 @@ provision_community_redis_plugin() {
     local mode execs
     mode="$(git -C "${dest}" ls-files -s "dist/${bin}" | cut -d' ' -f1)"
     if [ "${mode}" != "100755" ]; then
-        fail "git recorded dist/${bin} as ${mode:-nothing}, not 100755 (core.fileMode off under ${dest}?) — plugingit would find no executable in dist/ and community.redis would silently never arrive"
+        fail "git recorded dist/${bin} as ${mode:-nothing}, not 100755 (core.fileMode off under ${dest}?) — plugingit would find no executable in dist/ and redis would silently never arrive"
     fi
     execs="$(git -C "${dest}" ls-files -s dist/ | grep -c '^100755 ' || true)"
     if [ "${execs}" != "1" ]; then
-        fail "dist/ carries ${execs} executables, not exactly 1 — plugingit cannot tell which is the artifact and community.redis would silently never arrive (is ${dest}/dist/schema.json 0755 by mistake?)"
+        fail "dist/ carries ${execs} executables, not exactly 1 — plugingit cannot tell which is the artifact and redis would silently never arrive (is ${dest}/dist/schema.json 0755 by mistake?)"
     fi
-    git -C "${dest}" -c commit.gpgsign=false commit -q -m "community.redis plugin snapshot (dev-provision)"
+    git -C "${dest}" -c commit.gpgsign=false commit -q -m "redis plugin snapshot (dev-provision)"
     git -C "${dest}" -c tag.gpgsign=false tag -f v1.0.0 >/dev/null
-    log "community.redis plugin git repo @ ${dest} (branch main + tag v1.0.0, dist/${bin} stamped + dist/schema.json)"
+    log "redis plugin git repo @ ${dest} (branch main + tag v1.0.0, dist/${bin} stamped + dist/schema.json)"
 }
-provision_community_redis_plugin
+provision_redis_plugin
 
 # 10. Seed the service registry in Postgres (service_registry + keeper_settings).
 #

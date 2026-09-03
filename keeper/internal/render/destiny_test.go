@@ -372,10 +372,10 @@ func (f fakeModuleManifests) ResolveModule(ns, name string) (plugin.ModuleDef, b
 // the manifest or the scenario to hint at the difference.
 func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
 	manifests := fakeModuleManifests{
-		"community.redis": plugin.ModuleDef{
-			Name: "redis",
+		"redis.acl": plugin.ModuleDef{
+			Name: "acl",
 			States: map[string]plugin.StateDef{
-				"acl-present": {
+				"reloaded": {
 					Input:  plugin.Input{"user": {Type: "string", Required: true}},
 					Output: plugin.Output{"password": {Type: "string", Secret: true}, "user": {Type: "string"}},
 				},
@@ -388,7 +388,7 @@ func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
 			{
 				Name:     "Create the ACL user",
 				Register: "acl",
-				Module:   &config.ModuleTask{Module: "community.redis.acl-present", Params: map[string]any{"user": "app"}},
+				Module:   &config.ModuleTask{Module: "redis.acl.reloaded", Params: map[string]any{"user": "app"}},
 			},
 		},
 	}
@@ -409,7 +409,7 @@ func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
 
 	var found *RenderedTask
 	for _, rt := range tasks {
-		if rt.Module == "community.redis.acl-present" {
+		if rt.Module == "redis.acl.reloaded" {
 			found = rt
 		}
 	}

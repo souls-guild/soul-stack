@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -249,14 +249,14 @@ test:
 # (ADR-016: community plugins pull the core as a regular dependency, not a workspace member).
 # So they run with `GOWORK=off` per-module, and NOT via the MODULES list in `make test`
 # (which doesn't see them at all). This also covers the security guard on secret
-# masking in the community.redis plugin (59 test functions), which would otherwise
+# masking in the redis plugin (59 test functions), which would otherwise
 # stay outside the gate.
 #
 # Skip-on-unresolvable: cloud/ssh plugins (soul-cloud-*/soul-ssh-*) don't resolve
 # standalone-offline (workspace go.mod pins diverge from standalone-tidy, needs network).
 # `go list ./...` under GOWORK=off fails for them -> we skip LOUDLY with a warning (the same
 # trick as `go list` empty -> skip in `test`/`vet`). This is NOT a silent pass: the skip
-# is printed, and a plugin that *does* resolve offline (community.redis) isn't covered by it -
+# is printed, and a plugin that *does* resolve offline (redis) isn't covered by it -
 # its regressions are caught by the gate. Merge() tests are NOT here: they live in shared/cel
 # (workspace, covered by `make test`), no need to duplicate.
 # `-count=1` - no cache (the plugin may depend on external fake state).
@@ -545,7 +545,7 @@ e2e-live: build build-linux e2e-live-artifacts
 #
 # Deps DIFFER from e2e-live: also needs the native `build` - the harness runs
 # Keeper ON THE HOST (host-arch keeper/bin/keeper, see locateKeeperBinary), not in a
-# container. The community.redis plugin is built by the test itself (harness.BuildCommunityRedisPlugin),
+# container. The redis plugin is built by the test itself (harness.BuildCommunityRedisPlugin),
 # no need to build it in the Makefile.
 #
 # E2E_KEEPER_HOST - the IP the soul container uses to reach Keeper on the host;
@@ -1207,7 +1207,7 @@ check-soul-template:
 #   2. keeper-run.sh holds the answering /healthz to the version it just built - a
 #      foreign keeper on the port is reported as such instead of as "ready";
 #   3. dev/stamp-artifact.go compiles. provision.sh `go run`s it to append the schema
-#      trailer to the community.redis artifact, and it sits outside the workspace
+#      trailer to the redis artifact, and it sits outside the workspace
 #      modules (dev/ has no go.mod), so no other tier builds it and no other tier
 #      gofmts it. Without this, an SDK change breaks stand provisioning and the gate
 #      stays green until somebody tries to raise a stand - which is exactly the shape
@@ -1257,7 +1257,7 @@ check-dev-stand-build:
 	@out=$$(go build -o /dev/null dev/stamp-artifact.go 2>&1) || { \
 		echo "check-dev-stand-build: dev/stamp-artifact.go does not build:"; \
 		echo "$$out"; \
-		echo "  dev/provision.sh 'go run's it to stamp the schema trailer into the community.redis"; \
+		echo "  dev/provision.sh 'go run's it to stamp the schema trailer into the redis"; \
 		echo "  artifact, so a broken build here means no fresh dev stand comes up (NIM-516)."; \
 		exit 1; \
 	}
@@ -1380,7 +1380,7 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
-	check-modules-run
+	check-modules-run check-plugin-schema
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 check:
@@ -1543,6 +1543,41 @@ check-ci-status:
 # docker-free, about two seconds.
 check-modules-run:
 	@scripts/modules-run-test.sh
+
+# check-plugin-schema — the redis artifact's `schema.json` is GENERATED, and this is
+# what makes that checkable (NIM-525).
+#
+# The document is the module contract: soul-lint validates the whole corpus against
+# the committed copy, keeper reads the trailer at `plugin.allow`, and the module form
+# in the UI is built from it. All three trust the document over the code they cannot
+# see, so a copy edited by hand — or simply left behind after a `module.Def` changed —
+# is a contract the binary does not implement, and nothing downstream can tell.
+#
+# It runs the AUTHOR's path, end to end and offline: build the artifact, `soul-mod
+# stamp` it (which derives the document by running the artifact's own `schema`
+# subcommand, writes the trailer and publishes the bytes beside it), `soul-mod verify`
+# the result, then diff against what the repository committed. The plugin's own
+# manifest_test.go asserts the same equality from inside the package; this asserts it
+# through the tool a plugin author actually runs, which is the half that was untested.
+#
+# GOWORK=off for the artifact (examples/module/* are outside the workspace, ADR-016);
+# GOWORK= for soul-mod (it lives in the sdk module and resolves through the workspace).
+PLUGIN_SCHEMA_DIR ?= examples/module/soul-mod-redis
+check-plugin-schema:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
+	( cd $(PLUGIN_SCHEMA_DIR) && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+	"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+	"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
+	if ! cmp -s "$$tmp/schema.json" "$(PLUGIN_SCHEMA_DIR)/schema.json"; then \
+		echo "check-plugin-schema: $(PLUGIN_SCHEMA_DIR)/schema.json is NOT what the artifact publishes." >&2; \
+		echo "  It is generated from the module.Def values, not written by hand. Rebuild and re-stamp:" >&2; \
+		echo "    (cd $(PLUGIN_SCHEMA_DIR) && GOWORK=off go build -o dist/soul-mod-redis . )" >&2; \
+		echo "    go run ./sdk/cmd/soul-mod stamp $(PLUGIN_SCHEMA_DIR)/dist/soul-mod-redis" >&2; \
+		echo "    cp $(PLUGIN_SCHEMA_DIR)/dist/schema.json $(PLUGIN_SCHEMA_DIR)/schema.json" >&2; \
+		exit 1; \
+	fi
+	@echo "check-plugin-schema: $(PLUGIN_SCHEMA_DIR)/schema.json is what \`soul-mod stamp\` derives, and verify is green"
 
 check-all:
 	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
@@ -1708,7 +1743,7 @@ check-vuln:
 # module's `params:` are checked against its schema document by the same four checks
 # that `core.*` already gets. Without them the linter can only say
 # `plugin_params_unchecked` and move on — which is what this corpus did for every
-# `community.redis` step, even though the module's own document sits in the SAME tree
+# `redis` step, even though the module's own document sits in the SAME tree
 # (NIM-294). The corpus is the one place where both halves are present, so leaving the
 # flag off meant validating it without the check it exists to demonstrate.
 #
@@ -1717,13 +1752,16 @@ check-vuln:
 # registration alias an operator picks, and nothing in the bytes can tell the linter
 # what a task will call it. It has to be stated.
 #
-# The binding is PER SERVICE, and that is not a convenience. The corpus holds TWO
-# artifacts addressed `community.*` — soul-mod-community-redis serving module `redis`,
-# soul-mod-community-mongo serving module `mongo` — and one alias names one host slot
-# holding one artifact (keeper/internal/pluginhost/slot.go). So no single keeper could
-# serve both, and `--modules community=A --modules community=B` is refused outright.
-# One binding per lint run is exact, because no scenario in the corpus addresses both.
-LINT_MODULES_REDIS ?= examples/module/soul-mod-community-redis
+# The binding is PER SERVICE, and that is not a convenience: one alias names one host
+# slot holding one artifact (keeper/internal/pluginhost/slot.go), so no single keeper
+# serves two, and `--modules X=A --modules X=B` is refused outright. One binding per
+# lint run is exact, because no scenario in the corpus addresses both artifacts.
+#
+# The redis artifact registers as `redis` since NIM-766 — one alias, six modules, one
+# per OBJECT it manages. mongo is still on the pre-NIM-765 grouping level `community`;
+# converting it is NIM-769, and until then the two aliases differ, which is the state
+# that made the collision above moot rather than the rule that avoided it.
+LINT_MODULES_REDIS ?= examples/module/soul-mod-redis
 LINT_MODULES_MONGO ?= examples/module/soul-mod-community-mongo
 
 lint: build
@@ -1755,7 +1793,7 @@ lint: build
 		svc=$$(echo "$$f" | cut -d/ -f3); \
 		case "$$svc" in \
 			mongo) mods="--modules=community=$(LINT_MODULES_MONGO)";; \
-			*)     mods="--modules=community=$(LINT_MODULES_REDIS)";; \
+			*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
 		esac; \
 		echo "validate-scenario $$f $$mods --service-name=$$svc"; \
 		out=$$($(LINT_BIN) validate-scenario "$$f" "$$mods" "--service-name=$$svc" 2>&1); rc=$$?; \
@@ -1957,7 +1995,7 @@ help:
 	@echo "  build             build keeper / soul-trial / soul / soul-lint / soulctl"
 	@echo "  build-soulctl     build only soulctl (operator client CLI)"
 	@echo "  test              go test ./... across all modules (no docker)"
-	@echo "  test-plugins      GOWORK=off go test over go.mod plugins examples/module/* (community.redis)"
+	@echo "  test-plugins      GOWORK=off go test over go.mod plugins examples/module/* (redis)"
 	@echo "  test-race         go test -race -count=1 ./... — the unit corpus under the detector (no docker)"
 	@echo "  test-integration  go test -tags=integration -race over the tagged packages only (needs docker)"
 	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, needs docker for the imp-slice)"
@@ -1988,6 +2026,7 @@ help:
 	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
+	@echo "  check-plugin-schema  the redis artifact's schema.json is what \`soul-mod stamp\` derives (NIM-525)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
 	@echo "  stamp-examples    re-write migrations/schema.lock in every bundled tree that has a ladder"
 	@echo ""

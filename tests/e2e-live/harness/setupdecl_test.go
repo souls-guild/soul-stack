@@ -62,12 +62,12 @@ func TestShouldDeclareTruthTable(t *testing.T) {
 // tests. repoReadingFuncs below closes that half by a property rather than a
 // name; the rule both encode is stated in setupdecl.go.
 var productEntryPoints = map[string]string{
-	"runKeeperInit":             "`keeper init` — ADR-013 bootstrap, migrations, the JWT signing key",
-	"startKeeperRun":            "`keeper run`",
-	"registerExampleService":    "POST /v1/services over examples/ (NIM-211: examples are the subject, not scenery)",
-	"IssueBootstrapToken":       "raw INSERTs into souls/bootstrap_tokens — where a dropped column dies",
-	"SpawnSoulContainer":        "`soul init` (CSR Bootstrap RPC), `soul run`, waiting for souls.status='connected'",
-	"buildCommunityRedisBinary": "`go build` of this repo's community-redis plugin",
+	"runKeeperInit":          "`keeper init` — ADR-013 bootstrap, migrations, the JWT signing key",
+	"startKeeperRun":         "`keeper run`",
+	"registerExampleService": "POST /v1/services over examples/ (NIM-211: examples are the subject, not scenery)",
+	"IssueBootstrapToken":    "raw INSERTs into souls/bootstrap_tokens — where a dropped column dies",
+	"SpawnSoulContainer":     "`soul init` (CSR Bootstrap RPC), `soul run`, waiting for souls.status='connected'",
+	"buildRedisArtifact":     "`go build` + `soul-mod stamp` of this repo's redis plugin",
 	// assertKeeperBinaryMatchesTree (NIM-490) is deliberately absent, and since
 	// this half is a LIST, the absence has to be argued rather than left to be
 	// read as the gap the comment above describes. It answers to BOTH halves,
@@ -136,14 +136,14 @@ func TestDeclaredRegionsEndBeforeTheProductRuns(t *testing.T) {
 	// all, everything above passes by finding nothing to check.
 	if declaring < 2 {
 		t.Fatalf("only %d function(s) defer declareStandSetupFailure. NewStack and "+
-			"BuildCommunityRedisPlugin both must, or their bring-up failures read as "+
+			"BuildRedisPlugin both must, or their bring-up failures read as "+
 			"assertions and the gate is back to being illegible.", declaring)
 	}
 }
 
 // deferPos — where the region OPENS, or NoPos if this function does not declare
 // one. The region has two ends, and only tracking both keeps the guard from
-// punishing the fix: BuildCommunityRedisPlugin calls the plugin build first and
+// punishing the fix: BuildRedisPlugin calls the plugin build first and
 // declares afterwards, precisely so the build stays out.
 func deferPos(fn *ast.FuncDecl) token.Pos {
 	if d := standSetupDefer(fn); d != nil {
@@ -182,8 +182,8 @@ func standSetupDefer(fn *ast.FuncDecl) *ast.DeferStmt {
 // plausible entry-point list contains, and it labelled a deleted file in this
 // repo as a fact about the machine on every gate test.
 //
-// The closure is one the fix itself needs: BuildCommunityRedisPlugin no longer
-// reads the document inline, it calls readCommunityRedisDocument, and moving the
+// The closure is one the fix itself needs: BuildRedisPlugin no longer
+// reads the document inline, it calls readRedisDocument, and moving the
 // read one frame down must not move it out of sight.
 func repoReadingFuncs(pkg *ast.Package) map[string]bool {
 	bodies := map[string]*ast.FuncDecl{}

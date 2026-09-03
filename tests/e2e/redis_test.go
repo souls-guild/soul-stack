@@ -5,12 +5,12 @@
 // .pm/tasks/2026-06-22-redis-consolidation).
 //
 // The redis service is collapsed into ONE mode-agnostic destiny `redis`
-// (per-host install + render redis.conf + systemd) + the community.redis
+// (per-host install + render redis.conf + systemd) + the redis
 // plugin for the live Redis runtime. scenario create (standalone) -- SIMPLE
 // typed input -> translation:
 //  1. apply destiny `redis` -- install redis-server + render redis.conf
 //     (from the merged redis_config) + render users.acl + systemd.
-//  2. community.redis.command PING -- health-gate after startup.
+//  2. redis.command.run PING -- health-gate after startup.
 //
 // The operator's simple input (memory_mb / persistence / maxmemory_policy /
 // users) is TRANSLATED via merge() into the detailed redis_config (see
@@ -23,7 +23,7 @@
 //  2. Seed Vault (requirepass + per-user password) + soulprint(os/net) + Coven.
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
 //  4. ConnectSoulStub + LoadApplyScript (scripted success by task-name, incl.
-//     the community.redis.command task -- soul-stub matches by task_name, not by module).
+//     the redis.command.run task -- soul-stub matches by task_name, not by module).
 //  5. CreateIncarnationOnRoster -> create run -> WaitApplySuccess.
 //  6. Asserts: apply_runs success / incarnation.state (type/version/merged-config/
 //     users/hosts) / audit incarnation.scenario_started / metric
@@ -90,7 +90,7 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 
 	// Live EventStream: capture the SID-lease -> ApplyRequest into the local
 	// Outbound. LoadApplyScript -- scripted success by task-name (+
-	// default-success for when:-collector tasks). The community.redis.config
+	// default-success for when:-collector tasks). The redis.instance.configured
 	// task is matched by task_name.
 	stub := stack.ConnectSoulStub(t, 0)
 	harness.LoadApplyScript(stub, "create", redisCreateTasks())
@@ -206,15 +206,15 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 }
 
 // TestE2EServiceRedis_AddAclUser -- SKIP: the add_acl_user scenario is moving
-// to community.redis.acl (state acl not yet implemented -- next batch). See result.md.
+// to redis.acl.reloaded (state acl not yet implemented -- next batch). See result.md.
 func TestE2EServiceRedis_AddAclUser(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: add_acl_user is moving to community.redis.acl (state acl -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: add_acl_user is moving to redis.acl.reloaded (state acl -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
 // TestE2EServiceRedis_UpdateConfig -- SKIP: the update_config scenario is moving
-// to community.redis.config + re-apply destiny redis (next batch). See result.md.
+// to redis.instance.configured + re-apply destiny redis (next batch). See result.md.
 func TestE2EServiceRedis_UpdateConfig(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: update_config is moving to community.redis.config + re-apply destiny redis (next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: update_config is moving to redis.instance.configured + re-apply destiny redis (next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
 // TestE2EServiceRedis_UpdateNodeExporter -- SKIP: the exporter is a separate
@@ -231,15 +231,15 @@ func TestE2EServiceRedis_RestartNodeExporter(t *testing.T) {
 }
 
 // TestE2EServiceRedis_AddReplicas -- SKIP: replicas/topology are moving to
-// sentinel mode + community.redis.replica (next batch). The probe->where +
+// sentinel mode + redis.replica.present (next batch). The probe->where +
 // cross-host register invariant will move there too. See brief.md -> "Guard invariant migration".
 func TestE2EServiceRedis_AddReplicas(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: add_replicas is moving to sentinel mode + community.redis.replica (probe->where invariant -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: add_replicas is moving to sentinel mode + redis.replica.present (probe->where invariant -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
 // redisCreateTasks -- scripted success responses by task-name for the create
 // tasks of standalone mode: destiny `redis` tasks (install + render
-// redis.conf/users.acl + systemd) + the community.redis.command task (PING
+// redis.conf/users.acl + systemd) + the redis.command.run task (PING
 // health-gate). soul-stub matches by task_name (default-success covers
 // when:-collector tasks and everything not in the script -- socket-dir is
 // suppressed by static-when since there is no unixsocket in the config).
@@ -255,7 +255,7 @@ func redisCreateTasks() []harness.TaskResponse {
 		{TaskName: "Reload systemd because the hardening drop-in changed"},
 		{TaskName: "Ensure redis-server is running and enabled at boot", StateChanges: map[string]any{"services": []any{map[string]any{"redis-server": "running"}}}},
 		{TaskName: "Restart redis-server because config or hardening changed"},
-		// community.redis.command PING (live Redis health-gate). soul-stub success
+		// redis.command.run PING (live Redis health-gate). soul-stub success
 		// by task_name; the plugin's changed semantics are covered by L0 (impl_test.go).
 		{TaskName: "Wait for redis to answer PING"},
 	}

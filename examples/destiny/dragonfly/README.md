@@ -9,7 +9,7 @@ It idempotently installs DragonFly (distro-deb **or** upstream tarball), renders
 flags `deploy_dragonfly` / `install.method` and a ready merged config through `apply: input:`.
 
 DragonFly is **wire-compatible with redis**, so the entire live runtime path (PING / REPLICAOF)
-goes through the same `community.redis` plugin **with no changes**.
+goes through the same `redis` plugin **with no changes**.
 
 ## Sentinel — NOT in this building block (sentinel comes from destiny `redis`)
 

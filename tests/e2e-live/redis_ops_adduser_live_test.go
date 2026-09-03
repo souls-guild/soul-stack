@@ -1,13 +1,13 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::add_user via the community plugin -
+// L3b E2E day-2: examples/service/redis::add_user via the redis plugin -
 // live-guard NIM-8 (auto-deps) + ADR-065 S5. Proves the FULL chain of the
 // day-2 plugin channel on a LIVE Redis:
 //
 //	create (sentinel, 0 replicas = standalone-equivalent) brings up redis-server ->
-//	day-2 add_user: synthesizes install community.redis (auto-deps ADR-065) -> FetchModule
+//	day-2 add_user: synthesizes install redis (auto-deps ADR-065) -> FetchModule
 //	(plugingit.Resolver F-fetch from the git source repo) -> Sigil-verify (allowlist v1.0.0) ->
-//	hot-register -> community.redis.acl (ACL LOAD) against the REAL instance -> state/audit.
+//	hot-register -> redis.acl.reloaded (ACL LOAD) against the REAL instance -> state/audit.
 //
 // Difference from L3a (tests/e2e/redis_test.go, soul-stub): a real soul-in-container
 // with a real redis + a real plugin-subprocess, not scripted-success.
@@ -26,15 +26,15 @@ import (
 )
 
 func TestL3bRedisLive_Day2AddUser(t *testing.T) {
-	// Build the community plugin BEFORE NewStack: the source URL is needed for buildKeeperYAML.
-	repoURL := harness.BuildCommunityRedisPlugin(t)
+	// Build the redis plugin BEFORE NewStack: the source URL is needed for buildKeeperYAML.
+	repoURL := harness.BuildRedisPlugin(t)
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.RedisAlias, Source: repoURL, Ref: harness.RedisPluginRef},
 		},
 	})
 	defer stack.Cleanup()
@@ -46,7 +46,7 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 		adminPass = "e2e-default-admin-secret"
 	)
 
-	// Vault seed: main password + default_admin (used both by the community.redis.acl plugin
+	// Vault seed: main password + default_admin (used both by the redis.acl.reloaded plugin
 	// AUTH and by the redis-cli assert - requirepass is dropped, so default_admin is re-designated).
 	// The new user is DELIBERATELY NOT seeded (NIM-172): add_user generates
 	// secret/redis/<inc>/users/<name>#password itself via core.vault.kv-present, so this run is the
@@ -59,10 +59,10 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	// node-exporter/redis-exporter/vector (Slice I / ADR-067). All ref:v1.0.0 (service.yml).
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
 
-	// Allowlist community.redis@v1.0.0 via the operator Sigil API (AllowSoulModule). Ref-pin
+	// Allowlist redis@v1.0.0 via the operator Sigil API (AllowSoulModule). Ref-pin
 	// is mandatory (ADR-065): auto-deps synthesizes install with ref=v1.0.0, allowing main
 	// would not work.
-	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.RedisAlias, repoURL, harness.RedisPluginRef)
 
 	// Create the standalone-equivalent: sentinel + 0 replicas (standalone/sentinel_only modes
 	// have been removed from the service). provision:{enabled:false} - deploy onto a READY soul roster
@@ -91,8 +91,8 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 	// 3 exporters, measured ~115s) + commit barrier; ready arrives ~120s.
 	stack.WaitIncarnationReady(t, inc, 300)
 
-	// Day-2 add_user: this is where install community.redis -> FetchModule -> Sigil-verify
-	// -> hot-register -> community.redis.acl (ACL LOAD) gets synthesized. The new user's password is
+	// Day-2 add_user: this is where install redis -> FetchModule -> Sigil-verify
+	// -> hot-register -> redis.acl.reloaded (ACL LOAD) gets synthesized. The new user's password is
 	// neither in the input nor in Vault yet - add_user generates it (NIM-172).
 	addApply := stack.RunScenario(t, inc, "add_user", map[string]any{
 		"user": map[string]any{
@@ -118,7 +118,7 @@ func TestL3bRedisLive_Day2AddUser(t *testing.T) {
 		"apply_id": addApply,
 	})
 
-	// (c) *LIVE effect: community.redis.acl ran ACL LOAD -> the new user is visible on the
+	// (c) *LIVE effect: redis.acl.reloaded ran ACL LOAD -> the new user is visible on the
 	// REAL instance via redis-cli ACL LIST (AUTH default_admin), not just in state.
 	stack.AssertRedisACLUser(t, 0, "127.0.0.1", 6379, adminUser, adminPass, newUser)
 }

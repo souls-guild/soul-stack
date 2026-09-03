@@ -355,7 +355,7 @@ func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
 // TestRedisServerHardening_ConfDirInReadWritePaths is a direct regress-guard
 // of the same class for redis-server (audit of the sentinel defect,
 // 2026-06-28). The update_config operational scenario runs CONFIG REWRITE
-// (community.redis.config rewrite:true) — redis-server rewrites redis.conf to
+// (redis.instance.configured rewrite:true) — redis-server rewrites redis.conf to
 // persist applied directives. The hardening drop-in had ProtectSystem=strict +
 // ReadWritePaths WITHOUT conf_dir, so the first directive that actually
 // changed would hit CONFIG REWRITE against a read-only /etc (same bug class as
@@ -483,7 +483,7 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 // defect: "sentinel restart fails: replica master_link_status:DOWN, masterauth
 // empty" (2026-06-30). Root cause: after the default_admin redesign
 // (requirepass removed → ACL default_admin), replica→master replication runs
-// under an ACL user (masterauth+masteruser). The community.redis.replica
+// under an ACL user (masterauth+masteruser). The redis.replica.present
 // plugin sets them via CONFIG SET at runtime, but CONFIG SET does NOT persist
 // to redis.conf without CONFIG REWRITE — so on restart (sentinel restart wave
 // 2) redis-server comes up WITHOUT masterauth → replica fails to authenticate

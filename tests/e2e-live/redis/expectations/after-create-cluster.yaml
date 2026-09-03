@@ -2,7 +2,7 @@
 # (real-soul-in-container under examples/service/redis, redis consolidation).
 # Three Debian-12 systemd-PID-1 containers: shards=3, replicas_per_shard=0 →
 # 3 masters with no replicas. The cluster is formed ENTIRELY via the
-# community.redis.cluster plugin (CLUSTER MEET/ADDSLOTS), not redis-cli --cluster create.
+# redis.cluster.* plugin (CLUSTER MEET/ADDSLOTS), not redis-cli --cluster create.
 #
 # ★ Used by the skipped TestL3bRedisClusterCreate_ThreeNode: cluster-create
 # via the plugin is not yet proven live end-to-end (see the test header). The fixture is

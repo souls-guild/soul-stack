@@ -90,10 +90,10 @@ mocks:
 
 assert:
   task_present:
-    # ── probe (community.redis.role): tls_ca = NEW-CA (state.tls.ca_ref) ──
+    # ── probe (redis.instance.role-probed): tls_ca = NEW-CA (state.tls.ca_ref) ──
     # MAIN guard: the connect resolves the CA from the state-ref (current), NOT from the service vars-ref.
     # NEW-CA proves that after rotate, restart verifies the server with the new CA.
-    - module: community.redis.role
+    - module: redis.instance.role-probed
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -101,9 +101,9 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nNEW-CA\n-----END CERTIFICATE-----"
 
-    # ── slave-health-gate (community.redis.replica-synced): the same NEW-CA ──
+    # ── slave-health-gate (redis.replica.synced): the same NEW-CA ──
     # The resync gate inside the slave-block connects with the same current CA from the state-ref.
-    - module: community.redis.replica-synced
+    - module: redis.replica.synced
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -115,9 +115,9 @@ assert:
   # If compute.tls_ca reverted to vault(vars.tls_ca_ref) — probe/health-gate would carry
   # OLD-CA. task_absent catches ANY task with OLD-CA: ≥1 match → FAIL.
   task_absent:
-    - module: community.redis.role
+    - module: redis.instance.role-probed
       params_subset:
         tls_ca: "-----BEGIN CERTIFICATE-----\nOLD-CA\n-----END CERTIFICATE-----"
-    - module: community.redis.replica-synced
+    - module: redis.replica.synced
       params_subset:
         tls_ca: "-----BEGIN CERTIFICATE-----\nOLD-CA\n-----END CERTIFICATE-----"

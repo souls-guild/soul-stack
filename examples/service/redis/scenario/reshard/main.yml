@@ -82,9 +82,8 @@ tasks:
   #    hardcodes 'default_admin' directly (no extends: covenant compute.admin_user).
   - name: Reshard N slots from source master to target master
     run_once: true
-    module: community.redis.cluster
+    module: redis.cluster.resharded
     params:
-      action:   reshard
       username: default_admin
       password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))['default_admin'] }"
       # int() unifies the uint64 operand input.slots into a numeric type (the same trick

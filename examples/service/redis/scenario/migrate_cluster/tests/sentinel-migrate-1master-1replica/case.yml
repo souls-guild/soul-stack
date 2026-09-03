@@ -12,10 +12,10 @@
 #
 # What we assert (slice acceptance criterion):
 #   1. deploy tasks (from redis-deploy-sentinel.yml = deploying the new
-#      cluster): redis.conf render, IN-cluster community.redis.replica (where
+#      cluster): redis.conf render, IN-cluster redis.replica.present (where
 #      master-excluded) - the cluster is actually raised (migration = create +
 #      seeding from outside).
-#   1b. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) does NOT
+#   1b. * SPLIT-BRAIN FIX: SENTINEL MONITOR (redis.sentinel.monitored) does NOT
 #       execute during migration (task_absent). The deploy body proxies
 #       compute.sentinel_monitor_now into a task-var and gates step 4 on
 #       when: vars.sentinel_monitor_now; for migrate_cluster=false ->
@@ -26,11 +26,11 @@
 #       would trigger a failover. The actual MONITOR is issued by
 #       detach_source AFTER REPLICAOF NO ONE (see the detach case
 #       sentinel-detach-source).
-#   2. * MIGRATION: community.redis.replica with source_external:true,
+#   2. * MIGRATION: redis.replica.present with source_external:true,
 #      master_addr=external source (10.9.0.1:6379), master_password =
 #      vault(source.password_ref). DIFFERS from the in-cluster replica by
 #      master_addr/source_external (presence disambiguates).
-#   3. * offset-gate: community.redis.offset-synced, source_addr=external
+#   3. * offset-gate: redis.replica.offset-synced, source_addr=external
 #      source, lag_threshold=0 (default verify).
 #   4. state_after: create set + seeded_from {source_endpoints:[source], detached:false}.
 #
@@ -186,13 +186,13 @@ assert:
               arch: amd64
           role: ""
 
-    # -- deploy body: IN-cluster REPLICAOF (community.redis.replica) --------------
+    # -- deploy body: IN-cluster REPLICAOF (redis.replica.present) --------------
     # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379
     # (master-election node-1). where: master-excluded -> only on node-2 (the
     # replica). DIFFERS from source-replica (step below) by master_addr
     # (10.0.0.1 INTERNAL vs 10.9.0.1 EXTERNAL) and lack of source_external -
     # presence disambiguates both by params_subset.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
@@ -200,12 +200,12 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
 
-    # -- MIGRATION: REPLICAOF to the EXTERNAL source (community.redis.replica, source_external) --
+    # -- MIGRATION: REPLICAOF to the EXTERNAL source (redis.replica.present, source_external) --
     # run_once on node-1 (master of the new cluster). master_addr=10.9.0.1:6379
     # (source.hosts[0]), source_external:true, master_password =
     # vault(source.password_ref). Disambiguator from the in-cluster replica -
     # source_external:true + master_addr=external.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.9.0.1:6379"
@@ -218,11 +218,11 @@ assert:
         master_password: old-cluster-source-pass
         master_tls: false
 
-    # -- MIGRATION: offset-gate (community.redis.offset-synced) -------------------
+    # -- MIGRATION: offset-gate (redis.replica.offset-synced) -------------------
     # run_once on node-1. source_addr=10.9.0.1:6379 (external),
     # lag_threshold=0 (default verify), skip_checksum=false.
     # source_password = vault(source.password_ref).
-    - module: community.redis.offset-synced
+    - module: redis.replica.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
@@ -242,7 +242,7 @@ assert:
   # source (otherwise failover -> split-brain). MONITOR moved to
   # detach_source (sentinel-detach-source case).
   task_absent:
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
 
   # create set state + seed-source read-model. redis_config WITHOUT cluster
   # directives (sentinel). seeded_from: source_endpoints = source.hosts IN

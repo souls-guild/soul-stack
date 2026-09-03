@@ -5,7 +5,7 @@ description: >-
   `dragonfly`; the sentinel daemon over the DragonFly master deploys destiny `redis` in
   sentinel_only mode (DragonFly does not carry redis-sentinel - the "sentinel from destiny redis"
   refactor; two apply:destiny in create, ADR-009). LIVE runtime (PING/REPLICAOF/SENTINEL MONITOR) goes
-  through the `community.redis` plugin (DragonFly is redis-compatible - plugin WITHOUT changes); orchestration
+  through the `redis` plugin (DragonFly is redis-compatible - plugin WITHOUT changes); orchestration
   (order/targeting/health-gate) is in the service's scenario.
 
   ★ PILOT SCOPE (D1, 2026-06-27): ONLY sentinel mode (master-replica + sentinel daemon;
@@ -246,11 +246,16 @@ destiny:
   - { name: vector, ref: v1.0.0 }
 
 # Service custom modules, in the two-level form <alias>.<module>: level 1 is the alias
-# the operator registers the artifact under, and these scenarios address community.redis.*.
-# soul-mod-community-redis is the MAIN interface to the live DragonFly (redis-compatible:
-# PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-community-redis/).
+# the operator registers the artifact under, and these scenarios address redis.*; level 2
+# is the OBJECT it manages, and the entries collapse to ONE core.module.installed on the
+# shared alias. soul-mod-redis is the MAIN interface to the live DragonFly
+# (redis-compatible: PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-redis/).
 modules:
-  - { name: community.redis, ref: v1.0.0 }
+  - { name: redis.acl, ref: v1.0.0 }
+  - { name: redis.command, ref: v1.0.0 }
+  - { name: redis.instance, ref: v1.0.0 }
+  - { name: redis.replica, ref: v1.0.0 }
+  - { name: redis.sentinel, ref: v1.0.0 }
 
 # Server TLS (NIM-99). pki_role is what these certs are ISSUED with, at first issue
 # as much as at rotation, so it sits on the section; rotate: is the auto-rotation

@@ -8,7 +8,7 @@ description: >-
 
 # destiny version — git ref (ADR-007). No top-level `version:` field.
 # Task list — in tasks/main.yml. Core modules only → required_modules: not needed
-# (community.redis is called from the service scenario, not from this destiny).
+# (redis is called from the service scenario, not from this destiny).
 #
 # Mode-agnostic: the same brick serves standalone, cluster and sentinel
 # (the latter — via sentinel_enabled + conditional-include sentinel.yml). The
@@ -189,7 +189,7 @@ input:
   # any other directive. This keeps destiny "dumb" (a single config channel, no special fields for
   # replication), and the password is masked via vault()-in-cell for config on the scenario side. CRITICAL
   # for persistence across a restart: a static masterauth in redis.conf survives a restart
-  # (community.redis.replica's CONFIG SET does not, without CONFIG REWRITE).
+  # (redis.replica.present's CONFIG SET does not, without CONFIG REWRITE).
 
   # Merged redis.conf config: the caller (service scenario) merges default→preset→
   # computed→passthrough via merge() and passes a READY map. The template ranges over

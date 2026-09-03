@@ -7,7 +7,7 @@
 // (module_installs_integration_test.go - a dispatched plan without a real Soul).
 //
 // Fixture tests/e2e-live/module-delivery-live: service.yml declares
-// community.redis in modules[] and does NOT contain an explicit install step.
+// redis in modules[] and does NOT contain an explicit install step.
 // Synthesis, fetch, verify, atomic-rename into the host slot, and hot-register
 // are all observed on the wire.
 //
@@ -37,8 +37,8 @@ import (
 const (
 	moduleDeliverySID = "soul-live-a.example.com"
 	// ADR-065(g) <paths.modules>/<alias>, the alias being address level 1 of the
-	// modules[] entry - `community` of `community.redis` (NIM-377/NIM-524).
-	moduleDeliverySlot = "/var/lib/soul-stack/modules/" + harness.CommunityRedisAlias
+	// modules[] entry - `redis` of `redis.command` (NIM-377/NIM-524/NIM-766).
+	moduleDeliverySlot = "/var/lib/soul-stack/modules/" + harness.RedisAlias
 	// createAuthoredTasks - number of authored tasks in scenario/create (pkg+service),
 	// baseline for assert 1 (create plan without synthesis). Bump when adding a
 	// task to scenario/create/main.yml.
@@ -46,14 +46,14 @@ const (
 )
 
 func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
-	repoURL := harness.BuildCommunityRedisPlugin(t)
+	repoURL := harness.BuildRedisPlugin(t)
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "tests/e2e-live/module-delivery-live",
 		ServiceName: "module-delivery-live",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.RedisAlias, Source: repoURL, Ref: harness.RedisPluginRef},
 		},
 	})
 	defer stack.Cleanup()
@@ -68,7 +68,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 
 	const incName = "module-delivery"
 
-	// -- create: redis via core modules, WITHOUT the community.redis consumer --
+	// -- create: redis via core modules, WITHOUT the redis consumer --
 	// Seed row -> bind roster -> run create, the order owned by CreateIncarnationOnRoster
 	// (NIM-192: membership FKs the incarnation row, the run needs the roster).
 	// 300s - apt-get update + install redis-server on a fresh Debian-12 (like redis-live).
@@ -77,7 +77,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	stack.WaitIncarnationReady(t, inc, 30)
 
 	// -- ASSERT 1: create plan WITHOUT a synthesis step (ADR-065(e)) ----------
-	// modules[] is declared, but create doesn't use community.redis -> no synthesis.
+	// modules[] is declared, but create doesn't use redis -> no synthesis.
 	// A direct check "no core.module.installed in the plan" is IMPOSSIBLE: the
 	// module name/address in audit_log task.executed only appears inside error{}
 	// (filled on FAILED, shared/audit.BuildTaskExecutedPayload), and create is
@@ -91,7 +91,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	}
 
 	// -- ASSERT 2: fail-closed BEFORE allow (ADR-065(f)) ----------------------
-	// verify_live calls community.redis.command -> keeper synthesizes
+	// verify_live calls redis.command.run -> keeper synthesizes
 	// core.module.installed (plan_index 0) BEFORE the consumer (plan_index 1)
 	// and dispatches the plan WITHOUT an active Sigil (keeper doesn't fail-fast,
 	// ADR-065(e)). The soul-side allow-check fails the install step with
@@ -111,10 +111,10 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 		t.Fatalf("assert2: install step error.module=%q, expected core.module (this is the synthesis step)", mod)
 	}
 	// The message names the ALIAS whose grant is missing, not the module address
-	// the consumer uses: this step installs a slot, and `community.redis` is not a
+	// the consumer uses: this step installs a slot, and `redis` is not a
 	// thing that can be granted (installed.go, "no active Sigil grant for %q").
-	if !strings.Contains(msg, "module_not_allowed") || !strings.Contains(msg, strconv.Quote(harness.CommunityRedisAlias)) {
-		t.Fatalf("assert2: install step error.message=%q, expected module_not_allowed + the alias %q", msg, harness.CommunityRedisAlias)
+	if !strings.Contains(msg, "module_not_allowed") || !strings.Contains(msg, strconv.Quote(harness.RedisAlias)) {
+		t.Fatalf("assert2: install step error.message=%q, expected module_not_allowed + the alias %q", msg, harness.RedisAlias)
 	}
 	// NO fetch bytes: allow-check happens BEFORE fetch -> the host slot is NOT materialized.
 	assertHostFileAbsent(t, stack, 0, moduleDeliverySlot)
@@ -122,7 +122,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	// -- allow + unlock + repeat verify_live -----------------------------------
 	// AllowSoulModule (keeper-side seal) -> active Sigil. Unlock clears
 	// error_locked after the intentional failure (otherwise lockRun rejects the repeat).
-	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.RedisAlias, repoURL, harness.RedisPluginRef)
 	stack.Unlock(t, incName, "e2e NIM-32: unlock after negative fail-closed")
 
 	okApply := stack.RunScenario(t, incName, "verify_live", nil)
@@ -140,11 +140,11 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	}
 
 	// -- ASSERT 4: consumer SUCCESS in the SAME run (hot-register), PONG -------
-	// community.redis.command (plan_index 1) ran AFTER install in the same run
+	// redis.command.run (plan_index 1) ran AFTER install in the same run
 	// without a daemon restart (ADR-065(d)). changed=false -> OK; register
 	// result=PONG proves the live Redis responded (the failed_when gate passed).
 	if st := taskStatusByPlan(t, stack, okApply, sid, 1); st != "TASK_STATUS_OK" {
-		t.Fatalf("assert4: consumer community.redis.command (plan_index 1) status=%q, expected TASK_STATUS_OK", st)
+		t.Fatalf("assert4: consumer redis.command.run (plan_index 1) status=%q, expected TASK_STATUS_OK", st)
 	}
 	stack.AssertTaskRegisterField(t, okApply, sid, 1, "result", "PONG")
 
@@ -153,7 +153,7 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	// NIM-377, so the slot and the file in it are both named by the registration
 	// alias. There is NO manifest.yaml: it is what NIM-377 removed, and its absence
 	// is asserted so a resurrected copy beside the signed bytes is caught here.
-	slotArtifact := moduleDeliverySlot + "/" + harness.CommunityRedisAlias
+	slotArtifact := moduleDeliverySlot + "/" + harness.RedisAlias
 	stack.AssertHostFileExists(t, 0, slotArtifact)
 	assertHostFileExecutable(t, stack, 0, slotArtifact)
 	assertHostFileAbsent(t, stack, 0, moduleDeliverySlot+"/manifest.yaml")

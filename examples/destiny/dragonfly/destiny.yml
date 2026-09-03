@@ -7,7 +7,7 @@ description: >-
   of a single instance.
 
 # Destiny version - git ref (ADR-007). There is no top-level `version:` field. Task list -
-# in tasks/main.yml. Core modules only -> required_modules: not needed (community.redis
+# in tasks/main.yml. Core modules only -> required_modules: not needed (redis
 # is called from the service scenario, not from this destiny).
 #
 # * DragonFly vs redis: separate destiny, a copy of the redis structure with a swapped

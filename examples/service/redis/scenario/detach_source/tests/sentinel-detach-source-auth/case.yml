@@ -18,8 +18,8 @@
 #      seeded_from.source_password_ref), source_tls=true + source_tls_ca = the source's PEM
 #      (via vault on seeded_from.source_tls_ca_ref). The source is really under AUTH+TLS -
 #      the gate connects with the account instead of failing.
-#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
-#   3. SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix).
+#   2. REPLICAOF NO ONE (redis.replica.detached): local addr, our password.
+#   3. SENTINEL MONITOR (redis.sentinel.monitored) AFTER detach (split-brain fix).
 #   4. state_after: seeded_from.detached := true, refs are PRESERVED (merge of the old
 #      object with {detached:true} - source_endpoints/refs pass through).
 name: sentinel detach_source authenticates the final offset gate to an AUTH+TLS source
@@ -98,7 +98,7 @@ assert:
     # -- FINAL offset gate BEFORE detach - AUTHENTICATED to the AUTH+TLS source --
     # source_password = vault(seeded_from.source_password_ref) = old-cluster-source-pass.
     # source_tls=true (CA ref non-empty), source_tls_ca = vault(seeded_from.source_tls_ca_ref).
-    - module: community.redis.offset-synced
+    - module: redis.replica.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
@@ -114,8 +114,8 @@ assert:
         lag_threshold: 0
         skip_checksum: false
 
-    # -- REPLICAOF NO ONE (community.redis.detached) -----------------------------
-    - module: community.redis.detached
+    # -- REPLICAOF NO ONE (redis.replica.detached) -----------------------------
+    - module: redis.replica.detached
       params_subset:
         addr: "127.0.0.1:6379"
         # * default_admin REDESIGN: LOCAL connection uses default_admin.
@@ -123,8 +123,8 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
-    # -- SENTINEL MONITOR (community.redis.sentinel) AFTER detach (split-brain fix) --
-    - module: community.redis.sentinel
+    # -- SENTINEL MONITOR (redis.sentinel.monitored) AFTER detach (split-brain fix) --
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

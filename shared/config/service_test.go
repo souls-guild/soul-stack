@@ -43,8 +43,17 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Destiny[3].Name != "vector" || cfg.Destiny[3].Ref != "v1.0.0" {
 		t.Errorf("destiny[3]: %#v", cfg.Destiny[3])
 	}
-	if len(cfg.Modules) != 1 || cfg.Modules[0].Name != "community.redis" || cfg.Modules[0].Ref != "v1.0.0" {
+	// The artifact serves six objects (NIM-766), so the manifest carries six
+	// entries under ONE alias — they collapse to a single core.module.installed.
+	wantModules := []string{"redis.acl", "redis.cluster", "redis.command", "redis.instance", "redis.replica", "redis.sentinel"}
+	if len(cfg.Modules) != len(wantModules) {
 		t.Errorf("modules: %#v", cfg.Modules)
+	} else {
+		for i, want := range wantModules {
+			if cfg.Modules[i].Name != want || cfg.Modules[i].Ref != "v1.0.0" {
+				t.Errorf("modules[%d]: %#v, want %s v1.0.0", i, cfg.Modules[i], want)
+			}
+		}
 	}
 }
 
@@ -743,8 +752,8 @@ telemetry:
 func TestLoadServiceManifest_ConflictingModuleRef(t *testing.T) {
 	src := `state_schema: {}
 modules:
-  - { name: community.redis, ref: v1.0.0 }
-  - { name: community.sentinel, ref: v2.0.0 }
+  - { name: redis.instance, ref: v1.0.0 }
+  - { name: redis.sentinel, ref: v2.0.0 }
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
 	if n := countCode(diags, "conflicting_module_ref"); n != 1 {
@@ -767,8 +776,8 @@ modules:
 func TestLoadServiceManifest_SharedAliasSameRefIsClean(t *testing.T) {
 	src := `state_schema: {}
 modules:
-  - { name: community.redis, ref: v1.0.0 }
-  - { name: community.sentinel, ref: v1.0.0 }
+  - { name: redis.instance, ref: v1.0.0 }
+  - { name: redis.sentinel, ref: v1.0.0 }
   - { name: acme-tools.probe, ref: v0.3.1 }
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})

@@ -8,14 +8,14 @@
 # the cluster branch is group-dropped, sentinel.yml expands.
 #
 # What we assert:
-#   1. FINAL offset gate BEFORE detach (community.redis.offset-synced): source_addr=
+#   1. FINAL offset gate BEFORE detach (redis.replica.offset-synced): source_addr=
 #      the external source from state (seeded_from.source_endpoints[0]=10.9.0.1:6379),
 #      lag_threshold=0 (hard — detach is a point of no return). * source_password='' here is a
 #      back-compat branch (v10): this incarnation's seeded_from has NO ref fields (the form before
 #      the v10 fix) → compute.source_password resolves to '' (source without AUTH). The case with a
 #      NON-EMPTY ref (the gate authenticates to an AUTH source) is sentinel-detach-source-auth.
-#   2. REPLICAOF NO ONE (community.redis.detached): local addr, our password.
-#   3. * SPLIT-BRAIN FIX: SENTINEL MONITOR (community.redis.sentinel) IS PRESENT — it was
+#   2. REPLICAOF NO ONE (redis.replica.detached): local addr, our password.
+#   3. * SPLIT-BRAIN FIX: SENTINEL MONITOR (redis.sentinel.monitored) IS PRESENT — it was
 #      MOVED HERE from the migrate_cluster deploy body (there it was a placeholder-skip, to avoid
 #      monitoring the master during seeding → to avoid triggering a failover). Runs AFTER
 #      REPLICAOF NO ONE (master is autonomous): monitor.ip=10.0.0.1 (master election, roster
@@ -87,7 +87,7 @@ assert:
     # source_addr from state (seeded_from.source_endpoints[0]). lag_threshold=0 (hard).
     # source_password='' — back-compat (seeded_from without ref fields → compute.source_password=''
     # → source without AUTH). source_tls=false (no CA ref). password — our local one.
-    - module: community.redis.offset-synced
+    - module: redis.replica.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
@@ -99,8 +99,8 @@ assert:
         lag_threshold: 0
         skip_checksum: false
 
-    # ── REPLICAOF NO ONE (community.redis.detached) ─────────────────────────────
-    - module: community.redis.detached
+    # ── REPLICAOF NO ONE (redis.replica.detached) ─────────────────────────────
+    - module: redis.replica.detached
       params_subset:
         addr: "127.0.0.1:6379"
         # * default_admin REDESIGN: LOCAL connection under default_admin.
@@ -108,13 +108,13 @@ assert:
         password: default-admin-secret-pass
         tls: false
 
-    # ── SENTINEL MONITOR (community.redis.sentinel) — * MOVED HERE (split-brain fix) ──
+    # ── SENTINEL MONITOR (redis.sentinel.monitored) — * MOVED HERE (split-brain fix) ──
     # Runs AFTER REPLICAOF NO ONE (master is autonomous again). monitor.ip=10.0.0.1
     # (master election: roster = the new master), quorum=1 (size(1)/2+1=1). master_name=master,
     # redis_version=7.2.4, config (timings 5000/60000) — all from incarnation.state (compute
     # .sentinel_master_name/redis_version/sentinel_directives, detach has no input). auth_pass —
-    # our secret/redis/<inc>#password. The only community.redis.sentinel in the plan.
-    - module: community.redis.sentinel
+    # our secret/redis/<inc>#password. The only redis.sentinel.monitored in the plan.
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

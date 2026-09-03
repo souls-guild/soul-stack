@@ -338,8 +338,8 @@ func TestRunDetailTyped_NoticesReachTheView(t *testing.T) {
 					sid: "host-a", status: "success", passage: 0,
 					attempt: 1, scenario: "scale", startedAt: now, finishedAt: &now,
 					notices: []byte(`[
-						{"code":"deprecated_param","module":"community.redis.present","param":"address","message":"stops working in 0.6.0; use \"addr\""},
-						{"code":"deprecated_param","module":"community.redis.present","param":"address","message":"stops working in 0.6.0; use \"addr\""}
+						{"code":"deprecated_param","module":"redis.instance.pinged","param":"address","message":"stops working in 0.6.0; use \"addr\""},
+						{"code":"deprecated_param","module":"redis.instance.pinged","param":"address","message":"stops working in 0.6.0; use \"addr\""}
 					]`),
 				},
 				{ // an older agent on the same run reports nothing

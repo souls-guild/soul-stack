@@ -37,7 +37,7 @@ service Keeper {
 ```yaml
 plugins:
   soul_modules:
-    - { name: redis, source: "git@github.com:souls-guild/soul-mod-community-redis.git", ref: v1.2.0 }
+    - { name: redis, source: "git@github.com:souls-guild/soul-mod-redis.git", ref: v1.2.0 }
 ```
 
 - **Resolution — the existing `plugingit`** (go-git F-fetch → R-nested FS cache `cache_root`, [ADR-026(g)](0026-sigil.md)) reusing all the hardening (scheme-allowlist, size-limits, fail-closed per-entry).
@@ -70,7 +70,7 @@ The operator writes the install step **explicitly** before the first use of the 
 
 ```yaml
 - module: core.module.installed
-  params: { name: community }   # the ALIAS: level 1, the slot — never `community.redis`
+  params: { name: redis }   # the ALIAS: level 1, the slot — never `redis.instance`
 ```
 
 `service.yml::modules[]` — **validation-hint post-MVP**: a render/soul-lint gate "a module is used in tasks → it must be in `modules[]` and have an active Sigil allowance". This is a hint-check, **NOT auto-inject** of an install step.
@@ -131,7 +131,7 @@ The operator writes the install step **explicitly** before the first use of the 
 - **S2** — config catalog `plugins.soul_modules[]` + resolution of SoulModule entries with the existing `plugingit` (reuse).
 - **S3** — Soul-side `core.module.installed`: allow-check → fetch → verify → atomic rename into the directory slot; idempotency by sha256.
 - **S4** — hot-register: thread-safe `Rescan` of the Soul daemon's custom-module registry.
-- **S5** — e2e-guard: install step + `community.redis.*` in one run (regression test of the canonical scenario).
+- **S5** — e2e-guard: install step + `redis.*` in one run (regression test of the canonical scenario).
 - **S6** — live validation on the cloud-provision Souls (redis) + DoD closure.
 
 ## Amends
@@ -188,7 +188,7 @@ This is not the addressing decision NIM-376 defers. That one is whether level 1 
 
 Two consequences of the collapse, both new here:
 
-- **One install per alias, not one per entry.** Several `modules[]` entries of one artifact (`community.redis`, `community.acl`) name the same slot; keying the synthesis on the alias, the entries collapse into a single step before the earliest of their consumers. Keying it on the entry would have installed the same artifact twice.
+- **One install per alias, not one per entry.** Several `modules[]` entries of one artifact (`redis.instance`, `redis.acl`) name the same slot; keying the synthesis on the alias, the entries collapse into a single step before the earliest of their consumers. Keying it on the entry would have installed the same artifact twice.
 - **`conflicting_module_ref`** — a new validation diagnostic. Two entries under one alias pinning different `ref`s used to be two independent installs; as one slot they are a contradiction the manifest must state, not a race the last writer wins.
 
 The `destiny.yml::required_modules[]` twin needs no change: it synthesizes nothing (soul-lint reads it as a declaration), so it has no producer/consumer pair to disagree. Both lists keep the reserved-name check.

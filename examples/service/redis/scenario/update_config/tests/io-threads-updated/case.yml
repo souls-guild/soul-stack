@@ -6,7 +6,7 @@
 # Fix: rewrite=false (the file is the step-1 render) + dedicated io_threads (read-model state.io_threads).
 #
 # Asserting: (1) redis.conf (core.file.rendered) config carries io-threads:"2"; (2) hot-reload
-# (community.redis.config) rewrite=false + config carries io-threads:"2" (the plugin will skip it
+# (redis.instance.configured) rewrite=false + config carries io-threads:"2" (the plugin will skip it
 # on the live one - startup-only, it takes effect on the next restart); (3) state_after:
 # redis_config['io-threads']="2" AND io_threads:2 (namedfield read-model is consistent).
 # Plaintext, render-only, hermetic.
@@ -116,7 +116,7 @@ assert:
 
     # 2. HOT-RELOAD: rewrite=false (the file is the step-1 render). config carries io-threads:"2" -
     #    the plugin will skip it on the live one (startup-only denylist), the value takes effect on restart.
-    - module: community.redis.config
+    - module: redis.instance.configured
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

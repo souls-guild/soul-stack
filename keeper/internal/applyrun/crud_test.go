@@ -1131,7 +1131,7 @@ func TestOrphanDispatched_PGError(t *testing.T) {
 func TestAppendRunNotices_AppendsWithoutReading(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
 	err := AppendRunNotices(context.Background(), f, "01HAPPLY0000000000000000", "host.example.com", 2,
-		[]RunNotice{{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "m"}})
+		[]RunNotice{{Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address", Message: "m"}})
 	if err != nil {
 		t.Fatalf("AppendRunNotices: %v", err)
 	}
@@ -1184,9 +1184,9 @@ func TestAppendRunNotices_MissingRow(t *testing.T) {
 // twenty lines - so the read side collapses by (code, module, param).
 func TestDedupeNotices_CollapsesRepeatsAndOrdersStably(t *testing.T) {
 	in := []RunNotice{
-		{Code: "deprecated_param", Module: "community.redis.present", Param: "tls_ca", Message: "b"},
-		{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "a"},
-		{Code: "deprecated_param", Module: "community.redis.present", Param: "address", Message: "a"},
+		{Code: "deprecated_param", Module: "redis.instance.pinged", Param: "tls_ca", Message: "b"},
+		{Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address", Message: "a"},
+		{Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address", Message: "a"},
 		{Code: "deprecated_param", Module: "core.pkg.installed", Param: "address", Message: "c"},
 	}
 	got := DedupeNotices(in)
@@ -1196,14 +1196,14 @@ func TestDedupeNotices_CollapsesRepeatsAndOrdersStably(t *testing.T) {
 	// Ordered by the key, not by arrival: rows are appended by whichever task
 	// finished first, which is not something a reader should see move between
 	// two identical runs.
-	want := []string{"community.redis.present/address", "community.redis.present/tls_ca", "core.pkg.installed/address"}
+	want := []string{"core.pkg.installed/address", "redis.instance.pinged/address", "redis.instance.pinged/tls_ca"}
 	for i, w := range want {
 		if got[i].Module+"/"+got[i].Param != w {
 			t.Errorf("position %d = %s/%s, want %s", i, got[i].Module, got[i].Param, w)
 		}
 	}
 	// Same param on a DIFFERENT module is a different thing to migrate.
-	if got[2].Message != "c" {
+	if got[0].Message != "c" {
 		t.Errorf("a same-named param on another module was collapsed away")
 	}
 }

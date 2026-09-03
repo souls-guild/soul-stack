@@ -2,7 +2,7 @@
 
 // L3c live verification: remove-node slot migration is LOSSLESS on REAL Redis
 // Cluster (NOT L0 fake). Closes trust gap of MAJOR fix from 2026-06-22:
-// community.redis remove-node moved slot keys through CLUSTER GETKEYSINSLOT ->
+// redis remove-node moved slot keys through CLUSTER GETKEYSINSLOT ->
 // stringification (join with space) -> strings.Fields. Redis key is arbitrary
 // byte string and may contain space/\t/\n; "user 42" was split into two tokens ->
 // MIGRATE over nonexistent keys -> key was NOT moved, while SETSLOT NODE still
@@ -16,7 +16,7 @@
 // L3c's job (live Redis Cluster, independent verify through redis-cli).
 //
 // INVARIANT (what unblocked test must check):
-//  1. Start REAL Redis Cluster through community.redis scenario `create`
+//  1. Start REAL Redis Cluster through redis scenario `create`
 //     (examples/service/redis, redis_type=cluster) on soul containers: >=3 masters
 //     with slots + >=1 removable master with slots.
 //  2. Write N keys into slots of the REMOVED master, MUST include:
@@ -37,7 +37,7 @@
 //   - examples/service/redis scenario `create` for redis_type=cluster in L3b-live
 //     is not yet proven end-to-end (see redis_cluster_create_test.go::t.Skip:
 //     host-variable flow-control in destiny blocks cluster-create live, and
-//     community.redis cluster-bootstrap over soul containers is not wrapped by
+//     redis cluster-bootstrap over soul containers is not wrapped by
 //     harness yet: no helper starts cluster-mode redis on N containers and waits
 //     for cluster_state:ok through plugin).
 //   - harness has no helper for writing whitespace/TTL keys into specific slot
@@ -72,7 +72,7 @@ var losslessKeys = []string{
 }
 
 func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
-	t.Skip("L3c blocked (harness infra): community.redis cluster-create live is not yet proven end-to-end (see redis_cluster_create_test.go::t.Skip - host-variable flow-control in cluster-create destiny) + no harness helpers to write whitespace/TTL keys into specific slot and compare cluster-aware DBSIZE. Unblock together with cluster-create live (per-role scenario steps OR per-host destiny-dispatch) + cluster-aware write/verify helpers in harness. L0 fake (TestApplyClusterRemoveNode_WhitespaceKeysLossless) proves command order; this test proves real data losslessness.")
+	t.Skip("L3c blocked (harness infra): redis cluster-create live is not yet proven end-to-end (see redis_cluster_create_test.go::t.Skip - host-variable flow-control in cluster-create destiny) + no harness helpers to write whitespace/TTL keys into specific slot and compare cluster-aware DBSIZE. Unblock together with cluster-create live (per-role scenario steps OR per-host destiny-dispatch) + cluster-aware write/verify helpers in harness. L0 fake (TestApplyClusterRemoveNode_WhitespaceKeysLossless) proves command order; this test proves real data losslessness.")
 
 	// Skeleton remains for future unblocking.
 	// When cluster-create becomes applicable live and harness gets cluster-aware
@@ -99,7 +99,7 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	//     Seed row -> bind all Souls -> run create (CreateIncarnationOnRoster,
 	//     NIM-192: membership FKs the incarnation row, an unbound roster is no_hosts).
 	//     TODO(L3c-future): need helper guaranteeing cluster_state:ok through
-	//     community.redis (plugin cluster bootstrap, not redis-cli --cluster create).
+	//     redis (plugin cluster bootstrap, not redis-cli --cluster create).
 	_, createID := stack.CreateIncarnationOnRoster(t, incName, "redis@main", "create", stack.AllSoulIndexes(), map[string]any{
 		"redis_type":     "cluster",
 		"redis_password": "vault:secret/redis/" + incName + "#password",

@@ -17,9 +17,9 @@
 #      HOST-INVARIANT, both = primary_ip of the first host by SID (node-1 = 10.0.0.1).
 #      There is NO announce-ip in these params - it's per-host in sentinel.conf.tmpl from .self
 #      (separate destiny_redis_sentinel_tmpl_test.go).
-#   3. plugin community.redis.replica: addr=127.0.0.1:6379 (per-host invariant,
+#   3. plugin redis.replica.present: addr=127.0.0.1:6379 (per-host invariant,
 #      local), master_addr=10.0.0.1:6379 (master election).
-#   4. plugin community.redis.sentinel: monitor.ip=10.0.0.1, quorum=2 (AUTO:
+#   4. plugin redis.sentinel.monitored: monitor.ip=10.0.0.1, quorum=2 (AUTO:
 #      size(3)/2+1=2). master_name=master (service vars default).
 #
 # ATTENTION L0 limitation: apply.input is host-invariant in the pilot (resolved on
@@ -176,7 +176,7 @@ assert:
               arch: amd64
           role: ""
 
-    # -- REPLICAOF for replicas (community.redis.replica) --------------------
+    # -- REPLICAOF for replicas (redis.replica.present) --------------------
     # addr=127.0.0.1:6379 (per-host local invariant), master_addr - master
     # election (first by SID = node-1 = 10.0.0.1). * P0: the task carries
     # `where: soulprint.self.sid != soulprint.hosts[0].sid` - rendered ONLY on
@@ -186,24 +186,24 @@ assert:
     # trigger in prod, the real protection is this where. Per-host absence of the task on
     # master is proven by the render assert TargetSIDs (TestAcceptance_SentinelReplicaExcludesMaster).
     # Params are host-invariant -> presence checks the same replica params.
-    # The only community.redis.replica in the plan -> no disambiguator needed.
+    # The only redis.replica.present in the plan -> no disambiguator needed.
     # * default_admin REDESIGN: replica->master AUTH under the ACL user default_admin
     # (username -> CONFIG SET masteruser, password -> masterauth). The previous main
     # secret was DROPPED - password comes from the secret/redis/<inc>/users/default_admin branch.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
         username: default_admin
         password: default-admin-secret-pass
 
-    # -- SENTINEL MONITOR reconcile (community.redis.sentinel) ---------------
+    # -- SENTINEL MONITOR reconcile (redis.sentinel.monitored) ---------------
     # monitor.ip - HOST-INVARIANT master address (master election node-1).
     # quorum=2 (AUTO: size(3)/2+1). master_name=master (service vars default). auth_pass -
     # keeper-side vault() resolve. The only active one.
     # * #7: config carries per-master failover timings (defaults 5000/60000) under keys
     # `sentinel <opt> <master>` - the plugin's classifyConfig sorts them into per-master.
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

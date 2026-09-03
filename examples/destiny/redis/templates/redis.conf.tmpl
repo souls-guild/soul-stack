@@ -71,7 +71,7 @@ dir {{ .vars.data_dir }}
 # monitor, health-PING) goes through the SYSTEM ACL user default_admin (users.acl,
 # ~* &* +@all). protected-mode yes ABOVE stays: with aclfile set, the built-in default
 # user renders `off` (users.acl.tmpl), so there is no passwordless built-in default
-# access - external connections go under default_admin (the community.redis plugin
+# access - external connections go under default_admin (the redis plugin
 # passes username=default_admin). requirepass + aclfile together are redundant (with
 # aclfile set, Redis takes default's authority from the file); with default disabled,
 # a requirepass line would carry no meaning. Starting redis-server without requirepass
@@ -87,7 +87,7 @@ aclfile {{ .vars.conf_dir }}/users.acl
   and are printed by the config range below like any other directive. There is NO
   separate section for them here on purpose (destiny is "dumb" - a single config
   channel). CRITICAL for persistence across a restart: a static masterauth in
-  redis.conf survives a restart, unlike a CONFIG SET from the community.redis.replica
+  redis.conf survives a restart, unlike a CONFIG SET from the redis.replica.present
   plugin (without CONFIG REWRITE it is not persisted -> a sentinel restart would bring
   the replica up without masterauth -> master_link_status:DOWN). Sent to all nodes
   (failover-safe: Redis applies masteruser/masterauth only when a node becomes a

@@ -4,7 +4,7 @@
 #
 # ★ Invariant (convention §7a, ADR-057 amendment): the TLS discriminator is read from
 # the NAMED incarnation.state.tls (state_schema v3), NOT from the service vars.
-# When state.tls.enable=true, the hot-reload step (community.redis.config) must connect
+# When state.tls.enable=true, the hot-reload step (redis.instance.configured) must connect
 # over TLS: addr on state.tls.port, tls=true, tls_ca = PEM CA from vault(state.tls.ca_ref)
 # (current after rotate_tls, NOT the service vars default). Otherwise a plaintext connect to a TLS-only
 # Redis fails CONFIG SET (and plaintext AUTH over an open plain port leaks the password).
@@ -12,7 +12,7 @@
 # What we assert:
 #   1. redis.conf re-rendered with the new merged config (maxmemory changed; TLS directives
 #      PRESERVED from state.redis_config — update_config doesn't touch them, rotation is rotate_tls's job).
-#   2. hot-reload (community.redis.config): addr 127.0.0.1:7379 (TLS port from state.tls.port),
+#   2. hot-reload (redis.instance.configured): addr 127.0.0.1:7379 (TLS port from state.tls.port),
 #      tls=true, tls_ca = PEM CA, rewrite=false (NIM-53), config carries TLS directives (the plugin
 #      skips the startup-only tls-port via the denylist, applies the hot-settable tls-cert-file and
 #      regular directives).
@@ -137,11 +137,11 @@ assert:
               arch: amd64
           role: ""
 
-    # 2. HOT-RELOAD OVER TLS: community.redis.config, addr on the tls port (7379), tls=true,
+    # 2. HOT-RELOAD OVER TLS: redis.instance.configured, addr on the tls port (7379), tls=true,
     #    tls_ca = PEM CA, rewrite=false (NIM-53: step 1's redis.conf is the file's source of truth).
     #    config carries TLS directives — the plugin skips the startup-only tls-port (denylist),
     #    applies hot-settable ones.
-    - module: community.redis.config
+    - module: redis.instance.configured
       params_subset:
         addr: "127.0.0.1:7379"
         # ★ default_admin REDESIGN: AUTH under default_admin (username + its Vault password).

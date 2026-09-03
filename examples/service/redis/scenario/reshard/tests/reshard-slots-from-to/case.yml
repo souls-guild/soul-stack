@@ -65,10 +65,9 @@ assert:
   task_present:
     # RESHARD run_once: endpoints from the roster by SID. from=node-1, to=node-2,
     # slots=100 (int() → native number). password from vault. The only
-    # community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # redis.cluster.* in the plan.
+    - module: redis.cluster.resharded
       params_subset:
-        action: reshard
         username: default_admin
         password: default-admin-secret-pass
         slots: 100

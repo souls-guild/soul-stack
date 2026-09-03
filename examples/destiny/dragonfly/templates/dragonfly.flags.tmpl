@@ -64,7 +64,7 @@
   masterauth replication, sentinel monitor, health-PING) goes through the SYSTEM ACL user
   default_admin (users.acl, ~* &* +@all). With --aclfile set, the built-in default
   renders as `off` (users.acl.tmpl), so there is no passwordless built-in default access -
-  external connections go through default_admin (the community.redis plugin passes username).
+  external connections go through default_admin (the redis plugin passes username).
   requirepass + aclfile together are redundant (with aclfile set, DF takes default's authority from
   the file). masteruser/masterauth (replica->master AUTH) are regular merged-config keys
   (scenario puts them into the config map via a vault()-in-cell), printed by the config range below.

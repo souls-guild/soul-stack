@@ -6,7 +6,7 @@
 # 2, sentinel topology), (b) core.bootstrap.delivered delivers the token, (c)
 # core.soul.registered registers the created SIDs + the await_online barrier +
 # refresh_soulprint, THEN deploys the new cluster (redis-deploy-sentinel.yml) + seeds
-# from an external source (community.redis.replica source_external + offset-synced).
+# from an external source (redis.replica.present source_external + offset-synced).
 #
 # The redis-provision.yml include is gated on has(input.provision) && input.provision.enabled
 # in main.yml (placeholder-skip form of include-when — object-input isn't static): here
@@ -183,11 +183,11 @@ assert:
       params_subset:
         path: /etc/redis/redis.conf
 
-    # -- deploy body: IN-CLUSTER REPLICAOF (community.redis.replica) ---------------
+    # -- deploy body: IN-CLUSTER REPLICAOF (redis.replica.present) ---------------
     # addr=127.0.0.1:6379 (per-host local), master_addr=10.0.0.1:6379 (master
     # election vm-1). DIFFERS from the source-replica step below by master_addr (10.0.0.1
     # INSIDE vs 10.9.0.1 EXTERNAL) and by the absence of source_external.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.1:6379"
@@ -195,11 +195,11 @@ assert:
         username: default_admin
         password: default-admin-secret-pass
 
-    # -- MIGRATION: REPLICAOF to the EXTERNAL source (community.redis.replica, source_external) --
+    # -- MIGRATION: REPLICAOF to the EXTERNAL source (redis.replica.present, source_external) --
     # run_once on vm-1 (master of the new cluster). master_addr=10.9.0.1:6379 (source.hosts[0]),
     # source_external:true, master_password = vault(source.password_ref). Disambiguator from the
     # in-cluster replica — source_external:true + external master_addr.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.9.0.1:6379"
@@ -210,10 +210,10 @@ assert:
         master_password: old-cluster-source-pass
         master_tls: false
 
-    # -- MIGRATION: offset gate (community.redis.offset-synced) --------------------
+    # -- MIGRATION: offset gate (redis.replica.offset-synced) --------------------
     # run_once on vm-1. source_addr=10.9.0.1:6379 (external), lag_threshold=0 (default
     # verify), skip_checksum=false. source_password = vault(source.password_ref).
-    - module: community.redis.offset-synced
+    - module: redis.replica.offset-synced
       params_subset:
         addr: "127.0.0.1:6379"
         source_addr: "10.9.0.1:6379"
@@ -229,7 +229,7 @@ assert:
   # step 4 of the deploy body (Params=nil, presence task_absent passes). MONITOR runs
   # detach_source AFTER REPLICAOF NO ONE.
   task_absent:
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
 
   # create-set of state + cloud-provision read-model + seed-source read-model. redis_config
   # WITHOUT cluster directives (sentinel). provisioned_* — the FACT "these VMs were brought up by this migrate

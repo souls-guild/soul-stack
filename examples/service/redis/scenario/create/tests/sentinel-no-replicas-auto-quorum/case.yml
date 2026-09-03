@@ -93,8 +93,8 @@ assert:
   # emitted into the plan.
   task_present:
     # REPLICAOF: master_addr = the only host (which is also master) → plugin no-op
-    # (addr==master_addr guard). The single community.redis.replica in the plan.
-    - module: community.redis.replica
+    # (addr==master_addr guard). The single redis.replica.present in the plan.
+    - module: redis.replica.present
       params_subset:
         addr: "127.0.0.1:6379"
         master_addr: "10.0.0.9:6379"
@@ -104,8 +104,8 @@ assert:
 
     # SENTINEL MONITOR: monitor.ip — the only host; auto-quorum = 1/2+1 = 1.
     # master_name comes from service vars — default master. The single active
-    # community.redis.sentinel.
-    - module: community.redis.sentinel
+    # redis.sentinel.monitored.
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

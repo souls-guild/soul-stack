@@ -17,7 +17,7 @@
 
 # -- 0. SIZE-GUARD (topology) - keeper-side render-time assert -----------------------
 # The roster size MUST be exactly shards*(1+replicas_per_master) - otherwise the plugin
-# community.redis.cluster (action create) will derive the shard count FROM the node count and SILENTLY
+# redis.cluster.created will derive the shard count FROM the node count and SILENTLY
 # ignore the declared input.shards. The predicate is computed KEEPER-SIDE at RENDER time - there
 # soulprint.hosts is available. false ABORTS the render with a message BEFORE any dispatch. assert does NOT
 # emit a RenderedTask. It sits BEFORE the include of the deploy body - a mismatch aborts the run fail-fast.

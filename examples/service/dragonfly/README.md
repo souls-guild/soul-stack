@@ -9,7 +9,7 @@ DragonFly is a single-binary in-memory store, **wire-compatible with Redis**
 The operator sets **simple typed concepts** (memory, replicas, TLS, ACL users),
 and the `create` scenario **translates** them into the `dragonfly.conf` flagfile (DF flags,
 underscore form). Live runtime goes through the
-[`community.redis`](../../../docs/module/community/redis/README.md) plugin - no changes
+[`redis`](../../../docs/module/redis/README.md) plugin - no changes
 needed, DragonFly is Redis-compatible.
 
 Division of responsibilities (ADR-009):
@@ -21,7 +21,7 @@ Division of responsibilities (ADR-009):
   so the daemon installs the distro package `redis-server` via the `redis` destiny. In `create` -
   **two** `apply: destiny` calls (dragonfly + redis).
 - **service scenario** - translates the input into the flagfile + orchestration (order/targeting/health-gate).
-- **`community.redis` plugin** - interface to the live DragonFly (PING/REPLICAOF/SENTINEL/ACL).
+- **`redis` plugin** - interface to the live DragonFly (PING/REPLICAOF/SENTINEL/ACL).
 
 > **★ PILOT scope.** Only **sentinel** mode. `cluster` is out of scope (DragonFly cluster is
 > emulated, a separate slice). No persistence presets (DF persistence - `snapshot_cron`,
@@ -136,7 +136,7 @@ Besides operator-extra accounts (`input.users`), the service **always** tops up 
 
 **★ `default_admin` redesign** (symmetry with redis). `requirepass` was removed from the
 flagfile; **all** intra-cluster authentication (replication `masterauth`, sentinel monitor/auth,
-health-PING) goes through the system `default_admin` account. The `community.redis` plugin
+health-PING) goes through the system `default_admin` account. The `redis` plugin
 connects as `username=default_admin`. The built-in DragonFly `default` user is rendered `off`
 (absent from the sets) until the operator declares it in `input.users`.
 
@@ -162,15 +162,15 @@ body is inline. Steps:
 4. **`apply: destiny: dragonfly`** - install + render `dragonfly.conf`/`users.acl` + systemd.
    `masteruser`/`masterauth` are added to the flagfile as regular flags (replica→master AUTH must
    persist across a restart - `CONFIG SET` isn't persisted);
-5. **health-gate PING** (`community.redis.command`) - over the **UNIX socket** `compute.local_addr`
+5. **health-gate PING** (`redis.command.run`) - over the **UNIX socket** `compute.local_addr`
    (`unix:${run_dir}/dragonfly.sock`): DF with `--bind=primary_ip` does **not** listen on loopback,
    so local calls go over the socket;
 6. **`apply: destiny: redis` (sentinel_only)** - sentinel daemon (`deploy_redis: false`) over the
    DragonFly master; `version` is the distro pin of the `redis-server` package
    (`vars.sentinel_redis_package_version`);
-7. **REPLICAOF** (`community.redis.replica`, `where:` excludes the master by SID) - replicas
+7. **REPLICAOF** (`redis.replica.present`, `where:` excludes the master by SID) - replicas
    follow the elected master (`soulprint.hosts[0]`);
-8. **SENTINEL MONITOR** (`community.redis.sentinel`, on every host);
+8. **SENTINEL MONITOR** (`redis.sentinel.monitored`, on every host);
 9. **health-gate PONG** on `:26379` (same-task `register.self`, ADR-056);
 10. **node-exporter** and **vector** - mandatory monitoring/log-shipping (see
     ["Observability"](#observability)).
@@ -193,13 +193,13 @@ size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fal
 ### Day-2 scenarios
 
 - **[`add_user`](scenario/add_user/main.yml)** - add/override **one** ACL user
-  without a restart (hot-reload `ACL LOAD` via `community.redis.acl`). Merges into `state.df_users`,
+  without a restart (hot-reload `ACL LOAD` via `redis.acl.reloaded`). Merges into `state.df_users`,
   renders the full `users.acl`;
 - **[`update_users`](scenario/update_users/main.yml)** - **bulk-replace** of the entire
   operator-extra set (a user missing from the new array is removed). System accounts are
   untouched (re-added from service vars);
 - **[`restart`](scenario/restart/main.yml)** - rolling-restart with no config change. Each
-  host's role is taken from a live probe (`community.redis.role`), replicas one at a time
+  host's role is taken from a live probe (`redis.instance.role-probed`), replicas one at a time
   (`serial: 1`), master last. Only the DragonFly data plane restarts (`core.service.restarted`
   of the `dragonfly` unit); the sentinel daemon is untouched;
 - **[`rotate_tls`](scenario/rotate_tls/main.yml)** - cert/key/CA rotation without a restart. The

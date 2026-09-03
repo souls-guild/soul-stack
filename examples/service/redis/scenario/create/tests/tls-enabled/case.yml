@@ -217,7 +217,7 @@ assert:
     # PING health-gate: under tls_only the plugin goes over TLS (tls=true, addr on tls_port,
     # tls_ca = CA-PEM from vault). Proves "the plugin MUST use TLS". cluster/sentinel
     # PING — placeholder-skip; disambiguator addr/args.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin

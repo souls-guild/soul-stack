@@ -64,7 +64,7 @@ func TestScanDeprecated_ReportsOnlyWhatThePlanPasses(t *testing.T) {
 // off "nothing was checked" — the exact confusion this scan exists to prevent.
 func TestScanDeprecated_PluginModuleIsUnresolvedNotClean(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.redis.present", map[string]any{"address": "10.0.0.1"}),
+		moduleTask("redis.instance.pinged", map[string]any{"address": "10.0.0.1"}),
 	}, deprecatingRegistry(), nil)
 
 	if len(scan.Uses) != 0 {
@@ -145,8 +145,8 @@ func TestScanDeprecated_DescendsIntoBlocks(t *testing.T) {
 // twenty. A caller listing what it could not check wants the module named once.
 func TestScanDeprecated_UnresolvedIsDeduplicated(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.redis.present", map[string]any{"a": "1"}),
-		moduleTask("community.redis.present", map[string]any{"b": "2"}),
+		moduleTask("redis.instance.pinged", map[string]any{"a": "1"}),
+		moduleTask("redis.instance.pinged", map[string]any{"b": "2"}),
 		moduleTask("community.mongo.present", map[string]any{"c": "3"}),
 	}, deprecatingRegistry(), nil)
 
@@ -197,10 +197,10 @@ func (f fakeModuleCatalog) ResolveModule(namespace, name string) (plugin.ModuleD
 
 func redisCatalog() fakeModuleCatalog {
 	return fakeModuleCatalog{
-		"community.redis": {
-			Name: "redis",
+		"redis.instance": {
+			Name: "instance",
 			States: map[string]plugin.StateDef{
-				"present": {Input: map[string]plugin.InputParamDef{
+				"pinged": {Input: map[string]plugin.InputParamDef{
 					"addr": {Type: "string"},
 					"address": {Type: "string", Deprecated: &plugin.DeprecatedDef{
 						Since: "0.4.0", RemovedIn: "0.6.0", Use: "addr",
@@ -217,7 +217,7 @@ func redisCatalog() fakeModuleCatalog {
 // rollup rather than shipping a half-blind one.
 func TestScanDeprecated_ResolvesPluginModules(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.redis.present", map[string]any{"address": "10.0.0.1"}),
+		moduleTask("redis.instance.pinged", map[string]any{"address": "10.0.0.1"}),
 	}, deprecatingRegistry(), redisCatalog())
 
 	if len(scan.Unresolved) != 0 {
@@ -227,8 +227,8 @@ func TestScanDeprecated_ResolvesPluginModules(t *testing.T) {
 		t.Fatalf("uses = %d, want the deprecated plugin param: %+v", len(scan.Uses), scan.Uses)
 	}
 	u := scan.Uses[0]
-	if u.Module != "community.redis.present" || u.Param != "address" {
-		t.Errorf("use = %+v, want address on community.redis.present", u)
+	if u.Module != "redis.instance.pinged" || u.Param != "address" {
+		t.Errorf("use = %+v, want address on redis.instance.pinged", u)
 	}
 	if u.Deprecated.Use != "addr" || u.Deprecated.RemovedIn != "0.6.0" {
 		t.Errorf("deprecation = %+v, want the manifest's window", u.Deprecated)
@@ -259,7 +259,7 @@ func TestScanDeprecated_UnresolvablePluginIsStillAGap(t *testing.T) {
 // with no Sigil service). It must degrade to "unchecked", never to "clean".
 func TestScanDeprecated_NilCatalogLeavesPluginsUnchecked(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.redis.present", map[string]any{"address": "10.0.0.1"}),
+		moduleTask("redis.instance.pinged", map[string]any{"address": "10.0.0.1"}),
 	}, deprecatingRegistry(), nil)
 
 	if len(scan.Unresolved) != 1 || scan.Unresolved[0].Reason != ReasonPluginNamespace {
@@ -272,7 +272,7 @@ func TestScanDeprecated_NilCatalogLeavesPluginsUnchecked(t *testing.T) {
 // and finding nothing.
 func TestScanDeprecated_UnknownPluginStateIsAGap(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.redis.vanished", map[string]any{"address": "10.0.0.1"}),
+		moduleTask("redis.instance.vanished", map[string]any{"address": "10.0.0.1"}),
 	}, deprecatingRegistry(), redisCatalog())
 
 	if len(scan.Unresolved) != 1 || scan.Unresolved[0].Reason != ReasonUnknownPluginState {

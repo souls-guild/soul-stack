@@ -167,4 +167,4 @@
     await_timeout:     "${ default(input.provision.await_timeout, default(vars.provision_await_timeout, '10m')) }"
     refresh_soulprint: true
 
-# (d) install community.redis is synthesized by Keeper from service.yml::modules[] (ADR-065); an explicit step = takeover.
+# (d) install redis is synthesized by Keeper from service.yml::modules[] (ADR-065); an explicit step = takeover.

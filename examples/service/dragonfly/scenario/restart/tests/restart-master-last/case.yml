@@ -4,7 +4,7 @@
 # placeholder-skip, master-restart (where master, run_once) renders. Render-only, hermetic.
 #
 # What we assert:
-#   1. probe (community.redis.role) renders connect params (plaintext branch).
+#   1. probe (redis.instance.role-probed) renders connect params (plaintext branch).
 #   2. master-restart (core.service.restarted name=dragonfly, where master, run_once)
 #      renders. ★ the unit name is dragonfly (DF data plane), NOT redis-server.
 #
@@ -63,8 +63,8 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role (LOCAL UNIX socket, NO tls/tls_ca). AUTH as default_admin.
-    - module: community.redis.role
+    # probe redis.instance.role-probed (LOCAL UNIX socket, NO tls/tls_ca). AUTH as default_admin.
+    - module: redis.instance.role-probed
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin

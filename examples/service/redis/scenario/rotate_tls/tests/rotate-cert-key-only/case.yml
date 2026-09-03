@@ -11,7 +11,7 @@
 #   1b. users.acl is re-rendered with the system users appended (same redis destiny brick).
 #   1c. redis.conf carries masteruser/masterauth (guard replica→master AUTH; see rotate-cert-key-ca).
 #   2. applier-register tls_certs is MATERIALIZED (onchanges-gate anchor).
-#   3. three community.redis.command CONFIG SET tls-*-file: *ONLY tls_ca = SINGLE old CA
+#   3. three redis.command.run CONFIG SET tls-*-file: *ONLY tls_ca = SINGLE old CA
 #      (CACERT, NOT a bundle) — GUARD for the branch "no CA-rollover doesn't turn into a bundle":
 #      compareParams = reflect.DeepEqual by value → a bundle string would NOT match a single one.
 #      changed=true (force) is REMOVED (task_absent, onchanges idempotency).
@@ -227,12 +227,12 @@ assert:
     - module: core.noop.run
       id: tls_certs
 
-    # 3. *ONLY "no bundle" GUARD: all three community.redis.command CONFIG SET tls-*-file carry
+    # 3. *ONLY "no bundle" GUARD: all three redis.command.run CONFIG SET tls-*-file carry
     #    tls_ca = SINGLE old CA (CACERT), NOT a concatenation. has(input.ca_ref)=false → the
     #    single branch. compareParams = reflect.DeepEqual by value: a bundle string (CACERT+NEWCA)
     #    would NOT match → the regression "CA-rollover branch fired without a rollover" is
     #    caught here. Args — disambiguator of the three calls.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -240,7 +240,7 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -248,7 +248,7 @@ assert:
         tls: true
         tls_ca: "-----BEGIN CERTIFICATE-----\nCACERT\n-----END CERTIFICATE-----"
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin
@@ -260,15 +260,15 @@ assert:
   # * Idempotency GUARD (render level): force changed:true is REMOVED from the reload tasks.
   #    ALL THREE reload tasks (cert/key/ca) are covered. Args disambiguator.
   task_absent:
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-cert-file", "/etc/redis/tls/redis.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-key-file", "/etc/redis/tls/redis.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls-ca-cert-file", "/etc/redis/tls/ca.crt"]

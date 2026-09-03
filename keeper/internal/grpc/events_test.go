@@ -1076,7 +1076,7 @@ func deprecationEvent(applyID string) *keeperv1.TaskEvent {
 		Status:  keeperv1.TaskStatus_TASK_STATUS_CHANGED,
 		Notices: []*keeperv1.TaskNotice{{
 			Code:    "deprecated_param",
-			Module:  "community.redis.present",
+			Module:  "redis.instance.pinged",
 			Param:   "address",
 			Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
 		}},

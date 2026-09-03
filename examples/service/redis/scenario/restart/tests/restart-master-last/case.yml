@@ -3,11 +3,11 @@
 # hosts; mocks.register.redis_role.role = master → block descendants (where slave) —
 # placeholder-skip, master-restart (where master, run_once) is rendered.
 #
-# ★ Probe — community.redis.role (go-redis INFO replication), NOT raw redis-cli:
+# ★ Probe — redis.instance.role-probed (go-redis INFO replication), NOT raw redis-cli:
 # field register.redis_role.role (plugin Output), NOT .stdout.
 #
 # What we assert:
-#   1. probe (community.redis.role) renders connection params (addr localhost,
+#   1. probe (redis.instance.role-probed) renders connection params (addr localhost,
 #      password from vault, plaintext branch).
 #   2. block descendants (Restart + Wait-PONG) — placeholder-skip (Params == nil): on the
 #      master payload where slave does not match.
@@ -58,9 +58,9 @@ mocks:
 
 assert:
   task_present:
-    # ── probe (community.redis.role): go-redis INFO replication, no redis-cli ──
-    # The only community.redis.role in the plan.
-    - module: community.redis.role
+    # ── probe (redis.instance.role-probed): go-redis INFO replication, no redis-cli ──
+    # The only redis.instance.role-probed in the plan.
+    - module: redis.instance.role-probed
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

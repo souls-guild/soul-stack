@@ -3,7 +3,7 @@
 # +==================================================================================+
 # A single deploy of a new Redis Cluster (honest hash-slot, 16384 slots): per-host install +
 # render redis.conf (with cluster directives) / users.acl + systemd + PING-gate +
-# CLUSTER MEET/ADDSLOTS/REPLICATE (plugin community.redis.cluster, action create,
+# CLUSTER MEET/ADDSLOTS/REPLICATE (plugin redis.cluster.created,
 # run_once on the bootstrap node). Lives at service-level (scenario/<file>) rather than inside
 # a single scenario, and is included by consumers by file name: scenario-include resolves
 # `scenario/<name>/<file>`, then falls back to `scenario/<file>` (orchestration.md §6,
@@ -34,7 +34,7 @@
 #   NOT here - it's rendered by destiny `redis` in redis.conf.tmpl from .self.network.primary_ip
 #   of EACH host (via apply.input it would lock in the IP of the first node -> cluster-bus
 #   would break over NAT/in the cloud). The master/replica role and slot layout is done by the PLUGIN
-#   (community.redis.cluster action create) deterministically by sorting nodes keys;
+#   (redis.cluster.created deterministically by sorting nodes keys;
 #   scenario only builds the topology-MAP (SID->addr) and calls the plugin run_once on the bootstrap
 #   node - it does NOT repeat the translation itself (dividing 16384 across shards), otherwise the two layouts
 #   (scenario + plugin) would go out of sync.
@@ -72,7 +72,7 @@
       #
       # * default_admin REDESIGN: STATIC replica->master AUTH in redis.conf - masteruser/
       # masterauth are TOPPED UP into config as REGULAR directives (on top of compute.redis_config).
-      # CRITICAL for cluster REPLICAS: the plugin community.redis.cluster (CLUSTER REPLICATE,
+      # CRITICAL for cluster REPLICAS: the plugin redis.cluster.* (CLUSTER REPLICATE,
       # formCluster) does NOT set masterauth - it only sends REPLICATE master-id. A cluster
       # replica, on FULLSYNC with the master node, passes AUTH ONLY via the static masterauth in
       # redis.conf; without it PSYNC would hit NOAUTH -> master_link_status:DOWN (the same live
@@ -147,19 +147,19 @@
         ca_ref:   "${ compute.tls_ca_ref }"
 
 # 2. Per-host health-gate: PING of the live Redis after start (every node must respond BEFORE
-#    building the cluster). community.redis.command, retry/until via retry. addr - localhost
+#    building the cluster). redis.command.run, retry/until via retry. addr - localhost
 #    (plugin on the redis host), password - keeper-side vault() resolve.
 #    * Security (anti-downgrade): tls/tls_ca/port are gated on compute.tls_on (TLS ENABLED), NOT
 #    tls_only (TLS enabled -> the plugin MUST use TLS; when tls_only_on=false plain is still open,
 #    but an AUTH password over plaintext is unacceptable). addr on compute.tls_port + tls_ca (CA-PEM,
 #    vault(ref) at scenario-pass time, sealed by the vault layer).
 - name: Wait for each cluster node to answer PING
-  module: community.redis.command
+  module: redis.command.run
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     # * default_admin REDESIGN: AUTH under default_admin (requirepass removed). username +
-    # its password come from the new Vault branch. The community.redis plugin passes username into AUTH.
+    # its password come from the new Vault branch. The redis plugin passes username into AUTH.
     username: "${ compute.admin_user }"
     password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
@@ -171,7 +171,7 @@
 #    lays out master/replica by sorting keys deterministically), value =
 #    {addr: "<primary_ip>:6379"}. Form merge(list(map)): .map(...) yields a LIST of
 #    single-key SID->{addr} maps, merge folds them into one map (templating §2.3).
-#    The plugin community.redis.cluster (action create) itself sends CLUSTER MEET/ADDSLOTS/
+#    The plugin redis.cluster.created itself sends CLUSTER MEET/ADDSLOTS/
 #    REPLICATE over go-redis and splits the 16384 slots - scenario does NOT translate the topology,
 #    it passes it ready-made. * default_admin REDESIGN: connecting to each node - under the ACL user
 #    default_admin (requirepass removed). username (-> AUTH) + password from the new Vault branch;
@@ -187,11 +187,10 @@
 #    cert/key are host-invariant -> apply.input is correct.
 - name: Build the redis cluster (CLUSTER MEET/ADDSLOTS/REPLICATE)
   run_once: true
-  module: community.redis.cluster
+  module: redis.cluster.created
   params:
-    action:             create
     nodes:              "${ merge(soulprint.hosts.map(h, { h.sid: { 'addr': h.network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') } })) }"
-    # plugin-param `replicas_per_shard` - CONTRACT of community.redis.cluster (do not change),
+    # plugin-param `replicas_per_shard` - CONTRACT of redis.cluster.* (do not change),
     # sourced from -> unified input.replicas_per_master (replicas per shard).
     replicas_per_shard: "${ int(input.replicas_per_master) }"
     # * EXPLICIT TOPOLOGY (opt.): the operator passes a list of shards [master_sid, replica_sid, ...]

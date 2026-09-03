@@ -13,7 +13,7 @@
 redis_type: sentinel
 
 # Logical name of the monitored master in Sentinel (sentinel.conf directive SENTINEL
-# MONITOR + community.redis.sentinel master_name). Moved from operator-input to
+# MONITOR + redis.sentinel.monitored master_name). Moved from operator-input to
 # service vars (2026-06-25): author-context, a fleet forks this repo and edits it here.
 # Default `master` (the former operator-default was `mymaster`).
 sentinel_master_name: master
@@ -265,7 +265,7 @@ tls_ca_ref:   "secret/services/redis/tls#ca"
 # always added (like replica/monitoring) — in BOTH sets. Replaced the former model
 # "default in requirepass": requirepass is DEPRECATED and removed from redis.conf, all authentication
 # (incl. internal: replication/cluster/sentinel/health-PING) goes through default_admin.
-# The community.redis plugin connects with username=default_admin (see deployment bodies). The password for
+# The redis plugin connects with username=default_admin (see deployment bodies). The password for
 # default_admin — secret/redis/<inc>/system_acl_users/default_admin#password (the shared branch for
 # system users, NOT the former main secret/redis/<inc>#password — that one is DROPPED).
 #

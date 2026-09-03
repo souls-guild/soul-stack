@@ -136,12 +136,12 @@ assert:
         refresh_soulprint: true
         await_timeout: "10m"
 
-    # (d) core.module.installed: delivers the SoulModule plugin community.redis to the created
-    # hosts BEFORE the first community.redis.* task of the deploy branch (ADR-065).
+    # (d) core.module.installed: delivers the SoulModule plugin redis to the created
+    # hosts BEFORE the first redis.* task of the deploy branch (ADR-065).
     # params.name is address level 1 — the alias the artifact installs under (NIM-524).
     - module: core.module.installed
       params_subset:
-        name: community
+        name: redis
 
     # The main sentinel-branch deploy rolls out after provision (redis.conf is rendered).
     - module: core.file.rendered

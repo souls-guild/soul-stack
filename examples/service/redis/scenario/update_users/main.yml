@@ -62,7 +62,7 @@ compute:
   # ── admin_user: name of the SYSTEM ACL user for intra-cluster AUTH (default_admin) ──
   # ★ REDESIGN default_admin (2026-06-30): the scenario body has NO extends: covenant (no shared
   # compute), so the system admin-user name is declared as a LOCAL literal - a single
-  # source within the scenario (the community.redis.acl plugin connection + the masterauth merge into
+  # source within the scenario (the redis.acl.reloaded plugin connection + the masterauth merge into
   # config + the password Vault path all read compute.admin_user, instead of hardcoding 'default_admin' in
   # every spot). Mirrors covenant.compute.admin_user in deploy bodies.
   admin_user: "${ 'default_admin' }"
@@ -93,7 +93,7 @@ tasks:
     params:
       field: system_acl_users
       # ★★ DELIBERATELY read-only, never minted here: these are the credentials the LIVE
-      # instance and its replicas already authenticate with (community.redis.acl AUTHs as
+      # instance and its replicas already authenticate with (redis.acl.reloaded AUTHs as
       # default_admin BEFORE ACL LOAD applies the new file). No `password` property on any
       # element → secret resolution requires an EXISTING value, so a broken incarnation
       # fails loudly instead of being handed a fresh password nothing else knows.
@@ -198,18 +198,18 @@ tasks:
                }))
              ) }
 
-  # 2. HOT-RELOAD ACL: community.redis.acl sends ACL LOAD - the live instance re-reads
+  # 2. HOT-RELOAD ACL: redis.acl.reloaded sends ACL LOAD - the live instance re-reads
   #    the aclfile (rendered in step 1) in full. Users dropped from the set disappear from
   #    ACL LIST once the file reloads (ACL LOAD brings the instance in line with the file). Idempotent
   #    by construction; the plugin diffs ACL LIST before/after (changed=false when they match).
   #    addr/TLS discriminator - from state.tls (compute.tls_*), same as add_user/restart.
   - name: Hot-reload ACL on the live instance (ACL LOAD)
-    module: community.redis.acl
+    module: redis.acl.reloaded
     params:
       addr:     "${ compute.tls_on ? '127.0.0.1:' + compute.tls_port : '127.0.0.1:6379' }"
       # ★ REDESIGN default_admin (2026-06-30): AUTH as the system default_admin (requirepass
       # was dropped). username + its password come from the secret/redis/<inc>/system_acl_users/default_admin#password branch.
-      # The community.redis plugin passes username in AUTH (parseConnConfig).
+      # The redis plugin passes username in AUTH (parseConnConfig).
       username: "${ compute.admin_user }"
       password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       tls:      "${ compute.tls_on }"

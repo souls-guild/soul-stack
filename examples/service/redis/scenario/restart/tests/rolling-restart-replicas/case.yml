@@ -1,17 +1,17 @@
 # L0 test restart: rolling-restart of replicas (probe->where->block+serial:1).
 # Render-only, hermetic. Run roster - 2 hosts. Probe role for each host
 # is supplied as mocks.register (L0 pass-through of a ready register payload for the probe step,
-# without executing community.redis.role on the host): redis_role.role = slave ->
+# without executing redis.instance.role-probed on the host): redis_role.role = slave ->
 # block descendants (where slave) render, master-restart (where master) -
 # placeholder-skip.
 #
-# star Probe is community.redis.role (go-redis INFO replication), NOT raw redis-cli:
+# star Probe is redis.instance.role-probed (go-redis INFO replication), NOT raw redis-cli:
 # field register.redis_role.role (plugin Output), NOT .stdout. Slave-health-gate -
-# community.redis.replica-synced (STRICT resync gate master_link_status:up,
+# redis.replica.synced (STRICT resync gate master_link_status:up,
 # user decision 2026-06-23), NOT pinged/PONG and NOT core.exec.run redis-cli.
 #
 # What we assert (transfer-acceptance criteria shell->plugin):
-#   1. probe step (community.redis.role) renders connect params (addr localhost,
+#   1. probe step (redis.instance.role-probed) renders connect params (addr localhost,
 #      password from vault, plaintext branch when vars.tls_enable is absent).
 #   2. block fan-out: 2 descendants (Restart + Wait-PONG) expand into
 #      RenderedTask via cross-cutting indices (block fan-out + serial:1 inheritance
@@ -63,9 +63,9 @@ mocks:
 
 assert:
   task_present:
-    # -- probe (community.redis.role): go-redis INFO replication, without redis-cli --
-    # The only community.redis.role in the plan.
-    - module: community.redis.role
+    # -- probe (redis.instance.role-probed): go-redis INFO replication, without redis-cli --
+    # The only redis.instance.role-probed in the plan.
+    - module: redis.instance.role-probed
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin
@@ -73,15 +73,15 @@ assert:
         tls: false
         tls_ca: ""
 
-    # -- slave-health-gate (community.redis.replica-synced) ----------------------
+    # -- slave-health-gate (redis.replica.synced) ----------------------
     #    STRICT resync gate (master_link_status:up), NOT pinged/PONG. The only
-    #    community.redis.replica-synced in the plan. This gate lives INSIDE the slave block
+    #    redis.replica.synced in the plan. This gate lives INSIDE the slave block
     #    right after `core.service.restarted` (block fan-out where=slave) - its presence
     #    proves the slave block rendered, while the replica restart itself (bare
     #    core.service.restarted name=redis-server) is presence-indistinguishable from the master restart
     #    (both identical, discriminator - block `where`/TargetSIDs, presence does not
     #    see it), so it is NOT asserted separately (see the note in the report).
-    - module: community.redis.replica-synced
+    - module: redis.replica.synced
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

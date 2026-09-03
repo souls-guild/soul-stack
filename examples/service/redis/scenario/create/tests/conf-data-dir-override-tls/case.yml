@@ -203,7 +203,7 @@ assert:
           role: ""
 
     # PING health-gate over TLS on a conf_dir-agnostic addr (tls_port). tls_ca = CA-PEM.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7379"
         username: default_admin

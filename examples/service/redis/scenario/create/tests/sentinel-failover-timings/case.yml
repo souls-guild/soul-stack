@@ -1,7 +1,7 @@
 # L0 test (#7, 2026-06-26): the operator sets NON-DEFAULT sentinel failover
 # timings (sentinel_down_after_ms / sentinel_failover_timeout_ms). FALSIFICATION:
 # values 12000/70000 (≠ defaults 5000/60000) MUST reach:
-#   1. the community.redis.sentinel plugin params.config with keys
+#   1. the redis.sentinel.monitored plugin params.config with keys
 #      `sentinel down-after-milliseconds master` / `sentinel failover-timeout master`
 #      (per-master SENTINEL SET reconcile — classified by the plugin);
 #   2. state.redis_sentinel.down_after_ms / failover_timeout_ms (read-model).
@@ -84,7 +84,7 @@ assert:
   task_present:
     # ★ The plugin receives per-master timings via keys `sentinel <opt> <master>` with
     # the OPERATOR's values (12000/70000) — proves reading from input, not hardcoded.
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

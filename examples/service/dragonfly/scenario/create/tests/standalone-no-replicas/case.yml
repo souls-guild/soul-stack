@@ -73,7 +73,7 @@ assert:
   task_present:
     # REPLICAOF: addr - the LOCAL UNIX socket; master_addr = the single host (which is also the
     # master, primary_ip:6379). On real standalone INFO role=master → plugin no-op.
-    - module: community.redis.replica
+    - module: redis.replica.present
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         master_addr: "10.0.0.9:6379"
@@ -83,7 +83,7 @@ assert:
     # SENTINEL MONITOR: monitor.ip - the single host; auto-quorum = 1.
     # redis_version - the sentinel DAEMON version (vars.sentinel_redis_version, default 7.2.4),
     # NOT df_version (1.39.0). Gates version-aware sentinel features of the plugin.
-    - module: community.redis.sentinel
+    - module: redis.sentinel.monitored
       params_subset:
         addr: "127.0.0.1:26379"
         master_name: master

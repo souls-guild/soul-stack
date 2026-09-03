@@ -158,10 +158,9 @@ assert:
 
     # cluster-build: nodes MAP on tls_port (7379), tls=true + tls_ca (plugin over TLS) +
     # mTLS client-cert (tls_cert/tls_key for the mutual cluster bus, tls-cluster yes).
-    # The only community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # The only redis.cluster.* in the plan.
+    - module: redis.cluster.created
       params_subset:
-        action: create
         replicas_per_shard: 0
         # ★ default_admin REDESIGN: connects as default_admin (username → AUTH). The former
         # primary secret is DROPPED — password comes from the users/default_admin branch.

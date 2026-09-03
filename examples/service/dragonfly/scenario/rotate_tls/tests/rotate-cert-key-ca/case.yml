@@ -1,6 +1,6 @@
 # L0 test for rotate_tls: day-2 TLS material rotation WITHOUT restart. Operator supplies NEW
 # Vault refs for cert/key/ca; the scenario re-renders the PEM into ${conf_dir}/tls/ from the new refs and sends
-# three CONFIG SET tls_*_file (UNDERSCORE — DragonFly form!) via community.redis.command under
+# three CONFIG SET tls_*_file (UNDERSCORE — DragonFly form!) via redis.command.run under
 # an onchanges gate (DragonFly recreates SSL_CTX and re-reads live). Render-only, hermetic.
 # The instance is ALREADY on TLS (state.tls.enable=true; rotate only applies to TLS).
 #
@@ -12,7 +12,7 @@
 #   1. PEM re-rendered (core.file.present): dragonfly.crt/dragonfly.key/ca.crt in
 #      /etc/dragonfly/tls/, content = vault(NEW ref), mode 0600 owner dragonfly.
 #   2. applier-register tls_certs MATERIALIZED (core.noop.run id:tls_certs) — onchanges anchor.
-#   3. reload re-read (three community.redis.command): addr = LOCAL UNIX socket (WITHOUT tls/tls_ca),
+#   3. reload re-read (three redis.command.run): addr = LOCAL UNIX socket (WITHOUT tls/tls_ca),
 #      args = CONFIG SET tls_cert_file/tls_key_file/tls_ca_cert_file (UNDERSCORE).
 #   4. state_after: state.tls carries NEW refs; enable is preserved (WITHOUT only/port — DF has no tls port).
 #
@@ -149,22 +149,22 @@ assert:
     - module: core.noop.run
       id: tls_certs
 
-    # 3. RE-READ UNDER the onchanges GATE: three community.redis.command (CONFIG SET tls_*_file —
+    # 3. RE-READ UNDER the onchanges GATE: three redis.command.run (CONFIG SET tls_*_file —
     #    UNDERSCORE), addr — LOCAL UNIX socket (WITHOUT tls/tls_ca — UDS is not a network path), args target
     #    paths under /etc/dragonfly/tls/. Args disambiguate the three calls AND guard the underscore names.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-rotate-tls-pass
         args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-rotate-tls-pass
         args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
@@ -172,18 +172,18 @@ assert:
         args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]
 
   # * Idempotency GUARD (render level): forced changed:true from the reload tasks REMOVED. Any
-  #   community.redis.command CONFIG SET-tls with changed:true → regression back to the non-idempotent
+  #   redis.command.run CONFIG SET-tls with changed:true → regression back to the non-idempotent
   #   force path. task_absent catches it (>=1 match → fail). Covers ALL THREE reload tasks.
   task_absent:
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls_cert_file", "/etc/dragonfly/tls/dragonfly.crt"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls_key_file", "/etc/dragonfly/tls/dragonfly.key"]
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         changed: true
         args: ["CONFIG", "SET", "tls_ca_cert_file", "/etc/dragonfly/tls/ca.crt"]

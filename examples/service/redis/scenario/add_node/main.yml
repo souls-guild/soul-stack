@@ -185,14 +185,14 @@ tasks:
              ) }
 
   # 3. Health-gate: the new node must answer PING BEFORE being added to the cluster.
-  #    community.redis.command, retry/until via retry. addr localhost (plugin on the node
+  #    redis.command.run, retry/until via retry. addr localhost (plugin on the node
   #    itself). ★ default_admin REDESIGN (2026-06-30): the PING connect is under the
   #    system default_admin (username → AUTH, requirepass dropped); password from the new
   #    Vault path users/default_admin. The scenario body (outside covenant) hardcodes
   #    'default_admin'.
   - name: Wait for the new node to answer PING
     where: soulprint.self.sid == input.new_node_sid
-    module: community.redis.command
+    module: redis.command.run
     retry: { count: 10, delay: 3s }
     params:
       addr:     "127.0.0.1:6379"
@@ -208,9 +208,8 @@ tasks:
   #    master_sid is set; otherwise the plugin picks the master itself.
   - name: Add the new node to the cluster (CLUSTER MEET + REPLICATE/empty-master)
     run_once: true
-    module: community.redis.cluster
+    module: redis.cluster.node-added
     params:
-      action:   add-node
       role:     "${ default(input.role, 'replica') }"
       # ★ default_admin REDESIGN (2026-06-30): connection to the nodes is under the system
       # default_admin (username → AUTH, requirepass dropped); password from the new Vault

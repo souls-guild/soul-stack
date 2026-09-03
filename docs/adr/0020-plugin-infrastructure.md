@@ -361,10 +361,20 @@ the per-module `Side` field is in the schema (`sdk/schema/schema.go:147`, with
 
 ## Amendment 2026-09-02 (NIM-764 / NIM-765): a plugin address is `<plugin>.<object>.<action>`, and the origin-grouping level is removed
 
-**Not implemented** for the artifacts. What lands here is the **rule**; the artifacts still ship in
-the old form, and everything above still describes them. Written under NIM-765. The redis
-re-layout is **NIM-766**, `redis.user.present` is **NIM-767**, and the WB redis service moving off
-`redis-cli` is **NIM-768**.
+Written under NIM-765 as the **rule** alone; the artifacts shipped in the old form at the time,
+and everything above still described them.
+
+★ **Status 2026-09-03 (NIM-766): the redis artifact serves it.** `soul-mod-community-redis` is
+`soul-mod-redis`, registered under the alias **`redis`**, serving **six objects** — `acl`,
+`cluster`, `command`, `instance`, `replica`, `sentinel` — with `side: soul` declared per object
+and the whole schema document generated from `module.Def` values (which closed **NIM-525** in the
+same change: the artifact had no `schema` subcommand, so `soul-mod stamp`/`verify` were
+inapplicable to the one public example a plugin author copies). The seven cluster operations that
+used to travel in `params.action` are seven actions at level 3, which is what lets each declare
+only the params it reads — the old single state promised all fifteen to all seven. The engine was
+not touched, exactly as the paragraph below said it would not be. `redis.user.present` is still
+**NIM-767**, the WB redis service moving off `redis-cli` is **NIM-768**, and mongo is **NIM-769**;
+all three remain open.
 
 **The decision** — the user's, of 2026-09-02. A plugin step's address is
 **`<plugin-name>.<object>.<action>`**, for example `redis.user.present`. Level 1 is the plugin's

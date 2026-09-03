@@ -18,7 +18,7 @@ const (
 )
 
 // setupRedisStandalone brings up an L3b stack with a LIVE Redis (sentinel, 0 replicas =
-// standalone-equivalent), a plain connection (6379 without TLS), an allowlisted community.redis,
+// standalone-equivalent), a plain connection (6379 without TLS), an allowlisted redis,
 // and creates the incarnation via a create run through to status=ready. Returns the stack, the
 // incarnation name, and the default_admin password (for day-2 assert AUTH). Cleanup is registered
 // via t.Cleanup - the caller doesn't need a defer.
@@ -34,14 +34,14 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 func setupRedisStandaloneWith(t *testing.T, upstream bool, persistence, maxmemoryPolicy string, memoryMB int) (stack *harness.Stack, inc, adminPass string) {
 	t.Helper()
 
-	repoURL := harness.BuildCommunityRedisPlugin(t)
+	repoURL := harness.BuildRedisPlugin(t)
 
 	stack = harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",
 		Souls:       1,
 		SoulModules: []harness.SoulModuleEntry{
-			{Name: harness.CommunityRedisAlias, Source: repoURL, Ref: harness.CommunityRedisPluginRef},
+			{Name: harness.RedisAlias, Source: repoURL, Ref: harness.RedisPluginRef},
 		},
 		UpstreamArtifacts: upstream,
 	})
@@ -49,13 +49,13 @@ func setupRedisStandaloneWith(t *testing.T, upstream bool, persistence, maxmemor
 
 	const incName = "redis"
 
-	// Vault seed: incarnation's main password + default_admin (used by community.redis.* AUTH and
+	// Vault seed: incarnation's main password + default_admin (used by redis.* AUTH and
 	// by redis-cli asserts). create generates other system users itself.
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+redisDay2AdminUser, map[string]any{"password": redisDay2AdminPass})
 
 	stack.MaterializeDestinies(t, "v1.0.0", "redis", "node-exporter", "redis-exporter", "vector")
-	stack.AllowSoulModule(t, harness.CommunityRedisAlias, repoURL, harness.CommunityRedisPluginRef)
+	stack.AllowSoulModule(t, harness.RedisAlias, repoURL, harness.RedisPluginRef)
 
 	// Seed the incarnation row -> bind the roster -> run create. The order is
 	// owned by CreateIncarnationOnRoster (NIM-192): membership carries an FK on

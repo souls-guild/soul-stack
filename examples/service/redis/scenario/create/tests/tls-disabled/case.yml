@@ -141,7 +141,7 @@ assert:
     # PING — placeholder-skip; disambiguator addr/args.
     # ★ default_admin REDESIGN: AUTH via default_admin (username + its password from the
     # users/default_admin branch), requirepass removed.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:6379"
         username: default_admin

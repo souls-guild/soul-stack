@@ -98,7 +98,7 @@ assert:
     # `community` the artifact registers under, not the whole modules[] entry (NIM-524).
     - module: core.module.installed
       params_subset:
-        name: community
+        name: redis
         ref: v1.0.0
 
   task_absent:

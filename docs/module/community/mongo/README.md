@@ -22,7 +22,7 @@ Backend — [`go.mongodb.org/mongo-driver`](https://go.mongodb.org/mongo-driver)
 the plugin itself connects to `mongod` via TCP (`host:port`, usually `127.0.0.1:27017`).
 Work is carried out **through the driver, and not `core.exec` + `mongosh`** (the password in `argv` is
 IS risk, fragile output parsing; the same path `shell -> plugin` took
-[`community.redis`](../redis/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-766)**). Compliance with core modules
+[`redis`](../../redis/README.md)). Compliance with core modules
 (`core.pkg`/`core.file`/`core.service`/`core.sysctl`) - for everything that is NOT
 mongo-specific(installation, render `mongod.conf`, systemd, host-tuning); himself
 MongoDB runtime is this plugin.
@@ -41,7 +41,7 @@ MongoDB runtime is this plugin.
 The plugin remains at `module.BaseModule` - **doesn't** implement `PlanReadSafe`
 ([ADR-031](../../../adr/0031-scry-drift.md)) and `ErrandReadSafe`
 ([ADR-033](../../../adr/0033-errand.md)). This is a conscious choice (parallel
-`community.redis` ⚠ **LEAVING THE DICTIONARY (NIM-766)**): on `dry_run` host (Soul) applies **default-deny** - task
+`redis`): on `dry_run` host (Soul) applies **default-deny** - task
 gets the honest "drift not supported" rather than the false "no drift".
 
 ## States
@@ -53,7 +53,7 @@ imperative-upsert `user` (createUser/dropUser), imperative `command`.
 |---|---|---|
 | `pinged` | Health-probe via go-mongo-driver `Ping` (primary). Read-only. Replaces idiom `command { ping: 1 }` - health-gate in scripts (`retry`/`until`/`failed_when` by `register.self.ok`). | `false` **constructive** (probe, not change). |
 | `user` | `createUser`/`dropUser` (upsert). MongoDB users live in `admin.system.users` (imperative), **NOT** in the config file (unlike redis `users.acl`) - therefore verb-state, not render. `state: present` creates (if not present), `absent` deletes (if present). Idempotent by `usersInfo`. ★ the first admin is created via **localhost-exception** (see below). | `true` with real create/drop; `false` (no-op), if the user is already in the desired state (present+is / absent+no). |
-| `command` | Raw `db.runCommand` (imperative verb-state, precedent `community.redis.command` ⚠ **LEAVING THE DICTIONARY (NIM-766)**/`core.exec.run`). | `false` default (probe); `changed: true` in params - for actually mutating commands (the operator is responsible for idempotency). |
+| `command` | Raw `db.runCommand` (imperative verb-state, precedent `redis.command.run`/`core.exec.run`). | `false` default (probe); `changed: true` in params - for actually mutating commands (the operator is responsible for idempotency). |
 
 ## pinged — params
 
@@ -120,7 +120,7 @@ whether no-auth localhost path (only on `present`).
 ## command — params
 
 Raw `db.runCommand` to MongoDB (imperative verb-state, use case
-`community.redis.command` ⚠ **LEAVING THE DICTIONARY (NIM-766)**/`core.exec.run`). Default `changed=false` (probe);
+`redis.command.run`/`core.exec.run`). Default `changed=false` (probe);
 operator is responsible for idempotency. For pilot - single-field command
 (`{ serverStatus: 1 }`, `{ collStats: "events" }`).
 

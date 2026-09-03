@@ -83,7 +83,7 @@
       #
       # ★ REDESIGN default_admin: STATIC replica→master AUTH in redis.conf — masteruser/
       # masterauth are ADDED to config as REGULAR directives (on top of compute.redis_config).
-      # CRITICAL for PERSISTENCE across restart: the community.redis.replica plugin (step 3)
+      # CRITICAL for PERSISTENCE across restart: the redis.replica.present plugin (step 3)
       # sets them via CONFIG SET at runtime, but CONFIG SET is NOT saved without CONFIG REWRITE →
       # on sentinel restart redis-server would come up without masterauth → replica
       # master_link_status:DOWN → replica-synced timeout (a live defect). A static directive
@@ -192,25 +192,25 @@
         config:      "${ compute.sentinel_directives }"
 
 # 2. Health-gate per-host: PING a live Redis after start (every node must respond
-#    BEFORE binding replicas/configuring sentinel). community.redis.command, retry/until via
+#    BEFORE binding replicas/configuring sentinel). redis.command.run, retry/until via
 #    retry. addr — localhost (plugin runs on the redis host).
 #    ★ Security (anti-downgrade): tls/tls_ca/port are gated on compute.tls_on (TLS ENABLED), NOT
 #    tls_only — TLS enabled → the plugin MUST use TLS (otherwise the AUTH password would go plaintext). PING
 #    via compute.tls_port + tls=true + tls_ca (vault(ref) in the scenario pass).
 - name: Wait for each redis node to answer PING
-  module: community.redis.command
+  module: redis.command.run
   retry: { count: 10, delay: 3s }
   params:
     addr:     "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     # ★ REDESIGN default_admin: AUTH as default_admin (requirepass removed). username +
-    # its password from the new Vault branch. The community.redis plugin passes username into AUTH.
+    # its password from the new Vault branch. The redis plugin passes username into AUTH.
     username: "${ compute.admin_user }"
     password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
     tls:      "${ compute.tls_on }"
     tls_ca:   "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
     args:     ["PING"]
 
-# 3. REPLICAOF for replicas: plugin community.redis.replica ONLY on replicas. addr —
+# 3. REPLICAOF for replicas: plugin redis.replica.present ONLY on replicas. addr —
 #    the local instance (127.0.0.1:6379, per-host invariant); master_addr —
 #    the HOST-INVARIANT address of the master (master-election soulprint.hosts[0]).
 #
@@ -236,7 +236,7 @@
 #    secret/redis/<inc>/system_acl_users/default_admin#password (the same branch as auth_pass/health-PING).
 - name: Make replicas follow the elected master (REPLICAOF)
   where: "soulprint.self.sid != soulprint.hosts[0].sid"
-  module: community.redis.replica
+  module: redis.replica.present
   params:
     addr:        "${ compute.tls_on ? '127.0.0.1:' + string(compute.tls_port) : '127.0.0.1:6379' }"
     master_addr: "${ soulprint.hosts[0].network.primary_ip + ':' + (compute.tls_on ? string(compute.tls_port) : '6379') }"
@@ -245,7 +245,7 @@
     tls:         "${ compute.tls_on }"
     tls_ca:      "${ compute.tls_on ? vault(compute.tls_ca_ref) : '' }"
 
-# 4. SENTINEL MONITOR reconcile: plugin community.redis.sentinel on EVERY host (each
+# 4. SENTINEL MONITOR reconcile: plugin redis.sentinel.monitored on EVERY host (each
 #    sentinel daemon monitors the master). addr — local sentinel (127.0.0.1:26379,
 #    per-host invariant); monitor.ip — the HOST-INVARIANT address of the master (master-election).
 #    quorum — majority size/2+1. auth_pass — keeper-side vault() resolve (masked,
@@ -279,7 +279,7 @@
   vars:
     sentinel_monitor_now: "${ compute.sentinel_monitor_now }"
   when: "vars.sentinel_monitor_now"
-  module: community.redis.sentinel
+  module: redis.sentinel.monitored
   params:
     addr:        "127.0.0.1:26379"
     master_name: "${ default(vars.sentinel_master_name, 'master') }"
@@ -311,7 +311,7 @@
 #    we check ONLY our own local sentinel. retry/until + failed_when on
 #    register.self.result of this same task.
 - name: Wait until each sentinel answers PONG on :26379
-  module: community.redis.command
+  module: redis.command.run
   changed_when: false
   retry:
     count: 12

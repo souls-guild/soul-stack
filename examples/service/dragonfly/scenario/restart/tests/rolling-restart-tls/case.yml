@@ -9,8 +9,8 @@
 # clients). ★ state.tls WITHOUT only/port, df_config WITHOUT tls_port (DragonFly has no such flag).
 #
 # What we assert:
-#   1. probe (community.redis.role): addr = LOCAL UNIX socket (NOT 127.0.0.1:port), WITHOUT tls/tls_ca.
-#   2. block-child health-gate (community.redis.replica-synced) with the same socket params.
+#   1. probe (redis.instance.role-probed): addr = LOCAL UNIX socket (NOT 127.0.0.1:port), WITHOUT tls/tls_ca.
+#   2. block-child health-gate (redis.replica.synced) with the same socket params.
 name: rolling-restart replicas over TLS connects locally via unix socket
 
 fixtures:
@@ -67,16 +67,16 @@ mocks:
 
 assert:
   task_present:
-    # probe (community.redis.role): LOCAL UNIX socket (WITHOUT tls/tls_ca, even on a TLS instance).
+    # probe (redis.instance.role-probed): LOCAL UNIX socket (WITHOUT tls/tls_ca, even on a TLS instance).
     # AUTH under default_admin.
-    - module: community.redis.role
+    - module: redis.instance.role-probed
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-restart-pass
 
-    # slave-health-gate (community.redis.replica-synced): same socket connect.
-    - module: community.redis.replica-synced
+    # slave-health-gate (redis.replica.synced): same socket connect.
+    - module: redis.replica.synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin

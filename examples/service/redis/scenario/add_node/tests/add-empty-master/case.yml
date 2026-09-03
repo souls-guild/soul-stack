@@ -61,10 +61,9 @@ mocks:
 assert:
   # GUARD — assert: (not emitted into the plan).
   task_present:
-    # ADD-NODE: the only community.redis.cluster in the plan.
-    - module: community.redis.cluster
+    # ADD-NODE: the only redis.cluster.* in the plan.
+    - module: redis.cluster.node-added
       params_subset:
-        action: add-node
         role: master
         username: default_admin
         password: default-admin-secret-pass

@@ -1,13 +1,13 @@
 package trial
 
 // Guard on connection-AUTH to sentinel daemon :26379 (prod defect: verify/MONITOR
-// tasks of community.redis did not authenticate to sentinel daemon protected by
+// tasks of the redis plugin did not authenticate to sentinel daemon protected by
 // aclfile sentinel-users.acl, → apply failed `connect: NOAUTH Authentication required`).
 //
 // Root: sentinel.conf carries `aclfile sentinel-users.acl`, where default user
 // is `user default on #<hash>` (sentinel_users.default = MASTER secret
 // secret/<svc>/<inc>#password). So ANY connection to :26379 requires AUTH — both
-// SENTINEL MONITOR (community.redis.sentinel) and PONG-verify (community.redis.command
+// SENTINEL MONITOR (redis.sentinel.monitored) and PONG-verify (redis.command.run
 // args PING). connection-AUTH goes via params.password (parseConnConfig →
 // redis.Options.Password), not via auth_pass (that is master monitoring password,
 // SENTINEL SET <master> auth-pass command, unrelated to daemon AUTH itself).
@@ -15,7 +15,7 @@ package trial
 // Why Go guard, not just L0 case.yml: L0 expect_tasks verifies params_subset
 // ONLY for MONITOR tasks and ONLY in cases with expect_tasks (PONG-verify not verified
 // anywhere, detach_source branch — separate scenario). This guard walks REAL plan
-// (LoadScenarioManifest + ExpandIncludes) and catches ENTIRE class: every community.redis
+// (LoadScenarioManifest + ExpandIncludes) and catches ENTIRE class: every redis-plugin
 // task with addr on :26379 MUST carry non-empty params.password. Mutation (deletion
 // of password from any :26379 task of sentinel scenario) fails this test.
 
@@ -93,7 +93,12 @@ func taskHasConnectionPassword(t *config.Task) bool {
 	return ok && strings.TrimSpace(s) != ""
 }
 
-// assertSentinelDaemonTasksAuthenticate checks that every community.redis task with addr on
+// redisPluginAlias — address level 1 of the redis plugin, the registration alias the
+// corpus writes (NIM-766). Level 2 is the object, and this guard is about the port a
+// task connects to, not about which object connects.
+const redisPluginAlias = "redis"
+
+// assertSentinelDaemonTasksAuthenticate checks that every redis-plugin task with addr on
 // :26379 in scenario plan carries connection-password.
 func assertSentinelDaemonTasksAuthenticate(t *testing.T, caseFile string) {
 	t.Helper()
@@ -102,7 +107,10 @@ func assertSentinelDaemonTasksAuthenticate(t *testing.T, caseFile string) {
 	checked := 0
 	for i := range tasks {
 		task := &tasks[i]
-		if task.Module == nil || !strings.HasPrefix(task.Module.Module, "community.redis.") {
+		// Any object of the redis plugin, not one of them: what reaches :26379 is
+		// `redis.sentinel.monitored` and `redis.command.run`, and after NIM-766 a
+		// prefix naming a single object would silently check neither.
+		if task.Module == nil || !strings.HasPrefix(task.Module.Module, redisPluginAlias+".") {
 			continue
 		}
 		if !strings.Contains(taskAddrParam(task), sentinelDaemonPort) {
@@ -115,10 +123,10 @@ func assertSentinelDaemonTasksAuthenticate(t *testing.T, caseFile string) {
 		}
 	}
 	if checked == 0 {
-		t.Fatalf("%s: no community.redis task on :%s in plan — guard lost its subject of check (sentinel branch stopped connecting to daemon?)",
+		t.Fatalf("%s: no redis-plugin task on :%s in plan — guard lost its subject of check (sentinel branch stopped connecting to daemon?)",
 			caseFile, sentinelDaemonPort)
 	}
-	t.Logf("%s: %d community.redis tasks on :%s — all carry connection-password", caseFile, checked, sentinelDaemonPort)
+	t.Logf("%s: %d redis-plugin tasks on :%s — all carry connection-password", caseFile, checked, sentinelDaemonPort)
 }
 
 // TestSentinelDaemonTasksCarryConnectionPassword is a guard for connection-AUTH to :26379

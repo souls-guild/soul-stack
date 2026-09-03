@@ -8,7 +8,7 @@
 # (needed by create/create_from_souls for an explicit shard layout set by the operator).
 # migrate_cluster inherits it via `extends: covenant` → the effective migrate input ACCEPTS
 # the field by schema. BUT the cluster-branch of the migration (cluster.yml includes
-# redis-deploy-cluster-joinable.yml + the community.redis.cluster action join-external
+# redis-deploy-cluster-joinable.yml + the redis.cluster.external-joined
 # plugin) does NOT read cluster_topology: the B3-pilot moves ONLY the masters onto a ready
 # roster (replica-guard replicas_per_master==0), join-external merges exactly one new node
 # into the old master 1:1. The previous inline-migrate DELIBERATELY excluded this field;

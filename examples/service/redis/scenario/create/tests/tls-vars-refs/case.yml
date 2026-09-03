@@ -176,7 +176,7 @@ assert:
 
     # PING: tls=true, addr on tls_port 7400 (service vars), tls_ca = operator-CA-PEM.
     # cluster/sentinel PING — placeholder-skip; disambiguator addr/args.
-    - module: community.redis.command
+    - module: redis.command.run
       params_subset:
         addr: "127.0.0.1:7400"
         username: default_admin

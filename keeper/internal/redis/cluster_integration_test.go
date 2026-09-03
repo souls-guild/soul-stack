@@ -85,7 +85,7 @@ func startCluster(ctx context.Context, t *testing.T) (seedAddr string, terminate
 		//
 		// cluster_state:ok is the GLOBAL claim: a node reports it only once it
 		// sees all 16384 slots covered. It is the same condition the production
-		// module checks (examples/module/soul-mod-community-redis/cluster.go),
+		// module checks (examples/module/soul-mod-redis/cluster.go),
 		// so the fixture now waits for what the code under test requires rather
 		// than for a line that happens to appear earlier.
 		WaitingFor: wait.ForAll(

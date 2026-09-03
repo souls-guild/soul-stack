@@ -3,13 +3,13 @@
 # render, master-restart (where master, run_once) — placeholder-skip. Render-only,
 # hermetic.
 #
-# ★ Probe — community.redis.role (go-redis INFO replication, DragonFly is redis-compatible),
+# ★ Probe — redis.instance.role-probed (go-redis INFO replication, DragonFly is redis-compatible),
 # NOT raw redis-cli: field register.df_role.role, NOT .stdout.
 #
 # What we assert:
-#   1. probe (community.redis.role) renders the connection params (addr — LOCAL UNIX socket,
+#   1. probe (redis.instance.role-probed) renders the connection params (addr — LOCAL UNIX socket,
 #      password from vault; WITHOUT tls/tls_ca — UDS is not a network path).
-#   2. block-child (community.redis.replica-synced health-gate) renders with the same
+#   2. block-child (redis.replica.synced health-gate) renders with the same
 #      socket-params — proves fan-out of the slave block. Bare core.service.restarted
 #      (block-restart) is presence-indistinguishable from a master restart → not asserted separately.
 #
@@ -67,16 +67,16 @@ mocks:
 
 assert:
   task_present:
-    # probe community.redis.role: LOCAL UNIX socket (WITHOUT tls/tls_ca). AUTH as default_admin.
-    - module: community.redis.role
+    # probe redis.instance.role-probed: LOCAL UNIX socket (WITHOUT tls/tls_ca). AUTH as default_admin.
+    - module: redis.instance.role-probed
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
         password: dfadmin-restart-pass
 
-    # slave-health-gate community.redis.replica-synced (block-child, where slave): the same
+    # slave-health-gate redis.replica.synced (block-child, where slave): the same
     # socket connection. The presence of the gate inside the slave block proves the block fan-out renders.
-    - module: community.redis.replica-synced
+    - module: redis.replica.synced
       params_subset:
         addr: "unix:/var/run/dragonfly/dragonfly.sock"
         username: default_admin
