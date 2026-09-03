@@ -93,7 +93,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1737,6 +1737,11 @@ lint: build
 		echo "validate-service $$f"; \
 		$(LINT_BIN) validate-service "$$f" || exit 1; \
 	done
+	@for d in $(STAMP_TREES); do \
+		case "$$d" in examples/*) continue;; esac; \
+		echo "validate-service $$d/service.yml (stamped tree outside examples/)"; \
+		$(LINT_BIN) validate-service "$$d/service.yml" || exit 1; \
+	done
 	@for f in examples/module/*/schema.json; do \
 		[ -e "$$f" ] || continue; \
 		echo "validate-manifest $$f"; \
@@ -1769,6 +1774,32 @@ lint: build
 		fi; \
 	done
 	@echo "lint: examples/ corpus is valid"
+
+# Re-stamp the migrations/schema.lock of every bundled tree that has a ladder
+# (NIM-737). Run it after editing a bundled service's state_schema: `lint` above is
+# what tells you it is needed, because a stale lock is an error there.
+#
+# `lint` walks `examples/service/*` by its own charter, so the two `dev/upgrade-demo`
+# trees are validated by a second loop keyed on THIS list. Otherwise they would be
+# the one thing worse than an unstamped tree: a stamped one whose stamp nothing ever
+# compares, going stale in silence while looking like a checked artifact.
+#
+# It is NOT called `schema-stamp`, and this is not the target a service repository
+# has. There, `make schema-stamp` stamps the ONE service the repository is, and
+# `make validate` checks it; here the subject is a corpus of bundled examples, and a
+# core-repo target of the same name would read as the author-facing one. The command
+# underneath is the same either way: `soul-lint schema-stamp <service dir>`.
+#
+# Only trees with at least one ladder step are listed. A service still at version 1
+# is not stamped and does not need to be: the lock is required once a ladder has a
+# rung, and adopting it earlier is the service author's call, not the corpus's.
+STAMP_TREES := examples/service/redis examples/service/mongo examples/service/dragonfly \
+	dev/upgrade-demo/tree/v2.0.0 dev/upgrade-demo/tree/v2.0.1
+
+stamp-examples: build
+	@for d in $(STAMP_TREES); do \
+		$(LINT_BIN) schema-stamp "$$d" || exit 1; \
+	done
 
 # L0 trials (soul-trial, ADR-023): render-only, hermetic. Run recursively over
 # EVERY corpus directory examples/service/<svc> AND examples/destiny/<svc> with at
@@ -1958,6 +1989,7 @@ help:
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
+	@echo "  stamp-examples    re-write migrations/schema.lock in every bundled tree that has a ladder"
 	@echo ""
 	@echo "Local dev stack:"
 	@echo "  dev-up            docker compose up -d (PG / Vault / Redis)"

@@ -153,7 +153,7 @@ After Soul restart:
 Full migration spec - [`docs/migrations.md`](../migrations.md). Cycle for operator:
 
 1. **Service developer** edits `state_schema` and adds the step that carries the old state to the new shape: `migrations/<NNN>_<slug>/main.yml` with DSL operations (`rename`/`set`/`delete`/`move`, optional `foreach` for collections) + tests `migrations/<NNN>_<slug>/tests/<case>.yml`. The directory number is the version the step leads to; nothing else records it.
-2. **Service developer** runs `make schema-stamp` and commits the regenerated `migrations/schema.lock` — it carries the new top of the ladder and the fingerprint of the edited `state_schema`, and `soul-lint` refuses a stale one on the service repo's next `make validate` — both targets live in the service repository (wherever it runs `soul-lint validate-service`), not in this core repo (planned, NIM-737 — the target does not exist yet).
+2. **Service developer** runs `make schema-stamp` and commits the regenerated `migrations/schema.lock` — it carries the new top of the ladder and the fingerprint of the edited `state_schema`, and `soul-lint` refuses a stale one on the service repo's next `make validate` — both targets wrap `soul-lint schema-stamp` and `soul-lint validate-service`, and live in the service repository, not in this core repo.
 3. **CI** runs `soul-trial` ([ADR-023](../adr/0023-trial-test-runner.md)) - migration is applied on state-fixtures, assertion `state_after`.
 4. **Service-repo** is merged, new git-ref is released ([ADR-007](../adr/0007-versioning-git-ref.md)).
 5. **Operator** updates `service_registry.ref` via Operator API: `POST /v1/services/{name}` with new `ref:`.

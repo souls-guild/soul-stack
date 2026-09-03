@@ -178,6 +178,14 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// rather than by a script in each service repository, and through the same
 		// scanner the keeper reads the ladder with, so the two cannot disagree.
 		diags = append(diags, config.ValidateMigrationLadder(filepath.Dir(opts.Path))...)
+		// And the ladder against the schema, through the stamp that is the only
+		// artifact holding both (NIM-737). The ladder check above says the ladder is
+		// internally consistent; it cannot say whether the schema beside it was
+		// edited without a step, because nothing in the repository compares the two
+		// descriptions — not offline, and not inside the upgrade transaction either.
+		// Runs AFTER stateSchemaTypeRefDiags on purpose: the fingerprint is over the
+		// resolved schema, and that call is what resolves it.
+		diags = append(diags, schemaLockDiags(opts.Path, svc)...)
 	case KindScenario:
 		var scn *config.ScenarioManifest
 		var scnDoc *config.Document

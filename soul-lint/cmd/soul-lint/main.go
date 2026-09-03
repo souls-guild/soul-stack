@@ -17,6 +17,9 @@
 //	validate-manifest <path> [--json]  validate a plugin's schema document
 //	                                    (dist/schema.json, or a stamped
 //	                                    artifact).
+//	schema-stamp      <dir>            write migrations/schema.lock: the top of
+//	                                    the ladder and a fingerprint of the
+//	                                    parsed state_schema.
 //	plugin-init       <namespace>/<name> [flags]  scaffold a new SoulModule
 //	                                    plugin (ADR-016 amendment 2026-05-27).
 //	list-secret-paths <path> --service-name NAME  print the Vault address of
@@ -71,8 +74,8 @@ import (
 // command is one entry of the subcommand table. The table is the single place a
 // subcommand is declared: main dispatches from it and printUsage prints from it,
 // so a command cannot exist in one and be missing from the other — which is what
-// a switch beside a hand-written usage block eventually produces. Adding one
-// (NIM-737's `schema stamp` is next) is one row and its run function.
+// a switch beside a hand-written usage block eventually produces. Adding one is one
+// row and its run function.
 type command struct {
 	name string
 	// args is the argument shape after the name, for the usage line.
@@ -113,6 +116,14 @@ var commandTable = []command{
 	},
 	validateCommand("validate-manifest", "<path> [--json]",
 		"validate a plugin schema document", validate.KindManifest),
+	{
+		name:    "schema-stamp",
+		args:    "<dir>",
+		summary: "write migrations/schema.lock from the current state_schema and ladder",
+		run: func(c command, a []string) int {
+			return runSchemaStamp(c, a)
+		},
+	},
 	{
 		name:    "plugin-init",
 		args:    "<namespace>/<name> [flags]",
@@ -262,6 +273,39 @@ func runValidateServiceTree(c command, args []string) int {
 		Modules:     f.modules,
 		ServiceName: f.serviceName,
 	}, os.Stdout, os.Stderr)
+}
+
+// runSchemaStamp parses the positional of `schema-stamp <dir>` — the generator
+// half of the schema lock (NIM-737).
+//
+// It does NOT go through parseCommonFlags, and that is the same call
+// list-secret-paths makes for the same reason: this command prints a generated
+// artifact, not diagnostics. `--json` would have nothing to encode, `--modules`
+// binds checks it does not run, and `--service-name` names a fence it never
+// reaches. A flag accepted and ignored is worse than one that is absent.
+func runSchemaStamp(c command, args []string) int {
+	var root string
+	for _, a := range args {
+		switch {
+		case a == "-h" || a == "--help":
+			fmt.Fprintln(os.Stdout, c.usageLine())
+			return validate.ExitOK
+		case strings.HasPrefix(a, "-"):
+			fmt.Fprintf(os.Stderr, "soul-lint %s: unknown flag %q\n", c.name, a)
+			return validate.ExitIOFatal
+		default:
+			if root != "" {
+				fmt.Fprintln(os.Stderr, c.usageLine())
+				return validate.ExitIOFatal
+			}
+			root = a
+		}
+	}
+	if root == "" {
+		fmt.Fprintln(os.Stderr, c.usageLine())
+		return validate.ExitIOFatal
+	}
+	return validate.RunStamp(validate.StampOptions{Root: root}, os.Stdout, os.Stderr)
 }
 
 // runListSecretPaths parses flags for
@@ -439,6 +483,13 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "                 the covenant each scenario extends, and EVERY scenario, and reports all")
 	fmt.Fprintln(w, "                 of them - a broken part does not suppress the diagnostics of the rest.")
 	fmt.Fprintln(w, "                 The per-file commands above stay, for checking one file at a time.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  schema-stamp writes migrations/schema.lock - the top of the ladder plus a hash of the")
+	fmt.Fprintln(w, "                 PARSED state_schema, so a comment or a reordered key does not move it.")
+	fmt.Fprintln(w, "                 validate-service compares both on every run: a schema edited with no")
+	fmt.Fprintln(w, "                 ladder step behind it is caught by nothing else, offline or online. It")
+	fmt.Fprintln(w, "                 refuses to stamp a service that is red - a stamp claims the schema and")
+	fmt.Fprintln(w, "                 the ladder agreed, which a broken tree has not established.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "  --modules <alias>=<path>  bind a plugin's schema document to the alias a task")
 	fmt.Fprintln(w, "                 addresses it by (redis=./dist/schema.json). Repeatable. <path> is a")

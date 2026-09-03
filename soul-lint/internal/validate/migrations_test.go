@@ -165,20 +165,22 @@ func TestLadder_DeletedStepIsAGap(t *testing.T) {
 }
 
 // TestLadder_DeletedTopStepLowersTheVersion — deleting the TOP rung is NOT a gap,
-// and the linter must not invent one.
+// and the LADDER check must not invent one. What catches it is the stamp.
 //
 // This is the derived-version edge case ADR-019's amendment left open. Removing the
 // top step legitimately lowers the service's version from 7 to 6; the ladder is
-// still gapless and still describes a consistent service, and a linter that reported
-// a gap here would fire on every deliberate step removal.
+// still gapless and still describes a consistent service, so a ladder check that
+// reported a gap here would fire on every deliberate step removal. Both halves are
+// asserted below, and the second is the one that used to be missing: the derived
+// version really does drop to 6 with no ladder diagnostic, and the run is red all the
+// same, because `schema.lock` remembers that the ladder used to top out at 7.
 //
-// ⚠ What this test pins is a KNOWN HOLE, not a clean outcome. An incarnation at the
-// old top (7) gets a loud refusal — its target now reads as a downgrade. One at the
-// NEW top (6) sees `target == current`, an empty chain, and a silent ref-bump, and
-// nothing offline or online catches it; `schema.lock` (NIM-737) is the artifact that
-// remembers where the ladder used to end. One BELOW 6 simply migrates forward to 6,
-// which is correct and needs no answer. Recorded in ADR-019's Consequences and in
-// docs/migrations.md — if that changes, this test changes with it.
+// Until NIM-737 this test pinned a KNOWN HOLE — an incarnation at the old top (7)
+// got a loud refusal, but one at the NEW top (6) saw `target == current`, an empty
+// chain and a silent ref-bump, with nothing offline or online catching that
+// `state_schema` still described the shape the deleted step produced. The stamp is
+// the only artifact in the repository that remembers where the ladder ended, and
+// this is the case it was named for in ADR-019's Consequences.
 func TestLadder_DeletedTopStepLowersTheVersion(t *testing.T) {
 	root := copyServiceTree(t)
 	top := dragonflyLadder[len(dragonflyLadder)-1]
@@ -186,16 +188,34 @@ func TestLadder_DeletedTopStepLowersTheVersion(t *testing.T) {
 		t.Fatalf("remove top step: %v", err)
 	}
 
-	code, got := lintLadderService(t, root)
-	if code != ExitOK {
-		t.Fatalf("exit code = %d, want %d; diagnostics: %v", code, ExitOK, ladderCodes(got))
-	}
+	// The ladder itself is unbothered: still gapless, one rung shorter.
 	ladder, diags := config.ScanMigrationLadder(root)
 	if len(diags) != 0 {
 		t.Fatalf("scan diagnostics on a gapless ladder: %v", diags)
 	}
 	if ladder.Version() != 6 {
 		t.Errorf("derived version = %d, want 6 (the ladder is one rung shorter)", ladder.Version())
+	}
+
+	code, got := lintLadderService(t, root)
+	if code != ExitHasErrors {
+		t.Fatalf("exit code = %d, want %d; diagnostics: %v", code, ExitHasErrors, ladderCodes(got))
+	}
+	for _, invented := range []string{"migration_chain_broken", "migration_step_number_invalid"} {
+		if findLadderDiag(got, invented) != nil {
+			t.Errorf("the ladder check invented a %s for a deliberate top-step removal: %v", invented, ladderCodes(got))
+		}
+	}
+	d := findLadderDiag(got, "schema_lock_version_stale")
+	if d == nil {
+		t.Fatalf("no schema_lock_version_stale; got %v", ladderCodes(got))
+	}
+	// Both numbers, in the message. "The lock is stale" without them sends the
+	// author to a directory listing to find out which way it moved.
+	for _, want := range []string{"7", "6"} {
+		if !strings.Contains(d.Message, want) {
+			t.Errorf("message %q does not name version %s", d.Message, want)
+		}
 	}
 }
 

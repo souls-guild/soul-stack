@@ -255,6 +255,7 @@ func TestRunTree_CleanLadderIsClean(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(step, "main.yml"), []byte("transform: []\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	stampTree(t, root)
 	code, out, _ := runTree(t, TreeOptions{Root: root, ServiceName: "minimal"})
 	if code != ExitOK {
 		t.Fatalf("exit = %d, want %d:\n%s", code, ExitOK, out)
@@ -315,6 +316,7 @@ func TestRunTree_OKLinesNameExactlyTheCheckedParts(t *testing.T) {
 			"    module: core.file.present\n    params:\n      path: /tmp/x\n      content: hello\n")
 	writeFile(t, filepath.Join(root, "migrations", "002_widen_users", "main.yml"),
 		"transform:\n  - set:\n      path: x\n      value: y\n")
+	stampTree(t, root)
 
 	code, out, _ := runTree(t, TreeOptions{Root: root, ServiceName: "minimal"})
 	if code != ExitOK {
@@ -594,6 +596,21 @@ func writeMinimalTree(t *testing.T) string {
 	writeFile(t, filepath.Join(root, "scenario", "create", "main.yml"),
 		"name: create\ndescription: Minimal\n\ntasks:\n  - name: Write it\n    module: core.file.present\n    params:\n      path: /tmp/x\n      content: hello\n")
 	return root
+}
+
+// stampTree writes the tree's `migrations/schema.lock` by running the real
+// `schema-stamp`, which is what a service author runs and therefore what these
+// trees have to be able to survive. Writing the file by hand here would let the
+// stamp and the check drift apart with every test still green.
+//
+// A tree whose ladder has a step needs one: from NIM-737 an unstamped ladder is
+// `schema_lock_missing`, so a fixture that grows a rung grows a lock with it.
+func stampTree(t *testing.T, root string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	if code := RunStamp(StampOptions{Root: root}, &out, &errOut); code != ExitOK {
+		t.Fatalf("schema-stamp %s = %d:\n%s%s", root, code, out.String(), errOut.String())
+	}
 }
 
 // writeFile writes body at an absolute path, creating the parent directories.

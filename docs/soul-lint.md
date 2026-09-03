@@ -162,7 +162,7 @@ speak of rather than a partly broken one.
 | `types.yml` | the type catalog, **parsed on its own account** |
 | `scenario/<name>/main.yml` | every scenario, checked as `validate-scenario` checks it — and with it the covenant it `extends:` and every `include:` body reached from the entry point |
 | `upgrade/<slug>/main.yml` | the same, for the second scenario auto-discovery channel ([ADR-0068](adr/0068-service-upgrade-v2.md) §3) |
-| `migrations/` | discovered and reported as **not checked** (see below) |
+| `migrations/` | the state-schema ladder, checked — continuity, step layout, each step's own document, and the `schema.lock` beside it (the lock through the manifest part, which is where the schema is) |
 
 What is **not** in that table is as much the point as what is. A scenario's
 `tests/<case>/case.yml` fixtures are **not read** — L0 cases belong to `soul-trial`,
@@ -214,10 +214,10 @@ than re-derived here. A directory that does not begin with one and has no
 `main.yml` is an **error**: `<channel>/<name>/` is how a scenario is addressed, so
 a name that answers to nothing runnable is a defect, not something to pass over.
 
-### Three codes it raises that no per-file command can
+### Two codes it raises that no per-file command can
 
-Two of them are about the walk rather than about a document; the third is about a
-document, and exists only because the walk has more to lose than a single-file run.
+One is about the walk rather than about a document; the other is about a document,
+and exists only because the walk has more to lose than a single-file run.
 
 | Code | Level | What it says |
 |---|---|---|
@@ -489,6 +489,67 @@ top-level keys of every `*.yaml` in `vars/`, without evaluating `_stack.yaml`.
 A name a conditional step might contribute still counts, which is the right side
 to err on: a `when:`-gated layer that shadows on Tuesdays is precisely the case
 an author will not find by reading.
+
+## The state-schema lock: `schema-stamp` and the check
+
+Implemented, [ADR-019](adr/0019-state-migration-dsl.md) clause 4 (NIM-737). Full
+spec — [docs/migrations.md → The schema lock](migrations.md#the-schema-lock).
+
+A service describes the shape of `incarnation.state` **twice** — declaratively in
+`state_schema`, imperatively in the `migrations/` ladder — both by hand, and nothing
+reconciles the two: not the linter before this, and not the upgrade transaction,
+which applies the chain and never loads the target schema. `migrations/schema.lock`
+is the one artifact that holds both, and it is generated:
+
+```sh
+soul-lint schema-stamp <service dir>     # or the service.yml inside it
+```
+
+It writes the top of the ladder and a hash of the **parsed** `state_schema`, and it
+refuses to write anything while the **manifest or the ladder** is red — a stamp
+claims that a schema and a ladder were, at one moment, both sound and in agreement,
+which a broken one of either has not established. Those two and no more: a broken
+scenario or a malformed `vars/_stack.yaml` still stamps, since neither is evidence
+about the shape of `incarnation.state`, and refusing on them would push the author
+towards writing the file by hand. Two runs over one tree produce byte-identical
+output; a generated file in git is worth having only if re-running the generator
+leaves no diff.
+
+`validate-service` compares both halves, so `validate-service-tree` does too — the
+check hangs off the manifest part, where the schema is, rather than off the ladder
+part.
+
+| Code | Level | What it catches |
+|---|---|---|
+| `schema_lock_stale` | ERROR | The stamped fingerprint is not the hash of the current `state_schema`: the schema was edited with no ladder step behind it. Both hashes are in the message, so the disagreement can be quoted into a review rather than reproduced. |
+| `schema_lock_version_stale` | ERROR | The stamped `version` is not the ladder's top. Below it, a step was added without re-stamping. **Above** it, a published step was deleted off the top — the one failure nothing else in the repository can see, because the version is derived and the ladder no longer remembers being taller. |
+| `schema_lock_missing` | ERROR | The ladder holds at least one step and there is no lock beside it. |
+| `schema_lock_malformed` | ERROR | The lock cannot be read: not YAML, an unknown key, a version below 1, a digest that is not `sha256:<hex>`. It is generated, so the answer is a re-stamp rather than reading what is left. |
+| `schema_lock_unreadable` | ERROR | The lock is present and I/O on it failed. |
+| `schema_lock_unchecked` | ERROR | `state_schema` still holds an unresolved `$type`, so there was nothing honest to hash. It says the comparison did not run rather than reporting a schema edit that did not happen — but unlike `plugin_params_unchecked` and `own_namespace_fence_unchecked` it is an **error**, because nothing is missing from the *invocation*: every route here is the service contradicting itself, and one of them (a `types.yml` that exists and cannot be read) is only a warning upstream. Green would mean an arbitrary `state_schema` edit reported by nothing. The **version** half still runs underneath it. |
+
+**The hash is over the parsed schema and never the bytes.** A comment, a reordered
+key, a re-quoted value and block-versus-flow form all leave it where it was; a field
+added, removed, renamed or re-typed moves it — and so does any other key of the
+schema node, `description:` included. A YAML `#` comment is outside the schema; a
+`description:` is part of it, and re-stamping for one is the price of a walk with no
+hand-maintained list of what counts. That is what makes a changed lock worth
+reading, and the artifact's own bypass depends on it being worth reading: re-stamping
+without adding a step is **allowed**, and what stops it being free is the reviewer
+seeing a changed lock beside an unchanged `migrations/`.
+
+**A lock that is there is always checked; an absent one is an error only once the
+ladder has a step.** A service adopts the lock with one `schema-stamp` — which stamps
+a version-1 service too — and cannot then quietly stop being checked. Demanding one
+from every directory that merely holds a `service.yml` would fail a loose manifest
+that owns no repository at all.
+
+**The version half is skipped while the ladder's layout or continuity is broken.** A
+gap moves the derived version, and the author's fix there is to renumber — which
+moves it again — so reporting the lock as stale on top of a `migration_chain_broken`
+would point at the wrong repair. A step whose `main.yml` is missing does *not* skip
+it: the rung is on disk, so the top is where it says it is. The fingerprint half
+never depends on the ladder.
 
 ## What is NOT soul-lint
 

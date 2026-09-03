@@ -233,23 +233,7 @@ func ScanMigrationLadder(serviceRoot string) (MigrationLadder, []diag.Diagnostic
 // move at all.
 func ValidateMigrationLadder(serviceRoot string) []diag.Diagnostic {
 	ladder, out := ScanMigrationLadder(serviceRoot)
-
-	// Gapless from the floor up. Reported per missing version rather than once for
-	// the whole ladder: two deleted directories are two things to put back.
-	want := BaseStateSchemaVersion + 1
-	for _, s := range ladder.Steps {
-		for ; want < s.Version; want++ {
-			out = append(out, diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
-				File: filepath.Join(serviceRoot, MigrationsDirName), Code: "migration_chain_broken",
-				Message: fmt.Sprintf("no step leads to version %d, but %s/%s leads to %d — every version from %d to the top must have one",
-					want, MigrationsDirName, s.Dir, s.Version, BaseStateSchemaVersion+1),
-				Hint: fmt.Sprintf("add %s/%03d_<slug>/%s, or renumber the steps above the gap down onto it — an incarnation below the gap can never be upgraded past it",
-					MigrationsDirName, want, MigrationStepFile),
-			})
-		}
-		want = s.Version + 1
-	}
+	out = append(out, ladderContinuityDiags(serviceRoot, ladder)...)
 
 	for _, s := range ladder.Steps {
 		stepPath := filepath.Join(serviceRoot, filepath.FromSlash(s.Path))
@@ -264,6 +248,34 @@ func ValidateMigrationLadder(serviceRoot string) []diag.Diagnostic {
 			continue
 		}
 		out = append(out, ValidateMigrationStepFile(stepPath, data)...)
+	}
+	return out
+}
+
+// ladderContinuityDiags reports the ladder's gaps: gapless from the floor up, one
+// diagnostic per missing version rather than one for the whole ladder, because two
+// deleted directories are two things to put back.
+//
+// Split out from [ValidateMigrationLadder] so that [ValidateSchemaLock] can ask
+// whether the ladder is sound before judging a stamped version against its top,
+// without re-reading every step document to find out. A second copy of the loop
+// would be a second definition of "gapless", and the two would eventually disagree
+// about which ladder the stamp is allowed to be compared with.
+func ladderContinuityDiags(serviceRoot string, ladder MigrationLadder) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	want := BaseStateSchemaVersion + 1
+	for _, s := range ladder.Steps {
+		for ; want < s.Version; want++ {
+			out = append(out, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				File: filepath.Join(serviceRoot, MigrationsDirName), Code: "migration_chain_broken",
+				Message: fmt.Sprintf("no step leads to version %d, but %s/%s leads to %d — every version from %d to the top must have one",
+					want, MigrationsDirName, s.Dir, s.Version, BaseStateSchemaVersion+1),
+				Hint: fmt.Sprintf("add %s/%03d_<slug>/%s, or renumber the steps above the gap down onto it — an incarnation below the gap can never be upgraded past it",
+					MigrationsDirName, want, MigrationStepFile),
+			})
+		}
+		want = s.Version + 1
 	}
 	return out
 }
